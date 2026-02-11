@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Include user settings -->
+    <include domain="file" path="home/.vscodroid/User" />
+
+    <!-- Exclude sensitive data -->
+    <exclude domain="file" path="home/.ssh" />
+    <exclude domain="file" path="home/.gitconfig" />
+    <exclude domain="file" path="home/.vscodroid/logs" />
+
+    <!-- Exclude large/regenerable data -->
+    <exclude domain="file" path="server" />
+    <exclude domain="file" path="usr" />
+    <exclude domain="external" path="." />
+    <exclude domain="database" path="." />
+</full-backup-content>

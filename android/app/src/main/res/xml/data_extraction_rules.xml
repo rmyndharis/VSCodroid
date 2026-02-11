@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Include user settings -->
+        <include domain="file" path="home/.vscodroid/User" />
+
+        <!-- Exclude sensitive data -->
+        <exclude domain="file" path="home/.ssh" />
+        <exclude domain="file" path="home/.gitconfig" />
+        <exclude domain="file" path="home/.vscodroid/logs" />
+
+        <!-- Exclude large/regenerable data -->
+        <exclude domain="file" path="server" />
+        <exclude domain="file" path="usr" />
+        <exclude domain="external" path="." />
+        <exclude domain="database" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- Keep transfer behavior aligned with cloud backup for consistency -->
+        <include domain="file" path="home/.vscodroid/User" />
+        <exclude domain="file" path="home/.ssh" />
+        <exclude domain="file" path="home/.gitconfig" />
+        <exclude domain="file" path="home/.vscodroid/logs" />
+        <exclude domain="file" path="server" />
+        <exclude domain="file" path="usr" />
+        <exclude domain="external" path="." />
+        <exclude domain="database" path="." />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,4 @@
+[submodule "server"]
+	path = server
+	url = https://github.com/coder/code-server.git
+	branch = main

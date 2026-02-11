@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<HorizontalScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/colorSurface"
+    android:scrollbars="none"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp">
+
+        <!-- Tab -->
+        <Button
+            android:id="@+id/keyTab"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_tab"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Esc -->
+        <Button
+            android:id="@+id/keyEsc"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_esc"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Ctrl -->
+        <Button
+            android:id="@+id/keyCtrl"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_ctrl"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Alt -->
+        <Button
+            android:id="@+id/keyAlt"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_alt"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Left arrow -->
+        <Button
+            android:id="@+id/keyLeft"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_left"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Up arrow -->
+        <Button
+            android:id="@+id/keyUp"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_up"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Down arrow -->
+        <Button
+            android:id="@+id/keyDown"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_down"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Right arrow -->
+        <Button
+            android:id="@+id/keyRight"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_right"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Braces {} -->
+        <Button
+            android:id="@+id/keyBraces"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_braces"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Parens () -->
+        <Button
+            android:id="@+id/keyParens"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_parens"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Semicolon -->
+        <Button
+            android:id="@+id/keySemicolon"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_semicolon"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Colon -->
+        <Button
+            android:id="@+id/keyColon"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_colon"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Quote -->
+        <Button
+            android:id="@+id/keyQuote"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_quote"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+        <!-- Slash -->
+        <Button
+            android:id="@+id/keySlash"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:minWidth="48dp"
+            android:text="@string/key_slash"
+            android:textSize="12sp"
+            android:textColor="@color/colorExtraKeyText"
+            android:background="@color/colorExtraKeyBg"
+            android:layout_margin="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textAllCaps="false" />
+
+    </LinearLayout>
+
+</HorizontalScrollView>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VSCodroid</string>
+    <string name="notification_channel_name">VSCodroid Server</string>
+    <string name="notification_channel_description">Keeps the local development server running</string>
+    <string name="notification_title">VSCodroid is running</string>
+    <string name="notification_text">Local development server active</string>
+    <string name="action_stop">Stop Server</string>
+    <string name="extracting_title">Setting up VSCodroid</string>
+    <string name="extracting_message">Extracting core files\u2026</string>
+    <string name="error_server_start">Failed to start development server</string>
+    <string name="error_server_timeout">Server took too long to start</string>
+    <string name="error_webview_crash">Display crashed. Reloading\u2026</string>
+    <string name="error_webview_too_old">Your WebView is too old. Please update Android System WebView.</string>
+    <string name="error_storage_full">Not enough storage space</string>
+    <string name="key_tab">Tab</string>
+    <string name="key_esc">Esc</string>
+    <string name="key_ctrl">Ctrl</string>
+    <string name="key_alt">Alt</string>
+    <string name="key_left">\u2190</string>
+    <string name="key_right">\u2192</string>
+    <string name="key_up">\u2191</string>
+    <string name="key_down">\u2193</string>
+    <string name="key_braces">{}</string>
+    <string name="key_parens">()</string>
+    <string name="key_semicolon">;</string>
+    <string name="key_colon">:</string>
+    <string name="key_quote">"</string>
+    <string name="key_slash">/</string>
+    <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
+</resources>

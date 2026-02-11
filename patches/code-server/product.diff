@@ -1,0 +1,43 @@
+diff --git a/product.json b/product.json
+index 0000000..1111111 100644
+--- a/product.json
++++ b/product.json
+@@ -1,10 +1,10 @@
+ {
+-  "nameShort": "Code - OSS",
+-  "nameLong": "Code - OSS",
+-  "applicationName": "code-oss",
+-  "dataFolderName": ".vscode-oss",
++  "nameShort": "VSCodroid",
++  "nameLong": "VSCodroid",
++  "applicationName": "vscodroid",
++  "dataFolderName": ".vscodroid",
+   "win32MutexName": "vscodroid",
+-  "licenseName": "MIT",
++  "licenseName": "MIT",
+   "licenseUrl": "https://github.com/nicepkg/vscodroid/blob/main/LICENSE",
+   "serverApplicationName": "vscodroid-server",
+   "serverDataFolderName": ".vscodroid-server",
+@@ -12,6 +12,13 @@
+   "win32x64UserAppId": "",
+   "win32arm64UserAppId": "",
+   "darwinBundleIdentifier": "com.vscodroid",
++  "extensionsGallery": {
++    "serviceUrl": "https://open-vsx.org/vscode/gallery",
++    "itemUrl": "https://open-vsx.org/vscode/item",
++    "resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}",
++    "controlUrl": "",
++    "nlsBaseUrl": ""
++  },
+   "reportIssueUrl": "https://github.com/nicepkg/vscodroid/issues/new",
+   "urlProtocol": "vscodroid",
+   "webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/",
+@@ -19,5 +26,7 @@
+   "builtInExtensions": [],
+   "linkProtectionTrustedDomains": [
+     "https://open-vsx.org"
+-  ]
++  ],
++  "telemetryOptIn": false,
++  "enableTelemetry": false
+ }

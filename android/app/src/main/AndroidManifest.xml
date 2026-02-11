@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Network: localhost communication between WebView and Node.js server -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Foreground service: keep Node.js server alive -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Notifications: server status in notification shade -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Boot: optional auto-restart capability -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:name=".VSCodroidApp"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:theme="@style/Theme.VSCodroid"
+        tools:targetApi="34">
+
+        <!-- Splash screen: shown during binary extraction and server startup -->
+        <activity
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.VSCodroid">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Main editor activity: hosts WebView with VS Code UI -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.VSCodroid">
+
+            <!-- Open code files from file managers and other apps -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+
+                <!-- JavaScript / TypeScript -->
+                <data android:pathPattern=".*\\.js" />
+                <data android:pathPattern=".*\\.ts" />
+
+                <!-- Python -->
+                <data android:pathPattern=".*\\.py" />
+
+                <!-- Web -->
+                <data android:pathPattern=".*\\.html" />
+                <data android:pathPattern=".*\\.css" />
+
+                <!-- Data -->
+                <data android:pathPattern=".*\\.json" />
+                <data android:pathPattern=".*\\.xml" />
+                <data android:pathPattern=".*\\.yaml" />
+                <data android:pathPattern=".*\\.yml" />
+
+                <!-- Documentation -->
+                <data android:pathPattern=".*\\.md" />
+                <data android:pathPattern=".*\\.txt" />
+
+                <!-- Systems -->
+                <data android:pathPattern=".*\\.go" />
+                <data android:pathPattern=".*\\.rs" />
+                <data android:pathPattern=".*\\.c" />
+                <data android:pathPattern=".*\\.cpp" />
+                <data android:pathPattern=".*\\.h" />
+
+                <!-- JVM -->
+                <data android:pathPattern=".*\\.java" />
+                <data android:pathPattern=".*\\.kt" />
+
+                <!-- Ruby -->
+                <data android:pathPattern=".*\\.rb" />
+
+                <!-- Shell -->
+                <data android:pathPattern=".*\\.sh" />
+
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Node.js server service: runs code-server locally -->
+        <service
+            android:name=".service.NodeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local development server for code editor" />
+        </service>
+
+    </application>
+
+</manifest>
