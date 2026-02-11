@@ -115,7 +115,11 @@ class ExtraKeyRow @JvmOverloads constructor(
             pages = KeyPages.defaults,
             onKeyAction = { key, isActive, button -> handleKeyAction(key, isActive, button) },
             onArrowKey = { direction ->
+                // Don't reset modifiers here — trackpad fires many arrows per drag.
+                // Shift must stay active during the entire drag for text selection.
                 keyInjector?.injectKey(direction, ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
+            },
+            onDragEnd = {
                 resetModifiersIfNeeded()
             },
             onLongPress = { button, alternates -> showLongPressPopup(button, alternates) }

@@ -83,7 +83,7 @@ class FirstRunSetup(private val context: Context) {
             "usr/bin",
             "usr/lib",
             "usr/lib/git-core",
-            "usr/lib/python3.11",
+            "usr/lib/python3.12",
             "usr/share/terminfo",
         )
         for (dir in dirs) {
@@ -184,6 +184,8 @@ class FirstRunSetup(private val context: Context) {
             "bash" to "libbash.so",
             "git" to "libgit.so",
             "node" to "libnode.so",
+            "python3" to "libpython.so",
+            "python" to "libpython.so",
             "rg" to "libripgrep.so",
             "tmux" to "libtmux.so",
             "make" to "libmake.so",
@@ -294,7 +296,10 @@ class FirstRunSetup(private val context: Context) {
                 # VSCodroid bash configuration
                 # Prompt via PROMPT_COMMAND (readline can't show PS1 on pipe stdin)
                 __vscodroid_prompt() {
-                    printf '\033[32m%s\033[0m ${'$'} ' "${'$'}{PWD/#${'$'}HOME/~}"
+                    local dir="${'$'}PWD"
+                    dir="${'$'}{dir/#${'$'}HOME/~}"
+                    [[ "${'$'}dir" == /* ]] && dir="${'$'}{dir/#${'$'}PROJECTS_DIR/projects}"
+                    printf '\033[32m%s\033[0m ${'$'} ' "${'$'}dir"
                 }
                 PROMPT_COMMAND=__vscodroid_prompt
                 PS1=''
@@ -311,7 +316,6 @@ class FirstRunSetup(private val context: Context) {
 
     private fun createDefaultSettings() {
         val nativeLibDir = context.applicationInfo.nativeLibraryDir
-        val filesDir = context.filesDir.absolutePath
         val settingsDir = File(context.filesDir, "home/.vscodroid/User")
         settingsDir.mkdirs()
         val settingsFile = File(settingsDir, "settings.json")
@@ -327,7 +331,7 @@ class FirstRunSetup(private val context: Context) {
                     "terminal.integrated.profiles.linux": {
                         "bash": {
                             "path": "$nativeLibDir/libbash.so",
-                            "args": ["-i", "--noediting", "--rcfile", "$filesDir/home/.bashrc"],
+                            "args": ["--noediting", "-i"],
                             "icon": "terminal-bash"
                         }
                     },

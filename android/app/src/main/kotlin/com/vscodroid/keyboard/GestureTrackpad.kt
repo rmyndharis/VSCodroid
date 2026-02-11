@@ -29,6 +29,7 @@ class GestureTrackpad @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     var onArrowKey: ((direction: String) -> Unit)? = null
+    var onDragEnd: (() -> Unit)? = null
 
     private val crosshairPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF888888.toInt()
@@ -144,6 +145,7 @@ class GestureTrackpad @JvmOverloads constructor(
                 touchOffsetX = 0f
                 touchOffsetY = 0f
                 parent.requestDisallowInterceptTouchEvent(false)
+                onDragEnd?.invoke()
                 invalidate()
                 return true
             }

@@ -321,22 +321,27 @@ var PipeTerminal = (function (_super) {
         env.TERM = name;
         var encoding = (opt.encoding === undefined ? 'utf8' : opt.encoding);
         // VSCodroid: Inject bash args when VS Code profile resolution drops them.
-        // VS Code's terminal profile system may not pass args from settings to spawn.
-        // Ensure bash runs interactively with our rcfile for prompt and aliases.
-        if (args.length === 0 && file && file.indexOf('libbash.so') !== -1) {
-            var home = env.HOME || '';
-            var rcfile = home + '/.bashrc';
-            try { if (fs.existsSync(rcfile)) { args = ['-i', '--noediting', '--rcfile', rcfile]; } } catch(e) {}
+        // -i: interactive mode (sources \$HOME/.bashrc, enables PROMPT_COMMAND)
+        // --noediting: disables readline (our line discipline handles echo/editing)
+        if (args.length === 0 && file && file.indexOf('bash') !== -1) {
+            args = ['--noediting', '-i'];
         }
+        // Derive argv0 from file basename: "libbash.so" -> "bash", "libnode.so" -> "node"
+        // Bash checks argv[0] to decide if GNU long options (--noediting) are available.
+        // Without this, libbash.so rejects --noediting with "--: invalid option".
+        var argv0 = (file.match(/lib(\w+)\.so\$/) || [])[1] || undefined;
         var child;
         try {
-            child = child_process.spawn(file, args, { stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
+            child = child_process.spawn(file, args, { argv0: argv0, stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
         } catch (spawnErr) {
             if (file !== '/system/bin/sh') {
-                child = child_process.spawn('/system/bin/sh', args, { stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
+                // Fallback to system shell — don't pass bash-specific args
+                child = child_process.spawn('/system/bin/sh', [], { stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
             } else { throw spawnErr; }
         }
         _this._child = child;
+        var _startTime = Date.now();
+        var _suppressRe = /cannot set terminal process group|no job control in this shell/;
         _this._socket = new stream.PassThrough();
         if (encoding !== null) { _this._socket.setEncoding(encoding); }
         // Simulate PTY output line discipline: convert LF to CRLF (ONLCR).
@@ -355,7 +360,14 @@ var PipeTerminal = (function (_super) {
             return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
         }
         if (child.stdout) { child.stdout.on('data', function (data) { if (!_this._socket.destroyed) { _this._socket.push(onlcr(data)); } }); }
-        if (child.stderr) { child.stderr.on('data', function (data) { if (!_this._socket.destroyed) { _this._socket.push(onlcr(data)); } }); }
+        if (child.stderr) { child.stderr.on('data', function (data) {
+            if (_this._socket.destroyed) return;
+            if (Date.now() - _startTime < 3000) {
+                var str = typeof data === 'string' ? data : data.toString('utf8');
+                if (_suppressRe.test(str)) return;
+            }
+            _this._socket.push(onlcr(data));
+        }); }
         child.on('exit', function (code, signal) {
             if (!_this._emittedClose) {
                 _this._emittedClose = true;
@@ -367,7 +379,7 @@ var PipeTerminal = (function (_super) {
         child.on('error', function (err) { if (_this.listeners('error').length > 1) { _this.emit('error', err); } });
         _this._pid = child.pid || 0;
         _this._fd = -1;
-        _this._file = file;
+        _this._file = argv0 || file;
         _this._name = name;
         _this._readable = true;
         _this._writable = true;
@@ -377,7 +389,7 @@ var PipeTerminal = (function (_super) {
     }
     // Line discipline: simulates canonical-mode terminal driver.
     // Buffers input, handles echo/erase/signals, sends complete lines on Enter.
-    // Bash must run with -i --noediting (prompt via stderr, no readline).
+    // Bash runs with -i (prompt via PROMPT_COMMAND in .bashrc).
     PipeTerminal.prototype._write = function (data) {
         if (!this._child || !this._child.stdin || this._child.stdin.destroyed) return;
         var buf = typeof data === 'string' ? Buffer.from(data) : data;

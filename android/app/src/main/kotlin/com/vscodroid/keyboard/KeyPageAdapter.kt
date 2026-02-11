@@ -10,6 +10,7 @@ class KeyPageAdapter(
     private val pages: List<KeyPage>,
     private val onKeyAction: (key: String, isActive: Boolean, button: ExtraKeyButton) -> Unit,
     private val onArrowKey: (direction: String) -> Unit,
+    private val onDragEnd: () -> Unit,
     private val onLongPress: (button: ExtraKeyButton, alternates: List<AlternateKey>) -> Unit
 ) : RecyclerView.Adapter<KeyPageAdapter.PageViewHolder>() {
 
@@ -72,6 +73,9 @@ class KeyPageAdapter(
                     val trackpad = GestureTrackpad(holder.container.context).apply {
                         onArrowKey = { direction ->
                             this@KeyPageAdapter.onArrowKey(direction)
+                        }
+                        onDragEnd = {
+                            this@KeyPageAdapter.onDragEnd()
                         }
                     }
                     val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.5f)
