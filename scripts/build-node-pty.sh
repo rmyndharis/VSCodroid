@@ -162,47 +162,40 @@ else:
         print(f"  WARNING: -lutil not found in binding.gyp (may already be removed)")
 PYEOF
 
-# --- Step 7: Cross-compile with node-gyp ---
+# --- Step 7: Cross-compile with NDK clang ---
+# node-gyp's gyp generator adds macOS-specific -arch flags that NDK clang doesn't support.
+# Instead, compile directly with NDK clang — node-pty has a single source file (pty.cc)
+# and uses N-API (node-addon-api), so the build is straightforward.
 echo ""
 echo "Cross-compiling node-pty for ${TARGET} (API ${API})..."
 
-# Android sysroot for cross-compilation (NDK unified sysroot)
 SYSROOT="${TOOLCHAIN_DIR}/sysroot"
+NAPI_INCLUDE="$NPM_PACK_DIR/node_modules/node-addon-api"
+NODE_INCLUDE="$NODE_DIR/include/node"
 
-# Set CC/CXX to NDK cross-compiler. The versioned binary (e.g. aarch64-linux-android33-clang)
-# already implies the target triple and API level. We also pass --sysroot and -fPIC.
-export CC="$NDK_CC"
-export CXX="$NDK_CXX"
-export AR="$NDK_AR"
+mkdir -p build/Release
 
-# CFLAGS/CXXFLAGS: --sysroot is technically redundant with the versioned clang binary
-# but we set it explicitly for robustness. -fPIC is required for shared objects (.node).
-export CFLAGS="--sysroot=${SYSROOT} -fPIC"
-export CXXFLAGS="--sysroot=${SYSROOT} -fPIC -std=c++17"
-export LDFLAGS="--sysroot=${SYSROOT}"
-
-# GYP_DEFINES: OS=linux because Android IS Linux for build purposes.
-# The binding.gyp conditions check OS=="win", OS=="mac", OS=="solaris" —
-# OS=linux falls into the correct unix (OS!="win") path.
-export GYP_DEFINES="target_arch=arm64 OS=linux"
-
-# Run node-gyp rebuild. Capture exit code to provide helpful error message.
 set +e
-npx node-gyp rebuild \
-    --nodedir="$NODE_DIR" \
-    --arch=arm64 \
-    --release \
+"$NDK_CXX" \
+    -shared -fPIC -std=c++17 -O2 \
+    -DNODE_ADDON_API_DISABLE_DEPRECATED \
+    -DNAPI_VERSION=9 \
+    -DNODE_GYP_MODULE_NAME=pty \
+    -I"$NODE_INCLUDE" \
+    -I"$NAPI_INCLUDE" \
+    -o build/Release/pty.node \
+    src/unix/pty.cc \
     2>&1 | while IFS= read -r line; do echo "  $line"; done
-GYP_EXIT=${PIPESTATUS[0]}
+BUILD_EXIT=${PIPESTATUS[0]}
 set -e
 
-if [ "$GYP_EXIT" -ne 0 ]; then
+if [ "$BUILD_EXIT" -ne 0 ]; then
     echo ""
-    echo "ERROR: node-gyp rebuild failed (exit code $GYP_EXIT)"
-    echo "Common issues:"
-    echo "  - node-gyp not installed: npm install -g node-gyp"
-    echo "  - NDK sysroot missing headers: check $SYSROOT/usr/include/"
-    echo "  - Wrong Node.js version headers: expected v${NODE_VERSION}"
+    echo "ERROR: Compilation failed (exit code $BUILD_EXIT)"
+    echo "Check:"
+    echo "  - NDK sysroot: $SYSROOT/usr/include/"
+    echo "  - Node headers: $NODE_INCLUDE/"
+    echo "  - node-addon-api: $NAPI_INCLUDE/"
     exit 1
 fi
 
@@ -236,8 +229,11 @@ else
     exit 1
 fi
 
+# Strip debug symbols
+"${TOOLCHAIN_DIR}/bin/llvm-strip" "$PTY_NODE"
+
 SIZE="$(du -sh "$PTY_NODE" | cut -f1)"
-echo "  Size: $SIZE"
+echo "  Size: $SIZE (stripped)"
 
 # --- Step 9: Copy to output location ---
 echo ""
