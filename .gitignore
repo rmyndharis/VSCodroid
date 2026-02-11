@@ -117,6 +117,7 @@ CLAUDE.md
 .playwright-mcp/
 # Project AI planning docs
 docs/plans/
+_docs/
 
 # ===== Misc =====
 *.tmp

@@ -26,24 +26,37 @@
 static volatile pid_t g_child_pid = 0;
 static volatile int g_master_fd = -1;
 static char g_tmpdir[256] = "/tmp";  /* Cached at startup, safe for signal handler */
+static char g_size_path[320];        /* Pre-computed in main(), used by signal handler */
 
 static void handle_sigwinch(int sig) {
     (void)sig;
     if (g_master_fd < 0 || g_child_pid <= 0) return;
 
-    /* Read new size from $TMPDIR/.pty-size-<our_pid> */
-    char path[320];
-    snprintf(path, sizeof(path), "%s/.pty-size-%d", g_tmpdir, getpid());
-    FILE *f = fopen(path, "r");
-    if (!f) return;
+    /* All functions here are async-signal-safe per POSIX:
+       open, read, close, unlink, ioctl — no stdio, no malloc. */
+    int fd = open(g_size_path, O_RDONLY);
+    if (fd < 0) return;
 
-    int cols = 0, rows = 0;
-    if (fscanf(f, "%d %d", &cols, &rows) == 2 && cols > 0 && rows > 0) {
+    char buf[32];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    unlink(g_size_path);
+    if (n <= 0) return;
+    buf[n] = '\0';
+
+    /* Manual integer parse (strtol/sscanf are not async-signal-safe) */
+    const char *p = buf;
+    while (*p == ' ' || *p == '\t') p++;
+    int cols = 0;
+    while (*p >= '0' && *p <= '9') cols = cols * 10 + (*p++ - '0');
+    while (*p == ' ' || *p == '\t') p++;
+    int rows = 0;
+    while (*p >= '0' && *p <= '9') rows = rows * 10 + (*p++ - '0');
+
+    if (cols > 0 && rows > 0) {
         struct winsize ws = { .ws_row = rows, .ws_col = cols };
         ioctl(g_master_fd, TIOCSWINSZ, &ws);
     }
-    fclose(f);
-    unlink(path);
 }
 
 static void handle_forward(int sig) {
@@ -109,6 +122,9 @@ int main(int argc, char *argv[]) {
     const char *tmpdir = getenv("TMPDIR");
     if (tmpdir && strlen(tmpdir) < sizeof(g_tmpdir))
         strncpy(g_tmpdir, tmpdir, sizeof(g_tmpdir) - 1);
+
+    /* Pre-compute size-file path for the signal handler (async-signal-safe) */
+    snprintf(g_size_path, sizeof(g_size_path), "%s/.pty-size-%d", g_tmpdir, getpid());
 
     char *cmd = argv[optind];
     char **cmd_argv = &argv[optind];
@@ -225,9 +241,7 @@ int main(int argc, char *argv[]) {
     close(master_fd);
 
     /* Clean up size file */
-    char path[320];
-    snprintf(path, sizeof(path), "%s/.pty-size-%d", g_tmpdir, getpid());
-    unlink(path);
+    unlink(g_size_path);
 
     return exit_status;
 }

@@ -338,7 +338,7 @@ var PipeTerminal = (function (_super) {
             }
             // Wrap in tmux for session persistence across crashes
             if (TMUX_PATH && fs.existsSync(TMUX_PATH)) {
-                var sessionId = 'vsc-' + (_sessionCounter++);
+                var sessionId = 'vsc-' + process.pid + '-' + (_sessionCounter++);
                 _this._tmuxSessionId = sessionId;
                 // tmux new-session -A: attach if exists, create if not
                 args = ['new-session', '-A', '-s', sessionId, '--', file].concat(args);
