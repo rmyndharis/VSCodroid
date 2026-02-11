@@ -192,7 +192,6 @@ class FirstRunSetup(private val context: Context) {
             "rg" to "libripgrep.so",
             "tmux" to "libtmux.so",
             "make" to "libmake.so",
-            "ptybridge" to "libptybridge.so",
         )
 
         var created = 0
