@@ -176,8 +176,12 @@ NODE_INCLUDE="$NODE_DIR/include/node"
 mkdir -p build/Release
 
 set +e
+# -static-libstdc++ links libc++_static.a instead of libc++_shared.so.
+# This avoids requiring libc++_shared.so at runtime (which may not be in
+# LD_LIBRARY_PATH when ptyHost loads the addon).
 "$NDK_CXX" \
     -shared -fPIC -std=c++17 -O2 \
+    -static-libstdc++ \
     -DNODE_ADDON_API_DISABLE_DEPRECATED \
     -DNAPI_VERSION=9 \
     -DNODE_GYP_MODULE_NAME=pty \
