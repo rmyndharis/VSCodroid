@@ -43,6 +43,7 @@ yarn-error.log*
 /android/app/src/main/assets/usr/
 
 # ===== Cross-compilation build artifacts =====
+/.build/
 /toolchains/build/
 /toolchains/termux-packages/
 /toolchains/extensions/
