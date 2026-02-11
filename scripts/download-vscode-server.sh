@@ -255,9 +255,10 @@ JSEOF
     echo "  Replaced native-watchdog with JS shim"
 fi
 
-# Replace node-pty with pipe-based terminal shim
+# Replace node-pty with pipe-based terminal shim (with PTY bridge support)
 # The native pty.node is compiled for Linux glibc and won't load on Android Bionic.
-# This shim uses child_process.spawn with stdio pipes instead of a real PTY.
+# When VSCODROID_PTY_HELPER is set, spawns a C PTY bridge for real terminal support.
+# Otherwise falls back to pipe-based terminal with JS line discipline.
 echo ""
 echo "Patching node-pty with pipe terminal shim..."
 NODE_PTY_LIB="vscode-reh/node_modules/node-pty/lib"
@@ -266,17 +267,16 @@ if [ -d "$NODE_PTY_LIB" ]; then
     cat > "$NODE_PTY_LIB/pipeTerminal.js" <<'JSEOF'
 "use strict";
 /**
- * VSCodroid: Pipe-based terminal shim for Android.
+ * VSCodroid: Terminal shim for Android with dual-mode support.
  *
- * Implements node-pty's UnixTerminal interface using child_process.spawn
- * with stdio pipes instead of a real PTY. This works on Android where
- * the native pty.node binding (compiled for Linux glibc) is unavailable.
+ * PTY mode (VSCODROID_PTY_HELPER set):
+ *   Spawns a C PTY bridge that creates a real PTY via forkpty().
+ *   All line discipline (echo, readline, colors) handled by the kernel.
+ *   Supports vim, tmux, htop, job control, tab completion — everything.
  *
- * Limitations:
- * - No ANSI colors from programs that check isatty() (ls, git, grep)
- * - No terminal resize (SIGWINCH)
- * - No interactive programs (vim, nano, less)
- * - Basic command execution, output, and input work fine
+ * Pipe mode (fallback):
+ *   Spawns shell with pipe stdio and emulates line discipline in JS.
+ *   Basic command execution works but no interactive programs.
  */
 var __extends = (this && this.__extends) || (function () {
     var extendStatics = function (d, b) {
@@ -299,11 +299,13 @@ var fs = require("fs");
 var terminal_1 = require("./terminal");
 var utils_1 = require("./utils");
 var DEFAULT_FILE = 'sh';
+var PTY_HELPER = process.env.VSCODROID_PTY_HELPER || '';
 var PipeTerminal = (function (_super) {
     __extends(PipeTerminal, _super);
     function PipeTerminal(file, args, opt) {
         var _this = _super.call(this, opt) || this;
         _this._emittedClose = false;
+        _this._isPtyMode = false;
         if (typeof args === 'string') {
             throw new Error('args as a string is not supported on unix.');
         }
@@ -317,57 +319,87 @@ var PipeTerminal = (function (_super) {
         if (opt.env === process.env) { _this._sanitizeEnv(env); }
         var cwd = opt.cwd || process.cwd();
         env.PWD = cwd;
-        var name = opt.name || env.TERM || 'dumb';
+        var name = opt.name || env.TERM || 'xterm-256color';
         env.TERM = name;
         var encoding = (opt.encoding === undefined ? 'utf8' : opt.encoding);
-        // VSCodroid: Inject bash args when VS Code profile resolution drops them.
-        // -i: interactive mode (sources \$HOME/.bashrc, enables PROMPT_COMMAND)
-        // --noediting: disables readline (our line discipline handles echo/editing)
-        if (args.length === 0 && file && file.indexOf('bash') !== -1) {
-            args = ['--noediting', '-i'];
-        }
-        // Derive argv0 from file basename: "libbash.so" -> "bash", "libnode.so" -> "node"
-        // Bash checks argv[0] to decide if GNU long options (--noediting) are available.
-        // Without this, libbash.so rejects --noediting with "--: invalid option".
-        var argv0 = (file.match(/lib(\w+)\.so\$/) || [])[1] || undefined;
+        // Check if PTY bridge is available
+        var usePty = PTY_HELPER && fs.existsSync(PTY_HELPER);
+        _this._isPtyMode = usePty;
         var child;
-        try {
-            child = child_process.spawn(file, args, { argv0: argv0, stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
-        } catch (spawnErr) {
-            if (file !== '/system/bin/sh') {
-                // Fallback to system shell — don't pass bash-specific args
-                child = child_process.spawn('/system/bin/sh', [], { stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
-            } else { throw spawnErr; }
+        if (usePty) {
+            // === PTY MODE ===
+            // Spawn: ptybridge -c COLS -r ROWS <shell> [args...]
+            // The bridge creates a real PTY — kernel handles all line discipline.
+            if (args.length === 0 && file && file.indexOf('bash') !== -1) {
+                args = ['-i'];  // Readline works with real PTY, no --noediting needed
+            }
+            var bridgeArgs = ['-c', String(_this._cols), '-r', String(_this._rows), file].concat(args);
+            try {
+                child = child_process.spawn(PTY_HELPER, bridgeArgs, {
+                    stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd
+                });
+            } catch (spawnErr) {
+                // PTY bridge failed to spawn — fall through to pipe mode
+                usePty = false;
+                _this._isPtyMode = false;
+            }
+        }
+        if (!usePty) {
+            // === PIPE MODE (fallback) ===
+            if (args.length === 0 && file && file.indexOf('bash') !== -1) {
+                args = ['--noediting', '-i'];
+            }
+            var argv0 = (file.match(/lib(\w+)\.so$/) || [])[1] || undefined;
+            try {
+                child = child_process.spawn(file, args, { argv0: argv0, stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
+            } catch (spawnErr) {
+                if (file !== '/system/bin/sh') {
+                    child = child_process.spawn('/system/bin/sh', [], { stdio: ['pipe', 'pipe', 'pipe'], env: env, cwd: cwd });
+                } else { throw spawnErr; }
+            }
         }
         _this._child = child;
         var _startTime = Date.now();
         var _suppressRe = /cannot set terminal process group|no job control in this shell/;
         _this._socket = new stream.PassThrough();
         if (encoding !== null) { _this._socket.setEncoding(encoding); }
-        // Simulate PTY output line discipline: convert LF to CRLF (ONLCR).
-        // A real PTY converts \n from the process to \r\n for the terminal.
-        function onlcr(buf) {
-            if (typeof buf === 'string') { return buf.replace(/\n/g, '\r\n'); }
-            var chunks = []; var lastIdx = 0;
-            for (var j = 0; j < buf.length; j++) {
-                if (buf[j] === 0x0a) {
-                    if (j > lastIdx) chunks.push(buf.slice(lastIdx, j));
-                    chunks.push(Buffer.from([0x0d, 0x0a]));
-                    lastIdx = j + 1;
+        if (_this._isPtyMode) {
+            // PTY mode: direct passthrough — PTY driver handles ONLCR, echo, etc.
+            if (child.stdout) {
+                child.stdout.on('data', function (data) {
+                    if (!_this._socket.destroyed) { _this._socket.push(data); }
+                });
+            }
+            if (child.stderr) {
+                child.stderr.on('data', function (data) {
+                    if (!_this._socket.destroyed) { _this._socket.push(data); }
+                });
+            }
+        } else {
+            // Pipe mode: simulate PTY output (ONLCR) and suppress startup noise
+            function onlcr(buf) {
+                if (typeof buf === 'string') { return buf.replace(/\n/g, '\r\n'); }
+                var chunks = []; var lastIdx = 0;
+                for (var j = 0; j < buf.length; j++) {
+                    if (buf[j] === 0x0a) {
+                        if (j > lastIdx) chunks.push(buf.slice(lastIdx, j));
+                        chunks.push(Buffer.from([0x0d, 0x0a]));
+                        lastIdx = j + 1;
+                    }
                 }
+                if (lastIdx < buf.length) chunks.push(buf.slice(lastIdx));
+                return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
             }
-            if (lastIdx < buf.length) chunks.push(buf.slice(lastIdx));
-            return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
+            if (child.stdout) { child.stdout.on('data', function (data) { if (!_this._socket.destroyed) { _this._socket.push(onlcr(data)); } }); }
+            if (child.stderr) { child.stderr.on('data', function (data) {
+                if (_this._socket.destroyed) return;
+                if (Date.now() - _startTime < 3000) {
+                    var str = typeof data === 'string' ? data : data.toString('utf8');
+                    if (_suppressRe.test(str)) return;
+                }
+                _this._socket.push(onlcr(data));
+            }); }
         }
-        if (child.stdout) { child.stdout.on('data', function (data) { if (!_this._socket.destroyed) { _this._socket.push(onlcr(data)); } }); }
-        if (child.stderr) { child.stderr.on('data', function (data) {
-            if (_this._socket.destroyed) return;
-            if (Date.now() - _startTime < 3000) {
-                var str = typeof data === 'string' ? data : data.toString('utf8');
-                if (_suppressRe.test(str)) return;
-            }
-            _this._socket.push(onlcr(data));
-        }); }
         child.on('exit', function (code, signal) {
             if (!_this._emittedClose) {
                 _this._emittedClose = true;
@@ -379,7 +411,7 @@ var PipeTerminal = (function (_super) {
         child.on('error', function (err) { if (_this.listeners('error').length > 1) { _this.emit('error', err); } });
         _this._pid = child.pid || 0;
         _this._fd = -1;
-        _this._file = argv0 || file;
+        _this._file = file;
         _this._name = name;
         _this._readable = true;
         _this._writable = true;
@@ -387,44 +419,42 @@ var PipeTerminal = (function (_super) {
         _this._forwardEvents();
         return _this;
     }
-    // Line discipline: simulates canonical-mode terminal driver.
-    // Buffers input, handles echo/erase/signals, sends complete lines on Enter.
-    // Bash runs with -i (prompt via PROMPT_COMMAND in .bashrc).
     PipeTerminal.prototype._write = function (data) {
         if (!this._child || !this._child.stdin || this._child.stdin.destroyed) return;
+        if (this._isPtyMode) {
+            // PTY mode: direct passthrough — the real PTY handles everything
+            var buf = typeof data === 'string' ? Buffer.from(data) : data;
+            this._child.stdin.write(buf);
+            return;
+        }
+        // Pipe mode: line discipline emulation
         var buf = typeof data === 'string' ? Buffer.from(data) : data;
         var sock = this._socket;
         for (var i = 0; i < buf.length; i++) {
             var b = buf[i];
             if (b === 0x0d) {
-                // Enter (CR): echo CRLF, send buffered line + LF to child
                 if (!sock.destroyed) sock.push('\r\n');
                 var line = Buffer.from(this._lineBuf.concat([0x0a]));
                 this._lineBuf = [];
                 this._child.stdin.write(line);
             } else if (b === 0x7f || b === 0x08) {
-                // Backspace/DEL: erase last character
                 if (this._lineBuf.length > 0) {
                     this._lineBuf.pop();
                     if (!sock.destroyed) sock.push('\b \b');
                 }
             } else if (b === 0x03) {
-                // Ctrl+C: discard buffer, send SIGINT
                 this._lineBuf = [];
                 try { process.kill(this._child.pid, 'SIGINT'); } catch(e) {}
                 if (!sock.destroyed) sock.push('^C\r\n');
             } else if (b === 0x1c) {
-                // Ctrl+\: discard buffer, send SIGQUIT
                 this._lineBuf = [];
                 try { process.kill(this._child.pid, 'SIGQUIT'); } catch(e) {}
                 if (!sock.destroyed) sock.push('^\\\r\n');
             } else if (b === 0x04) {
-                // Ctrl+D: EOF on empty line, ignore otherwise
                 if (this._lineBuf.length === 0) {
                     this._child.stdin.end();
                 }
             } else if (b === 0x15) {
-                // Ctrl+U: kill line
                 var len = this._lineBuf.length;
                 if (len > 0 && !sock.destroyed) {
                     var erase = ''; for (var j = 0; j < len; j++) erase += '\b \b';
@@ -432,7 +462,6 @@ var PipeTerminal = (function (_super) {
                     this._lineBuf = [];
                 }
             } else if (b === 0x17) {
-                // Ctrl+W: kill last word
                 while (this._lineBuf.length > 0 && this._lineBuf[this._lineBuf.length-1] === 0x20) {
                     this._lineBuf.pop(); if (!sock.destroyed) sock.push('\b \b');
                 }
@@ -440,14 +469,11 @@ var PipeTerminal = (function (_super) {
                     this._lineBuf.pop(); if (!sock.destroyed) sock.push('\b \b');
                 }
             } else if (b === 0x0c) {
-                // Ctrl+L: clear screen
                 if (!sock.destroyed) sock.push('\x1b[2J\x1b[H');
             } else if (b === 0x09) {
-                // Tab: echo tab, add to buffer
                 this._lineBuf.push(b);
                 if (!sock.destroyed) sock.push('\t');
             } else if (b === 0x1b) {
-                // ESC sequence: skip entirely (arrow keys etc. not supported in line mode)
                 var end = i + 1;
                 if (end < buf.length && buf[end] === 0x5b) {
                     end++; while (end < buf.length && buf[end] >= 0x20 && buf[end] < 0x40) end++;
@@ -455,23 +481,35 @@ var PipeTerminal = (function (_super) {
                 }
                 i = end - 1;
             } else if (b >= 0x20 && b <= 0x7e) {
-                // Printable ASCII: echo + buffer
                 this._lineBuf.push(b);
                 if (!sock.destroyed) sock.push(Buffer.from([b]));
             } else if (b >= 0xc0) {
-                // UTF-8 multibyte start: echo + buffer entire sequence
                 var sLen = (b < 0xe0) ? 2 : (b < 0xf0) ? 3 : 4;
                 var seq = buf.slice(i, Math.min(i + sLen, buf.length));
                 for (var k = 0; k < seq.length; k++) this._lineBuf.push(seq[k]);
                 if (!sock.destroyed) sock.push(seq);
                 i += seq.length - 1;
             }
-            // Other control chars (0x01-0x1f): silently ignored
         }
     };
     Object.defineProperty(PipeTerminal.prototype, "fd", { get: function () { return this._fd; }, enumerable: false, configurable: true });
-    Object.defineProperty(PipeTerminal.prototype, "ptsName", { get: function () { return 'pipe'; }, enumerable: false, configurable: true });
-    PipeTerminal.prototype.resize = function (cols, rows) { if (cols > 0 && rows > 0) { this._cols = cols; this._rows = rows; } };
+    Object.defineProperty(PipeTerminal.prototype, "ptsName", {
+        get: function () { return this._isPtyMode ? 'pty-bridge' : 'pipe'; },
+        enumerable: false, configurable: true
+    });
+    PipeTerminal.prototype.resize = function (cols, rows) {
+        if (cols <= 0 || rows <= 0) return;
+        this._cols = cols;
+        this._rows = rows;
+        if (this._isPtyMode && this._child && this._child.pid) {
+            // Write size file and send SIGWINCH to PTY bridge
+            try {
+                var tmpdir = process.env.TMPDIR || '/tmp';
+                fs.writeFileSync(tmpdir + '/.pty-size-' + this._child.pid, cols + ' ' + rows);
+                process.kill(this._child.pid, 'SIGWINCH');
+            } catch (e) {}
+        }
+    };
     PipeTerminal.prototype.clear = function () {};
     PipeTerminal.prototype.kill = function (signal) {
         try { if (this._child && this._child.pid) { process.kill(this._child.pid, signal || 'SIGHUP'); } } catch (e) {}
@@ -505,7 +543,7 @@ var PipeTerminal = (function (_super) {
         delete env['WINDOWID']; delete env['TERMCAP'];
         delete env['COLUMNS']; delete env['LINES'];
     };
-    PipeTerminal.open = function () { throw new Error('PipeTerminal.open() is not supported (no PTY available)'); };
+    PipeTerminal.open = function () { throw new Error('PipeTerminal.open() is not supported'); };
     return PipeTerminal;
 }(terminal_1.Terminal));
 exports.PipeTerminal = PipeTerminal;

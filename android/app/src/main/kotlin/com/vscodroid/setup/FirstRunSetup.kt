@@ -53,6 +53,7 @@ class FirstRunSetup(private val context: Context) {
             createStorageSymlinks()
             createWelcomeProject()
             createBashrc()
+            createTmuxConf()
 
             reportProgress("Setting up extensions...", 70)
             extractBundledExtensions()
@@ -189,6 +190,7 @@ class FirstRunSetup(private val context: Context) {
             "rg" to "libripgrep.so",
             "tmux" to "libtmux.so",
             "make" to "libmake.so",
+            "ptybridge" to "libptybridge.so",
         )
 
         var created = 0
@@ -314,6 +316,20 @@ class FirstRunSetup(private val context: Context) {
         }
     }
 
+    private fun createTmuxConf() {
+        val tmuxConf = File(context.filesDir, "home/.tmux.conf")
+        if (!tmuxConf.exists()) {
+            tmuxConf.writeText("""
+                # VSCodroid tmux configuration
+                set -g mouse on
+                set -g default-terminal "xterm-256color"
+                set -g history-limit 10000
+                set -g escape-time 10
+                set -g status off
+            """.trimIndent() + "\n")
+        }
+    }
+
     private fun createDefaultSettings() {
         val nativeLibDir = context.applicationInfo.nativeLibraryDir
         val settingsDir = File(context.filesDir, "home/.vscodroid/User")
@@ -331,7 +347,7 @@ class FirstRunSetup(private val context: Context) {
                     "terminal.integrated.profiles.linux": {
                         "bash": {
                             "path": "$nativeLibDir/libbash.so",
-                            "args": ["--noediting", "-i"],
+                            "args": ["-i"],
                             "icon": "terminal-bash"
                         }
                     },

@@ -45,6 +45,8 @@ object Environment {
             "PROJECTS_DIR" to getProjectsDir(context),
             "VSCODROID_PORT" to port.toString(),
             "VSCODROID_VERSION" to getVersionName(context),
+            "VSCODROID_PTY_HELPER" to "$nativeLibDir/libptybridge.so",
+            "TMUX_TMPDIR" to "$cacheDir/tmp",
         )
     }
 
