@@ -300,12 +300,15 @@ var terminal_1 = require("./terminal");
 var utils_1 = require("./utils");
 var DEFAULT_FILE = 'sh';
 var PTY_HELPER = process.env.VSCODROID_PTY_HELPER || '';
+var TMUX_PATH = process.env.VSCODROID_TMUX || '';
+var _sessionCounter = 0;
 var PipeTerminal = (function (_super) {
     __extends(PipeTerminal, _super);
     function PipeTerminal(file, args, opt) {
         var _this = _super.call(this, opt) || this;
         _this._emittedClose = false;
         _this._isPtyMode = false;
+        _this._tmuxSessionId = null;
         if (typeof args === 'string') {
             throw new Error('args as a string is not supported on unix.');
         }
@@ -332,6 +335,14 @@ var PipeTerminal = (function (_super) {
             // The bridge creates a real PTY — kernel handles all line discipline.
             if (args.length === 0 && file && file.indexOf('bash') !== -1) {
                 args = ['-i'];  // Readline works with real PTY, no --noediting needed
+            }
+            // Wrap in tmux for session persistence across crashes
+            if (TMUX_PATH && fs.existsSync(TMUX_PATH)) {
+                var sessionId = 'vsc-' + (_sessionCounter++);
+                _this._tmuxSessionId = sessionId;
+                // tmux new-session -A: attach if exists, create if not
+                args = ['new-session', '-A', '-s', sessionId, '--', file].concat(args);
+                file = TMUX_PATH;
             }
             var bridgeArgs = ['-c', String(_this._cols), '-r', String(_this._rows), file].concat(args);
             try {
@@ -512,10 +523,28 @@ var PipeTerminal = (function (_super) {
     };
     PipeTerminal.prototype.clear = function () {};
     PipeTerminal.prototype.kill = function (signal) {
-        try { if (this._child && this._child.pid) { process.kill(this._child.pid, signal || 'SIGHUP'); } } catch (e) {}
+        try {
+            if (this._child && this._child.pid) {
+                // Clean up tmux session on terminal close (SIGHUP)
+                if (this._tmuxSessionId && TMUX_PATH && (!signal || signal === 'SIGHUP')) {
+                    try {
+                        child_process.spawnSync(TMUX_PATH, ['kill-session', '-t', this._tmuxSessionId],
+                            { timeout: 2000, stdio: 'ignore' });
+                    } catch (e) {}
+                }
+                process.kill(this._child.pid, signal || 'SIGHUP');
+            }
+        } catch (e) {}
     };
     PipeTerminal.prototype.destroy = function () {
         this._close();
+        // Kill tmux session on explicit close to prevent orphans
+        if (this._tmuxSessionId && TMUX_PATH) {
+            try {
+                child_process.spawnSync(TMUX_PATH, ['kill-session', '-t', this._tmuxSessionId],
+                    { timeout: 2000, stdio: 'ignore' });
+            } catch (e) {}
+        }
         if (this._child) {
             this._child.stdin && this._child.stdin.destroy();
             this._child.stdout && this._child.stdout.destroy();

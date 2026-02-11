@@ -25,14 +25,15 @@
 
 static volatile pid_t g_child_pid = 0;
 static volatile int g_master_fd = -1;
+static char g_tmpdir[256] = "/tmp";  /* Cached at startup, safe for signal handler */
 
 static void handle_sigwinch(int sig) {
     (void)sig;
     if (g_master_fd < 0 || g_child_pid <= 0) return;
 
-    /* Read new size from /tmp/.pty-size-<our_pid> */
-    char path[64];
-    snprintf(path, sizeof(path), "/tmp/.pty-size-%d", getpid());
+    /* Read new size from $TMPDIR/.pty-size-<our_pid> */
+    char path[320];
+    snprintf(path, sizeof(path), "%s/.pty-size-%d", g_tmpdir, getpid());
     FILE *f = fopen(path, "r");
     if (!f) return;
 
@@ -103,6 +104,11 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "ptybridge: no command specified\n");
         return 1;
     }
+
+    /* Cache TMPDIR before fork — signal handlers can't call getenv() */
+    const char *tmpdir = getenv("TMPDIR");
+    if (tmpdir && strlen(tmpdir) < sizeof(g_tmpdir))
+        strncpy(g_tmpdir, tmpdir, sizeof(g_tmpdir) - 1);
 
     char *cmd = argv[optind];
     char **cmd_argv = &argv[optind];
@@ -219,8 +225,8 @@ int main(int argc, char *argv[]) {
     close(master_fd);
 
     /* Clean up size file */
-    char path[64];
-    snprintf(path, sizeof(path), "/tmp/.pty-size-%d", getpid());
+    char path[320];
+    snprintf(path, sizeof(path), "%s/.pty-size-%d", g_tmpdir, getpid());
     unlink(path);
 
     return exit_status;

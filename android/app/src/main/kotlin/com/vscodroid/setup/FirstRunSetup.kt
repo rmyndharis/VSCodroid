@@ -53,6 +53,7 @@ class FirstRunSetup(private val context: Context) {
             createStorageSymlinks()
             createWelcomeProject()
             createBashrc()
+            createBashProfile()
             createTmuxConf()
 
             reportProgress("Setting up extensions...", 70)
@@ -312,6 +313,18 @@ class FirstRunSetup(private val context: Context) {
 
                 # Start in projects directory
                 cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+            """.trimIndent() + "\n")
+        }
+    }
+
+    private fun createBashProfile() {
+        val bashProfile = File(context.filesDir, "home/.bash_profile")
+        if (!bashProfile.exists()) {
+            bashProfile.writeText("""
+                # Source .bashrc for login shells (e.g. tmux sessions)
+                if [ -f "${'$'}HOME/.bashrc" ]; then
+                    . "${'$'}HOME/.bashrc"
+                fi
             """.trimIndent() + "\n")
         }
     }
