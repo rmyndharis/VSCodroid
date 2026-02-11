@@ -256,6 +256,92 @@ else:
     print(f"  ExtHost worker_thread: no changes (already patched?)")
 PYEOF
 
+# Create IPC bridge shim for ptyHost Worker thread
+# Workers use parentPort.postMessage/on('message') instead of process.send/on('message').
+# This shim bridges the gap so bootstrap-fork.js works unchanged inside a Worker.
+echo ""
+echo "Creating pty-worker-shim.mjs..."
+cat > "vscode-reh/out/pty-worker-shim.mjs" <<'JSEOF'
+import { parentPort } from 'worker_threads';
+
+// Bridge Worker message channel to process IPC interface.
+// bootstrap-fork.js uses process.send() / process.on('message') for IPC.
+// In a Worker thread, these don't exist — we shim them via parentPort.
+process.send = (msg) => parentPort.postMessage(msg);
+parentPort.on('message', (msg) => process.emit('message', msg));
+
+// Import the real bootstrap-fork
+await import('./bootstrap-fork.js');
+JSEOF
+echo "  Created pty-worker-shim.mjs"
+
+# Patch ptyHost to use worker_thread instead of child_process.fork()
+# The rg IPC class is shared by fileWatcher and ptyHost. We conditionally
+# use Worker only for ptyHost (serverName === "Pty Host").
+# Two patches to server-main.js:
+#   1. Add worker_threads import alongside child_process
+#   2. Conditional fork/Worker in rg class based on serverName
+echo ""
+echo "Patching ptyHost to use worker_thread..."
+python3 - "$SERVER_MAIN_JS" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path, 'r') as f:
+    content = f.read()
+
+original = content
+patches = 0
+
+# Patch 1: Add worker_threads import alongside child_process
+old = 'import{fork as XO}from"child_process"'
+new = 'import{fork as XO}from"child_process";import{Worker as __VW}from"worker_threads"'
+count = content.count(old)
+if count == 1:
+    content = content.replace(old, new)
+    patches += 1
+    print(f"  Patch 1 (worker_threads import): OK")
+else:
+    print(f"  Patch 1 (worker_threads import): SKIP (found {count}x, expected 1)")
+
+# Patch 2: Replace fork with conditional Worker for ptyHost
+# The rg class's get m() getter calls: this.d=XO(this.i,e,t)
+# For ptyHost (serverName==="Pty Host"), use Worker with IPC shims.
+# For fileWatcher and others, keep using fork.
+# The Worker loads pty-worker-shim.mjs which bridges parentPort <-> process IPC.
+old = 'this.d=XO(this.i,e,t)'
+new = (
+    'this.d=this.j&&this.j.serverName==="Pty Host"'
+    '?(function(p,a,o){'
+    'var shimPath=p.replace(/[^\\/]+$/,"pty-worker-shim.mjs");'
+    'var ea=(o.execArgv||[]).filter(function(x){'
+    'return!/^--max-old-space-size/.test(x)&&!/^--max-semi-space-size/.test(x)});'
+    'var rl={maxOldGenerationSizeMb:256};'
+    'var w=new __VW(shimPath,{argv:a,env:o.env,execArgv:ea,resourceLimits:rl,stdout:true,stderr:true});'
+    'w.pid=w.threadId;'
+    'w.kill=function(){w.terminate()};'
+    'w.send=function(m){w.postMessage(m)};'
+    'w.connected=true;'
+    'w.on("exit",function(){w.connected=false});'
+    'return w})(this.i,e,t)'
+    ':XO(this.i,e,t)'
+)
+count = content.count(old)
+if count == 1:
+    content = content.replace(old, new)
+    patches += 1
+    print(f"  Patch 2 (conditional fork/Worker): OK")
+else:
+    print(f"  Patch 2 (conditional fork/Worker): SKIP (found {count}x, expected 1)")
+
+if content != original:
+    with open(path, 'w') as f:
+        f.write(content)
+    print(f"  ptyHost worker_thread: {patches}/2 patches applied")
+else:
+    print(f"  ptyHost worker_thread: no changes")
+PYEOF
+
 # Replace native spdlog with JS shim
 echo ""
 echo "Patching spdlog native module..."
