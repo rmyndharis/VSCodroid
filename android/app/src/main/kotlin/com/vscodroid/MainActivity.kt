@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.webkit.WebView
 import android.widget.Toast
+import java.io.File
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -105,9 +106,19 @@ class MainActivity : AppCompatActivity() {
         @Suppress("DEPRECATION")
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
             Logger.w(tag, "Low memory signal: level=$level")
+            writeMemoryPressure(level)
             webView?.evaluateJavascript(
                 "window.__vscodroid?.onLowMemory?.($level)", null
             )
+        }
+    }
+
+    private fun writeMemoryPressure(level: Int) {
+        try {
+            val tmpDir = File(cacheDir, "tmp")
+            File(tmpDir, "vscodroid-memory-pressure").writeText(level.toString())
+        } catch (e: Exception) {
+            Logger.d(tag, "Failed to write memory pressure: ${e.message}")
         }
     }
 

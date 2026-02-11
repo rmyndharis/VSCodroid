@@ -123,6 +123,14 @@ if (!fs.existsSync(rehEntryPoint)) {
         stdio: 'inherit'
     });
 
+    // Start process monitor (non-fatal if it fails)
+    try {
+        const monitor = require(path.join(SERVER_DIR, 'process-monitor.js'));
+        monitor.start(server.pid);
+    } catch (e) {
+        log('warn', 'Process monitor failed to start: ' + e.message);
+    }
+
     server.on('exit', (code) => {
         log('info', `VS Code Server exited with code ${code}`);
         process.exit(code || 0);

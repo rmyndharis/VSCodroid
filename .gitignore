@@ -38,7 +38,8 @@ yarn-error.log*
 /android/app/src/main/assets/vscode-web/
 /android/app/src/main/assets/vscode-reh/
 /android/app/src/main/assets/python-stdlib/
-/android/app/src/main/assets/extensions/
+/android/app/src/main/assets/extensions/*
+!/android/app/src/main/assets/extensions/vscodroid.vscodroid-process-monitor-*/
 /android/app/src/main/assets/usr/
 
 # ===== Cross-compilation build artifacts =====

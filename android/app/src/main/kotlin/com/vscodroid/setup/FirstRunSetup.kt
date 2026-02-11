@@ -40,6 +40,7 @@ class FirstRunSetup(private val context: Context) {
 
             reportProgress("Extracting server bootstrap...", 58)
             extractAssetFile("server.js", "server/server.js")
+            extractAssetFile("process-monitor.js", "server/process-monitor.js")
 
             reportProgress("Extracting tools...", 62)
             extractAssetDir("usr", "usr")

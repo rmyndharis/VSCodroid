@@ -1,0 +1,25 @@
+{
+  "name": "vscodroid-process-monitor",
+  "displayName": "VSCodroid Process Monitor",
+  "description": "Monitors phantom process count on Android",
+  "version": "1.0.0",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodroid.showProcesses",
+        "title": "VSCodroid: Show Process Tree"
+      }
+    ]
+  }
+}
