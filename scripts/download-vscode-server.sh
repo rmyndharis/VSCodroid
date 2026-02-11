@@ -195,6 +195,67 @@ else:
     print(f"  SKIP: Pattern not found in {path} (already patched?)")
 PYEOF
 
+# Patch Extension Host to use worker_thread instead of child_process.fork()
+# Android 12+ has a 32 phantom process limit. Each fork() counts as a phantom.
+# Worker threads run inside the parent process, so they don't count.
+# Three patches to server-main.js:
+#   1. Force named pipe mode (ExtHost connects via Unix socket, not process.send() IPC)
+#   2. Replace fork() with Worker() (same interface, runs as thread not process)
+#   3. Guard .send() call (Workers don't have IPC channel)
+echo ""
+echo "Patching Extension Host to use worker_thread..."
+SERVER_MAIN_JS="vscode-reh/out/server-main.js"
+python3 - "$SERVER_MAIN_JS" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path, 'r') as f:
+    content = f.read()
+
+original = content
+patches = 0
+
+# Patch 1: Force named pipe mode for ExtHost connection
+old = 'this.c=!me||!this.n.args["socket-path"]'
+new = 'this.c=!1'
+count = content.count(old)
+if count == 1:
+    content = content.replace(old, new)
+    patches += 1
+    print(f"  Patch 1 (named pipe mode): OK")
+else:
+    print(f"  Patch 1 (named pipe mode): SKIP (found {count}x, expected 1)")
+
+# Patch 2: Replace fork() with Worker()
+old = 'this.h=QC.fork(jt.asFileUri("bootstrap-fork").fsPath,o,r)'
+new = 'this.h=await(async function(f,a,opts){var W=(await import("worker_threads")).Worker;var ea=opts.execArgv||[];var rl={};ea=ea.filter(function(x){var m=x.match(/^--max-old-space-size=(\\d+)/);if(m){rl.maxOldGenerationSizeMb=+m[1];return false}return!/^--max-semi-space-size/.test(x)});var w=new W(f,{argv:a,env:opts.env,execArgv:ea,resourceLimits:rl,stdout:true,stderr:true});w.pid=w.threadId;w.kill=function(){w.terminate()};return w})(jt.asFileUri("bootstrap-fork").fsPath,o,r)'
+count = content.count(old)
+if count == 1:
+    content = content.replace(old, new)
+    patches += 1
+    print(f"  Patch 2 (fork->Worker): OK")
+else:
+    print(f"  Patch 2 (fork->Worker): SKIP (found {count}x, expected 1)")
+
+# Patch 3: Guard .send() call (Workers lack IPC channel)
+old = 'this.h.send(t)'
+new = 'this.h.send&&this.h.send(t)'
+count = content.count(old)
+if count == 1:
+    content = content.replace(old, new)
+    patches += 1
+    print(f"  Patch 3 (guard .send()): OK")
+else:
+    print(f"  Patch 3 (guard .send()): SKIP (found {count}x, expected 1)")
+
+if content != original:
+    with open(path, 'w') as f:
+        f.write(content)
+    print(f"  ExtHost worker_thread: {patches}/3 patches applied")
+else:
+    print(f"  ExtHost worker_thread: no changes (already patched?)")
+PYEOF
+
 # Replace native spdlog with JS shim
 echo ""
 echo "Patching spdlog native module..."
