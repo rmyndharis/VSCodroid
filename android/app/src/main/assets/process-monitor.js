@@ -127,7 +127,7 @@ function classify(cmdline) {
 
     if (cmd.includes('server-main.js')) return 'server';
     if (cmd.includes('bootstrap-fork') && cmd.includes('filewatcher')) return 'fileWatcher';
-    if (cmd.includes('bootstrap-fork') && cmd.includes('ptyhost')) return 'ptyHost';
+    // ptyHost is now a worker_thread — no longer visible in /proc
     if (cmd.includes('libtmux.so') || cmd.includes('/tmux')) return 'tmux';
     if (cmd.includes('libbash.so') || cmd.includes('/bash')) return 'terminal';
     if (cmd.includes('/sh') && !cmd.includes('bash')) return 'terminal';
