@@ -507,6 +507,8 @@ class MainActivity : AppCompatActivity() {
         injectTouchTargetCSS()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
+        // Open in Browser command for dev server preview
+        injectOpenInBrowserCommand()
     }
 
     /**
@@ -618,6 +620,86 @@ class MainActivity : AppCompatActivity() {
                     }
                     return orig.apply(window, arguments);
                 };
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Injects a "VSCodroid: Open in Browser" command into VS Code's command palette.
+     * Lets developers open localhost dev server URLs (Vite, NestJS, etc.) in the
+     * device's browser for preview. Also registers Ctrl+Shift+B as a shortcut.
+     */
+    private fun injectOpenInBrowserCommand() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidOpenInBrowserRegistered) return;
+                window.__vscodroidOpenInBrowserRegistered = true;
+
+                // Wait for VS Code's command registry to be available
+                var attempts = 0;
+                var interval = setInterval(function() {
+                    attempts++;
+                    if (attempts > 50) { clearInterval(interval); return; }
+                    try {
+                        // Access VS Code's internal command service via the workbench API
+                        var cs = window.require('vs/platform/commands/common/commands');
+                        if (!cs || !cs.CommandsRegistry) return;
+
+                        cs.CommandsRegistry.registerCommand('vscodroid.openInBrowser', function(accessor) {
+                            var qs = accessor.get(window.require('vs/platform/quickinput/common/quickInput').IQuickInputService);
+                            var inputBox = qs.createInputBox();
+                            inputBox.title = 'Open in Browser';
+                            inputBox.placeholder = 'http://localhost:5173';
+                            inputBox.prompt = 'Enter URL to open in device browser';
+                            inputBox.value = 'http://localhost:';
+                            inputBox.onDidAccept(function() {
+                                var url = inputBox.value.trim();
+                                inputBox.dispose();
+                                if (!url) return;
+                                // Add http:// if no scheme provided
+                                if (!/^https?:\/\//.test(url)) url = 'http://' + url;
+                                var t = (window.__vscodroid || {}).authToken;
+                                if (t && typeof AndroidBridge !== 'undefined') {
+                                    AndroidBridge.openExternalUrl(url, t);
+                                }
+                            });
+                            inputBox.onDidHide(function() { inputBox.dispose(); });
+                            inputBox.show();
+                        });
+
+                        // Register in the command palette (Action)
+                        var ar = window.require('vs/platform/actions/common/actions');
+                        if (ar && ar.MenuRegistry && ar.MenuId) {
+                            ar.MenuRegistry.appendMenuItem(ar.MenuId.CommandPalette, {
+                                command: {
+                                    id: 'vscodroid.openInBrowser',
+                                    title: 'VSCodroid: Open in Browser'
+                                }
+                            });
+                        }
+
+                        // Register keyboard shortcut: Ctrl+Shift+O (unused in web)
+                        var kb = window.require('vs/platform/keybinding/common/keybindingsRegistry');
+                        if (kb && kb.KeybindingsRegistry) {
+                            var kc = window.require('vs/base/common/keyCodes');
+                            if (kc && kc.KeyMod && kc.KeyCode) {
+                                kb.KeybindingsRegistry.registerKeybindingRule({
+                                    id: 'vscodroid.openInBrowser',
+                                    weight: 200,
+                                    primary: kc.KeyMod.CtrlCmd | kc.KeyMod.Shift | kc.KeyCode.KeyB,
+                                    when: null
+                                });
+                            }
+                        }
+
+                        clearInterval(interval);
+                    } catch(e) {
+                        // VS Code not ready yet, retry
+                    }
+                }, 200);
             })();
             """.trimIndent(),
             null

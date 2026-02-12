@@ -50,10 +50,10 @@ class AndroidBridge(
         if (!security.isAllowedUrl(url)) return
         try {
             val uri = Uri.parse(url)
-            // Use Chrome Custom Tabs for https URLs — keeps the user in-app,
-            // loads faster than an external browser, and handles OAuth redirects
-            // back to the app via deep links.
-            if (uri.scheme == "https") {
+            val isLocalhost = uri.host == "127.0.0.1" || uri.host == "localhost"
+            // Use system browser for localhost URLs (dev server preview needs full browser),
+            // Chrome Custom Tabs for https (keeps user in-app, handles OAuth redirects).
+            if (uri.scheme == "https" && !isLocalhost) {
                 val customTabsIntent = CustomTabsIntent.Builder()
                     .setShowTitle(true)
                     .build()

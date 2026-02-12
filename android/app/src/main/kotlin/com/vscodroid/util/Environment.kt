@@ -36,12 +36,19 @@ object Environment {
         else
             "$basePath:/system/bin"
 
+        // Preload script that fixes process.platform ("android" → "linux")
+        // so npm packages (Prisma, node-gyp, esbuild, etc.) detect the platform correctly.
+        // NODE_OPTIONS propagates to all child processes and worker threads.
+        val platformFixPath = "$filesDir/server/platform-fix.js"
+        val nodeOptions = "--require=$platformFixPath"
+
         val base = mapOf(
             "HOME" to homeDir,
             "TMPDIR" to "$cacheDir/tmp",
             "PATH" to path,
             "LD_LIBRARY_PATH" to "$nativeLibDir:$filesDir/usr/lib",
             "NODE_PATH" to "$filesDir/server/vscode-reh/node_modules",
+            "NODE_OPTIONS" to nodeOptions,
             "SHELL" to shell,
             "TERM" to term,
             "TERMINFO" to "$filesDir/usr/share/terminfo",

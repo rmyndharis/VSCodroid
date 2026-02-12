@@ -21,6 +21,10 @@ class SecurityManager(private val allowedPort: Int) {
         if (url.startsWith("https://") || url.startsWith("mailto:")) {
             return true
         }
+        // Allow http:// only for localhost (dev servers like Vite, NestJS)
+        if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) {
+            return true
+        }
         Logger.w(tag, "Blocked URL scheme: $url")
         return false
     }
