@@ -52,6 +52,15 @@ yarn-error.log*
 /android/toolchain_java/src/main/assets/usr/
 /android/toolchain_java/src/main/assets/toolchain_java.json
 
+# ===== Toolchain Asset Pack build intermediates =====
+/android/toolchain_go/build/
+/android/toolchain_ruby/build/
+/android/toolchain_java/build/
+
+# ===== Bundletool (local AAB testing only) =====
+bundletool.jar
+*.apks
+
 # ===== Cross-compilation build artifacts =====
 /.build/
 /toolchains/build/
