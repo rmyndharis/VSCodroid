@@ -14,13 +14,20 @@ import java.net.URL
  */
 object ServerReadyHelper {
 
-    private const val PREFS_NAME = "vscodroid"
+    // FirstRunSetup uses "vscodroid_setup" for setup_version
+    private const val SETUP_PREFS = "vscodroid_setup"
+    // SplashActivity uses "vscodroid" for toolchain_picker_shown
+    private const val APP_PREFS = "vscodroid"
     private const val KEY_SETUP_VERSION = "setup_version"
     private const val KEY_PICKER_SHOWN = "toolchain_picker_shown"
 
     /**
      * Pre-populates SharedPreferences so [com.vscodroid.SplashActivity] considers
      * first-run setup already done and jumps straight to [com.vscodroid.MainActivity].
+     *
+     * Writes to both prefs files to match how the production code uses them:
+     * - `vscodroid_setup` for `setup_version` (read by [com.vscodroid.setup.FirstRunSetup])
+     * - `vscodroid` for `toolchain_picker_shown` (read by [com.vscodroid.SplashActivity])
      *
      * Call this in a @Before method for tests that only need MainActivity.
      */
@@ -30,9 +37,12 @@ object ServerReadyHelper {
         } catch (_: Exception) {
             "test"
         }
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        context.getSharedPreferences(SETUP_PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_SETUP_VERSION, versionName)
+            .commit()
+        context.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
+            .edit()
             .putBoolean(KEY_PICKER_SHOWN, true)
             .commit()
     }
@@ -42,9 +52,12 @@ object ServerReadyHelper {
      * first-run extraction. Useful for SplashActivity tests.
      */
     fun clearSetupState(context: Context) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        context.getSharedPreferences(SETUP_PREFS, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_SETUP_VERSION)
+            .commit()
+        context.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
+            .edit()
             .remove(KEY_PICKER_SHOWN)
             .commit()
     }
