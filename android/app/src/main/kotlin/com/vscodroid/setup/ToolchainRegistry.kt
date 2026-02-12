@@ -12,7 +12,7 @@ object ToolchainRegistry {
         val packName: String,
         val displayName: String,
         val description: String,
-        /** Approximate .deb download size in bytes (shown to user before download) */
+        /** Approximate asset pack size in bytes (shown to user before download) */
         val estimatedSize: Long,
         /** Fallback URL for sideloaded installs (no Play Store). Null = Play-only. */
         val downloadUrl: String? = null,
@@ -23,19 +23,19 @@ object ToolchainRegistry {
             packName = "toolchain_go",
             displayName = "Go",
             description = "Go programming language (CGO_ENABLED=0)",
-            estimatedSize = 30_000_000,
+            estimatedSize = 179_000_000,
         ),
         ToolchainInfo(
             packName = "toolchain_ruby",
             displayName = "Ruby",
             description = "Ruby with irb, gem, bundler",
-            estimatedSize = 12_000_000,
+            estimatedSize = 34_000_000,
         ),
         ToolchainInfo(
             packName = "toolchain_java",
             displayName = "Java 17",
             description = "OpenJDK 17 (javac, jar, jshell)",
-            estimatedSize = 96_000_000,
+            estimatedSize = 146_000_000,
         ),
     )
 
