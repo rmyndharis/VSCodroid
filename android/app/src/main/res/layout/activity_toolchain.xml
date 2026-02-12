@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/colorBackground"
+    android:orientation="vertical">
+
+    <!-- Toolbar with back arrow -->
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/colorSurface"
+        app:navigationIcon="?attr/homeAsUpIndicator"
+        app:navigationIconTint="@color/colorOnSurface"
+        app:title="@string/toolchain_settings_title"
+        app:titleTextColor="@color/colorOnSurface" />
+
+    <!-- Toolchain cards grid -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/toolchainGrid"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipToPadding="false"
+        android:padding="12dp" />
+
+</LinearLayout>

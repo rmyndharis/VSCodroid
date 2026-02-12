@@ -241,6 +241,20 @@ class AndroidBridge(
         }
     }
 
+    // -- Toolchain Settings --
+
+    /**
+     * Opens the ToolchainActivity settings screen for managing toolchains.
+     */
+    @JavascriptInterface
+    fun openToolchainSettings(authToken: String) {
+        if (!security.validateToken(authToken)) return
+        Logger.i(tag, "Opening toolchain settings")
+        val intent = Intent(context, com.vscodroid.ToolchainActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
+
     // -- Toolchain Management --
 
     private val toolchainManager by lazy { ToolchainManager(context) }

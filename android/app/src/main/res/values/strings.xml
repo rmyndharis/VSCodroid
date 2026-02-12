@@ -28,4 +28,29 @@
     <string name="key_quote">"</string>
     <string name="key_slash">/</string>
     <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
+
+    <!-- Toolchain picker (first-run) -->
+    <string name="picker_title">What do you code in?</string>
+    <string name="picker_subtitle">Optional \u2014 you can add these anytime in Settings.</string>
+    <string name="picker_included">Node.js, Python, and Git are already included.</string>
+    <string name="picker_continue">Continue</string>
+    <string name="picker_skip">Skip</string>
+
+    <!-- Toolchain download progress -->
+    <string name="progress_title">Installing toolchains\u2026</string>
+    <string name="progress_waiting">Waiting\u2026</string>
+    <string name="progress_installing">Installing\u2026</string>
+    <string name="progress_done">Done</string>
+    <string name="progress_failed">Failed</string>
+    <string name="progress_cancel">Cancel</string>
+    <string name="progress_retry">Retry</string>
+
+    <!-- Toolchain settings -->
+    <string name="toolchain_settings_title">Toolchains</string>
+    <string name="toolchain_installed">Installed</string>
+    <string name="toolchain_install">Install</string>
+    <string name="toolchain_remove">Remove</string>
+    <string name="toolchain_cancel">Cancel</string>
+    <string name="toolchain_remove_confirm_title">Remove %s?</string>
+    <string name="toolchain_remove_confirm_message">This will delete all %s files. You can reinstall anytime.</string>
 </resources>

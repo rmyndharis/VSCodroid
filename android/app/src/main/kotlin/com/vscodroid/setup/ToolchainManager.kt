@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import android.app.Activity
 import android.content.Context
 import android.system.Os
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
@@ -113,6 +114,25 @@ class ToolchainManager(private val context: Context) {
         val info = ToolchainRegistry.find(packName) ?: return
         assetPackManager.cancel(listOf(info.packName))
         Logger.i(tag, "Cancelled download of ${info.packName}")
+    }
+
+    /**
+     * Shows the Play Store cellular data confirmation dialog for large downloads.
+     * Called when AssetPackStatus.REQUIRES_USER_CONFIRMATION is received.
+     */
+    @Suppress("DEPRECATION")
+    fun showConfirmationDialog(activity: Activity) {
+        try {
+            assetPackManager.showCellularDataConfirmation(activity)
+                .addOnSuccessListener {
+                    Logger.i(tag, "User confirmed cellular data download")
+                }
+                .addOnFailureListener { e ->
+                    Logger.e(tag, "Cellular data confirmation failed", e)
+                }
+        } catch (e: Exception) {
+            Logger.e(tag, "Failed to show confirmation dialog", e)
+        }
     }
 
     // -- Uninstall (runs on IO thread) --

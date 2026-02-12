@@ -23,4 +23,9 @@
 
     <!-- Notification -->
     <color name="colorNotificationBg">#1E1E1E</color>
+
+    <!-- Toolchain picker -->
+    <color name="colorCardSelected">#1A007ACC</color>
+    <color name="colorSuccess">#4EC9B0</color>
+    <color name="colorError">#F48771</color>
 </resources>

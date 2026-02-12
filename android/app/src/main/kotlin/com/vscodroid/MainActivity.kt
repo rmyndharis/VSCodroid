@@ -329,8 +329,10 @@ class MainActivity : AppCompatActivity() {
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
             // Show a loading placeholder while Node.js starts
+            // viewport-fit=cover enables rendering into display cutout area
             wv.loadData(
-                """<html><body style="background:#1e1e1e;color:#888;font-family:sans-serif;
+                """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
+                   <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
                    display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
                    <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
                    <p>Starting server...</p></div></body></html>""",
@@ -474,8 +476,68 @@ class MainActivity : AppCompatActivity() {
         )
         // Install JS interceptor so ExtraKeyRow Ctrl/Alt modifiers apply to soft keyboard input
         extraKeyRow?.keyInjector?.setupModifierInterceptor()
+        // Inject safe area CSS for round-corner devices
+        injectSafeAreaCSS()
         // Set up BroadcastChannel relay so browser extensions can reach AndroidBridge
         injectBridgeRelay()
+    }
+
+    /**
+     * Injects CSS into VS Code to handle round-corner device safe areas.
+     *
+     * Adds padding to the Activity Bar (left sidebar) and Status Bar (bottom)
+     * so content isn't clipped by the device's rounded display corners.
+     * Uses CSS `env(safe-area-inset-*)` with fallback padding.
+     */
+    private fun injectSafeAreaCSS() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (document.getElementById('vscodroid-safe-area-css')) return;
+
+                // Ensure viewport-fit=cover meta tag exists
+                var meta = document.querySelector('meta[name="viewport"]');
+                if (meta) {
+                    var content = meta.getAttribute('content') || '';
+                    if (content.indexOf('viewport-fit') === -1) {
+                        meta.setAttribute('content', content + ', viewport-fit=cover');
+                    }
+                } else {
+                    meta = document.createElement('meta');
+                    meta.name = 'viewport';
+                    meta.content = 'width=device-width, initial-scale=1.0, viewport-fit=cover';
+                    document.head.appendChild(meta);
+                }
+
+                var style = document.createElement('style');
+                style.id = 'vscodroid-safe-area-css';
+                style.textContent = [
+                    '/* VSCodroid: Safe area padding for round-corner devices */',
+                    '.part.activitybar {',
+                    '  padding-left: env(safe-area-inset-left, 0px);',
+                    '  padding-top: env(safe-area-inset-top, 0px);',
+                    '}',
+                    '.part.statusbar {',
+                    '  padding-left: env(safe-area-inset-left, 0px);',
+                    '  padding-right: env(safe-area-inset-right, 0px);',
+                    '  padding-bottom: env(safe-area-inset-bottom, 0px);',
+                    '}',
+                    '.part.titlebar {',
+                    '  padding-top: env(safe-area-inset-top, 0px);',
+                    '  padding-right: env(safe-area-inset-right, 0px);',
+                    '}',
+                    '.part.sidebar {',
+                    '  padding-left: env(safe-area-inset-left, 0px);',
+                    '}',
+                    '.part.panel {',
+                    '  padding-bottom: env(safe-area-inset-bottom, 0px);',
+                    '}'
+                ].join('\n');
+                document.head.appendChild(style);
+            })();
+            """.trimIndent(),
+            null
+        )
     }
 
     /**
@@ -520,6 +582,9 @@ class MainActivity : AppCompatActivity() {
                             ch.postMessage({id: d.id, ok: true, data: result});
                         } else if (d.cmd === 'startGitHubAuth') {
                             AndroidBridge.startGitHubAuth(d.url, token);
+                            ch.postMessage({id: d.id, ok: true});
+                        } else if (d.cmd === 'openToolchainSettings') {
+                            AndroidBridge.openToolchainSettings(token);
                             ch.postMessage({id: d.id, ok: true});
                         }
                     } catch(err) {
