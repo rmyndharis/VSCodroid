@@ -35,6 +35,7 @@
             android:name=".SplashActivity"
             android:exported="true"
             android:noHistory="true"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
             android:theme="@style/Theme.VSCodroid">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

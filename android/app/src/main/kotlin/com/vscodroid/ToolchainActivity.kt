@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
@@ -46,7 +47,7 @@ class ToolchainActivity : AppCompatActivity() {
                 }
                 ToolchainPickerAdapter.Action.CANCEL -> {
                     toolchainManager.cancel(packName)
-                    adapter.updateState(packName, 0, 0) // NOT_INSTALLED = 0
+                    adapter.updateState(packName, AssetPackStatus.NOT_INSTALLED, 0)
                 }
             }
         }
@@ -57,7 +58,16 @@ class ToolchainActivity : AppCompatActivity() {
 
         // Listen for download state changes
         toolchainManager.onStateChange = { packName, status, percent ->
-            runOnUiThread { adapter.updateState(packName, status, percent) }
+            runOnUiThread {
+                adapter.updateState(packName, status, percent)
+                if (status == AssetPackStatus.REQUIRES_USER_CONFIRMATION) {
+                    try {
+                        toolchainManager.showConfirmationDialog(this)
+                    } catch (e: Exception) {
+                        Logger.e(tag, "Failed to show confirmation dialog", e)
+                    }
+                }
+            }
         }
     }
 

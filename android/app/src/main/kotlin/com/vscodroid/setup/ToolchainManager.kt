@@ -231,7 +231,13 @@ class ToolchainManager(private val context: Context) {
         val percent = if (totalBytes > 0) ((downloaded * 100) / totalBytes).toInt() else 0
 
         Logger.d(tag, "Pack $packName: status=$status, $downloaded/$totalBytes ($percent%)")
-        onStateChange?.invoke(packName, status, percent)
+
+        // Don't fire onStateChange for COMPLETED here — the real COMPLETED fires
+        // after copyFromAssetPack() finishes extraction (line in copyFromAssetPack).
+        // Firing it twice would cause downloadNext() to be called twice, skipping packs.
+        if (status != AssetPackStatus.COMPLETED) {
+            onStateChange?.invoke(packName, status, percent)
+        }
 
         when (status) {
             AssetPackStatus.COMPLETED -> {
@@ -246,9 +252,11 @@ class ToolchainManager(private val context: Context) {
                             Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
                         } else {
                             Logger.e(tag, "No assetsPath for completed pack $packName")
+                            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
                         }
                     } catch (e: Exception) {
                         Logger.e(tag, "Failed to process completed pack $packName", e)
+                        onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
                     }
                 }
             }

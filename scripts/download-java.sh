@@ -195,6 +195,16 @@ if [ -d "$JDK_BIN_DIR" ]; then
         SYMLINKS+="\"$name\":\"$binpath\""
     done
 fi
+# Also include lib/jspawnhelper and lib/jexec — these aren't in bin/ but need chmod +x.
+# jspawnhelper is required by ProcessBuilder (fork+exec), jexec handles #! JAR execution.
+for libbin in jspawnhelper jexec; do
+    libbin_path="$JDK_DIR/lib/$libbin"
+    if [ -f "$libbin_path" ]; then
+        binpath="usr/lib/jvm/java-17-openjdk/lib/$libbin"
+        [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
+        BINARIES+="\"$binpath\""
+    fi
+done
 BINARIES+=']'
 SYMLINKS+='}'
 

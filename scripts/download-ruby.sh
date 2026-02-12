@@ -190,16 +190,21 @@ echo "  Ruby: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SI
 echo ""
 echo "Writing manifest.json..."
 
-# Collect all binaries for the manifest
+# Collect all binaries AND symlinks for the manifest (only include actually-copied files)
 BINARIES='['
-FIRST=true
+SYMLINKS='{'
+FIRST_BIN=true
+FIRST_SYM=true
 for bin in ruby irb gem bundle bundler erb rdoc ri; do
     if [ -f "$PACK_ASSETS/usr/bin/$bin" ]; then
-        [ "$FIRST" = true ] && FIRST=false || BINARIES+=','
+        [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
         BINARIES+="\"usr/bin/$bin\""
+        [ "$FIRST_SYM" = true ] && FIRST_SYM=false || SYMLINKS+=','
+        SYMLINKS+="\"$bin\":\"usr/bin/$bin\""
     fi
 done
 BINARIES+=']'
+SYMLINKS+='}'
 
 cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
@@ -207,16 +212,7 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
     "displayName": "Ruby",
     "version": "$RUBY_VERSION",
     "binaries": $BINARIES,
-    "symlinks": {
-        "ruby": "usr/bin/ruby",
-        "irb": "usr/bin/irb",
-        "gem": "usr/bin/gem",
-        "bundle": "usr/bin/bundle",
-        "bundler": "usr/bin/bundler",
-        "erb": "usr/bin/erb",
-        "rdoc": "usr/bin/rdoc",
-        "ri": "usr/bin/ri"
-    },
+    "symlinks": $SYMLINKS,
     "env": {
         "GEM_HOME": "\$HOME/.gem/ruby",
         "GEM_PATH": "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems"

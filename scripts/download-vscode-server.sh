@@ -228,7 +228,7 @@ else:
 
 # Patch 2: Replace fork() with Worker()
 old = 'this.h=QC.fork(jt.asFileUri("bootstrap-fork").fsPath,o,r)'
-new = 'this.h=await(async function(f,a,opts){var W=(await import("worker_threads")).Worker;var ea=opts.execArgv||[];var rl={};ea=ea.filter(function(x){var m=x.match(/^--max-old-space-size=(\\d+)/);if(m){rl.maxOldGenerationSizeMb=+m[1];return false}return!/^--max-semi-space-size/.test(x)});var w=new W(f,{argv:a,env:opts.env,execArgv:ea,resourceLimits:rl,stdout:true,stderr:true});w.pid=w.threadId;w.kill=function(){w.terminate()};return w})(jt.asFileUri("bootstrap-fork").fsPath,o,r)'
+new = 'this.h=await(async function(f,a,opts){var W=(await import("worker_threads")).Worker;var ea=opts.execArgv||[];var rl={};ea=ea.filter(function(x){var m=x.match(/^--max-old-space-size=(\\d+)/);if(m){rl.maxOldGenerationSizeMb=+m[1];return false}return!/^--max-semi-space-size/.test(x)});var w=new W(f,{argv:a,env:opts.env,execArgv:ea,resourceLimits:rl,stdout:true,stderr:true});w.pid=w.threadId;w._killed=false;var _on=w.on.bind(w);w.on=function(ev,fn){if(ev==="exit"){return _on(ev,function(code){w.connected=false;fn(w._killed?0:code,w._killed?"SIGTERM":null)})}if(ev==="error"){return _on(ev,fn)}return _on(ev,fn)};w.on("error",function(e){});w.kill=function(){w._killed=true;w.connected=false;try{w.postMessage({__type:"__vsc_disconnect"})}catch(e){}setTimeout(function(){try{w.terminate()}catch(e){}},200)};w.send=function(m){if(!w.connected)return false;try{w.postMessage(m);return true}catch(e){w.connected=false;return false}};w.connected=true;w.disconnect=function(){w.connected=false};return w})(jt.asFileUri("bootstrap-fork").fsPath,o,r)'
 count = content.count(old)
 if count == 1:
     content = content.replace(old, new)

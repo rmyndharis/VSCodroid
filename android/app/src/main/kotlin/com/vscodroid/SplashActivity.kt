@@ -230,6 +230,7 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun handleDownloadState(packName: String, status: Int, percent: Int) {
+        if (cancelled) return
         val row = progressRows[packName] ?: return
 
         when (status) {
