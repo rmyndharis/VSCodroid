@@ -142,8 +142,8 @@ object CrashReporter {
 
             file.writeText(sw.toString())
             Logger.e(TAG, "Crash log written: ${file.name}")
-        } catch (_: Exception) {
-            // Last-resort: can't even write the crash log
+        } catch (_: Throwable) {
+            // Last-resort: can't even write the crash log (including OOM)
         }
     }
 

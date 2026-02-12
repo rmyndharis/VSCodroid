@@ -125,6 +125,12 @@ class SafSyncEngine(private val context: Context) {
                     Thread.sleep(WRITEBACK_POLL_MS)
                 }
             }
+            // Drain remaining items before exiting so pending writes aren't lost
+            var remaining = writeBackQueue.poll()
+            while (remaining != null) {
+                processWriteBack(remaining)
+                remaining = writeBackQueue.poll()
+            }
         }
 
         Logger.i(tag, "File watcher started for: ${mirrorDir.absolutePath}")
@@ -137,7 +143,9 @@ class SafSyncEngine(private val context: Context) {
         isWatching = false
         fileObserver?.stopWatching()
         fileObserver = null
+        // Wake thread from sleep, then wait for it to drain remaining writes
         writeBackThread?.interrupt()
+        try { writeBackThread?.join(2000) } catch (_: InterruptedException) {}
         writeBackThread = null
         writeBackQueue.clear()
         docIdCache.clear()

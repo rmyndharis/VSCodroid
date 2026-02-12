@@ -1,0 +1,13 @@
+{
+    "name": "ruby",
+    "displayName": "Ruby",
+    "version": "3.4.1-2",
+    "binaries": ["usr/bin/ruby","usr/bin/irb","usr/bin/gem","usr/bin/bundle","usr/bin/bundler","usr/bin/erb","usr/bin/rdoc","usr/bin/ri"],
+    "env": {
+        "GEM_HOME": "$HOME/.gem/ruby",
+        "GEM_PATH": "$HOME/.gem/ruby:$FILESDIR/usr/lib/ruby/gems"
+    },
+    "pathDirs": ["usr/bin"],
+    "installRoot": "usr/lib/ruby",
+    "libs": ["libruby.so", "libgmp.so", "libyaml-0.so"]
+}

@@ -6,7 +6,7 @@
     <!-- Exclude sensitive data -->
     <exclude domain="file" path="home/.ssh" />
     <exclude domain="file" path="home/.gitconfig" />
-    <exclude domain="file" path="home/.vscodroid/logs" />
+    <exclude domain="file" path="home/.vscodroid/data/logs" />
 
     <!-- Exclude large/regenerable data -->
     <exclude domain="file" path="server" />

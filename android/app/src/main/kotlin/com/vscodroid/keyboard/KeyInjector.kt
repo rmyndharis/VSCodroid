@@ -16,6 +16,8 @@ class KeyInjector(private val webView: WebView) {
         val keyDef = KeyMapping.getKeyDefOrLetter(key)
         val jsKey = keyDef.key.replace("'", "\\'").replace("\"", "\\\"")
         val jsCode = keyDef.code.replace("'", "\\'")
+        // Force shiftKey=true for characters that require Shift on a physical keyboard
+        val effectiveShift = shiftKey || keyDef.requiresShift
 
         val js = """
             (function() {
@@ -27,7 +29,7 @@ class KeyInjector(private val webView: WebView) {
                     which: ${keyDef.keyCode},
                     ctrlKey: ${ctrlKey},
                     altKey: ${altKey},
-                    shiftKey: ${shiftKey},
+                    shiftKey: ${effectiveShift},
                     metaKey: ${metaKey},
                     bubbles: true,
                     cancelable: true,
@@ -80,13 +82,42 @@ class KeyInjector(private val webView: WebView) {
                 document.addEventListener('beforeinput', function(e) {
                     var mod = window.__vscodroid;
                     if (!mod.ctrl && !mod.alt && !mod.shift) return;
+
+                    var target = document.activeElement || document.body;
+                    var init;
+
+                    // Handle delete operations (Ctrl+Backspace = delete word, etc.)
+                    if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteContentForward') {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        var isForward = e.inputType === 'deleteContentForward';
+                        init = {
+                            key: isForward ? 'Delete' : 'Backspace',
+                            code: isForward ? 'Delete' : 'Backspace',
+                            keyCode: isForward ? 46 : 8,
+                            which: isForward ? 46 : 8,
+                            ctrlKey: !!mod.ctrl,
+                            altKey: !!mod.alt,
+                            shiftKey: !!mod.shift,
+                            metaKey: false,
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true
+                        };
+                        target.dispatchEvent(new KeyboardEvent('keydown', init));
+                        target.dispatchEvent(new KeyboardEvent('keyup', init));
+                        mod.ctrl = false;
+                        mod.alt = false;
+                        mod.shift = false;
+                        return;
+                    }
+
                     if (e.inputType !== 'insertText' || !e.data) return;
 
                     e.preventDefault();
                     e.stopImmediatePropagation();
 
                     var chars = e.data;
-                    var target = document.activeElement || document.body;
                     for (var i = 0; i < chars.length; i++) {
                         var ch = chars[i];
                         var upper = ch.toUpperCase();
@@ -94,7 +125,7 @@ class KeyInjector(private val webView: WebView) {
                                    /[0-9]/.test(ch) ? 'Digit' + ch : '';
                         var keyCode = upper.charCodeAt(0);
 
-                        var init = {
+                        init = {
                             key: ch,
                             code: code,
                             keyCode: keyCode,

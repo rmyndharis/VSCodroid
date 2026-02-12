@@ -12,9 +12,6 @@
     <!-- Notifications: server status in notification shade -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Boot: optional auto-restart capability -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
     <application
         android:name=".VSCodroidApp"
         android:allowBackup="true"
@@ -71,6 +68,9 @@
                 <data android:scheme="vscodroid" android:host="oauth" />
             </intent-filter>
 
+            <!-- Open code files by extension (file:// and content:// schemes).
+                 mimeType is required for content:// URIs — use text/* plus specific
+                 code-related types instead of */* to avoid matching photos/music/etc. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -78,6 +78,14 @@
                 <data android:scheme="file" />
                 <data android:scheme="content" />
                 <data android:host="*" />
+
+                <!-- MIME types for code files -->
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="application/javascript" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="application/x-shellscript" />
+                <data android:mimeType="application/octet-stream" />
 
                 <!-- JavaScript / TypeScript -->
                 <data android:pathPattern=".*\\.js" />
@@ -116,8 +124,6 @@
 
                 <!-- Shell -->
                 <data android:pathPattern=".*\\.sh" />
-
-                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
 

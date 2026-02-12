@@ -652,11 +652,11 @@ class MainActivity : AppCompatActivity() {
         }
         Logger.i(tag, "OAuth callback received (state=$state)")
         // Forward to VS Code's auth handler via JS.
-        // Escape backslashes FIRST, then quotes — prevents injection via \'
-        val escapedCode = code.replace("\\", "\\\\").replace("'", "\\'")
-        val escapedState = state.replace("\\", "\\\\").replace("'", "\\'")
+        // Use JSONObject.quote() for complete escaping (handles \u2028, \u2029, etc.)
+        val escapedCode = org.json.JSONObject.quote(code)
+        val escapedState = org.json.JSONObject.quote(state)
         webView?.evaluateJavascript(
-            "window.__vscodroid?.onOAuthCallback?.('$escapedCode', '$escapedState')", null
+            "window.__vscodroid?.onOAuthCallback?.($escapedCode, $escapedState)", null
         )
     }
 
@@ -700,13 +700,9 @@ class MainActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent) {
         val uri = intent.data ?: return
         Logger.i(tag, "Received intent with URI: $uri")
-        val escaped = uri.toString()
-            .replace("\\", "\\\\")
-            .replace("'", "\\'")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
+        val escaped = org.json.JSONObject.quote(uri.toString())
         webView?.evaluateJavascript(
-            "window.__vscodroid?.onFileOpen?.('${escaped}')", null
+            "window.__vscodroid?.onFileOpen?.($escaped)", null
         )
     }
 
