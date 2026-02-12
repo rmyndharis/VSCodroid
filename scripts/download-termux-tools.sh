@@ -37,6 +37,8 @@ REQUIRED_PACKAGES=(
     libevent
     libandroid-glob
     make
+    openssh
+    libedit
 )
 
 # Soname mapping: returns space-separated soname(s) for a package.
@@ -58,6 +60,7 @@ get_sonames() {
         zlib)              echo "libz.so.1" ;;
         libevent)          echo "libevent-2.1.so libevent_core-2.1.so" ;;
         libandroid-glob)   echo "libandroid-glob.so" ;;
+        libedit)           echo "libedit.so" ;;
         *)                 echo "" ;;
     esac
 }
@@ -67,10 +70,10 @@ LIB_PACKAGES=(
     readline ncurses libiconv libandroid-support
     libcurl openssl pcre2 libexpat
     libnghttp2 libnghttp3 libngtcp2 libssh2 zlib
-    libevent libandroid-glob
+    libevent libandroid-glob libedit
 )
 
-echo "=== Downloading Termux Tools (bash + git + tmux + make) ==="
+echo "=== Downloading Termux Tools (bash + git + tmux + make + ssh) ==="
 echo ""
 
 mkdir -p "$WORK_DIR"
@@ -204,6 +207,28 @@ if [ -f "$MAKE_BIN" ]; then
 else
     echo "  ERROR: make binary not found at $MAKE_BIN"
     find "extracted/make" -name "make" -type f 2>/dev/null || true
+    exit 1
+fi
+
+# ssh (OpenSSH client)
+SSH_BIN="extracted/openssh/data/data/com.termux/files/usr/bin/ssh"
+if [ -f "$SSH_BIN" ]; then
+    cp "$SSH_BIN" "$JNILIBS_DIR/libssh.so"
+    echo "  libssh.so ($(du -sh "$JNILIBS_DIR/libssh.so" | cut -f1))"
+else
+    echo "  ERROR: ssh binary not found at $SSH_BIN"
+    find "extracted/openssh" -name "ssh" -type f 2>/dev/null || true
+    exit 1
+fi
+
+# ssh-keygen
+SSH_KEYGEN_BIN="extracted/openssh/data/data/com.termux/files/usr/bin/ssh-keygen"
+if [ -f "$SSH_KEYGEN_BIN" ]; then
+    cp "$SSH_KEYGEN_BIN" "$JNILIBS_DIR/libssh-keygen.so"
+    echo "  libssh-keygen.so ($(du -sh "$JNILIBS_DIR/libssh-keygen.so" | cut -f1))"
+else
+    echo "  ERROR: ssh-keygen binary not found at $SSH_KEYGEN_BIN"
+    find "extracted/openssh" -name "ssh-keygen" -type f 2>/dev/null || true
     exit 1
 fi
 
@@ -365,7 +390,7 @@ echo ""
 echo "=== Size Summary ==="
 
 echo "jniLibs executables:"
-for so in "$JNILIBS_DIR"/libbash.so "$JNILIBS_DIR"/libgit.so "$JNILIBS_DIR"/libtmux.so "$JNILIBS_DIR"/libmake.so; do
+for so in "$JNILIBS_DIR"/libbash.so "$JNILIBS_DIR"/libgit.so "$JNILIBS_DIR"/libtmux.so "$JNILIBS_DIR"/libmake.so "$JNILIBS_DIR"/libssh.so "$JNILIBS_DIR"/libssh-keygen.so; do
     [ -f "$so" ] && echo "  $(basename "$so"): $(du -sh "$so" | cut -f1)"
 done
 

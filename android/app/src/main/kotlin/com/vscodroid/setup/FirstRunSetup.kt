@@ -62,6 +62,7 @@ class FirstRunSetup(private val context: Context) {
             reportProgress("Setting up tools...", 85)
             setupToolSymlinks()
             setupRipgrepVscodeSymlink()
+            setupSshDefaults()
             createBashrc()
             createBashProfile()
             createTmuxConf()
@@ -90,6 +91,7 @@ class FirstRunSetup(private val context: Context) {
     private fun createDirectories() {
         val dirs = listOf(
             "home",
+            "home/.ssh",
             "home/.vscodroid",
             "home/.vscodroid/extensions",
             "home/.vscodroid/data/logs",
@@ -204,6 +206,8 @@ class FirstRunSetup(private val context: Context) {
             "rg" to "libripgrep.so",
             "tmux" to "libtmux.so",
             "make" to "libmake.so",
+            "ssh" to "libssh.so",
+            "ssh-keygen" to "libssh-keygen.so",
         )
 
         var created = 0
@@ -272,6 +276,45 @@ class FirstRunSetup(private val context: Context) {
     }
 
     /**
+     * Creates default SSH configuration for git operations.
+     *
+     * Sets up ~/.ssh/ directory, default ssh_config (auto-accept first connection,
+     * ed25519 key, keepalive), and correct file permissions. Only runs on first setup
+     * — does not overwrite existing user SSH config.
+     */
+    private fun setupSshDefaults() {
+        val homeDir = context.filesDir.absolutePath + "/home"
+        val sshDir = File(homeDir, ".ssh")
+        sshDir.mkdirs()
+
+        // Set directory permissions to 700 (owner only)
+        try {
+            Os.chmod(sshDir.absolutePath, 448) // 0700 octal = 448 decimal
+        } catch (e: Exception) {
+            Logger.d(tag, "Failed to chmod .ssh: ${e.message}")
+        }
+
+        // Create default ssh_config if it doesn't exist
+        val sshConfig = File(sshDir, "config")
+        if (!sshConfig.exists()) {
+            sshConfig.writeText("""
+                Host *
+                    StrictHostKeyChecking accept-new
+                    IdentityFile ~/.ssh/id_ed25519
+                    ServerAliveInterval 60
+                    UserKnownHostsFile ~/.ssh/known_hosts
+            """.trimIndent() + "\n")
+            try {
+                Os.chmod(sshConfig.absolutePath, 384) // 0600
+            } catch (e: Exception) {
+                Logger.d(tag, "Failed to chmod ssh config: ${e.message}")
+            }
+        }
+
+        Logger.i(tag, "SSH defaults configured")
+    }
+
+    /**
      * Ensures npm/npx shell functions exist in .bashrc and creates .npmrc.
      *
      * Android mounts /data noexec, so shell script wrappers in usr/bin/ fail with
@@ -311,13 +354,16 @@ class FirstRunSetup(private val context: Context) {
             }
         }
 
-        // Update .npmrc script-shell on every launch — nativeLibDir changes on APK reinstall
+        // Update .npmrc on every launch — nativeLibDir changes on APK reinstall
         val npmrc = File(context.filesDir, "home/.npmrc")
         val bashPath = "$nativeLibDir/libbash.so"
-        val expectedContent = "script-shell=$bashPath\n"
+        // script-shell: use bundled bash for npm lifecycle scripts (Android has no /bin/sh)
+        // os[]: install optional deps for both linux and android so tools like
+        // @rollup/rollup-android-arm64 get installed alongside linux fallbacks
+        val expectedContent = "script-shell=$bashPath\nos[]=linux\nos[]=android\n"
         if (!npmrc.exists() || npmrc.readText() != expectedContent) {
             npmrc.writeText(expectedContent)
-            Logger.d(tag, "Updated .npmrc script-shell path")
+            Logger.d(tag, "Updated .npmrc")
         }
     }
 
@@ -348,9 +394,11 @@ class FirstRunSetup(private val context: Context) {
     private fun npmBashFunctions(): String = """
 
 # npm/npx — shell functions (Android noexec prevents script wrappers)
+# VSCODROID_PLATFORM_FIX=1: override process.platform to "linux" for npm only
+# (child processes like Rollup/esbuild see real "android" platform)
 # --prefer-offline: use local cache first, saves time on slow mobile connections
-npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" --prefer-offline "${'$'}@"; }
-npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
+npm() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" --prefer-offline "${'$'}@"; }
+npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
 """
 
     /**

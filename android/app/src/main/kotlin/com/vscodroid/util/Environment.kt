@@ -36,9 +36,9 @@ object Environment {
         else
             "$basePath:/system/bin"
 
-        // Preload script that fixes process.platform ("android" → "linux")
-        // so npm packages (Prisma, node-gyp, esbuild, etc.) detect the platform correctly.
-        // NODE_OPTIONS propagates to all child processes and worker threads.
+        // Preload script that selectively fixes process.platform ("android" → "linux")
+        // for npm/node-gyp only. Build tools like Rollup/esbuild see real "android" platform.
+        // Loaded in all Node.js processes via NODE_OPTIONS but only activates with opt-in env var.
         val platformFixPath = "$filesDir/server/platform-fix.js"
         val nodeOptions = "--require=$platformFixPath"
 
@@ -58,6 +58,7 @@ object Environment {
             "PYTHONDONTWRITEBYTECODE" to "1",
             "GIT_EXEC_PATH" to "$filesDir/usr/lib/git-core",
             "GIT_TEMPLATE_DIR" to "$filesDir/usr/share/git-core/templates",
+            "GIT_SSH_COMMAND" to "$nativeLibDir/libssh.so -F $homeDir/.ssh/config",
             "GIT_SSL_CAPATH" to getSystemCaCertsPath(),
             "SSL_CERT_DIR" to getSystemCaCertsPath(),
             "NPM_CONFIG_PREFIX" to "$filesDir/usr",

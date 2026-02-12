@@ -15,6 +15,7 @@ import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 class AndroidBridge(
     private val context: Context,
@@ -321,6 +322,116 @@ class AndroidBridge(
     fun cancelToolchainInstall(name: String, authToken: String) {
         if (!security.validateToken(authToken)) return
         toolchainManager.cancel(name)
+    }
+
+    // -- SSH Key Management --
+
+    /**
+     * Generates an ed25519 SSH key pair in ~/.ssh/.
+     * Returns JSON: {success: boolean, publicKey?: string, error?: string}
+     *
+     * Uses the bundled ssh-keygen binary (libssh-keygen.so) via ProcessBuilder.
+     * Empty passphrase for mobile UX — keys are protected by app sandbox.
+     */
+    @JavascriptInterface
+    fun generateSshKey(authToken: String, comment: String): String {
+        if (!security.validateToken(authToken)) return """{"success":false,"error":"unauthorized"}"""
+        val result = JSONObject()
+        try {
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            val homeDir = "${context.filesDir}/home"
+            val sshDir = File(homeDir, ".ssh")
+            sshDir.mkdirs()
+            val keyFile = File(sshDir, "id_ed25519")
+
+            // Don't overwrite existing key
+            if (keyFile.exists()) {
+                val pubKey = File("${keyFile.absolutePath}.pub").readText().trim()
+                result.put("success", true)
+                result.put("publicKey", pubKey)
+                result.put("existed", true)
+                return result.toString()
+            }
+
+            val keyComment = if (comment.isBlank()) "vscodroid@android" else comment
+
+            val process = ProcessBuilder(
+                "$nativeLibDir/libssh-keygen.so",
+                "-t", "ed25519",
+                "-f", keyFile.absolutePath,
+                "-N", "",  // empty passphrase
+                "-C", keyComment
+            ).apply {
+                environment()["HOME"] = homeDir
+                environment()["LD_LIBRARY_PATH"] = "$nativeLibDir:${context.filesDir}/usr/lib"
+                redirectErrorStream(true)
+            }.start()
+
+            val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+
+            if (exitCode == 0 && keyFile.exists()) {
+                // Set correct permissions (600 for private key, 644 for public)
+                try {
+                    android.system.Os.chmod(keyFile.absolutePath, 384)  // 0600
+                    android.system.Os.chmod("${keyFile.absolutePath}.pub", 420)  // 0644
+                } catch (e: Exception) {
+                    Logger.d(tag, "Failed to chmod SSH key: ${e.message}")
+                }
+
+                val pubKey = File("${keyFile.absolutePath}.pub").readText().trim()
+                result.put("success", true)
+                result.put("publicKey", pubKey)
+            } else {
+                result.put("success", false)
+                result.put("error", output.trim().ifEmpty { "ssh-keygen exited with code $exitCode" })
+            }
+        } catch (e: Exception) {
+            Logger.e(tag, "SSH key generation failed", e)
+            result.put("success", false)
+            result.put("error", e.message ?: "unknown error")
+        }
+        return result.toString()
+    }
+
+    /**
+     * Reads the SSH public key (~/.ssh/id_ed25519.pub).
+     * Returns the key contents or empty string if not found.
+     */
+    @JavascriptInterface
+    fun getSshPublicKey(authToken: String): String {
+        if (!security.validateToken(authToken)) return ""
+        val pubKeyFile = File("${context.filesDir}/home/.ssh/id_ed25519.pub")
+        return if (pubKeyFile.exists()) pubKeyFile.readText().trim() else ""
+    }
+
+    /**
+     * Lists all SSH keys in ~/.ssh/.
+     * Returns JSON array of {name, type, fingerprint} for each key pair.
+     */
+    @JavascriptInterface
+    fun listSshKeys(authToken: String): String {
+        if (!security.validateToken(authToken)) return "[]"
+        val sshDir = File("${context.filesDir}/home/.ssh")
+        if (!sshDir.exists()) return "[]"
+
+        val keys = JSONArray()
+        val allFiles: Array<File> = sshDir.listFiles() ?: emptyArray()
+        val pubFiles = allFiles.filter { f -> f.name.endsWith(".pub") }
+        for (pubFile in pubFiles) {
+            try {
+                val content = pubFile.readText().trim()
+                val parts = content.split(" ", limit = 3)
+                keys.put(JSONObject().apply {
+                    put("name", pubFile.name.removeSuffix(".pub"))
+                    put("type", if (parts.isNotEmpty()) parts[0] else "unknown")
+                    put("comment", if (parts.size > 2) parts[2] else "")
+                })
+            } catch (e: Exception) {
+                Logger.d(tag, "Failed to read SSH key ${pubFile.name}: ${e.message}")
+            }
+        }
+        return keys.toString()
     }
 
     private fun getVersionName(): String {

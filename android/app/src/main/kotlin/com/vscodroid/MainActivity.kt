@@ -509,6 +509,8 @@ class MainActivity : AppCompatActivity() {
         injectWindowOpenOverride()
         // Open in Browser command for dev server preview
         injectOpenInBrowserCommand()
+        // SSH key management commands
+        injectSshKeyCommands()
     }
 
     /**
@@ -707,6 +709,84 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Injects SSH key management commands into VS Code's command palette:
+     * - "VSCodroid: Generate SSH Key" — generates ed25519 key pair
+     * - "VSCodroid: Copy SSH Public Key" — copies public key to clipboard
+     */
+    private fun injectSshKeyCommands() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidSshCommandsRegistered) return;
+                window.__vscodroidSshCommandsRegistered = true;
+
+                var attempts = 0;
+                var interval = setInterval(function() {
+                    attempts++;
+                    if (attempts > 50) { clearInterval(interval); return; }
+                    try {
+                        var cs = window.require('vs/platform/commands/common/commands');
+                        if (!cs || !cs.CommandsRegistry) return;
+                        var ns = window.require('vs/platform/notification/common/notification');
+                        var ar = window.require('vs/platform/actions/common/actions');
+
+                        // -- Generate SSH Key --
+                        cs.CommandsRegistry.registerCommand('vscodroid.generateSshKey', function(accessor) {
+                            var token = (window.__vscodroid || {}).authToken;
+                            if (!token || typeof AndroidBridge === 'undefined') return;
+                            var notif = accessor.get(ns.INotificationService);
+                            try {
+                                var result = JSON.parse(AndroidBridge.generateSshKey(token, ''));
+                                if (result.success) {
+                                    var msg = result.existed
+                                        ? 'SSH key already exists.'
+                                        : 'SSH key generated!';
+                                    msg += '\n' + result.publicKey;
+                                    notif.info(msg);
+                                } else {
+                                    notif.error('SSH key generation failed: ' + (result.error || 'unknown'));
+                                }
+                            } catch(e) {
+                                notif.error('SSH key generation failed: ' + e);
+                            }
+                        });
+
+                        // -- Copy SSH Public Key --
+                        cs.CommandsRegistry.registerCommand('vscodroid.copySshPublicKey', function(accessor) {
+                            var token = (window.__vscodroid || {}).authToken;
+                            if (!token || typeof AndroidBridge === 'undefined') return;
+                            var notif = accessor.get(ns.INotificationService);
+                            var pubKey = AndroidBridge.getSshPublicKey(token);
+                            if (pubKey) {
+                                AndroidBridge.copyToClipboard(pubKey);
+                                notif.info('SSH public key copied to clipboard.');
+                            } else {
+                                notif.warn('No SSH key found. Use "VSCodroid: Generate SSH Key" first.');
+                            }
+                        });
+
+                        // Register in command palette
+                        if (ar && ar.MenuRegistry && ar.MenuId) {
+                            ar.MenuRegistry.appendMenuItem(ar.MenuId.CommandPalette, {
+                                command: { id: 'vscodroid.generateSshKey', title: 'VSCodroid: Generate SSH Key' }
+                            });
+                            ar.MenuRegistry.appendMenuItem(ar.MenuId.CommandPalette, {
+                                command: { id: 'vscodroid.copySshPublicKey', title: 'VSCodroid: Copy SSH Public Key' }
+                            });
+                        }
+
+                        clearInterval(interval);
+                    } catch(e) {
+                        // VS Code not ready yet, retry
+                    }
+                }, 200);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
      * Injects a BroadcastChannel relay into the WebView main page.
      *
      * Browser extensions (which run in a Web Worker) cannot access AndroidBridge
@@ -752,6 +832,15 @@ class MainActivity : AppCompatActivity() {
                         } else if (d.cmd === 'openToolchainSettings') {
                             AndroidBridge.openToolchainSettings(token);
                             ch.postMessage({id: d.id, ok: true});
+                        } else if (d.cmd === 'generateSshKey') {
+                            result = AndroidBridge.generateSshKey(token, d.comment || '');
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'getSshPublicKey') {
+                            result = AndroidBridge.getSshPublicKey(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'listSshKeys') {
+                            result = AndroidBridge.listSshKeys(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
