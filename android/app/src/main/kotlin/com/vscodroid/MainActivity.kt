@@ -847,6 +847,9 @@ class MainActivity : AppCompatActivity() {
                         } else if (d.cmd === 'showAboutDialog') {
                             AndroidBridge.showAboutDialog(token);
                             ch.postMessage({id: d.id, ok: true});
+                        } else if (d.cmd === 'openExternalUrl') {
+                            AndroidBridge.openExternalUrl(d.url, token);
+                            ch.postMessage({id: d.id, ok: true});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});

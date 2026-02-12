@@ -108,6 +108,7 @@ if (!fs.existsSync(rehEntryPoint)) {
         '--port', String(PORT),
         '--without-connection-token',
         '--accept-server-license-terms',
+        '--password-store', 'basic',
         '--log', LOG_LEVEL
     ];
 

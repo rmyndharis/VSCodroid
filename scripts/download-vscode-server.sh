@@ -133,6 +133,11 @@ else
 JSON
 fi
 
+# NOTE: Secret storage (vscode.secrets API) requires --password-store=basic at runtime.
+# Android has no system keyring (gnome-keyring/kwallet), so without this flag,
+# extensions using OAuth/token storage (e.g., Cline, GitHub) fail silently.
+# The flag is passed in server.js, not here — no build-time patch needed.
+
 # Patch vsda signing validation
 # VS Code uses a native binary (vsda.node) for client-server handshake validation.
 # The native binary is Linux x86_64 and won't work on Android ARM64.
