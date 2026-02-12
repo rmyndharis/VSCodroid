@@ -542,6 +542,10 @@ import sys
 with open(sys.argv[1], 'r') as f: c = f.read()
 c = c.replace('Get Started with VS Code for the Web', 'Get Started with VSCodroid')
 c = c.replace('Setup VS Code Web', 'Setup VSCodroid')
+# Remove telemetry notice from walkthrough footer — VSCodroid does not collect usage data.
+# This blanks the template string; the {1} and {2} link texts become harmless since
+# the parent sentence is empty, so nothing renders.
+c = c.replace('{0} collects usage data. Read our {1} and learn how to {2}.', '')
 with open(sys.argv[1], 'w') as f: f.write(c)
 " "$NLS_FILE"
         echo "  Patched: $NLS_FILE"
