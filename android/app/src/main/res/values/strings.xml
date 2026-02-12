@@ -30,6 +30,10 @@
     <string name="key_slash">/</string>
     <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
 
+    <!-- About dialog -->
+    <string name="about_title">About VSCodroid</string>
+    <string name="about_version_format">Version %s</string>
+
     <!-- Toolchain picker (first-run) -->
     <string name="picker_title">What do you code in?</string>
     <string name="picker_subtitle">Optional \u2014 you can add these anytime in Settings.</string>

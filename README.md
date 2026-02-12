@@ -33,16 +33,17 @@
 
 - **Real VS Code** — Monaco Editor, Workbench UI, Command Palette, and all the features you know
 - **Extension Support** — Install themes, linters, language packs, and more from [Open VSX](https://open-vsx.org)
-- **Integrated Terminal** — Full bash terminal with tmux multiplexing, right in the editor
-- **Batteries Included** — Node.js, Python 3, Git, and essential tools bundled out of the box
+- **Integrated Terminal** — Full bash terminal with real PTY support (vim, tmux, readline all work)
+- **Batteries Included** — Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box
 - **Offline-First** — Code without an internet connection. Everything runs locally on your device
 - **Mobile-Optimized** — Extra Key Row (Ctrl, Alt, Tab, Esc, arrows), touch-friendly UI, clipboard bridge
-- **Language Picker** — Select your languages, Go/Rust/Java/C++/Ruby auto-install via Play Store
-- **Built-in Package Manager** — 2000+ pre-compiled ARM64 packages available
+- **SSH Key Management** — Generate ed25519 keys and copy public keys from the command palette
+- **Language Picker** — Select your languages, Go/Ruby/Java auto-install via Play Store
+- **Dev Server Preview** — Open localhost URLs in your device's browser for web app testing
 
 ## 🏗 Architecture
 
-VSCodroid runs a local [code-server](https://github.com/coder/code-server) instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process — all on `localhost`.
+VSCodroid runs a local VS Code Server instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process — all on `localhost`.
 
 ```mermaid
 flowchart TD
@@ -53,7 +54,7 @@ flowchart TD
     NODE["Node.js Process (VS Code Server, vscode-reh, ARM64)"]
     REH["VS Code Server (vscode-reh)"]
     EXT["Extension Host"]
-    TERM["Terminal (tmux)"]
+    TERM["Terminal (node-pty)"]
     FS["File System / Search"]
     WV --> WEB
     NODE --> REH
@@ -92,9 +93,8 @@ flowchart TD
 
 | Tier | What | How |
 |---|---|---|
-| **Core (Base APK)** | Node.js, Python 3, Git, Bash, tmux, make | Available immediately |
-| **Toolchains (Asset Packs)** | Go, Rust, Java/Kotlin, C/C++, Ruby | Select in Language Picker, auto-installed via Play Store |
-| **Package Manager** | 2000+ additional ARM64 packages | `vscodroid pkg install <package>` |
+| **Core (Base APK)** | Node.js, npm, Python 3, Git, Bash, SSH, tmux, make, ripgrep | Available immediately |
+| **Toolchains (Asset Packs)** | Go, Ruby, Java | Select in Language Picker, auto-installed via Play Store |
 
 ## 🔨 Building from Source
 
@@ -161,9 +161,12 @@ Quick links:
 | [Risk Matrix](docs/08-RISK_MATRIX.md) | Known risks and mitigation strategies |
 | [Development Guide](docs/09-DEVELOPMENT_GUIDE.md) | How to set up and build the project |
 | [Release Plan](docs/10-RELEASE_PLAN.md) | Release strategy, CI/CD, Play Store |
-| [Milestones](MILESTONES.md) | Development milestones M0–M5 |
+| [User Guide](docs/USER_GUIDE.md) | How to use VSCodroid (keyboard, terminal, extensions, SSH) |
+| [Milestones](MILESTONES.md) | Development milestones M0–M6 |
 | [Glossary](docs/11-GLOSSARY.md) | Terms and definitions |
 | [Implementation Plan](docs/12-IMPLEMENTATION_PLAN.md) | Week-by-week task breakdown with dependencies |
+| [Third-Party Attribution](NOTICE.md) | Licenses for all bundled software |
+| [Privacy Policy](https://rmyndharis.github.io/VSCodroid/privacy-policy.html) | Data collection and privacy practices |
 
 ## 🔒 Security
 
@@ -176,6 +179,8 @@ VSCodroid is built from the MIT-licensed [Code - OSS](https://github.com/microso
 - "Visual Studio Code" and "VS Code" are trademarks of Microsoft
 - Uses [Open VSX](https://open-vsx.org) extension registry, not Microsoft Marketplace
 - See [LICENSE](LICENSE) for full license text
+- See [NOTICE.md](NOTICE.md) for third-party attribution
+- See [Privacy Policy](https://rmyndharis.github.io/VSCodroid/privacy-policy.html) for data practices
 
 ## 📄 License
 

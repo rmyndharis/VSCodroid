@@ -25,6 +25,7 @@ class AndroidBridge(
     private val onMinimize: () -> Unit,
     private val onOpenFolderPicker: () -> Unit = {},
     private val onOpenRecentFolder: (Uri) -> Unit = {},
+    private val onShowAbout: () -> Unit = {},
     private val safManager: SafStorageManager? = null
 ) {
     private val tag = "AndroidBridge"
@@ -322,6 +323,14 @@ class AndroidBridge(
     fun cancelToolchainInstall(name: String, authToken: String) {
         if (!security.validateToken(authToken)) return
         toolchainManager.cancel(name)
+    }
+
+    // -- About --
+
+    @JavascriptInterface
+    fun showAboutDialog(authToken: String) {
+        if (!security.validateToken(authToken)) return
+        onShowAbout()
     }
 
     // -- SSH Key Management --

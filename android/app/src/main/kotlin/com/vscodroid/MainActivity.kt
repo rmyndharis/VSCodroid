@@ -440,6 +440,7 @@ class MainActivity : AppCompatActivity() {
             onMinimize = { moveTaskToBack(true) },
             onOpenFolderPicker = { openFolderPicker() },
             onOpenRecentFolder = { uri -> openRecentSafFolder(uri) },
+            onShowAbout = { runOnUiThread { showAboutDialog() } },
             safManager = safManager
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
@@ -511,6 +512,8 @@ class MainActivity : AppCompatActivity() {
         injectOpenInBrowserCommand()
         // SSH key management commands
         injectSshKeyCommands()
+        // About dialog
+        injectAboutCommand()
     }
 
     /**
@@ -841,6 +844,9 @@ class MainActivity : AppCompatActivity() {
                         } else if (d.cmd === 'listSshKeys') {
                             result = AndroidBridge.listSshKeys(token);
                             ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'showAboutDialog') {
+                            AndroidBridge.showAboutDialog(token);
+                            ch.postMessage({id: d.id, ok: true});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
@@ -880,6 +886,71 @@ class MainActivity : AppCompatActivity() {
                         });
                     } catch(e) {}
                 };
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Shows the About dialog. Called from AndroidBridge via JS.
+     */
+    fun showAboutDialog() {
+        val versionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (_: Exception) {
+            "unknown"
+        }
+        val version = getString(R.string.about_version_format, versionName)
+        val disclaimer = getString(R.string.legal_disclaimer)
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.about_title))
+            .setMessage("$version\n\n$disclaimer")
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Source Code") { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
+            }
+            .setNegativeButton("Privacy Policy") { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")))
+            }
+            .show()
+    }
+
+    /**
+     * Injects a "VSCodroid: About" command into VS Code's command palette.
+     */
+    private fun injectAboutCommand() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidAboutRegistered) return;
+                window.__vscodroidAboutRegistered = true;
+
+                var attempts = 0;
+                var interval = setInterval(function() {
+                    attempts++;
+                    if (attempts > 50) { clearInterval(interval); return; }
+                    try {
+                        var cs = window.require('vs/platform/commands/common/commands');
+                        if (!cs || !cs.CommandsRegistry) return;
+                        var ar = window.require('vs/platform/actions/common/actions');
+
+                        cs.CommandsRegistry.registerCommand('vscodroid.about', function() {
+                            var token = (window.__vscodroid || {}).authToken;
+                            if (token && typeof AndroidBridge !== 'undefined') {
+                                AndroidBridge.showAboutDialog(token);
+                            }
+                        });
+
+                        if (ar && ar.MenuRegistry && ar.MenuId) {
+                            ar.MenuRegistry.appendMenuItem(ar.MenuId.CommandPalette, {
+                                command: { id: 'vscodroid.about', title: 'VSCodroid: About' }
+                            });
+                        }
+                        clearInterval(interval);
+                    } catch(e) {}
+                }, 200);
             })();
             """.trimIndent(),
             null
