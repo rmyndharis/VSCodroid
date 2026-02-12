@@ -209,7 +209,7 @@ function scan() {
         const snapshot = {
             timestamp: now,
             total: tree.length,
-            budget: { current: tree.length, soft: 8, hard: 12 },
+            budget: { current: tree.length, soft: 5, hard: 32 },
             tree,
             warnings
         };

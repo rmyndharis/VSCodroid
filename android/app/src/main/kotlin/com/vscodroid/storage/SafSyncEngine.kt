@@ -140,6 +140,7 @@ class SafSyncEngine(private val context: Context) {
         writeBackThread?.interrupt()
         writeBackThread = null
         writeBackQueue.clear()
+        docIdCache.clear()
         Logger.i(tag, "File watcher stopped")
     }
 
@@ -243,12 +244,26 @@ class SafSyncEngine(private val context: Context) {
      */
     private fun createInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri) {
         try {
-            val mimeType = guessMimeType(localFile.name)
+            val mimeType = if (localFile.isDirectory) {
+                DocumentsContract.Document.MIME_TYPE_DIR
+            } else {
+                guessMimeType(localFile.name)
+            }
             val newDocUri = DocumentsContract.createDocument(
                 context.contentResolver, parentSafUri, mimeType, localFile.name
             )
             if (newDocUri != null && localFile.isFile) {
                 writeLocalToSaf(localFile, newDocUri)
+            }
+            // Cache the new document ID for future write-back lookups
+            if (newDocUri != null) {
+                val newDocId = DocumentsContract.getDocumentId(newDocUri)
+                val parentDocId = DocumentsContract.getDocumentId(parentSafUri)
+                val parentRelPath = docIdCache.entries
+                    .firstOrNull { it.value == parentDocId }?.key ?: ""
+                val relPath = if (parentRelPath.isEmpty()) localFile.name
+                    else "$parentRelPath/${localFile.name}"
+                docIdCache[relPath] = newDocId
             }
         } catch (e: Exception) {
             Logger.w(tag, "Failed to create ${localFile.name} in SAF: ${e.message}")

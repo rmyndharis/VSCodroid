@@ -59,12 +59,12 @@ function updateStatusBar(snapshot) {
 
     statusBarItem.text = `$(pulse) ${total}`;
 
-    // Color thresholds
-    if (total > 10) {
+    // Color thresholds (soft budget = 5, system hard limit = 32)
+    if (total >= 10) {
         statusBarItem.backgroundColor = new vscode.ThemeColor(
             'statusBarItem.errorBackground'
         );
-    } else if (total >= 6) {
+    } else if (total >= 5) {
         statusBarItem.backgroundColor = new vscode.ThemeColor(
             'statusBarItem.warningBackground'
         );
@@ -81,18 +81,18 @@ function updateStatusBar(snapshot) {
     const parts = Object.entries(counts).map(([k, v]) => `${v} ${k}`);
     statusBarItem.tooltip = `Phantom processes: ${total}\n${parts.join(', ')}`;
 
-    // Warning notification at threshold crossing
-    if (total >= 10 && !warningShownAtThreshold) {
+    // Warning notification at threshold crossing (8 = approaching danger zone)
+    if (total >= 8 && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
         vscode.window.showWarningMessage(
-            `Running ${total} phantom processes. Consider closing unused terminals or restarting language servers.`,
+            `Running ${total} phantom processes (target: ≤5). Consider closing unused terminals or restarting language servers.`,
             'Show Details'
         ).then(choice => {
             if (choice === 'Show Details') {
                 showProcessTree();
             }
         });
-    } else if (total < 8) {
+    } else if (total < 5) {
         // Reset so warning can fire again if count goes back up
         warningShownAtThreshold = false;
     }

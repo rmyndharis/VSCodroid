@@ -630,9 +630,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Logger.i(tag, "OAuth callback received (state=$state)")
-        // Forward to VS Code's auth handler via JS
-        val escapedCode = code.replace("'", "\\'")
-        val escapedState = state.replace("'", "\\'")
+        // Forward to VS Code's auth handler via JS.
+        // Escape backslashes FIRST, then quotes — prevents injection via \'
+        val escapedCode = code.replace("\\", "\\\\").replace("'", "\\'")
+        val escapedState = state.replace("\\", "\\\\").replace("'", "\\'")
         webView?.evaluateJavascript(
             "window.__vscodroid?.onOAuthCallback?.('$escapedCode', '$escapedState')", null
         )

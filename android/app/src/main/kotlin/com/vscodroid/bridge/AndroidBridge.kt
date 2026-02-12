@@ -230,6 +230,11 @@ class AndroidBridge(
         if (!security.validateToken(authToken)) return
         try {
             val uri = Uri.parse(authUrl)
+            // Only allow GitHub OAuth URLs to prevent misuse
+            if (uri.scheme != "https" || uri.host != "github.com") {
+                Logger.w(tag, "Blocked non-GitHub OAuth URL: ${uri.host}")
+                return
+            }
             val customTabsIntent = CustomTabsIntent.Builder()
                 .setShowTitle(true)
                 .build()
