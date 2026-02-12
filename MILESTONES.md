@@ -340,14 +340,13 @@ M6 (Release)   → Play Store release
 
 ## M5 — Toolchain Ecosystem
 
-**Goal**: Extensible toolchain delivery so users can install additional languages and tools.
+**Goal**: On-demand toolchain delivery so users can install additional languages beyond the bundled core.
 
-**Deliverable**: In-app package manager and on-demand toolchain downloads.
+**Deliverable**: Play Asset Delivery integration with Go, Ruby, and Java toolchains, plus a Language Picker UI.
 
 ### Entry Criteria:
 - [x] All M4 success criteria passed
 - [ ] APK size audit completed (current vs projected with additional toolchains)
-- [ ] Termux package compatibility verified for target toolchains
 
 ### Tasks:
 
@@ -357,44 +356,48 @@ M6 (Release)   → Play Store release
    - [x] Extensions load correctly under worker_thread mode
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
-2. **On-demand toolchains**
-   - Go (cross-compiled for ARM64 Android)
-   - Rust (rustc + cargo)
-   - Java (OpenJDK + javac)
-   - C/C++ (clang/gcc from NDK or Termux)
-   - Ruby
-   - Verify each: `go version`, `rustc --version`, `javac -version`, `gcc --version`, `ruby --version`
+2. **~~On-demand toolchain download scripts~~** (`scripts/download-go.sh`, `download-ruby.sh`, `download-java.sh`)
+   - [x] Go from Termux `golang` package (179 MB asset pack, CGO_ENABLED=0)
+   - [x] Ruby from Termux `ruby` + libgmp + libyaml (34 MB asset pack)
+   - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn (146 MB asset pack)
+   - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
 
-3. **Package manager (`vscodroid pkg`)**
-   - Implement lightweight package manager CLI
-   - Leverage Termux package repository (or host mirror)
-   - Terminal command: `vscodroid pkg install <package>`
-   - Package install to `usr/` directory structure
-   - Package listing, removal, update support
+3. **~~Play Asset Delivery integration~~** (`ToolchainManager.kt`, `ToolchainRegistry.kt`)
+   - [x] Gradle asset pack modules (`toolchain_go/`, `toolchain_ruby/`, `toolchain_java/`)
+   - [x] `ToolchainManager`: fetch, progress tracking, copy to filesDir, chmod +x, symlinks, uninstall
+   - [x] `ToolchainRegistry`: catalog of available toolchains with sizes
+   - [x] `Environment.kt`: dynamic toolchain env vars merged into server process
+   - [x] `AndroidBridge.kt`: JS bridge for install/uninstall/query from extensions
+   - [x] `.bashrc` sources `toolchain-env.sh` for terminal PATH/env updates
 
-4. **Play Store AssetPackManager integration** *(requires Google Play Developer account)*
-   - Integrate Play Asset Delivery for on-demand toolchain downloads
-   - Each toolchain as a separate asset pack (keeps base APK small)
-   - Handle download states: pending, downloading, completed, failed
-   - Verify per-device delivery sizes stay within Play Store limits
+4. **Toolchain compatibility verification** *(requires device testing)*
+   - [ ] `go version` → works after install
+   - [ ] `ruby --version`, `irb`, `gem` → works after install
+   - [ ] `java -version`, `javac -version` → works after install
+   - [ ] Verify toolchains persist across app restarts
+   - [ ] Verify uninstall cleans up correctly
 
 5. **Language Picker UI**
-   - First-run UI: "What do you code in?" with language checkboxes
-   - Settings > Toolchains page for adding/removing languages post-install
-   - Download progress UI, error handling, retry
-   - Auto-configure PATH for each installed toolchain
+   - [ ] First-run UI: "What do you code in?" with language checkboxes
+   - [ ] Settings > Toolchains page for adding/removing languages post-install
+   - [ ] Download progress UI, error handling, retry
+   - [ ] Size display per toolchain before download
+
+6. **APK size audit**
+   - [ ] Measure base APK size (without toolchains)
+   - [ ] Verify base APK stays < 150 MB
+   - [ ] Document per-toolchain on-demand sizes
 
 ### Success Criteria:
 - [x] Extension Host runs as worker_thread (phantom process count reduced)
 - [x] ptyHost runs as worker_thread (additional phantom process saved)
-- [ ] `vscodroid pkg install <package>` works for at least 10 packages
-- [ ] On-demand toolchains download via Play Asset Delivery
-- [ ] Go/Rust/Java/C++/Ruby compile and run correctly after install
+- [x] On-demand toolchains delivered via Play Asset Delivery (Go, Ruby, Java)
+- [x] ToolchainManager handles full lifecycle (install, uninstall, env vars, symlinks)
+- [ ] Go/Ruby/Java verified working on physical device after asset pack install
 - [ ] Base APK stays < 150 MB (toolchains delivered on-demand)
-- [ ] Installed toolchains persist across app updates
 - [ ] Language Picker UI works during first-run and from Settings
 
-### Estimated Effort: 4-6 weeks
+### Estimated Effort: 3-4 weeks
 
 ---
 
@@ -486,10 +489,10 @@ M6 (Release)   → Play Store release
 | M2 — Mobile UX | 2-3 weeks | 7-9 weeks |
 | M3 — All-in-One Dev Environment | 3-4 weeks | 10-13 weeks |
 | M4 — Polish & Performance | 3-4 weeks | 13-17 weeks |
-| M5 — Toolchain Ecosystem | 4-6 weeks | 17-23 weeks |
-| M6 — Release | 6-8 weeks | 23-31 weeks |
+| M5 — Toolchain Ecosystem | 3-4 weeks | 16-21 weeks |
+| M6 — Release | 6-8 weeks | 22-29 weeks |
 
-**Total: ~6-8 months from start to Play Store release.**
+**Total: ~5-7 months from start to Play Store release.**
 
 ## Critical Path
 
@@ -507,3 +510,26 @@ flowchart LR
 ```
 
 The hardest part is **M0 + M1** — getting Node.js and VS Code actually running on Android. Once that works, everything else is incremental.
+
+---
+
+## Post-Release Roadmap
+
+Features planned for after Play Store launch, prioritized by user demand.
+
+### Package Manager (`vscodroid pkg`)
+- Lightweight CLI for installing additional tools from Termux repository (2000+ packages)
+- `vscodroid pkg install <package>` — download, extract, configure PATH
+- `vscodroid pkg list` / `vscodroid pkg remove <package>` / `vscodroid pkg search <query>`
+- Curated installer UI inside VSCodroid (not just terminal-based)
+- Targets: PHP, Perl, Lua, and other tools beyond bundled/on-demand toolchains
+
+### Additional On-demand Toolchains
+- **Rust** (rustc + cargo, ~100 MB) — high demand, self-contained
+- **C/C++** (clang/LLVM from Termux, ~84 MB) — large, needs careful stripping
+- Delivered via same Play Asset Delivery pipeline as Go/Ruby/Java
+
+### Future Enhancements
+- Toolchain version management (multiple Go/Ruby/Java versions)
+- Automatic toolchain updates via Play Store asset pack updates
+- Community-contributed toolchain recipes
