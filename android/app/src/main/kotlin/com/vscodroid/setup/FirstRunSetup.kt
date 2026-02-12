@@ -51,6 +51,7 @@ class FirstRunSetup(private val context: Context) {
             reportProgress("Setting up tools...", 68)
             setupToolSymlinks()
             setupRipgrepVscodeSymlink()
+            createNpmWrappers()
             createStorageSymlinks()
             createWelcomeProject()
             createBashrc()
@@ -260,6 +261,66 @@ class FirstRunSetup(private val context: Context) {
     }
 
     /**
+     * Ensures npm/npx shell functions exist in .bashrc and creates .npmrc.
+     *
+     * Android mounts /data noexec, so shell script wrappers in usr/bin/ fail with
+     * "bad interpreter: Permission denied". Instead, npm/npx are defined as bash
+     * functions that invoke node with the cli entry point.
+     *
+     * Safe to call on every launch — only appends if functions are missing.
+     */
+    fun createNpmWrappers() {
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        val filesDir = context.filesDir.absolutePath
+        val npmCliJs = "$filesDir/usr/lib/node_modules/npm/bin/npm-cli.js"
+
+        // Only set up if npm was actually extracted
+        if (!File(npmCliJs).exists()) {
+            Logger.d(tag, "npm not extracted yet, skipping npm setup")
+            return
+        }
+
+        // Remove stale script-based wrappers from previous versions
+        val binDir = File(context.filesDir, "usr/bin")
+        for (name in listOf("npm", "npx")) {
+            val script = File(binDir, name)
+            if (script.exists() && !isSymlink(script)) {
+                script.delete()
+                Logger.d(tag, "Removed stale $name script wrapper")
+            }
+        }
+
+        // Append npm/npx functions to .bashrc if not already present
+        val bashrc = File(context.filesDir, "home/.bashrc")
+        if (bashrc.exists()) {
+            val content = bashrc.readText()
+            if (!content.contains("npm()")) {
+                bashrc.appendText(npmBashFunctions())
+                Logger.i(tag, "Appended npm/npx functions to .bashrc")
+            }
+        }
+
+        // Create default .npmrc if it doesn't exist
+        val npmrc = File(context.filesDir, "home/.npmrc")
+        if (!npmrc.exists()) {
+            val bashPath = "$nativeLibDir/libbash.so"
+            npmrc.writeText("script-shell=$bashPath\n")
+        }
+    }
+
+    private fun isSymlink(file: File): Boolean = try {
+        Os.lstat(file.absolutePath)
+        file.canonicalPath != file.absolutePath
+    } catch (e: Exception) { false }
+
+    private fun npmBashFunctions(): String = """
+
+# npm/npx — shell functions (Android noexec prevents script wrappers)
+npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" "${'$'}@"; }
+npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
+"""
+
+    /**
      * Updates nativeLibraryDir paths in settings.json.
      *
      * Android changes nativeLibraryDir on every reinstall (random hash in path).
@@ -347,6 +408,10 @@ class FirstRunSetup(private val context: Context) {
                 export SAF_MIRRORS_DIR='$safMirrorsDir'
                 alias ls='ls --color=auto'
                 alias ll='ls -la'
+
+                # npm/npx — shell functions (Android noexec prevents script wrappers)
+                npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" "${'$'}@"; }
+                npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
 
                 # Start in the active folder (SAF or default projects dir)
                 if [ -f "${'$'}HOME/.vscodroid_folder" ]; then

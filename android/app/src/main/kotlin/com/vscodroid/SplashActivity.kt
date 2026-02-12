@@ -24,6 +24,7 @@ class SplashActivity : AppCompatActivity() {
         // path on every reinstall, which breaks absolute symlinks in usr/bin/.
         setup.setupToolSymlinks()
         setup.setupRipgrepVscodeSymlink()
+        setup.createNpmWrappers()
         setup.updateSettingsNativeLibPaths()
 
         if (!setup.isFirstRun()) {

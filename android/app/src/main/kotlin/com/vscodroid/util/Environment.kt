@@ -44,6 +44,8 @@ object Environment {
             "GIT_TEMPLATE_DIR" to "$filesDir/usr/share/git-core/templates",
             "GIT_SSL_CAPATH" to getSystemCaCertsPath(),
             "SSL_CERT_DIR" to getSystemCaCertsPath(),
+            "NPM_CONFIG_PREFIX" to "$filesDir/usr",
+            "NPM_CONFIG_CACHE" to "$cacheDir/npm-cache",
             "PROJECTS_DIR" to getProjectsDir(context),
             "VSCODROID_PORT" to port.toString(),
             "VSCODROID_VERSION" to getVersionName(context),
