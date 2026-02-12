@@ -14,6 +14,8 @@ android {
         versionCode = 1
         versionName = "0.1.0-m0"
 
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -106,11 +108,18 @@ dependencies {
     // Play Asset Delivery (on-demand toolchain packs)
     implementation(libs.play.asset.delivery.ktx)
 
-    // Testing
+    // Unit Testing (JUnit 5, JVM only)
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.junit.jupiter.api)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testImplementation(libs.mockk)
+
+    // Instrumented Testing (JUnit 4, runs on device)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation(libs.androidx.test.uiautomator)
 }
 
 tasks.withType<Test> {
