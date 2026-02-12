@@ -14,6 +14,8 @@ import android.webkit.WebView
 import android.widget.Toast
 import java.io.File
 import androidx.activity.OnBackPressedCallback
+import com.vscodroid.util.CrashReporter
+import com.vscodroid.util.StorageManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -93,10 +95,17 @@ class MainActivity : AppCompatActivity() {
         setupBackNavigation()
         requestNotificationPermission()
         startAndBindService()
+        checkPreviousCrash()
+        checkStorageHealth()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val uri = intent.data
+        if (uri?.scheme == "vscodroid" && uri.host == "oauth") {
+            handleOAuthCallback(uri)
+            return
+        }
         handleIntent(intent)
     }
 
@@ -490,14 +499,27 @@ class MainActivity : AppCompatActivity() {
                     var token = (window.__vscodroid || {}).authToken;
                     if (!token || !d || !d.cmd) return;
                     try {
+                        var result;
                         if (d.cmd === 'openFolderPicker') {
                             AndroidBridge.openFolderPicker(token);
                             ch.postMessage({id: d.id, ok: true});
                         } else if (d.cmd === 'getRecentFolders') {
-                            var result = AndroidBridge.getRecentFolders(token);
+                            result = AndroidBridge.getRecentFolders(token);
                             ch.postMessage({id: d.id, ok: true, data: result});
                         } else if (d.cmd === 'openRecentFolder') {
                             AndroidBridge.openRecentFolder(token, d.uri);
+                            ch.postMessage({id: d.id, ok: true});
+                        } else if (d.cmd === 'getStorageBreakdown') {
+                            result = AndroidBridge.getStorageBreakdown(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'clearCaches') {
+                            result = AndroidBridge.clearCaches(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'generateBugReport') {
+                            result = AndroidBridge.generateBugReport(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'startGitHubAuth') {
+                            AndroidBridge.startGitHubAuth(d.url, token);
                             ch.postMessage({id: d.id, ok: true});
                         }
                     } catch(err) {
@@ -529,6 +551,63 @@ class MainActivity : AppCompatActivity() {
         if (serverPort > 0) {
             loadVSCode(serverPort)
         }
+    }
+
+    /**
+     * Forwards an OAuth callback deep link to VS Code's authentication handler.
+     * URL format: vscodroid://oauth/github?code=XXX&state=YYY
+     */
+    private fun handleOAuthCallback(uri: Uri) {
+        val code = uri.getQueryParameter("code")
+        val state = uri.getQueryParameter("state")
+        if (code == null || state == null) {
+            Logger.w(tag, "OAuth callback missing code or state: $uri")
+            return
+        }
+        Logger.i(tag, "OAuth callback received (state=$state)")
+        // Forward to VS Code's auth handler via JS
+        val escapedCode = code.replace("'", "\\'")
+        val escapedState = state.replace("'", "\\'")
+        webView?.evaluateJavascript(
+            "window.__vscodroid?.onOAuthCallback?.('$escapedCode', '$escapedState')", null
+        )
+    }
+
+    /**
+     * Shows a dialog if the app crashed in a previous session.
+     */
+    private fun checkPreviousCrash() {
+        if (!CrashReporter.hasPendingCrash()) return
+        val lastCrash = CrashReporter.getLastCrash() ?: return
+        // Truncate for display
+        val preview = if (lastCrash.length > 500) lastCrash.take(500) + "\n..." else lastCrash
+        AlertDialog.Builder(this)
+            .setTitle("VSCodroid crashed")
+            .setMessage("The app crashed in a previous session.\n\n$preview")
+            .setPositiveButton("Dismiss") { _, _ -> CrashReporter.clearCrashLogs() }
+            .setNeutralButton("Copy Report") { _, _ ->
+                val report = CrashReporter.generateBugReport(this)
+                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("VSCodroid Bug Report", report))
+                Toast.makeText(this, "Bug report copied to clipboard", Toast.LENGTH_SHORT).show()
+                CrashReporter.clearCrashLogs()
+            }
+            .setCancelable(true)
+            .show()
+    }
+
+    /**
+     * Warns the user if available storage is critically low (<100 MB).
+     */
+    private fun checkStorageHealth() {
+        if (!StorageManager.isStorageLow(this)) return
+        val available = StorageManager.formatSize(StorageManager.getAvailableStorage(this))
+        Toast.makeText(
+            this,
+            "Storage low ($available available). Clear caches in Settings.",
+            Toast.LENGTH_LONG
+        ).show()
+        Logger.w(tag, "Storage low: $available available")
     }
 
     private fun handleIntent(intent: Intent) {

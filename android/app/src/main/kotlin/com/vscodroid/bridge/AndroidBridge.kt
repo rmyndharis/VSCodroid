@@ -6,8 +6,11 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.webkit.JavascriptInterface
+import androidx.browser.customtabs.CustomTabsIntent
 import com.vscodroid.storage.SafStorageManager
+import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -44,10 +47,22 @@ class AndroidBridge(
         if (!security.validateToken(authToken)) return
         if (!security.isAllowedUrl(url)) return
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val uri = Uri.parse(url)
+            // Use Chrome Custom Tabs for https URLs — keeps the user in-app,
+            // loads faster than an external browser, and handles OAuth redirects
+            // back to the app via deep links.
+            if (uri.scheme == "https") {
+                val customTabsIntent = CustomTabsIntent.Builder()
+                    .setShowTitle(true)
+                    .build()
+                customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                customTabsIntent.launchUrl(context, uri)
+            } else {
+                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
             }
-            context.startActivity(intent)
         } catch (e: Exception) {
             Logger.e(tag, "Failed to open URL: $url", e)
         }
@@ -139,6 +154,89 @@ class AndroidBridge(
         val uri = Uri.parse(uriString)
         Logger.i(tag, "Opening recent SAF folder: $uri")
         onOpenRecentFolder(uri)
+    }
+
+    // -- Storage Management --
+
+    /**
+     * Returns per-component storage breakdown as JSON.
+     * Keys: vscode_server, extensions, user_data, logs, tools, saf_mirrors, cache, total
+     * Values in bytes.
+     */
+    @JavascriptInterface
+    fun getStorageBreakdown(authToken: String): String {
+        if (!security.validateToken(authToken)) return "{}"
+        return StorageManager.getStorageBreakdown(context).toString()
+    }
+
+    /**
+     * Clears caches (npm, tmp, crash logs, VS Code logs). Returns bytes freed.
+     */
+    @JavascriptInterface
+    fun clearCaches(authToken: String): Long {
+        if (!security.validateToken(authToken)) return 0
+        return StorageManager.clearCaches(context)
+    }
+
+    /**
+     * Returns available storage in bytes.
+     */
+    @JavascriptInterface
+    fun getAvailableStorage(authToken: String): Long {
+        if (!security.validateToken(authToken)) return 0
+        return StorageManager.getAvailableStorage(context)
+    }
+
+    // -- Crash Reporting --
+
+    /**
+     * Returns the last crash log text, or null if no crashes recorded.
+     */
+    @JavascriptInterface
+    fun getLastCrash(authToken: String): String? {
+        if (!security.validateToken(authToken)) return null
+        return CrashReporter.getLastCrash()
+    }
+
+    /**
+     * Generates a full bug report (device info + crash logs + server logs).
+     */
+    @JavascriptInterface
+    fun generateBugReport(authToken: String): String {
+        if (!security.validateToken(authToken)) return ""
+        return CrashReporter.generateBugReport(context)
+    }
+
+    /**
+     * Clears stored crash logs.
+     */
+    @JavascriptInterface
+    fun clearCrashLogs(authToken: String) {
+        if (!security.validateToken(authToken)) return
+        CrashReporter.clearCrashLogs()
+    }
+
+    // -- GitHub OAuth --
+
+    /**
+     * Opens a GitHub OAuth URL via Chrome Custom Tabs.
+     * The callback deep link (vscodroid://oauth/github?code=...&state=...)
+     * is handled by MainActivity and forwarded to VS Code via JS callback.
+     */
+    @JavascriptInterface
+    fun startGitHubAuth(authUrl: String, authToken: String) {
+        if (!security.validateToken(authToken)) return
+        try {
+            val uri = Uri.parse(authUrl)
+            val customTabsIntent = CustomTabsIntent.Builder()
+                .setShowTitle(true)
+                .build()
+            customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            customTabsIntent.launchUrl(context, uri)
+            Logger.i(tag, "GitHub OAuth started")
+        } catch (e: Exception) {
+            Logger.e(tag, "Failed to start GitHub OAuth", e)
+        }
     }
 
     private fun getVersionName(): String {

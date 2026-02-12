@@ -61,6 +61,15 @@
                 <data android:mimeType="application/json" />
             </intent-filter>
 
+            <!-- OAuth callback deep link: vscodroid://oauth/github?code=...&state=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="vscodroid" android:host="oauth" />
+            </intent-filter>
+
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

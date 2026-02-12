@@ -36,18 +36,19 @@ function activate(context) {
     // Auto-open walkthrough on first activation only
     if (!fs.existsSync(markerFile)) {
         try { fs.writeFileSync(markerFile, '1'); } catch (_) {}
-        // Small delay to let the workbench finish initializing
-        setTimeout(() => {
-            // Close sidebar first — on mobile the Explorer panel eats ~40%
-            // of the screen, leaving the walkthrough content cramped.
-            // This is transient (not a setting change), user can reopen anytime.
-            vscode.commands.executeCommand('workbench.action.closeSidebar');
-            vscode.commands.executeCommand(
+        // onStartupFinished already means the workbench is ready,
+        // but a short delay avoids racing with layout restoration.
+        setTimeout(async () => {
+            await vscode.commands.executeCommand(
                 'workbench.action.openWalkthrough',
                 WALKTHROUGH_ID,
                 false
             );
-        }, 1000);
+            // Close sidebar AFTER walkthrough is shown — on mobile the
+            // Explorer panel eats ~40% of the screen. Closing after ensures
+            // the walkthrough command doesn't re-trigger the sidebar.
+            vscode.commands.executeCommand('workbench.action.closeSidebar');
+        }, 500);
     }
 }
 

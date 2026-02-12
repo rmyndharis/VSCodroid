@@ -93,6 +93,9 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.viewpager2)
 
+    // Chrome Custom Tabs (GitHub OAuth, external auth flows)
+    implementation(libs.androidx.browser)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)

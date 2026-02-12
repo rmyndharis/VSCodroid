@@ -86,6 +86,8 @@ class VSCodroidWebViewClient(
 
     companion object {
         private const val TAG = "WebViewClient"
+        /** VS Code assets are versioned by commit hash — safe to cache forever. */
+        private const val CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 
         /**
          * Register a ServiceWorkerClient to intercept service worker script fetches.
@@ -188,10 +190,15 @@ class VSCodroidWebViewClient(
 
                 return WebResourceResponse(
                     mimeType, null, 200, "OK",
-                    mapOf(
-                        "Access-Control-Allow-Origin" to "*",
-                        "Content-Length" to file.length().toString()
-                    ),
+                    buildMap {
+                        put("Access-Control-Allow-Origin", "*")
+                        put("Content-Length", file.length().toString())
+                        // Static resources are versioned by commit hash in the URL,
+                        // so they never change — cache aggressively for warm starts.
+                        if (isStaticAsset(path)) {
+                            put("Cache-Control", CACHE_IMMUTABLE)
+                        }
+                    },
                     FileInputStream(file)
                 )
             }
@@ -246,15 +253,26 @@ class VSCodroidWebViewClient(
                     }
                 }
 
+                val headers = conn.headerFields
+                    ?.filterKeys { it != null }
+                    ?.mapValues { it.value.joinToString(", ") }
+                    ?.toMutableMap()
+                    ?: mutableMapOf()
+
+                // Ensure static assets from the local server get cached.
+                // VS Code Server may not set Cache-Control on all responses.
+                if (responseCode in 200..299 && isStaticAsset(url) &&
+                    !headers.containsKey("Cache-Control")
+                ) {
+                    headers["Cache-Control"] = CACHE_IMMUTABLE
+                }
+
                 WebResourceResponse(
                     contentType.substringBefore(";").trim(),
                     encoding ?: "utf-8",
                     responseCode,
                     conn.responseMessage ?: "OK",
-                    conn.headerFields
-                        ?.filterKeys { it != null }
-                        ?.mapValues { it.value.joinToString(", ") }
-                        ?: emptyMap(),
+                    headers,
                     wrappedStream
                 )
             } catch (e: Exception) {
@@ -289,6 +307,13 @@ class VSCodroidWebViewClient(
             val localPath = "/$quality-$commit/static/$rest"
             val queryPart = if (!query.isNullOrEmpty()) "?$query" else ""
             return "http://127.0.0.1:$port$localPath$queryPart"
+        }
+
+        private fun isStaticAsset(path: String): Boolean {
+            return path.endsWith(".js") || path.endsWith(".css") ||
+                    path.endsWith(".woff2") || path.endsWith(".woff") ||
+                    path.endsWith(".ttf") || path.endsWith(".svg") ||
+                    path.endsWith(".png") || path.endsWith(".jpg")
         }
 
         private fun guessMimeType(path: String): String {
