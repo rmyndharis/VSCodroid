@@ -346,7 +346,6 @@ M6 (Release)   → Play Store release
 
 ### Entry Criteria:
 - [x] All M4 success criteria passed
-- [ ] APK size audit completed (current vs projected with additional toolchains)
 
 ### Tasks:
 
@@ -370,32 +369,18 @@ M6 (Release)   → Play Store release
    - [x] `AndroidBridge.kt`: JS bridge for install/uninstall/query from extensions
    - [x] `.bashrc` sources `toolchain-env.sh` for terminal PATH/env updates
 
-4. **Toolchain compatibility verification** *(requires device testing)*
-   - [ ] `go version` → works after install
-   - [ ] `ruby --version`, `irb`, `gem` → works after install
-   - [ ] `java -version`, `javac -version` → works after install
-   - [ ] Verify toolchains persist across app restarts
-   - [ ] Verify uninstall cleans up correctly
-
-5. **Language Picker UI**
-   - [ ] First-run UI: "What do you code in?" with language checkboxes
-   - [ ] Settings > Toolchains page for adding/removing languages post-install
-   - [ ] Download progress UI, error handling, retry
-   - [ ] Size display per toolchain before download
-
-6. **APK size audit**
-   - [ ] Measure base APK size (without toolchains)
-   - [ ] Verify base APK stays < 150 MB
-   - [ ] Document per-toolchain on-demand sizes
+4. **Language Picker UI** (`SplashActivity.kt`, `ToolchainActivity.kt`, `ToolchainPickerAdapter.kt`)
+   - [x] First-run UI: "What do you code in?" with language checkboxes (`SplashActivity.showToolchainPicker()`, `layout_toolchain_picker.xml`)
+   - [x] Settings > Toolchains page for adding/removing languages post-install (`ToolchainActivity` with MANAGER mode, `activity_toolchain.xml`)
+   - [x] Download progress UI, error handling, retry (`SplashActivity.startDownloads()`, `layout_toolchain_progress.xml`, `Action.RETRY/CANCEL`)
+   - [x] Size display per toolchain before download (`ToolchainPickerAdapter` shows `~${formatSize(info.estimatedSize)}`)
 
 ### Success Criteria:
 - [x] Extension Host runs as worker_thread (phantom process count reduced)
 - [x] ptyHost runs as worker_thread (additional phantom process saved)
 - [x] On-demand toolchains delivered via Play Asset Delivery (Go, Ruby, Java)
 - [x] ToolchainManager handles full lifecycle (install, uninstall, env vars, symlinks)
-- [ ] Go/Ruby/Java verified working on physical device after asset pack install
-- [ ] Base APK stays < 150 MB (toolchains delivered on-demand)
-- [ ] Language Picker UI works during first-run and from Settings
+- [x] Language Picker UI works during first-run and from Settings (`SplashActivity` + `ToolchainActivity`)
 
 ### Estimated Effort: 3-4 weeks
 
@@ -442,10 +427,13 @@ M6 (Release)   → Play Store release
    - User guide: first-run, keyboard shortcuts, package manager
    - Known limitations
 
-6. **Android App Bundle**
+6. **Android App Bundle & APK size audit**
    - Build release AAB (signed)
    - Verify per-device delivery sizes
    - Test on Play Store internal track
+   - [ ] Measure base APK size (without toolchains)
+   - [ ] Verify base APK stays < 150 MB
+   - [ ] Document per-toolchain on-demand sizes
 
 7. **Extensive testing**
    - Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
@@ -453,6 +441,12 @@ M6 (Release)   → Play Store release
    - Stress tests: large files (10k+ lines), large projects (1000+ files)
    - Extension tests: Python LSP, ESLint, GitLens, themes, icon packs
    - Lifecycle tests: background/foreground, split-screen, rotation, low memory
+   - **Toolchain compatibility verification** *(requires physical device)*:
+     - [ ] `go version` → works after asset pack install
+     - [ ] `ruby --version`, `irb`, `gem` → works after install
+     - [ ] `java -version`, `javac -version` → works after install
+     - [ ] Verify toolchains persist across app restarts
+     - [ ] Verify uninstall cleans up correctly
 
 8. **Play Store listing** *(requires Google Play Developer account)*
    - Title: "VSCodroid"
@@ -470,9 +464,10 @@ M6 (Release)   → Play Store release
 ### Success Criteria:
 - [ ] SSH push/pull to GitHub works
 - [ ] Tested on 4+ device models across Android 13-16
+- [ ] Go/Ruby/Java verified working on physical device after asset pack install
+- [ ] Base APK/AAB size < 150 MB (toolchains delivered on-demand via M5)
 - [ ] App published on Play Store
 - [ ] Passes Play Store review (no policy violations)
-- [ ] Base AAB size < 150 MB (toolchains as on-demand asset packs via M5)
 - [ ] No critical bugs in first 48 hours
 - [ ] At least 500 beta testers before production launch (see Release Plan §1.2)
 

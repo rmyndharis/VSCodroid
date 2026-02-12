@@ -77,20 +77,19 @@ gantt
 
   section M5 — Toolchain Ecosystem
     worker_thread patch         :m5a, after m4gate, 6d
-    Package manager             :m5b, after m4gate, 5d
-    AssetPackManager            :m5c, after m5b, 4d
-    On-demand toolchains        :m5d, after m5c, 5d
-    Language Picker UI          :m5e, after m5d, 5d
-    M5 validation gate          :milestone, m5gate, after m5a m5e, 0d
+    AssetPackManager            :m5b, after m4gate, 4d
+    On-demand toolchains        :m5c, after m5b, 5d
+    Language Picker UI          :m5d, after m5c, 5d
+    M5 validation gate          :milestone, m5gate, after m5a m5d, 0d
 
   section M6 — Release
     SSH key management          :m6a, after m5gate, 3d
-    Extensive testing           :m6b, after m6a, 5d
+    Extensive testing + toolchain verification :m6b, after m6a, 7d
     CI/CD pipeline              :m6c, after m5gate, 10d
     Branding + legal            :m6d, after m5gate, 5d
     Documentation               :m6e, after m6d, 3d
     Play Store listing          :m6f, after m6d m6e, 3d
-    Android App Bundle          :m6g, after m6b m6c m6f, 3d
+    AAB build + APK size audit  :m6g, after m6b m6c m6f, 3d
     Internal → beta → launch   :m6h, after m6g, 37d
     M6 launch gate              :milestone, m6gate, after m6h, 0d
 ```
@@ -1775,20 +1774,22 @@ patches/vscodroid/
 
 ## 8. M5 — Toolchain Ecosystem
 
-**Goal**: Extensible toolchain delivery with in-app package manager and on-demand downloads.
-**Duration**: 4-6 weeks (20-30 working days)
+**Goal**: On-demand toolchain delivery so users can install additional languages beyond the bundled core, plus a Language Picker UI.
+**Duration**: 3-4 weeks (15-20 working days)
 **Entry criteria**: All M4 gate passed, no P0 defects
 
 ### 8.1 Task Breakdown
 
 ```mermaid
 flowchart TD
-  M5T1["M5-T1: worker_thread Extension Host<br/>6 days"] --> M5T5["M5-T5: Language Picker UI<br/>5 days"]
-  M5T2["M5-T2: Package manager<br/>5 days"] --> M5T3["M5-T3: AssetPackManager<br/>4 days"]
-  M5T3 --> M5T4["M5-T4: On-demand toolchains<br/>5 days"]
-  M5T4 --> M5T5
-  M5T5 --> M5GATE["M5 GATE"]
+  M5T1["M5-T1: worker_thread Extension Host<br/>6 days"] --> M5T4["M5-T4: Language Picker UI<br/>5 days"]
+  M5T2["M5-T2: AssetPackManager<br/>4 days"] --> M5T3["M5-T3: On-demand toolchains<br/>5 days"]
+  M5T3 --> M5T4
+  M5T4 --> M5GATE["M5 GATE"]
 ```
+
+> [!NOTE]
+> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Toolchain compatibility verification and APK size audit have been moved to M6 (Release) where they logically belong as verification/release activities.
 
 ---
 
@@ -1843,40 +1844,9 @@ patches/vscodroid/
 
 ---
 
-#### M5-T2: Package Manager
+#### M5-T2: Play Store AssetPackManager Integration
 
-**Effort**: 5 days | **Dependencies**: M4 gate | **Parallel with M5-T1**
-
-**Files to create**:
-```
-android/app/src/main/kotlin/com/vscodroid/
-└── setup/
-    └── PackageManager.kt           (pkg command implementation)
-
-android/app/src/main/assets/
-└── bin/
-    └── vscodroid                   (shell wrapper script for `vscodroid pkg`)
-```
-
-**Implementation steps**:
-
-1. Implement CLI: `vscodroid pkg search|install|remove|list|update|info`
-2. Repository index: compatible with Termux package format (deb, ARM64)
-3. Package download, extract, install to `$PREFIX/usr/`
-4. Dependency resolution (basic)
-5. Note: only available in sideloaded version (Play Store uses asset packs only)
-
-**Acceptance criteria**:
-- [ ] `vscodroid pkg search curl` returns results
-- [ ] `vscodroid pkg install curl` installs successfully
-- [ ] `vscodroid pkg list` shows installed packages
-- [ ] `vscodroid pkg remove curl` uninstalls cleanly
-
----
-
-#### M5-T3: Play Store AssetPackManager Integration
-
-**Effort**: 4 days | **Dependencies**: M5-T2
+**Effort**: 4 days | **Dependencies**: M4 gate | **Parallel with M5-T1**
 
 **Files to create**:
 ```
@@ -1900,9 +1870,9 @@ android/app/src/main/kotlin/com/vscodroid/
 
 ---
 
-#### M5-T4: On-Demand Toolchains
+#### M5-T3: On-Demand Toolchains
 
-**Effort**: 5 days | **Dependencies**: M5-T3
+**Effort**: 5 days | **Dependencies**: M5-T2
 
 **Files to create**:
 ```
@@ -1941,58 +1911,71 @@ android/settings.gradle.kts         (register asset pack modules)
    - Configure PATH and environment variables
    - Create symlinks in `$PREFIX/bin/`
 
-3. **Day 4-5** — Testing:
-   - Install each toolchain → verify version command works
-   - Compile and run a simple program per language
-   - Verify uninstall cleans up properly
+3. **Day 4-5** — Integration:
+   - Wire up `AndroidBridge.kt` JS bridge for install/uninstall/query from extensions
+   - Configure `.bashrc` to source `toolchain-env.sh` for terminal PATH/env updates
+   - `Environment.kt`: dynamic toolchain env vars merged into server process
 
 **Acceptance criteria**:
-- [ ] `go version` works after Go toolchain install
-- [ ] `rustc --version` works after Rust toolchain install
-- [ ] Each toolchain can compile and run a simple program
-- [ ] Uninstall removes toolchain cleanly
+- [ ] Toolchain asset pack modules build correctly
+- [ ] ToolchainManager lifecycle works (install, configure env, uninstall)
+- [ ] AndroidBridge JS bridge for toolchains works
+- [ ] `.bashrc` sources `toolchain-env.sh` for PATH updates
+
+> [!NOTE]
+> Actual device-level toolchain verification (`go version`, `ruby --version`, `java -version`) is performed in **M6-T2 (Extensive Testing)**, not here.
 
 ---
 
-#### M5-T5: Language Picker UI
+#### M5-T4: Language Picker UI
 
-**Effort**: 5 days | **Dependencies**: M5-T4, M5-T1
+**Effort**: 5 days | **Dependencies**: M5-T3, M5-T1
 
 **Files to create**:
 ```
 android/app/src/main/kotlin/com/vscodroid/
+├── ToolchainActivity.kt                (settings screen for toolchain management)
 └── setup/
-    └── LanguagePickerActivity.kt   (first-run + settings UI)
+    └── ToolchainPickerAdapter.kt       (shared adapter: PICKER + MANAGER modes)
 
-android/app/src/main/res/
-└── layout/
-    └── activity_language_picker.xml
+android/app/src/main/res/layout/
+├── layout_toolchain_picker.xml         (first-run picker grid)
+├── layout_toolchain_progress.xml       (download progress view)
+├── item_toolchain_card.xml             (card for each toolchain)
+└── activity_toolchain.xml              (settings screen layout)
 ```
 
 **Implementation steps**:
 
-1. **Day 1-2** — Language Picker UI:
-   - Checkbox list of available toolchains with size estimates
-   - "Install" button → `AssetPackManager.fetch()` for selected packs
-   - Progress bar per pack
-   - Shown during first run and in Settings > Toolchains
+1. **Day 1-2** — First-run Toolchain Picker (integrated in `SplashActivity`):
+   - `showToolchainPicker()` displays grid of available toolchains after first-run setup
+   - `ToolchainPickerAdapter(Mode.PICKER)` — tap toggles checkmark, shows size per toolchain
+   - "What do you code in?" title with Continue + Skip buttons
+   - `shouldShowPicker()` / `markPickerShown()` via SharedPreferences
 
-2. **Day 3** — Settings > Toolchains page:
-   - Add/remove languages from Settings
-   - Show installed toolchains and sizes
-   - Update available indicator
+2. **Day 3** — Download Progress Phase:
+   - `startDownloads()` — sequential per-pack download with progress rows
+   - Per-pack progress bar, status text, cancel button
+   - Handles `AssetPackStatus.DOWNLOADING`, `COMPLETED`, `FAILED`, `REQUIRES_USER_CONFIRMATION`
+   - Failed packs skip to next; all done → launch `MainActivity`
 
-3. **Day 4-5** — Integration and polish:
-   - Wire into SplashActivity first-run flow
-   - Handle edge cases: partial download, interrupted install
-   - Test with slow network simulation
+3. **Day 4** — Settings > Toolchains (`ToolchainActivity`):
+   - `ToolchainPickerAdapter(Mode.MANAGER)` — shows installed/available/downloading state
+   - Action buttons: Install, Remove (with confirmation dialog), Cancel, Retry
+   - Opened from `AndroidBridge.openToolchainSettings()`
+   - Refreshes installed state on `onStart()`
+
+4. **Day 5** — Polish:
+   - Toolchain cards with MaterialCardView, checkmarks, progress bars, status badges
+   - Handle edge cases: partial download, interrupted install, remove confirmation
+   - String resources for all UI text
 
 **Acceptance criteria**:
-- [ ] Language Picker UI shows during first run
-- [ ] Can select and install toolchain on-demand
-- [ ] Settings > Toolchains allows adding/removing
-- [ ] Progress tracking and error handling work
-- [ ] Installed toolchains work immediately
+- [ ] First-run picker shows "What do you code in?" with language grid
+- [ ] Can select and install toolchains on-demand with progress UI
+- [ ] Settings > Toolchains allows installing/removing with confirmation
+- [ ] Size display per toolchain before download
+- [ ] Error handling (retry, cancel, skip failed) works correctly
 
 ---
 
@@ -2001,12 +1984,12 @@ android/app/src/main/res/
 | # | Criterion | Test Method |
 |---|-----------|-------------|
 | 1 | worker_thread Extension Host works | Extension activation test |
-| 2 | Phantom process count reduced vs M4 | `adb shell ps` comparison |
-| 3 | Package manager works (sideload) | `vscodroid pkg install` |
-| 4 | On-demand toolchain install works (≥ 1 language) | Install Go or Rust |
-| 5 | Installed toolchain works immediately | `go version` after install |
-| 6 | Language Picker UI works | First-run flow test |
-| 7 | AssetPackManager integration works | Play Store test |
+| 2 | ptyHost runs as worker_thread | `adb shell ps` comparison |
+| 3 | Phantom process count reduced vs M4 | `adb shell ps` count |
+| 4 | On-demand toolchains delivered via Play Asset Delivery | Install Go or Ruby |
+| 5 | ToolchainManager handles full lifecycle | Install, uninstall, env vars, symlinks |
+| 6 | Language Picker UI works during first-run | First-run flow test |
+| 7 | Toolchain management works from Settings | `ToolchainActivity` test |
 | 8 | 2-hour stability test passes with worker_thread | Endurance test |
 
 ---
@@ -2061,9 +2044,9 @@ android/app/src/main/kotlin/com/vscodroid/
 
 ---
 
-#### M6-T2: Extensive Testing
+#### M6-T2: Extensive Testing + Toolchain Verification
 
-**Effort**: 5 days | **Dependencies**: M6-T1
+**Effort**: 7 days | **Dependencies**: M6-T1
 
 **Implementation steps**:
 
@@ -2077,6 +2060,12 @@ android/app/src/main/kotlin/com/vscodroid/
 8. Run backup & restore tests (Testing Strategy §3.8)
 9. SSH key and GitHub OAuth flow testing
 10. Worker_thread stability testing (2-hour endurance)
+11. **Toolchain compatibility verification** *(requires physical device)*:
+    - [ ] `go version` → works after asset pack install
+    - [ ] `ruby --version`, `irb`, `gem` → works after install
+    - [ ] `java -version`, `javac -version` → works after install
+    - [ ] Verify toolchains persist across app restarts
+    - [ ] Verify uninstall cleans up correctly
 
 **Acceptance criteria**:
 - [ ] All E2E tests pass on 4 device models
@@ -2085,6 +2074,7 @@ android/app/src/main/kotlin/com/vscodroid/
 - [ ] No crash in 2 hours continuous use
 - [ ] SSH + OAuth flows work end-to-end
 - [ ] Backup/restore tests pass
+- [ ] Go/Ruby/Java verified working on physical device after asset pack install
 
 ---
 
@@ -2178,7 +2168,7 @@ docs/
 
 ---
 
-#### M6-T7: Android App Bundle (AAB)
+#### M6-T7: Android App Bundle (AAB) + APK Size Audit
 
 **Effort**: 3 days | **Dependencies**: M6-T2, M6-T3, M6-T6
 
@@ -2186,14 +2176,18 @@ docs/
 
 1. Build release AAB with all asset pack modules
 2. Sign with release keystore
-3. Verify AAB size < 200 MB (base module)
+3. **APK size audit**:
+   - [ ] Measure base APK size (without toolchains)
+   - [ ] Verify base APK stays < 150 MB
+   - [ ] Document per-toolchain on-demand sizes
 4. Upload to Play Console for review
 5. Verify asset pack delivery works
 
 **Acceptance criteria**:
-- [ ] AAB base < 200 MB
+- [ ] Base APK/AAB < 150 MB (toolchains delivered on-demand via M5)
 - [ ] Asset packs download on-demand correctly
 - [ ] App installs from Play Store and works
+- [ ] Per-toolchain sizes documented
 
 ---
 
@@ -2236,12 +2230,13 @@ docs/
 |---|-----------|-------------|
 | 1 | SSH key management works | Generate + git push via SSH |
 | 2 | All E2E tests pass on 4 device models | Device matrix |
-| 3 | App published on Play Store | Play Console |
-| 4 | Passes Play Store review | No policy violations |
-| 5 | Base AAB < 200 MB | AAB file size check |
-| 6 | No critical bugs in first 48 hours | Crash monitoring |
-| 7 | At least 500 beta testers before production | Play Console stats |
-| 8 | Security testing checklist complete | Security doc §7 |
+| 3 | Go/Ruby/Java verified working on physical device | `go version`, `ruby --version`, `java -version` |
+| 4 | Base APK/AAB < 150 MB | APK/AAB file size check |
+| 5 | App published on Play Store | Play Console |
+| 6 | Passes Play Store review | No policy violations |
+| 7 | No critical bugs in first 48 hours | Crash monitoring |
+| 8 | At least 500 beta testers before production | Play Console stats |
+| 9 | Security testing checklist complete | Security doc §7 |
 
 ---
 
@@ -2258,7 +2253,7 @@ Tests are written alongside implementation, not as a separate phase.
 | M2 | ExtraKeyRow, KeyInjector, ClipboardBridge, AndroidBridge security | JUnit 5 + Espresso |
 | M3 | npm bash functions, extension extraction | JUnit 5 |
 | M4 | StorageManager, CrashReporter, SafSyncEngine | JUnit 5 |
-| M5 | ToolchainManager, PackageManager, worker_thread supervisor | JUnit 5 + Jest |
+| M5 | ToolchainManager, ToolchainPickerAdapter, worker_thread supervisor | JUnit 5 + Jest |
 | M6 | CI pipeline validation, E2E test suite | Espresso + Firebase Test Lab |
 
 **Coverage targets**: Kotlin ≥ 80%, JS ≥ 70%
@@ -2314,7 +2309,7 @@ Total new files created across all milestones:
 | Category | Approx Count | Key Files |
 |----------|-------------|-----------|
 | **Kotlin sources** | ~30 files | MainActivity, NodeService, ProcessManager, AndroidBridge, ExtraKeyRow, GestureTrackpad, ToolchainManager, SafStorageManager, SshKeyBridge, CrashReporter, etc. |
-| **Layouts (XML)** | ~5 files | activity_main, activity_splash, activity_language_picker, view_extra_key_row |
+| **Layouts (XML)** | ~8 files | activity_main, activity_splash, activity_toolchain, layout_toolchain_picker, layout_toolchain_progress, item_toolchain_card, view_extra_key_row |
 | **Build/download scripts** | ~10 files | download-node.sh, download-python.sh, build-git.sh, build-bash.sh, build-tmux.sh, build-node-pty.sh, download-termux-tools.sh, build-all.sh, apply-patches.sh, deploy.sh |
 | **VS Code patches** | ~18 files | 9 code-server patches + 9 VSCodroid patches (incl. ext-host-worker, android-fs) |
 | **Gradle configs** | ~8 files | root + app + 5 asset pack modules + settings |
