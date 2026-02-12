@@ -1,0 +1,38 @@
+<svg width="280" height="200" viewBox="0 0 280 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Editor window frame -->
+  <rect x="20" y="15" width="240" height="170" rx="8" fill="var(--vscode-editor-background)" stroke="var(--vscode-editorWidget-border)" stroke-width="1.5"/>
+
+  <!-- Title bar -->
+  <rect x="20" y="15" width="240" height="28" rx="8" fill="var(--vscode-titleBar-activeBackground)"/>
+  <rect x="20" y="35" width="240" height="8" fill="var(--vscode-titleBar-activeBackground)"/>
+  <!-- Window dots -->
+  <circle cx="38" cy="29" r="4.5" fill="#ff5f57"/>
+  <circle cx="54" cy="29" r="4.5" fill="#febc2e"/>
+  <circle cx="70" cy="29" r="4.5" fill="#28c840"/>
+
+  <!-- Dark panel (left) -->
+  <rect x="30" y="55" width="105" height="115" rx="6" fill="var(--vscode-sideBar-background)" stroke="var(--vscode-editorWidget-border)" stroke-width="1"/>
+  <text x="82" y="73" font-family="sans-serif" font-size="9" font-weight="bold" fill="var(--vscode-sideBar-foreground)" text-anchor="middle">Dark</text>
+  <!-- Code lines (dark) -->
+  <rect x="40" y="82" width="50" height="4" rx="2" fill="#569cd6" opacity="0.8"/>
+  <rect x="40" y="92" width="70" height="4" rx="2" fill="#ce9178" opacity="0.8"/>
+  <rect x="40" y="102" width="40" height="4" rx="2" fill="#4ec9b0" opacity="0.8"/>
+  <rect x="40" y="112" width="60" height="4" rx="2" fill="#dcdcaa" opacity="0.8"/>
+  <rect x="40" y="122" width="45" height="4" rx="2" fill="#c586c0" opacity="0.8"/>
+  <rect x="40" y="132" width="80" height="4" rx="2" fill="#9cdcfe" opacity="0.8"/>
+  <rect x="40" y="142" width="35" height="4" rx="2" fill="#569cd6" opacity="0.8"/>
+  <rect x="40" y="152" width="55" height="4" rx="2" fill="#6a9955" opacity="0.8"/>
+
+  <!-- Light panel (right) -->
+  <rect x="145" y="55" width="105" height="115" rx="6" fill="#ffffff" stroke="var(--vscode-editorWidget-border)" stroke-width="1"/>
+  <text x="197" y="73" font-family="sans-serif" font-size="9" font-weight="bold" fill="#333333" text-anchor="middle">Light</text>
+  <!-- Code lines (light) -->
+  <rect x="155" y="82" width="50" height="4" rx="2" fill="#0000ff" opacity="0.7"/>
+  <rect x="155" y="92" width="70" height="4" rx="2" fill="#a31515" opacity="0.7"/>
+  <rect x="155" y="102" width="40" height="4" rx="2" fill="#267f99" opacity="0.7"/>
+  <rect x="155" y="112" width="60" height="4" rx="2" fill="#795e26" opacity="0.7"/>
+  <rect x="155" y="122" width="45" height="4" rx="2" fill="#af00db" opacity="0.7"/>
+  <rect x="155" y="132" width="80" height="4" rx="2" fill="#001080" opacity="0.7"/>
+  <rect x="155" y="142" width="35" height="4" rx="2" fill="#0000ff" opacity="0.7"/>
+  <rect x="155" y="152" width="55" height="4" rx="2" fill="#008000" opacity="0.7"/>
+</svg>

@@ -459,6 +459,7 @@ npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
         if (!settingsFile.exists()) {
             settingsFile.writeText("""
                 {
+                    "workbench.startupEditor": "none",
                     "workbench.colorTheme": "Default Dark Modern",
                     "editor.fontSize": 14,
                     "editor.wordWrap": "on",

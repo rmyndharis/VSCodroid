@@ -41,6 +41,7 @@ yarn-error.log*
 /android/app/src/main/assets/extensions/*
 !/android/app/src/main/assets/extensions/vscodroid.vscodroid-process-monitor-*/
 !/android/app/src/main/assets/extensions/vscodroid.vscodroid-saf-bridge-*/
+!/android/app/src/main/assets/extensions/vscodroid.vscodroid-welcome-*/
 /android/app/src/main/assets/usr/
 
 # ===== Cross-compilation build artifacts =====

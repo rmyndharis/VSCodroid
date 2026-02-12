@@ -1,0 +1,82 @@
+{
+  "name": "vscodroid-welcome",
+  "displayName": "VSCodroid Welcome",
+  "description": "Welcome walkthrough for VSCodroid",
+  "version": "1.0.0",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodroid.welcome.open",
+        "title": "VSCodroid: Open Welcome"
+      },
+      {
+        "command": "vscodroid.welcome.toolsDismissed",
+        "title": "VSCodroid: Dismiss Tools Step"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "vscodroid.welcome",
+        "title": "Get Started with VSCodroid",
+        "description": "Set up your mobile development environment",
+        "steps": [
+          {
+            "id": "theme",
+            "title": "Choose your theme",
+            "description": "Pick a color theme that suits your style.\n\n[Browse Color Themes](command:workbench.action.selectTheme)",
+            "media": {
+              "svg": "media/theme.svg"
+            },
+            "completionEvents": [
+              "onSettingChanged:workbench.colorTheme"
+            ]
+          },
+          {
+            "id": "tools",
+            "title": "Your development tools",
+            "description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js 20** + npm 10 — ready\n\n$(check) **Python 3.12** + pip — ready\n\n$(check) **Git 2.53** — ready\n\n$(check) **make** — ready\n\nMore toolchains (Go, Rust, Java, C/C++, Ruby) coming soon.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
+            "media": {
+              "svg": "media/tools.svg"
+            },
+            "completionEvents": [
+              "onCommand:vscodroid.welcome.toolsDismissed"
+            ]
+          },
+          {
+            "id": "terminal",
+            "title": "A powerful terminal",
+            "description": "Open a full bash terminal with all your tools on PATH.\n\nRun ``node``, ``python3``, ``git``, ``npm`` — they all just work.\n\n[Open Terminal](command:workbench.action.terminal.new)",
+            "media": {
+              "svg": "media/terminal.svg"
+            },
+            "completionEvents": [
+              "onCommand:workbench.action.terminal.new"
+            ]
+          },
+          {
+            "id": "extensions",
+            "title": "Extend with more features",
+            "description": "Install extensions from the Open VSX marketplace for language support, themes, and tools.\n\n[Browse Extensions](command:workbench.view.extensions)",
+            "media": {
+              "svg": "media/extensions.svg"
+            },
+            "completionEvents": [
+              "onView:extensions.listView"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

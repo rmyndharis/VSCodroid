@@ -1,0 +1,34 @@
+<svg width="280" height="200" viewBox="0 0 280 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Sidebar panel -->
+  <rect x="20" y="15" width="240" height="170" rx="8" fill="var(--vscode-sideBar-background)" stroke="var(--vscode-editorWidget-border)" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <text x="35" y="38" font-family="sans-serif" font-size="11" font-weight="bold" fill="var(--vscode-sideBar-foreground)">EXTENSIONS</text>
+
+  <!-- Search box -->
+  <rect x="30" y="46" width="220" height="24" rx="4" fill="var(--vscode-input-background)" stroke="var(--vscode-input-border, var(--vscode-editorWidget-border))" stroke-width="1"/>
+  <text x="40" y="62" font-family="sans-serif" font-size="10" fill="var(--vscode-input-placeholderForeground, #888)">Search extensions...</text>
+
+  <!-- Extension row 1 -->
+  <rect x="30" y="78" width="220" height="38" rx="4" fill="var(--vscode-list-hoverBackground)" opacity="0.5"/>
+  <rect x="38" y="84" width="26" height="26" rx="4" fill="#007acc"/>
+  <text x="51" y="101" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle">Py</text>
+  <text x="72" y="95" font-family="sans-serif" font-size="10" font-weight="bold" fill="var(--vscode-foreground)">Python</text>
+  <text x="72" y="108" font-family="sans-serif" font-size="8" fill="var(--vscode-descriptionForeground)">Language support</text>
+
+  <!-- Extension row 2 -->
+  <rect x="30" y="120" width="220" height="38" rx="4" fill="transparent"/>
+  <rect x="38" y="126" width="26" height="26" rx="4" fill="#cb3837"/>
+  <text x="51" y="142" font-family="sans-serif" font-size="10" font-weight="bold" fill="white" text-anchor="middle">ES</text>
+  <text x="72" y="137" font-family="sans-serif" font-size="10" font-weight="bold" fill="var(--vscode-foreground)">ESLint</text>
+  <text x="72" y="150" font-family="sans-serif" font-size="8" fill="var(--vscode-descriptionForeground)">JavaScript linting</text>
+
+  <!-- Extension row 3 (partial) -->
+  <rect x="30" y="162" width="220" height="20" rx="4" fill="transparent"/>
+  <rect x="38" y="164" width="26" height="14" rx="4" fill="#1a73e8"/>
+  <text x="72" y="175" font-family="sans-serif" font-size="10" font-weight="bold" fill="var(--vscode-foreground)">Prettier</text>
+
+  <!-- Open VSX badge -->
+  <rect x="170" y="20" width="78" height="18" rx="9" fill="var(--vscode-badge-background)"/>
+  <text x="209" y="33" font-family="sans-serif" font-size="8" font-weight="bold" fill="var(--vscode-badge-foreground)" text-anchor="middle">Open VSX</text>
+</svg>
