@@ -127,7 +127,9 @@ function classify(cmdline) {
 
     if (cmd.includes('server-main.js')) return 'server';
     if (cmd.includes('bootstrap-fork') && cmd.includes('filewatcher')) return 'fileWatcher';
-    if (cmd.includes('bootstrap-fork') && cmd.includes('ptyhost')) return 'ptyHost';
+    // SAF sync engine: mirrors content:// URIs to local filesystem for VS Code access
+    if (cmd.includes('saf-mirrors') || cmd.includes('saf-writeback') || cmd.includes('SafSync')) return 'safSync';
+    // ptyHost is now a worker_thread — no longer visible in /proc
     if (cmd.includes('libtmux.so') || cmd.includes('/tmux')) return 'tmux';
     if (cmd.includes('libbash.so') || cmd.includes('/bash')) return 'terminal';
     if (cmd.includes('/sh') && !cmd.includes('bash')) return 'terminal';
@@ -256,7 +258,7 @@ function readMemoryPressure() {
     const content = readFileQuiet(pressurePath);
     if (!content) return 0;
     // Delete after reading (one-shot signal)
-    try { fs.unlinkSync(pressurePath); } catch {}
+    try { fs.unlinkSync(pressurePath); } catch { }
     return parseInt(content.trim(), 10) || 0;
 }
 

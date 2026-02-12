@@ -1,7 +1,9 @@
 package com.vscodroid.util
 
 import android.content.Context
+import android.net.Uri
 import java.io.File
+import java.security.MessageDigest
 
 object Environment {
 
@@ -45,9 +47,6 @@ object Environment {
             "PROJECTS_DIR" to getProjectsDir(context),
             "VSCODROID_PORT" to port.toString(),
             "VSCODROID_VERSION" to getVersionName(context),
-            "VSCODROID_PTY_HELPER" to "$nativeLibDir/libptybridge.so",
-            "VSCODROID_TMUX" to "$nativeLibDir/libtmux.so",
-            "TMUX_TMPDIR" to "$cacheDir/tmp",
         )
     }
 
@@ -103,4 +102,17 @@ object Environment {
         } catch (e: Exception) {
             "unknown"
         }
+
+    // -- SAF (Storage Access Framework) --
+
+    fun getSafMirrorsDir(context: Context): String =
+        "${context.filesDir}/saf-mirrors"
+
+    fun getSafMirrorDir(context: Context, safUri: Uri): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(safUri.toString().toByteArray())
+            .take(6) // 6 bytes = 12 hex chars — collision probability ~1 in 281 trillion
+            .joinToString("") { "%02x".format(it) }
+        return "${getSafMirrorsDir(context)}/$hash"
+    }
 }

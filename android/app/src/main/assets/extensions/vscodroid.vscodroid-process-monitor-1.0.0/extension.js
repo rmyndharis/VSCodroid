@@ -102,6 +102,7 @@ function typeLabel(type) {
     const labels = {
         server: 'system',
         fileWatcher: 'system',
+        safSync: 'storage',
         ptyHost: 'system',
         system: 'system',
         tmux: 'terminal',

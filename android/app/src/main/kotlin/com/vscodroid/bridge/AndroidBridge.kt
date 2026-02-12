@@ -6,7 +6,9 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.webkit.JavascriptInterface
+import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
+import org.json.JSONArray
 import org.json.JSONObject
 
 class AndroidBridge(
@@ -14,7 +16,10 @@ class AndroidBridge(
     private val security: SecurityManager,
     private val clipboard: ClipboardBridge,
     private val onBackPressed: () -> Boolean,
-    private val onMinimize: () -> Unit
+    private val onMinimize: () -> Unit,
+    private val onOpenFolderPicker: () -> Unit = {},
+    private val onOpenRecentFolder: (Uri) -> Unit = {},
+    private val safManager: SafStorageManager? = null
 ) {
     private val tag = "AndroidBridge"
 
@@ -90,6 +95,50 @@ class AndroidBridge(
             "error" -> Logger.e(tag, message)
             else -> Logger.d(tag, message)
         }
+    }
+
+    // -- SAF (Storage Access Framework) --
+
+    /**
+     * Opens the Android SAF folder picker to select any folder on the device.
+     * The result is handled by MainActivity and triggers a folder sync + reload.
+     */
+    @JavascriptInterface
+    fun openFolderPicker(authToken: String) {
+        if (!security.validateToken(authToken)) return
+        Logger.i(tag, "Opening SAF folder picker")
+        onOpenFolderPicker()
+    }
+
+    /**
+     * Returns a JSON array of recently opened SAF folders.
+     * Each entry has: uri, name, lastOpened.
+     */
+    @JavascriptInterface
+    fun getRecentFolders(authToken: String): String {
+        if (!security.validateToken(authToken)) return "[]"
+        val manager = safManager ?: return "[]"
+        val folders = manager.getPersistedFolders()
+        return JSONArray().apply {
+            folders.forEach { f ->
+                put(JSONObject().apply {
+                    put("uri", f.uri.toString())
+                    put("name", f.displayName)
+                    put("lastOpened", f.lastOpened)
+                })
+            }
+        }.toString()
+    }
+
+    /**
+     * Opens a previously selected SAF folder by its URI string.
+     */
+    @JavascriptInterface
+    fun openRecentFolder(authToken: String, uriString: String) {
+        if (!security.validateToken(authToken)) return
+        val uri = Uri.parse(uriString)
+        Logger.i(tag, "Opening recent SAF folder: $uri")
+        onOpenRecentFolder(uri)
     }
 
     private fun getVersionName(): String {

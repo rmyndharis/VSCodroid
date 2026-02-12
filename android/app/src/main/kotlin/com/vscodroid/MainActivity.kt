@@ -15,8 +15,10 @@ import android.widget.Toast
 import java.io.File
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.vscodroid.util.Environment
 import com.vscodroid.bridge.AndroidBridge
 import com.vscodroid.bridge.ClipboardBridge
@@ -24,10 +26,14 @@ import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.service.NodeService
+import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
     private val tag = "MainActivity"
@@ -38,13 +44,26 @@ class MainActivity : AppCompatActivity() {
     private var serviceBound = false
     private var serverPort = 0
     private var backgroundedAt = 0L
+    private var bridgeInitialized = false
 
     private lateinit var securityManager: SecurityManager
+    private lateinit var safManager: SafStorageManager
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         Logger.i(tag, "Notification permission granted=$granted")
+    }
+
+    /**
+     * SAF folder picker launcher.
+     * When a user selects a folder, we persist the permission, sync to a local mirror,
+     * and reload VS Code with the mirror path.
+     */
+    private val folderPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let { handleSafFolderSelected(it) }
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -67,6 +86,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        safManager = SafStorageManager(this)
+
         setupWebView()
         setupExtraKeyRow()
         setupBackNavigation()
@@ -80,6 +101,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        safManager.stopFileWatcher()
         if (serviceBound) {
             unbindService(serviceConnection)
             serviceBound = false
@@ -112,6 +134,103 @@ class MainActivity : AppCompatActivity() {
             )
         }
     }
+
+    // -- SAF Folder Picker --
+
+    /**
+     * Opens the Android SAF folder picker UI.
+     * Called from [AndroidBridge.openFolderPicker] via JS bridge.
+     */
+    fun openFolderPicker() {
+        folderPickerLauncher.launch(null)
+    }
+
+    /**
+     * Handles a SAF folder selection result:
+     * 1. Persists the URI permission
+     * 2. Syncs folder contents to a local mirror (with progress dialog)
+     * 3. Reloads VS Code with the mirror path
+     */
+    private fun handleSafFolderSelected(uri: Uri) {
+        Logger.i(tag, "SAF folder selected: $uri")
+
+        // Persist permission so we can access this folder after app restart
+        safManager.persistPermission(uri)
+
+        val displayName = safManager.getDisplayName(uri)
+
+        // Show progress dialog during sync
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Opening folder")
+            .setMessage("Syncing \"$displayName\"...")
+            .setCancelable(false)
+            .create()
+        dialog.show()
+
+        lifecycleScope.launch {
+            try {
+                val mirrorDir = withContext(Dispatchers.IO) {
+                    safManager.syncToLocal(uri) { done, total ->
+                        runOnUiThread {
+                            dialog.setMessage(
+                                "Syncing \"$displayName\"\n$done / $total files..."
+                            )
+                        }
+                    }
+                }
+
+                // Stop any existing file watcher before starting a new one
+                safManager.stopFileWatcher()
+                safManager.startFileWatcher(mirrorDir, uri)
+
+                // Write active folder so new terminals cd to the right place
+                writeActiveFolder(mirrorDir.absolutePath)
+
+                dialog.dismiss()
+
+                // Reload VS Code with the mirror directory
+                if (serverPort > 0) {
+                    navigateToFolder(serverPort, mirrorDir.absolutePath)
+                }
+            } catch (e: SecurityException) {
+                dialog.dismiss()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Permission denied. Please select the folder again.",
+                    Toast.LENGTH_LONG
+                ).show()
+                Logger.e(tag, "SAF permission revoked during sync", e)
+            } catch (e: Exception) {
+                dialog.dismiss()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Failed to open folder: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+                Logger.e(tag, "SAF sync failed", e)
+            }
+        }
+    }
+
+    /**
+     * Opens a previously selected SAF folder from the recent list.
+     * Called from [AndroidBridge.openRecentFolder] via JS bridge.
+     */
+    fun openRecentSafFolder(uri: Uri) {
+        if (!safManager.hasPersistedPermission(uri)) {
+            Toast.makeText(
+                this,
+                "Permission expired. Please select the folder again.",
+                Toast.LENGTH_LONG
+            ).show()
+            // Open the picker as a fallback
+            openFolderPicker()
+            return
+        }
+        handleSafFolderSelected(uri)
+    }
+
+    // -- Internal --
 
     private fun writeMemoryPressure(level: Int) {
         try {
@@ -269,7 +388,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadVSCode(port: Int, folderPath: String? = null) {
+        initBridge(port)
+        navigateToFolder(port, folderPath ?: Environment.getProjectsDir(this))
+    }
+
+    /**
+     * Initializes the WebView bridge, security manager, and clients.
+     * Only called once per server lifecycle — not on every folder switch.
+     */
+    private fun initBridge(port: Int) {
         val wv = webView ?: return
+
+        // Skip re-initialization if bridge is already set up for this port
+        if (bridgeInitialized) return
+        bridgeInitialized = true
 
         securityManager = SecurityManager(port)
         val clipboardBridge = ClipboardBridge(this)
@@ -278,7 +410,10 @@ class MainActivity : AppCompatActivity() {
             security = securityManager,
             clipboard = clipboardBridge,
             onBackPressed = { false },
-            onMinimize = { moveTaskToBack(true) }
+            onMinimize = { moveTaskToBack(true) },
+            onOpenFolderPicker = { openFolderPicker() },
+            onOpenRecentFolder = { uri -> openRecentSafFolder(uri) },
+            safManager = safManager
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
@@ -295,11 +430,31 @@ class MainActivity : AppCompatActivity() {
 
         val keyInjector = KeyInjector(wv)
         extraKeyRow?.keyInjector = keyInjector
+    }
 
-        val folder = folderPath ?: Environment.getProjectsDir(this)
-        val url = "http://127.0.0.1:$port/?folder=${Uri.encode(folder)}"
+    /**
+     * Navigates the WebView to a specific folder without re-initializing the bridge.
+     * Safe to call multiple times (e.g., when switching SAF folders).
+     */
+    private fun navigateToFolder(port: Int, folderPath: String) {
+        val wv = webView ?: return
+        val url = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
         Logger.i(tag, "Loading VS Code at $url")
         wv.loadUrl(url)
+    }
+
+    /**
+     * Writes the active folder path to ~/.vscodroid_folder so new terminals
+     * can cd to the correct directory. See bashrc in FirstRunSetup.
+     */
+    private fun writeActiveFolder(folderPath: String) {
+        try {
+            val homeDir = File(Environment.getHomeDir(this))
+            File(homeDir, ".vscodroid_folder").writeText(folderPath)
+            Logger.d(tag, "Active folder: $folderPath")
+        } catch (e: Exception) {
+            Logger.d(tag, "Failed to write active folder: ${e.message}")
+        }
     }
 
     private fun injectBridgeToken() {
@@ -323,6 +478,9 @@ class MainActivity : AppCompatActivity() {
         newWebView.id = R.id.webView
         container.addView(newWebView, 0)
         webView = newWebView
+
+        // Reset bridge so initBridge() re-registers on the new WebView
+        bridgeInitialized = false
 
         setupWebView()
         if (serverPort > 0) {

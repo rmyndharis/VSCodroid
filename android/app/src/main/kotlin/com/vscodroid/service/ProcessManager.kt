@@ -91,7 +91,7 @@ class ProcessManager(private val context: Context) {
             "--user-data-dir=${Environment.getUserDataDir(context)}",
             "--server-data-dir=${Environment.getUserDataDir(context)}",
             "--logsPath=${Environment.getLogsDir(context)}",
-            "--default-folder=${Environment.getProjectsDir(context)}",
+            "--default-folder=${defaultFolder ?: Environment.getProjectsDir(context)}",
             "--accept-server-license-terms",
             "--log=info"
         )

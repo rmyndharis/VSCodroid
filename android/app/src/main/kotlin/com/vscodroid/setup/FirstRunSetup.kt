@@ -192,7 +192,6 @@ class FirstRunSetup(private val context: Context) {
             "rg" to "libripgrep.so",
             "tmux" to "libtmux.so",
             "make" to "libmake.so",
-            "ptybridge" to "libptybridge.so",
         )
 
         var created = 0
@@ -260,6 +259,29 @@ class FirstRunSetup(private val context: Context) {
         }
     }
 
+    /**
+     * Updates nativeLibraryDir paths in settings.json.
+     *
+     * Android changes nativeLibraryDir on every reinstall (random hash in path).
+     * Settings like terminal.integrated.profiles.linux.bash.path and git.path
+     * reference this directory, so they must be refreshed on each launch.
+     */
+    fun updateSettingsNativeLibPaths() {
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        val settingsFile = File(context.filesDir, "home/.vscodroid/User/settings.json")
+        if (!settingsFile.exists()) return
+
+        val content = settingsFile.readText()
+        // Match any /data/app/<random>/<pkg-random>/lib/<arch> prefix
+        val pattern = Regex("""/data/app/[^"]+/lib/[^"]+""")
+        val updated = pattern.replace(content, nativeLibDir)
+
+        if (updated != content) {
+            settingsFile.writeText(updated)
+            Logger.i(tag, "Updated nativeLibDir paths in settings.json")
+        }
+    }
+
     private fun createWelcomeProject() {
         val projectsDir = File(Environment.getProjectsDir(context))
         val welcomeFile = File(projectsDir, "README.md")
@@ -267,12 +289,17 @@ class FirstRunSetup(private val context: Context) {
             welcomeFile.writeText("""
                 # Welcome to VSCodroid
 
-                This is your projects directory. Create folders here to start coding.
+                This is your default projects directory. Create folders here to start coding.
 
-                Your projects are stored at:
+                Your default projects are stored at:
                 `Android/data/${context.packageName}/files/projects/`
 
-                You can access this folder from any file manager on your device.
+                **Open any folder on your device**: Use the Command Palette
+                (F1) → "VSCodroid: Open Folder from Device" to browse Downloads,
+                USB drives, or cloud storage folders.
+
+                **Recent folders**: Use "VSCodroid: Open Recent Folder" to quickly
+                reopen previously selected folders.
             """.trimIndent() + "\n")
         }
     }
@@ -294,6 +321,7 @@ class FirstRunSetup(private val context: Context) {
 
     private fun createBashrc() {
         val projectsDir = Environment.getProjectsDir(context)
+        val safMirrorsDir = Environment.getSafMirrorsDir(context)
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (!bashrc.exists()) {
             bashrc.writeText("""
@@ -303,17 +331,31 @@ class FirstRunSetup(private val context: Context) {
                     local dir="${'$'}PWD"
                     dir="${'$'}{dir/#${'$'}HOME/~}"
                     [[ "${'$'}dir" == /* ]] && dir="${'$'}{dir/#${'$'}PROJECTS_DIR/projects}"
+                    # Abbreviate SAF mirror paths: /data/.../saf-mirrors/<hash>/... → [folder]/...
+                    if [[ "${'$'}dir" == *saf-mirrors/* ]]; then
+                        dir="${'$'}{dir#*saf-mirrors/}"
+                        dir="${'$'}{dir#*/}"  # strip hash dir
+                        [ -z "${'$'}dir" ] && dir="[saf]"
+                        dir="[saf]/${'$'}dir"
+                    fi
                     printf '\033[32m%s\033[0m ${'$'} ' "${'$'}dir"
                 }
                 PROMPT_COMMAND=__vscodroid_prompt
                 PS1=''
 
                 export PROJECTS_DIR='$projectsDir'
+                export SAF_MIRRORS_DIR='$safMirrorsDir'
                 alias ls='ls --color=auto'
                 alias ll='ls -la'
 
-                # Start in projects directory
-                cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+                # Start in the active folder (SAF or default projects dir)
+                if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
+                    __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
+                    [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+                    unset __folder
+                else
+                    cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+                fi
             """.trimIndent() + "\n")
         }
     }
