@@ -410,7 +410,15 @@ class FirstRunSetup(private val context: Context) {
                     "git.path": "$nativeLibDir/libgit.so",
                     "terminal.integrated.shellIntegration.enabled": false,
                     "telemetry.telemetryLevel": "off",
-                    "security.workspace.trust.enabled": false
+                    "security.workspace.trust.enabled": false,
+                    "python.languageServer": "Jedi",
+                    "python.defaultInterpreterPath": "${context.filesDir.absolutePath}/usr/bin/python3",
+                    "gitlens.showWelcomeOnInstall": false,
+                    "gitlens.showWhatsNewAfterUpgrades": false,
+                    "gitlens.codeLens.enabled": false,
+                    "gitlens.currentLine.enabled": true,
+                    "gitlens.hovers.enabled": false,
+                    "gitlens.statusBar.enabled": false
                 }
             """.trimIndent())
         }

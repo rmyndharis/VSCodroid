@@ -17,10 +17,11 @@ const MEMORY_PRESSURE_KILL_LEVEL = 15; // TRIM_MEMORY_RUNNING_CRITICAL
 
 const LANG_SERVER_PATTERNS = [
     'tsserver', 'typescript-language-server',
-    'pylsp', 'pyright', 'python-language-server',
+    'pylsp', 'pyright', 'python-language-server', 'jedi',
     'gopls', 'rust-analyzer', 'clangd',
     'eslint', 'vscode-eslint', 'css-languageserver',
-    'html-languageserver', 'json-languageserver'
+    'html-languageserver', 'json-languageserver',
+    'tailwindcss'
 ];
 
 let outputPath = '';

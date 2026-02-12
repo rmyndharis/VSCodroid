@@ -19,6 +19,10 @@ WORK_DIR="$ROOT_DIR/toolchains/extensions"
 EXTENSIONS=(
     "PKief.material-icon-theme"
     "esbenp.prettier-vscode@11.0.3"
+    "ms-python.python@2024.22.1"
+    "dbaeumer.vscode-eslint"
+    "bradlc.vscode-tailwindcss"
+    "eamodio.gitlens"
 )
 
 OPENVSX_API="https://open-vsx.org/api"
