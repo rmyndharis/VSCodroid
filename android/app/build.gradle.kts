@@ -35,6 +35,14 @@ android {
         }
     }
 
+    // AAPT's default ignoreAssetsPattern skips files/dirs starting with "_"
+    // (pattern "_*"). npm's @sigstore/protobuf-specs has a __generated__/
+    // directory that gets silently dropped, breaking `npm install`. Override
+    // to only skip dotfiles and VCS metadata (keep underscore-prefixed dirs).
+    aaptOptions {
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*.orig:*~"
+    }
+
     // CRITICAL: Required for the .so binary bundling trick on Android 14+.
     // Without useLegacyPackaging = true, the Package Manager will not extract
     // .so files from the APK, and our bundled binaries (libnode.so, libgit.so,
