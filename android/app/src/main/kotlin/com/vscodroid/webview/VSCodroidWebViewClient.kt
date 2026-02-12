@@ -89,6 +89,13 @@ class VSCodroidWebViewClient(
         /** VS Code assets are versioned by commit hash — safe to cache forever. */
         private const val CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 
+        /** Paths that file-scheme resource requests are allowed to read from. */
+        private val ALLOWED_PATH_PREFIXES = listOf(
+            "/data/data/",     // App-private storage (filesDir, cacheDir)
+            "/data/user/",     // Multi-user variant of app-private storage
+            "/storage/",       // External storage (projects dir)
+        )
+
         /**
          * Register a ServiceWorkerClient to intercept service worker script fetches.
          *
@@ -180,6 +187,13 @@ class VSCodroidWebViewClient(
                 // Both "file" and "vscode-remote" schemes use local paths in VSCodroid
                 // since the server runs on the same device.
                 val file = File(path)
+                // Validate canonical path stays within app-accessible directories
+                // to prevent path traversal via ../../ in crafted URLs.
+                val canonical = file.canonicalPath
+                if (!ALLOWED_PATH_PREFIXES.any { canonical.startsWith(it) }) {
+                    Logger.w(TAG, "Path traversal blocked: $canonical")
+                    return notFound("Access denied")
+                }
                 if (!file.exists() || !file.isFile) {
                     Logger.d(TAG, "Resource not found ($scheme): $path")
                     return notFound(path)

@@ -131,6 +131,11 @@ if (!fs.existsSync(rehEntryPoint)) {
         log('warn', 'Process monitor failed to start: ' + e.message);
     }
 
+    server.on('error', (err) => {
+        log('error', `Failed to start VS Code Server: ${err.message}`);
+        process.exit(1);
+    });
+
     server.on('exit', (code) => {
         log('info', `VS Code Server exited with code ${code}`);
         process.exit(code || 0);

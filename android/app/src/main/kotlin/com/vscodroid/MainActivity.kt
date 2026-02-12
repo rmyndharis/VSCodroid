@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private var extraKeyRow: ExtraKeyRow? = null
     private var nodeService: NodeService? = null
     private var serviceBound = false
+    private var serviceBindingInitiated = false
     private var serverPort = 0
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
@@ -120,8 +121,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         safManager.stopFileWatcher()
-        if (serviceBound) {
-            unbindService(serviceConnection)
+        if (serviceBindingInitiated) {
+            try {
+                unbindService(serviceConnection)
+            } catch (_: IllegalArgumentException) {
+                // Already unbound — safe to ignore
+            }
+            serviceBindingInitiated = false
             serviceBound = false
         }
         webView?.destroy()
@@ -381,6 +387,7 @@ class MainActivity : AppCompatActivity() {
         val serviceIntent = Intent(this, NodeService::class.java)
         startForegroundService(serviceIntent)
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+        serviceBindingInitiated = true
     }
 
     private fun setupServiceCallbacks() {

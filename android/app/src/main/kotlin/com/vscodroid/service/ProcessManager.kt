@@ -32,6 +32,7 @@ class ProcessManager(private val context: Context) {
     private var serverProcess: Process? = null
     private var watchdogThread: Thread? = null
     private var _port: Int = 0
+    @Volatile
     private var isShuttingDown = false
 
     /** The port the server is listening on. Only valid after [startServer] returns true. */
@@ -101,7 +102,7 @@ class ProcessManager(private val context: Context) {
                 redirectErrorStream(true)
                 directory(context.filesDir)
             }
-            serverProcess = processBuilder.start()
+            serverProcess = processBuilder.start().also { it.outputStream.close() }
             startOutputReader()
             startWatchdog()
             Logger.i(tag, "Server process started with PID ${getServerPid()}")
@@ -185,6 +186,7 @@ class ProcessManager(private val context: Context) {
             }
         }
         serverProcess = null
+        watchdogThread?.interrupt()
         watchdogThread = null
     }
 
