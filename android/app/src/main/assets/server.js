@@ -112,7 +112,7 @@ if (!fs.existsSync(rehEntryPoint)) {
     ];
 
     // Forward relevant CLI args
-    ['extensions-dir', 'user-data-dir', 'server-data-dir', 'logsPath', 'default-folder'].forEach(key => {
+    ['extensions-dir', 'user-data-dir', 'server-data-dir', 'logsPath'].forEach(key => {
         if (args[key]) serverArgs.push(`--${key}`, args[key]);
     });
 
