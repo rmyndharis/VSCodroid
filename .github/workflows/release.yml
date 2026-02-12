@@ -80,10 +80,25 @@ jobs:
           name: release-artifacts
           path: artifacts
 
+      - name: Install toolchain packaging dependencies
+        run: sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
+
+      - name: Download toolchain assets
+        run: |
+          bash scripts/download-go.sh
+          bash scripts/download-ruby.sh
+          bash scripts/download-java.sh
+
+      - name: Package toolchain ZIPs
+        run: bash scripts/package-toolchains.sh
+
       - name: Generate checksums
         run: |
           cd artifacts
           find . -type f \( -name "*.apk" -o -name "*.aab" \) -exec sha256sum {} \; > checksums.sha256
+          for zip in ../toolchain-zips/*.zip; do
+            sha256sum "$zip" >> checksums.sha256
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -92,4 +107,5 @@ jobs:
           files: |
             artifacts/**/*.apk
             artifacts/**/*.aab
+            toolchain-zips/*.zip
             artifacts/checksums.sha256

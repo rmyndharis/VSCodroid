@@ -3,6 +3,7 @@ package com.vscodroid.setup
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
@@ -33,6 +34,15 @@ class ToolchainRegistryTest {
                 assertNotNull(tc.description, "description must not be null")
                 assert(tc.estimatedSize > 0) { "estimatedSize must be positive: ${tc.packName}" }
                 assert(tc.packName.startsWith("toolchain_")) { "packName must start with 'toolchain_': ${tc.packName}" }
+            }
+        }
+
+        @Test
+        fun `all toolchains have HTTPS download URLs`() {
+            for (tc in ToolchainRegistry.available) {
+                assertNotNull(tc.downloadUrl, "downloadUrl must not be null: ${tc.packName}")
+                assertTrue(tc.downloadUrl!!.startsWith("https://"), "downloadUrl must be HTTPS: ${tc.packName}")
+                assertTrue(tc.downloadUrl!!.endsWith(".zip"), "downloadUrl must end with .zip: ${tc.packName}")
             }
         }
 

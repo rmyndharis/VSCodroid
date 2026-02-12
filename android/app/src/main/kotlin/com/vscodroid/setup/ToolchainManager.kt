@@ -2,6 +2,7 @@ package com.vscodroid.setup
 
 import android.app.Activity
 import android.content.Context
+import android.os.StatFs
 import android.system.Os
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackState
@@ -10,21 +11,29 @@ import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Logger
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.Executors
+import java.util.zip.ZipInputStream
 
 /**
- * Manages on-demand toolchain installation via Play Asset Delivery.
+ * Manages on-demand toolchain installation via Play Asset Delivery or HTTP fallback.
  *
- * Install flow:
+ * Play Store install flow:
  *   1. fetch() → AssetPackManager downloads the pack
- *   2. On COMPLETED → copyFromAssetPack() copies files to filesDir (off main thread)
+ *   2. On COMPLETED → installFromDirectory() copies files to filesDir (off main thread)
  *   3. chmod +x on binaries, create symlinks in usr/bin/
  *   4. Write toolchain-env.sh for bash, persist state to toolchains.json
  *   5. removePack() to free the duplicate asset pack storage
  *
- * For sideloaded installs (no Play Store), a future HTTP fallback can be
- * added by checking isPlayStoreAvailable() before calling fetch().
+ * HTTP fallback (sideloaded/debug builds):
+ *   1. Download ZIP from GitHub Releases via HttpURLConnection
+ *   2. Extract ZIP → installFromDirectory() (shared with Play path)
+ *   3. Same chmod/symlink/persist steps as above
  */
 class ToolchainManager(private val context: Context) {
 
@@ -42,6 +51,17 @@ class ToolchainManager(private val context: Context) {
 
     /** Callback for progress/state updates: (packName, status, percentDone) */
     var onStateChange: ((String, Int, Int) -> Unit)? = null
+
+    // -- HTTP fallback state --
+    @Volatile private var httpCancelled = false
+
+    companion object {
+        private const val SPACE_BUFFER = 50_000_000L  // 50 MB free space buffer
+        private const val HTTP_TIMEOUT_MS = 30_000     // 30s connect + read timeout
+        private const val MAX_RETRIES = 2
+        private const val DOWNLOAD_BUFFER_SIZE = 8192
+        private const val MAX_REDIRECTS = 5
+    }
 
     private val listener = AssetPackStateUpdateListener { state ->
         handleStateUpdate(state)
@@ -102,16 +122,30 @@ class ToolchainManager(private val context: Context) {
         val info = ToolchainRegistry.find(packName)
         if (info == null) {
             Logger.e(tag, "Unknown toolchain: $packName")
+            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
             return
         }
         Logger.i(tag, "Requesting install of ${info.displayName} (${info.packName})")
-        // Ensure listener is registered before fetching
-        registerListener()
-        assetPackManager.fetch(listOf(info.packName))
+
+        if (shouldUseHttpFallback()) {
+            val url = info.downloadUrl
+            if (url == null) {
+                Logger.e(tag, "No downloadUrl for ${info.packName} — Play Store required")
+                onStateChange?.invoke(info.packName, AssetPackStatus.FAILED, 0)
+                return
+            }
+            downloadViaHttp(info.packName, url, info.estimatedSize)
+        } else {
+            // Ensure listener is registered before fetching
+            registerListener()
+            assetPackManager.fetch(listOf(info.packName))
+        }
     }
 
     fun cancel(packName: String) {
         val info = ToolchainRegistry.find(packName) ?: return
+        // Signal HTTP download to stop (checked every 8KB in download loop)
+        httpCancelled = true
         assetPackManager.cancel(listOf(info.packName))
         Logger.i(tag, "Cancelled download of ${info.packName}")
     }
@@ -247,7 +281,7 @@ class ToolchainManager(private val context: Context) {
                         val location = assetPackManager.getPackLocation(packName)
                         val assetsPath = location?.assetsPath()
                         if (assetsPath != null) {
-                            copyFromAssetPack(packName, assetsPath)
+                            installFromDirectory(packName, File(assetsPath))
                             assetPackManager.removePack(packName)
                             Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
                         } else {
@@ -275,8 +309,7 @@ class ToolchainManager(private val context: Context) {
 
     // -- File operations --
 
-    private fun copyFromAssetPack(packName: String, assetsPath: String) {
-        val assetsDir = File(assetsPath)
+    private fun installFromDirectory(packName: String, assetsDir: File) {
         val manifestFile = File(assetsDir, "$packName.json")
         if (!manifestFile.exists()) {
             Logger.e(tag, "No $packName.json in asset pack $packName")
@@ -350,6 +383,228 @@ class ToolchainManager(private val context: Context) {
         Logger.i(tag, "Toolchain $name installed successfully")
         onStateChange?.invoke(packName, AssetPackStatus.COMPLETED, 100)
     }
+
+    // -- HTTP fallback (sideloaded installs) --
+
+    /**
+     * Returns true if the app was NOT installed via Play Store.
+     * On sideloaded/debug builds, Play Asset Delivery silently fails,
+     * so we download toolchain ZIPs from GitHub Releases instead.
+     */
+    private fun shouldUseHttpFallback(): Boolean {
+        return try {
+            val source = context.packageManager.getInstallSourceInfo(context.packageName)
+            val installer = source.installingPackageName
+            Logger.d(tag, "Install source: $installer")
+            installer != "com.android.vending"
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not determine install source, using HTTP fallback: ${e.message}")
+            true
+        }
+    }
+
+    /**
+     * Downloads a toolchain ZIP from GitHub Releases, extracts it, and installs.
+     * Runs entirely on ioExecutor. Fires onStateChange with AssetPackStatus constants.
+     */
+    private fun downloadViaHttp(packName: String, url: String, estimatedSize: Long) {
+        httpCancelled = false
+        onStateChange?.invoke(packName, AssetPackStatus.PENDING, 0)
+
+        ioExecutor.execute {
+            val tempDir = File(context.cacheDir, "toolchain-download")
+            val zipFile = File(tempDir, "$packName.zip")
+            val extractDir = File(tempDir, packName)
+
+            try {
+                // Pre-flight disk space check
+                val stat = StatFs(context.filesDir.absolutePath)
+                val availableBytes = stat.availableBytes
+                val requiredBytes = estimatedSize + SPACE_BUFFER
+                if (availableBytes < requiredBytes) {
+                    Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
+                            "${requiredBytes / 1_000_000} MB required")
+                    onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                    return@execute
+                }
+
+                tempDir.mkdirs()
+
+                // Download
+                downloadWithRetries(packName, url, zipFile, estimatedSize)
+
+                if (httpCancelled) {
+                    Logger.i(tag, "HTTP download cancelled for $packName")
+                    return@execute
+                }
+
+                // Extract — report as TRANSFERRING (file copy phase)
+                onStateChange?.invoke(packName, AssetPackStatus.TRANSFERRING, 90)
+                extractDir.deleteRecursively()
+                extractDir.mkdirs()
+                extractZip(zipFile, extractDir)
+
+                // Install from extracted directory (same path as Play Asset Delivery)
+                installFromDirectory(packName, extractDir)
+
+            } catch (e: IOException) {
+                if (httpCancelled) {
+                    Logger.i(tag, "HTTP download cancelled for $packName")
+                } else {
+                    Logger.e(tag, "HTTP download failed for $packName", e)
+                    onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                }
+            } catch (e: SecurityException) {
+                Logger.e(tag, "Zip security violation for $packName", e)
+                onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+            } catch (e: Exception) {
+                Logger.e(tag, "Unexpected error downloading $packName", e)
+                onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+            } finally {
+                // Clean up temp files
+                tempDir.deleteRecursively()
+            }
+        }
+    }
+
+    /**
+     * Retries download up to MAX_RETRIES times with exponential backoff.
+     * Does not retry on 404 (zips not uploaded yet) — fails immediately.
+     */
+    @Throws(IOException::class)
+    private fun downloadWithRetries(packName: String, url: String, destFile: File, estimatedSize: Long) {
+        var lastException: IOException? = null
+        for (attempt in 0..MAX_RETRIES) {
+            try {
+                if (attempt > 0) {
+                    val backoffMs = (1L shl attempt) * 1000  // 2s, 4s
+                    Logger.i(tag, "Retry $attempt/$MAX_RETRIES for $packName after ${backoffMs}ms")
+                    Thread.sleep(backoffMs)
+                }
+                downloadFile(packName, url, destFile, estimatedSize)
+                return  // Success
+            } catch (e: IOException) {
+                lastException = e
+                if (httpCancelled) throw e
+                // Don't retry on 404
+                if (e.message?.contains("404") == true) throw e
+                Logger.w(tag, "Download attempt $attempt failed for $packName: ${e.message}")
+            }
+        }
+        throw lastException ?: IOException("Download failed after ${MAX_RETRIES + 1} attempts")
+    }
+
+    /**
+     * Downloads a file from the given URL using HttpURLConnection.
+     * Manually follows redirects (GitHub → CDN) up to MAX_REDIRECTS hops.
+     * Reports progress via onStateChange as DOWNLOADING status.
+     */
+    @Throws(IOException::class)
+    private fun downloadFile(packName: String, url: String, destFile: File, estimatedSize: Long) {
+        var currentUrl = url
+        var redirects = 0
+
+        while (redirects < MAX_REDIRECTS) {
+            val conn = URL(currentUrl).openConnection() as HttpURLConnection
+            try {
+                conn.connectTimeout = HTTP_TIMEOUT_MS
+                conn.readTimeout = HTTP_TIMEOUT_MS
+                conn.instanceFollowRedirects = false
+                conn.setRequestProperty("User-Agent", "VSCodroid")
+
+                val responseCode = conn.responseCode
+
+                if (responseCode in 300..399) {
+                    val location = conn.getHeaderField("Location")
+                        ?: throw IOException("Redirect with no Location header from $currentUrl")
+                    currentUrl = if (location.startsWith("http")) location
+                                 else URL(URL(currentUrl), location).toString()
+                    redirects++
+                    conn.disconnect()
+                    continue
+                }
+
+                if (responseCode == 404) {
+                    throw IOException("404 Not Found: $currentUrl — toolchain ZIP not uploaded to release?")
+                }
+
+                if (responseCode != 200) {
+                    throw IOException("HTTP $responseCode from $currentUrl")
+                }
+
+                val totalBytes = conn.contentLengthLong.let {
+                    if (it > 0) it else estimatedSize
+                }
+
+                onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, 0)
+
+                BufferedInputStream(conn.inputStream).use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
+                        var bytesRead: Long = 0
+                        var len: Int
+
+                        while (input.read(buffer).also { len = it } != -1) {
+                            if (httpCancelled) {
+                                throw IOException("Download cancelled")
+                            }
+                            output.write(buffer, 0, len)
+                            bytesRead += len
+                            val percent = if (totalBytes > 0) {
+                                ((bytesRead * 85) / totalBytes).toInt().coerceAtMost(85)
+                            } else 0
+                            onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, percent)
+                        }
+                    }
+                }
+
+                Logger.i(tag, "Downloaded $packName: ${destFile.length() / 1_000_000} MB")
+                return  // Success
+
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        throw IOException("Too many redirects ($MAX_REDIRECTS) for $url")
+    }
+
+    /**
+     * Extracts a ZIP archive to the destination directory.
+     * Includes zip-slip protection (rejects entries that escape destDir).
+     */
+    @Throws(IOException::class, SecurityException::class)
+    private fun extractZip(zipFile: File, destDir: File) {
+        val canonicalDest = destDir.canonicalPath
+
+        ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val outFile = File(destDir, entry.name)
+                val canonicalOut = outFile.canonicalPath
+
+                if (!canonicalOut.startsWith(canonicalDest + File.separator) && canonicalOut != canonicalDest) {
+                    throw SecurityException("Zip slip detected: ${entry.name}")
+                }
+
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { out ->
+                        zis.copyTo(out)
+                    }
+                }
+
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
+
+        Logger.i(tag, "Extracted ${zipFile.name} to ${destDir.absolutePath}")
+    }
+
+    // -- Shared file operations --
 
     private fun copyDirectoryRecursively(src: File, dest: File) {
         if (src.isDirectory) {

@@ -27,6 +27,7 @@ object ToolchainRegistry {
             shortLabel = "Go",
             description = "Go programming language (CGO_ENABLED=0)",
             estimatedSize = 179_000_000,
+            downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_go.zip",
         ),
         ToolchainInfo(
             packName = "toolchain_ruby",
@@ -34,6 +35,7 @@ object ToolchainRegistry {
             shortLabel = "Ruby",
             description = "Ruby with irb, gem, bundler",
             estimatedSize = 34_000_000,
+            downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
         ToolchainInfo(
             packName = "toolchain_java",
@@ -41,6 +43,7 @@ object ToolchainRegistry {
             shortLabel = "Java 17",
             description = "OpenJDK 17 (javac, jar, jshell)",
             estimatedSize = 146_000_000,
+            downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
     )
 
