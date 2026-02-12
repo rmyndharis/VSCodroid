@@ -501,6 +501,12 @@ class MainActivity : AppCompatActivity() {
         injectSafeAreaCSS()
         // Set up BroadcastChannel relay so browser extensions can reach AndroidBridge
         injectBridgeRelay()
+        // Register memory pressure listener
+        injectMemoryPressureHandler()
+        // Fix #2: Inject touch target enlargement CSS for phone-sized screens
+        injectTouchTargetCSS()
+        // Fix #7: Override window.open() to route through AndroidBridge
+        injectWindowOpenOverride()
     }
 
     /**
@@ -555,6 +561,63 @@ class MainActivity : AppCompatActivity() {
                     '}'
                 ].join('\n');
                 document.head.appendChild(style);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Fix #2: Injects CSS to enlarge touch targets for phone-sized screens.
+     * Only active when screen width < 600px (phones, not tablets).
+     * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
+     */
+    private fun injectTouchTargetCSS() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (document.getElementById('vscodroid-touch-css')) return;
+                if (window.innerWidth > 600) return;
+                var s = document.createElement('style');
+                s.id = 'vscodroid-touch-css';
+                s.textContent = [
+                    '/* VSCodroid: Enlarged touch targets for mobile */',
+                    '.monaco-list-row { min-height: 36px !important; padding: 2px 0 !important; }',
+                    '.tabs-container .tab { min-height: 40px !important; }',
+                    '.activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
+                    '.activitybar .action-label { min-height: 44px !important; }',
+                    '.statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
+                    '.context-view .action-item { min-height: 40px !important; }',
+                    '.context-view .action-label { padding: 6px 12px !important; }',
+                    '.slider { min-width: 12px !important; }',
+                    '.quick-input-list .monaco-list-row { min-height: 36px !important; }'
+                ].join('\n');
+                document.head.appendChild(s);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Fix #7: Overrides window.open() to route external URLs through AndroidBridge.
+     * VS Code web's link handling (Markdown preview, "Open in Browser") calls window.open(),
+     * which is blocked by shouldOverrideUrlLoading. This intercepts at the JS level instead.
+     */
+    private fun injectWindowOpenOverride() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidOpenPatched) return;
+                window.__vscodroidOpenPatched = true;
+                var orig = window.open;
+                window.open = function(url) {
+                    if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
+                        var t = (window.__vscodroid || {}).authToken;
+                        if (t) { AndroidBridge.openExternalUrl(url, t); return null; }
+                    }
+                    return orig.apply(window, arguments);
+                };
             })();
             """.trimIndent(),
             null
@@ -618,9 +681,45 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Fix #9: Register a consumer for the onLowMemory JS callback.
+     * MainActivity.onTrimMemory already fires window.__vscodroid?.onLowMemory?.(level),
+     * but no consumer was registered. This method registers one.
+     */
+    private fun injectMemoryPressureHandler() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidMemoryHandlerActive) return;
+                window.__vscodroidMemoryHandlerActive = true;
+                window.__vscodroid = window.__vscodroid || {};
+                window.__vscodroid.onLowMemory = function(level) {
+                    console.warn('[VSCodroid] Memory pressure: level=' + level);
+                    // Hint GC and reduce image cache
+                    try {
+                        if (typeof gc === 'function') gc();
+                    } catch(e) {}
+                    // Clear any cached blob URLs
+                    try {
+                        var perf = performance.getEntries();
+                        perf.forEach(function(e) {
+                            if (e.name && e.name.startsWith('blob:')) {
+                                try { URL.revokeObjectURL(e.name); } catch(x) {}
+                            }
+                        });
+                    } catch(e) {}
+                };
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
     private fun recreateWebView() {
         Logger.w(tag, "Recreating WebView after crash")
         val wv = webView ?: return
+        // Fix #4: Preserve last URL for folder context restoration
+        val lastUrl = wv.url
         val container = findViewById<android.widget.FrameLayout>(R.id.webViewContainer)
         container.removeView(wv)
         wv.destroy()
@@ -635,7 +734,12 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
         if (serverPort > 0) {
-            loadVSCode(serverPort)
+            // Restore last URL if it was a localhost VS Code URL (preserves folder context)
+            if (lastUrl != null && lastUrl.startsWith("http://127.0.0.1")) {
+                webView?.loadUrl(lastUrl)
+            } else {
+                loadVSCode(serverPort)
+            }
         }
     }
 

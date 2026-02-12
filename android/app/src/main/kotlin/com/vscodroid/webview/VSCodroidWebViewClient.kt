@@ -1,5 +1,6 @@
 package com.vscodroid.webview
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.webkit.RenderProcessGoneDetail
@@ -31,8 +32,16 @@ class VSCodroidWebViewClient(
         if (isLocalhost(url) || isCdnRedirect(url)) {
             return false
         }
-        Logger.w(tag, "Blocked external navigation: $url")
-        return true
+        // Fix #7: Open external URLs in system browser instead of blocking silently
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, url)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            view.context.startActivity(intent)
+            Logger.i(tag, "Opened external URL: $url")
+        } catch (e: Exception) {
+            Logger.e(tag, "Failed to open external URL: $url", e)
+        }
+        return true  // Don't navigate WebView to external URL
     }
 
     /**
