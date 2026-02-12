@@ -19,6 +19,10 @@
       {
         "command": "vscodroid.showProcesses",
         "title": "VSCodroid: Show Process Tree"
+      },
+      {
+        "command": "vscodroid.killIdleServers",
+        "title": "VSCodroid: Kill Idle Servers"
       }
     ]
   }

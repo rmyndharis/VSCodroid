@@ -348,7 +348,8 @@ class FirstRunSetup(private val context: Context) {
     private fun npmBashFunctions(): String = """
 
 # npm/npx — shell functions (Android noexec prevents script wrappers)
-npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" "${'$'}@"; }
+# --prefer-offline: use local cache first, saves time on slow mobile connections
+npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" --prefer-offline "${'$'}@"; }
 npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
 """
 
@@ -495,6 +496,7 @@ npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
                     "editor.fontSize": 14,
                     "editor.wordWrap": "on",
                     "editor.minimap.enabled": false,
+                    "diffEditor.wordWrap": "on",
                     "terminal.integrated.fontSize": 13,
                     "terminal.integrated.defaultProfile.linux": "bash",
                     "terminal.integrated.profiles.linux": {
@@ -518,7 +520,37 @@ npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
                     "gitlens.codeLens.enabled": false,
                     "gitlens.currentLine.enabled": true,
                     "gitlens.hovers.enabled": false,
-                    "gitlens.statusBar.enabled": false
+                    "gitlens.statusBar.enabled": false,
+                    "launch": {
+                        "version": "0.2.0",
+                        "configurations": [
+                            {
+                                "name": "Attach to Node.js",
+                                "type": "node",
+                                "request": "attach",
+                                "port": 9229,
+                                "restart": true,
+                                "skipFiles": ["<node_internals>/**"]
+                            },
+                            {
+                                "name": "NestJS: Debug",
+                                "type": "node",
+                                "request": "launch",
+                                "runtimeArgs": ["--inspect", "-r", "ts-node/register", "-r", "tsconfig-paths/register"],
+                                "args": ["${'$'}{workspaceFolder}/src/main.ts"],
+                                "skipFiles": ["<node_internals>/**"],
+                                "console": "integratedTerminal"
+                            },
+                            {
+                                "name": "Node.js: Run Current File",
+                                "type": "node",
+                                "request": "launch",
+                                "program": "${'$'}{file}",
+                                "skipFiles": ["<node_internals>/**"],
+                                "console": "integratedTerminal"
+                            }
+                        ]
+                    }
                 }
             """.trimIndent())
         }
