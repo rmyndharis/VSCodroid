@@ -19,6 +19,19 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 APK_PATH="$ROOT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 PKG="com.vscodroid.debug"
 
+# Auto-detect adb if not in PATH
+if ! command -v adb &>/dev/null; then
+    for candidate in \
+        "$HOME/Library/Android/sdk/platform-tools/adb" \
+        "${ANDROID_HOME:-__none__}/platform-tools/adb" \
+        "${ANDROID_SDK_ROOT:-__none__}/platform-tools/adb"; do
+        if [ -x "$candidate" ]; then
+            export PATH="$(dirname "$candidate"):$PATH"
+            break
+        fi
+    done
+fi
+
 # Defaults
 SKIP_BUILD=false
 SKIP_INSTALL=false
@@ -103,6 +116,7 @@ run_with_timeout() {
 # ── Captured state ─────────────────────────────────────────────────
 SERVER_PORT=""
 NATIVE_LIB_DIR=""
+DATA_DIR=""  # resolved after device check via run-as pwd
 
 # ── Header ─────────────────────────────────────────────────────────
 printf "\n${BOLD}${CYAN}=== VSCodroid Device Test Suite ===${RESET}\n\n"
@@ -193,14 +207,16 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 # TEST 6: first_run_setup
 # ═══════════════════════════════════════════════════════════════════
-# Wait for "launching main" in logcat (SplashActivity completed)
+# Wait for first-run setup to complete.
+# On first run: VSCodroid.FirstRunSetup logs "First-run setup completed"
+# On subsequent runs: VSCodroid.SplashActivity logs "Not first run, launching main"
 SETUP_TIMEOUT=$TIMEOUT
 ELAPSED=0
 SETUP_OK=false
 
 while [ $ELAPSED -lt $SETUP_TIMEOUT ]; do
-    LOGCAT=$($ADB logcat -d -s SplashActivity:I 2>/dev/null)
-    if echo "$LOGCAT" | grep -q "launching main"; then
+    LOGCAT=$($ADB logcat -d -s VSCodroid.SplashActivity:I VSCodroid.FirstRunSetup:I 2>/dev/null)
+    if echo "$LOGCAT" | grep -q "setup completed\|launching main"; then
         SETUP_OK=true
         break
     fi
@@ -227,7 +243,7 @@ ELAPSED=0
 READY_OK=false
 
 while [ $ELAPSED -lt $READY_TIMEOUT ]; do
-    LOGCAT=$($ADB logcat -d -s NodeService:I ProcessManager:I 2>/dev/null)
+    LOGCAT=$($ADB logcat -d -s VSCodroid.NodeService:I VSCodroid.ProcessManager:I 2>/dev/null)
     # Extract port from "Server is ready on port NNNN"
     PORT_LINE=$(echo "$LOGCAT" | grep -o "Server is ready on port [0-9]*" | tail -1)
     if [ -n "$PORT_LINE" ]; then
@@ -280,6 +296,10 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 printf "\n${BOLD}Phase 3: Tool Symlinks${RESET}\n"
 
+# Resolve the app data directory (run-as cwd)
+DATA_DIR=$($ADB shell run-as "$PKG" pwd 2>/dev/null | tr -d '\r\n')
+vlog "dataDir=$DATA_DIR"
+
 # Discover nativeLibraryDir by reading a symlink target
 NODE_LINK=$($ADB shell run-as "$PKG" ls -la files/usr/bin/node 2>/dev/null)
 NATIVE_LIB_DIR=$(echo "$NODE_LINK" | grep -o '/data/app/[^ ]*lib/arm64' | head -1)
@@ -314,11 +334,11 @@ printf "\n${BOLD}Phase 4: Tool Versions${RESET}\n"
 run_tool() {
     local tool_path="$1"; shift
     $ADB shell run-as "$PKG" env \
-        "HOME=\$(pwd)/files/home" \
-        "PATH=\$(pwd)/files/usr/bin:$NATIVE_LIB_DIR" \
-        "LD_LIBRARY_PATH=\$(pwd)/files/usr/lib:$NATIVE_LIB_DIR" \
-        "PYTHONHOME=\$(pwd)/files/usr" \
-        "GIT_EXEC_PATH=\$(pwd)/files/usr/libexec/git-core" \
+        "HOME=$DATA_DIR/files/home" \
+        "PATH=$DATA_DIR/files/usr/bin:$NATIVE_LIB_DIR" \
+        "LD_LIBRARY_PATH=$DATA_DIR/files/usr/lib:$NATIVE_LIB_DIR" \
+        "PYTHONHOME=$DATA_DIR/files/usr" \
+        "GIT_EXEC_PATH=$DATA_DIR/files/usr/libexec/git-core" \
         "$tool_path" "$@" 2>&1
 }
 
@@ -332,9 +352,9 @@ fi
 
 # Test 16: npm (via node + npm-cli.js)
 NPM_OUT=$($ADB shell run-as "$PKG" env \
-    "HOME=\$(pwd)/files/home" \
-    "PATH=\$(pwd)/files/usr/bin:$NATIVE_LIB_DIR" \
-    "LD_LIBRARY_PATH=\$(pwd)/files/usr/lib:$NATIVE_LIB_DIR" \
+    "HOME=$DATA_DIR/files/home" \
+    "PATH=$DATA_DIR/files/usr/bin:$NATIVE_LIB_DIR" \
+    "LD_LIBRARY_PATH=$DATA_DIR/files/usr/lib:$NATIVE_LIB_DIR" \
     files/usr/bin/node files/usr/lib/node_modules/npm/bin/npm-cli.js --version 2>&1)
 if echo "$NPM_OUT" | grep -q "^10\."; then
     pass "tool_npm ($NPM_OUT)"
@@ -382,7 +402,7 @@ fi
 vlog "$(echo "$PROC_LIST" | head -5)"
 
 # Test 21: extensions_manifest
-EXT_JSON=$($ADB shell run-as "$PKG" cat "files/.vscodroid/extensions/extensions.json" 2>/dev/null || true)
+EXT_JSON=$($ADB shell run-as "$PKG" cat "files/home/.vscodroid/extensions/extensions.json" 2>/dev/null || true)
 if echo "$EXT_JSON" | grep -q '"identifier"'; then
     EXT_COUNT=$(echo "$EXT_JSON" | grep -c '"identifier"' || true)
     pass "extensions_manifest ($EXT_COUNT extensions)"
@@ -391,20 +411,20 @@ else
 fi
 
 # Test 22: settings_json
-SETTINGS_CHECK=$($ADB shell run-as "$PKG" test -f "files/.vscodroid/data/Machine/settings.json" 2>&1; echo "EXIT:$?")
-if echo "$SETTINGS_CHECK" | grep -q "EXIT:0"; then
+# settings.json is created by FirstRunSetup, not by VS Code server
+SETTINGS_CHECK=$($ADB shell "run-as $PKG sh -c 'test -f files/home/.vscodroid/data/Machine/settings.json && echo EXISTS'" 2>/dev/null)
+if echo "$SETTINGS_CHECK" | grep -q "EXISTS"; then
     pass "settings_json"
 else
     fail "settings_json" "settings.json not found"
 fi
 
-# Test 23: file_creation
-TEST_FILE="files/home/projects/.vscodroid-test-$$"
-$ADB shell run-as "$PKG" touch "$TEST_FILE" 2>/dev/null
-FILE_CHECK=$($ADB shell run-as "$PKG" test -f "$TEST_FILE" 2>&1; echo "EXIT:$?")
-if echo "$FILE_CHECK" | grep -q "EXIT:0"; then
+# Test 23: file_creation (uses home dir, not projects/ which may be an external symlink)
+TEST_FILE="files/home/.vscodroid-test-$$"
+FILE_CHECK=$($ADB shell "run-as $PKG sh -c 'touch $TEST_FILE && test -f $TEST_FILE && echo EXISTS'" 2>/dev/null)
+if echo "$FILE_CHECK" | grep -q "EXISTS"; then
     pass "file_creation"
-    $ADB shell run-as "$PKG" rm "$TEST_FILE" 2>/dev/null
+    $ADB shell "run-as $PKG rm $TEST_FILE" 2>/dev/null
 else
     fail "file_creation" "Could not create/verify file"
 fi
