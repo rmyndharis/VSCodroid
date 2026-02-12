@@ -17,6 +17,9 @@
         <!-- Ensure dark appearance for system UI elements -->
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
+
+        <!-- Render content into display cutout area (notch, rounded corners) -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 
 </resources>

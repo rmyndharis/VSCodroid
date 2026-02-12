@@ -3,6 +3,7 @@ package com.vscodroid.keyboard
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.GestureDetector
@@ -68,10 +69,13 @@ class ExtraKeyButton @JvmOverloads constructor(
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         typeface = Typeface.MONOSPACE
         minWidth = dpToPx(48)
-        minimumHeight = dpToPx(42)
-        setPadding(dpToPx(6), dpToPx(4), dpToPx(6), dpToPx(4))
+        minimumHeight = dpToPx(48)
+        setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
         isClickable = true
         isFocusable = false
+
+        // Rounded corner background
+        applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
 
         setOnTouchListener { _, event ->
             gestureDetector.onTouchEvent(event)
@@ -88,11 +92,18 @@ class ExtraKeyButton @JvmOverloads constructor(
 
     private fun updateToggleAppearance() {
         if (isToggleActive) {
-            setBackgroundColor(context.getColor(R.color.colorExtraKeyActive))
+            applyRoundedBackground(context.getColor(R.color.colorExtraKeyActive))
             setTextColor(context.getColor(android.R.color.white))
         } else {
-            setBackgroundColor(context.getColor(R.color.colorExtraKeyBg))
+            applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
             setTextColor(context.getColor(R.color.colorExtraKeyText))
+        }
+    }
+
+    fun applyRoundedBackground(color: Int) {
+        background = GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dpToPx(6).toFloat()
         }
     }
 

@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -45,7 +46,7 @@ class KeyPageAdapter(
                         isToggle = item.isToggle
                         contentDescription = item.contentDescription
                         alternates = item.alternates
-                        setBackgroundColor(context.getColor(R.color.colorExtraKeyBg))
+                        applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
                         setTextColor(context.getColor(R.color.colorExtraKeyText))
 
                         onKeyAction = { key, isActive ->
@@ -65,7 +66,10 @@ class KeyPageAdapter(
                         toggleButtons[item.value] = button
                     }
 
-                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                        marginStart = dpToPx(holder.container.context, 2)
+                        marginEnd = dpToPx(holder.container.context, 2)
+                    }
                     holder.container.addView(button, lp)
                 }
 
@@ -91,4 +95,9 @@ class KeyPageAdapter(
         toggleState[keyValue] = active
         toggleButtons[keyValue]?.isToggleActive = active
     }
+
+    private fun dpToPx(context: android.content.Context, dp: Int): Int =
+        android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), context.resources.displayMetrics
+        ).toInt()
 }

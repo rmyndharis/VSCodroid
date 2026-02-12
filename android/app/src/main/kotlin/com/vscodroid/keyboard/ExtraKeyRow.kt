@@ -69,7 +69,7 @@ class ExtraKeyRow @JvmOverloads constructor(
 
         // ViewPager2 for swipeable key pages
         viewPager = ViewPager2(context).apply {
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(42))
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(48))
             offscreenPageLimit = 1
         }
         addView(viewPager)
@@ -133,7 +133,7 @@ class ExtraKeyRow @JvmOverloads constructor(
         dots.clear()
 
         for (i in 0 until pageCount) {
-            val size = dpToPx(6)
+            val size = dpToPx(8)
             val dot = ImageView(context).apply {
                 val drawable = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL

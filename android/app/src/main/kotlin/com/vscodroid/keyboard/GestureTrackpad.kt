@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
@@ -58,13 +59,18 @@ class GestureTrackpad @JvmOverloads constructor(
     private var touchOffsetY = 0f
 
     init {
-        setBackgroundColor(context.getColor(R.color.colorGestureTrackpadBg))
+        // Rounded background with subtle border for visual distinction
+        background = GradientDrawable().apply {
+            setColor(context.getColor(R.color.colorGestureTrackpadBg))
+            cornerRadius = dpToPx(6f)
+            setStroke(dpToPx(1f).toInt(), 0xFF555555.toInt())
+        }
         contentDescription = "Arrow key trackpad. Drag to move cursor."
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val desiredWidth = dpToPx(96f).toInt()
-        val desiredHeight = dpToPx(42f).toInt()
+        val desiredHeight = dpToPx(48f).toInt()
         setMeasuredDimension(
             resolveSize(desiredWidth, widthMeasureSpec),
             resolveSize(desiredHeight, heightMeasureSpec)

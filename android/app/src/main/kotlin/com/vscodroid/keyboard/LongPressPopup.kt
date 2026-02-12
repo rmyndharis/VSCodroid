@@ -3,6 +3,7 @@ package com.vscodroid.keyboard
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -23,9 +24,13 @@ class LongPressPopup(
     fun show(anchor: View) {
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(context.getColor(R.color.colorPopupBg))
-            val pad = dpToPx(4)
+            val pad = dpToPx(6)
             setPadding(pad, pad, pad, pad)
+            // Rounded popup container
+            background = GradientDrawable().apply {
+                setColor(context.getColor(R.color.colorPopupBg))
+                cornerRadius = dpToPx(10).toFloat()
+            }
         }
 
         for (alt in alternates) {
@@ -35,11 +40,16 @@ class LongPressPopup(
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                 typeface = Typeface.MONOSPACE
                 setTextColor(context.getColor(R.color.colorExtraKeyText))
-                setBackgroundColor(context.getColor(R.color.colorExtraKeyBg))
-                minWidth = dpToPx(44)
-                minimumHeight = dpToPx(38)
-                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+                minWidth = dpToPx(48)
+                minimumHeight = dpToPx(48)
+                setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
                 isClickable = true
+
+                // Rounded button background
+                background = GradientDrawable().apply {
+                    setColor(context.getColor(R.color.colorExtraKeyBg))
+                    cornerRadius = dpToPx(8).toFloat()
+                }
 
                 setOnClickListener {
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -50,7 +60,7 @@ class LongPressPopup(
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dpToPx(2) }
+            ).apply { marginEnd = dpToPx(4) }
             container.addView(button, lp)
         }
 
