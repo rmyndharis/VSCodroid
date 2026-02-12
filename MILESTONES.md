@@ -303,7 +303,7 @@ M6 (Release)   → Play Store release
    - `process-monitor.js` extracted to `server/` on first run — monitors child process count
    - `vscodroid.vscodroid-process-monitor` extension bundled — provides in-VS Code UI
    - Exit code 137 (SIGKILL) handling in `ProcessManager` — detects OOM/phantom kill
-   - Note: Extension Host still runs as `child_process.fork()` (worker_thread migration deferred to M5)
+   - Extension Host and ptyHost run as `worker_threads.Worker()` (saves 2 phantom process slots)
 
 5. **Storage management** (`StorageManager.kt`, `AndroidBridge.kt`)
    - `StorageManager.getStorageBreakdown()` — per-component usage tracking
@@ -345,17 +345,17 @@ M6 (Release)   → Play Store release
 **Deliverable**: In-app package manager and on-demand toolchain downloads.
 
 ### Entry Criteria:
-- [ ] All M4 success criteria passed
+- [x] All M4 success criteria passed
 - [ ] APK size audit completed (current vs projected with additional toolchains)
 - [ ] Termux package compatibility verified for target toolchains
 
 ### Tasks:
 
-1. **worker_thread Extension Host migration**
-   - Patch VS Code to run Extension Host as `worker_thread` instead of `child_process.fork()`
-   - Reduces phantom process count by 1 per window (critical for Android 12+ phantom process limit of 32)
-   - Verify extensions still load correctly after migration
-   - Test: language servers, debuggers, and linters under worker_thread mode
+1. **~~worker_thread Extension Host & ptyHost migration~~** *(completed during M4)*
+   - [x] Extension Host patched to run as `worker_threads.Worker()` instead of `child_process.fork()`
+   - [x] ptyHost patched to run as `worker_threads.Worker()` with graceful disconnect
+   - [x] Extensions load correctly under worker_thread mode
+   - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
 2. **Package manager (`vscodroid pkg`)**
    - Implement lightweight package manager CLI
@@ -385,7 +385,8 @@ M6 (Release)   → Play Store release
    - Auto-configure PATH for each installed toolchain
 
 ### Success Criteria:
-- [ ] Extension Host runs as worker_thread (phantom process count reduced)
+- [x] Extension Host runs as worker_thread (phantom process count reduced)
+- [x] ptyHost runs as worker_thread (additional phantom process saved)
 - [ ] `vscodroid pkg install <package>` works for at least 10 packages
 - [ ] On-demand toolchains download via Play Asset Delivery
 - [ ] Go/Rust/Java/C++/Ruby compile and run correctly after install
