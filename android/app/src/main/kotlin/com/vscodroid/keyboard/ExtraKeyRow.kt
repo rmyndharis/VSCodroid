@@ -69,7 +69,7 @@ class ExtraKeyRow @JvmOverloads constructor(
 
         // ViewPager2 for swipeable key pages
         viewPager = ViewPager2(context).apply {
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(48))
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(56))
             offscreenPageLimit = 1
         }
         addView(viewPager)

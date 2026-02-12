@@ -68,11 +68,17 @@ class ExtraKeyButton @JvmOverloads constructor(
         gravity = Gravity.CENTER
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         typeface = Typeface.MONOSPACE
+        maxLines = 1
         minWidth = dpToPx(48)
-        minimumHeight = dpToPx(48)
-        setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+        minimumHeight = dpToPx(56)
+        setPadding(dpToPx(4), dpToPx(6), dpToPx(4), dpToPx(6))
         isClickable = true
         isFocusable = false
+
+        // Auto-shrink text to fit within button width
+        setAutoSizeTextTypeUniformWithConfiguration(
+            8, 13, 1, TypedValue.COMPLEX_UNIT_SP
+        )
 
         // Rounded corner background
         applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))

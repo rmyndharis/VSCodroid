@@ -70,7 +70,7 @@ class GestureTrackpad @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val desiredWidth = dpToPx(96f).toInt()
-        val desiredHeight = dpToPx(48f).toInt()
+        val desiredHeight = dpToPx(56f).toInt()
         setMeasuredDimension(
             resolveSize(desiredWidth, widthMeasureSpec),
             resolveSize(desiredHeight, heightMeasureSpec)
