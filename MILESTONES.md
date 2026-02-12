@@ -357,26 +357,26 @@ M6 (Release)   → Play Store release
    - [x] Extensions load correctly under worker_thread mode
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
-2. **Package manager (`vscodroid pkg`)**
-   - Implement lightweight package manager CLI
-   - Leverage Termux package repository (or host mirror)
-   - Terminal command: `vscodroid pkg install <package>`
-   - Package install to `usr/` directory structure
-   - Package listing, removal, update support
-
-3. **Play Store AssetPackManager integration**
-   - Integrate Play Asset Delivery for on-demand toolchain downloads
-   - Each toolchain as a separate asset pack (keeps base APK small)
-   - Handle download states: pending, downloading, completed, failed
-   - Verify per-device delivery sizes stay within Play Store limits
-
-4. **On-demand toolchains**
+2. **On-demand toolchains**
    - Go (cross-compiled for ARM64 Android)
    - Rust (rustc + cargo)
    - Java (OpenJDK + javac)
    - C/C++ (clang/gcc from NDK or Termux)
    - Ruby
    - Verify each: `go version`, `rustc --version`, `javac -version`, `gcc --version`, `ruby --version`
+
+3. **Package manager (`vscodroid pkg`)**
+   - Implement lightweight package manager CLI
+   - Leverage Termux package repository (or host mirror)
+   - Terminal command: `vscodroid pkg install <package>`
+   - Package install to `usr/` directory structure
+   - Package listing, removal, update support
+
+4. **Play Store AssetPackManager integration** *(requires Google Play Developer account)*
+   - Integrate Play Asset Delivery for on-demand toolchain downloads
+   - Each toolchain as a separate asset pack (keeps base APK small)
+   - Handle download states: pending, downloading, completed, failed
+   - Verify per-device delivery sizes stay within Play Store limits
 
 5. **Language Picker UI**
    - First-run UI: "What do you code in?" with language checkboxes
@@ -411,53 +411,53 @@ M6 (Release)   → Play Store release
 
 ### Tasks:
 
-1. **SSH key management**
+1. **CI/CD pipeline**
+   - GitHub Actions: build Node.js ARM64, build VS Code, build APK
+   - Automated testing on Firebase Test Lab (physical ARM64 devices)
+   - Release workflow: tag -> build -> upload to Play Store
+
+2. **SSH key management**
    - Generate SSH key pair from within app
    - Store keys securely in app-private storage
    - UI to copy public key (for adding to GitHub/GitLab)
    - Configure git to use SSH key for push/pull
 
-2. **Extensive testing**
+3. **Branding**
+   - Design VSCodroid icon/logo (original, not VS Code's)
+   - App screenshots for Play Store
+   - Feature graphic
+
+4. **Legal compliance**
+   - Disclaimer in app About screen
+   - Privacy policy (required for Play Store)
+   - MIT license notice for VS Code source
+   - Trademark disclaimers
+
+5. **Documentation**
+   - README.md with project overview
+   - CONTRIBUTING.md for contributors
+   - User guide: first-run, keyboard shortcuts, package manager
+   - Known limitations
+
+6. **Android App Bundle**
+   - Build release AAB (signed)
+   - Verify per-device delivery sizes
+   - Test on Play Store internal track
+
+7. **Extensive testing**
    - Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
    - Android version matrix: 13, 14, 15, 16
    - Stress tests: large files (10k+ lines), large projects (1000+ files)
    - Extension tests: Python LSP, ESLint, GitLens, themes, icon packs
    - Lifecycle tests: background/foreground, split-screen, rotation, low memory
 
-3. **CI/CD pipeline**
-   - GitHub Actions: build Node.js ARM64, build VS Code, build APK
-   - Automated testing on Firebase Test Lab (physical ARM64 devices)
-   - Release workflow: tag -> build -> upload to Play Store
-
-4. **Branding**
-   - Design VSCodroid icon/logo (original, not VS Code's)
-   - App screenshots for Play Store
-   - Feature graphic
-
-5. **Legal compliance**
-   - Disclaimer in app About screen
-   - Privacy policy (required for Play Store)
-   - MIT license notice for VS Code source
-   - Trademark disclaimers
-
-6. **Documentation**
-   - README.md with project overview
-   - CONTRIBUTING.md for contributors
-   - User guide: first-run, keyboard shortcuts, package manager
-   - Known limitations
-
-7. **Play Store listing**
+8. **Play Store listing** *(requires Google Play Developer account)*
    - Title: "VSCodroid"
    - Description: feature list, compatibility notes
    - Screenshots: phone + tablet
    - Category: Developer Tools
    - Content rating questionnaire
    - Prepare for binary execution policy review
-
-8. **Android App Bundle**
-   - Build release AAB (signed)
-   - Verify per-device delivery sizes
-   - Test on Play Store internal track
 
 9. **Launch**
    - Internal testing track -> closed beta -> open beta -> production
