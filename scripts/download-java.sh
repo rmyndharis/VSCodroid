@@ -198,7 +198,7 @@ fi
 BINARIES+=']'
 SYMLINKS+='}'
 
-cat > "$PACK_ASSETS/manifest.json" << EOF
+cat > "$PACK_ASSETS/toolchain_java.json" << EOF
 {
     "name": "java",
     "displayName": "Java 17",
@@ -213,7 +213,7 @@ cat > "$PACK_ASSETS/manifest.json" << EOF
     "libs": ["libandroid-shmem.so", "libandroid-spawn.so"]
 }
 EOF
-echo "  manifest.json written"
+echo "  toolchain_java.json written"
 
 # --- Step 7: Size summary ---
 echo ""

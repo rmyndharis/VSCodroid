@@ -201,7 +201,7 @@ for bin in ruby irb gem bundle bundler erb rdoc ri; do
 done
 BINARIES+=']'
 
-cat > "$PACK_ASSETS/manifest.json" << EOF
+cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
     "name": "ruby",
     "displayName": "Ruby",
@@ -226,7 +226,7 @@ cat > "$PACK_ASSETS/manifest.json" << EOF
     "libs": ["libruby.so", "libgmp.so", "libyaml-0.so"]
 }
 EOF
-echo "  manifest.json written"
+echo "  toolchain_ruby.json written"
 
 # --- Step 7: Size summary ---
 echo ""

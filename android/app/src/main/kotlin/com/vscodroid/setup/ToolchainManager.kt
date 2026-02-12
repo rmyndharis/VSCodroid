@@ -249,9 +249,9 @@ class ToolchainManager(private val context: Context) {
 
     private fun copyFromAssetPack(packName: String, assetsPath: String) {
         val assetsDir = File(assetsPath)
-        val manifestFile = File(assetsDir, "manifest.json")
+        val manifestFile = File(assetsDir, "$packName.json")
         if (!manifestFile.exists()) {
-            Logger.e(tag, "No manifest.json in asset pack $packName")
+            Logger.e(tag, "No $packName.json in asset pack $packName")
             return
         }
 

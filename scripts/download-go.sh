@@ -140,7 +140,7 @@ echo "  Go: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SIZE
 # --- Step 6: Write manifest.json ---
 echo ""
 echo "Writing manifest.json..."
-cat > "$PACK_ASSETS/manifest.json" << EOF
+cat > "$PACK_ASSETS/toolchain_go.json" << EOF
 {
     "name": "go",
     "displayName": "Go",
@@ -163,7 +163,7 @@ cat > "$PACK_ASSETS/manifest.json" << EOF
     "libs": []
 }
 EOF
-echo "  manifest.json written"
+echo "  toolchain_go.json written"
 
 # --- Step 7: Size summary ---
 echo ""

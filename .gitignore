@@ -46,11 +46,11 @@ yarn-error.log*
 
 # ===== Toolchain Asset Packs (populated by scripts/download-*.sh) =====
 /android/toolchain_go/src/main/assets/usr/
-/android/toolchain_go/src/main/assets/manifest.json
+/android/toolchain_go/src/main/assets/toolchain_go.json
 /android/toolchain_ruby/src/main/assets/usr/
-/android/toolchain_ruby/src/main/assets/manifest.json
+/android/toolchain_ruby/src/main/assets/toolchain_ruby.json
 /android/toolchain_java/src/main/assets/usr/
-/android/toolchain_java/src/main/assets/manifest.json
+/android/toolchain_java/src/main/assets/toolchain_java.json
 
 # ===== Cross-compilation build artifacts =====
 /.build/
