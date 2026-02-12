@@ -12,7 +12,8 @@
     <string name="error_server_timeout">Server took too long to start</string>
     <string name="error_webview_crash">Display crashed. Reloading\u2026</string>
     <string name="error_webview_too_old">Your WebView is too old. Please update Android System WebView.</string>
-    <string name="error_storage_full">Not enough storage space</string>
+    <string name="error_storage_full">Not enough storage space. Free at least 500 MB and try again.</string>
+    <string name="error_setup_failed">Setup failed. Tap Retry or reinstall the app.</string>
     <string name="key_tab">Tab</string>
     <string name="key_esc">Esc</string>
     <string name="key_ctrl">Ctrl</string>

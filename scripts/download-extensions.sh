@@ -17,12 +17,12 @@ WORK_DIR="$ROOT_DIR/toolchains/extensions"
 # Extensions to bundle: publisher.name or publisher.name@version
 # Pin versions to ensure compatibility with VS Code 1.96.4
 EXTENSIONS=(
-    "PKief.material-icon-theme"
+    "PKief.material-icon-theme@5.31.0"
     "esbenp.prettier-vscode@11.0.3"
     "ms-python.python@2024.22.1"
-    "dbaeumer.vscode-eslint"
-    "bradlc.vscode-tailwindcss"
-    "eamodio.gitlens"
+    "dbaeumer.vscode-eslint@3.0.20"
+    "bradlc.vscode-tailwindcss@0.14.28"
+    "eamodio.gitlens@2026.2.1114"
 )
 
 OPENVSX_API="https://open-vsx.org/api"

@@ -18,50 +18,60 @@ class FirstRunSetup(private val context: Context) {
 
     var onProgress: ((message: String, percent: Int) -> Unit)? = null
 
+    enum class SetupResult { SUCCESS, LOW_STORAGE, ERROR }
+
     fun isFirstRun(): Boolean {
         val installedVersion = prefs.getString(KEY_VERSION, null)
         val currentVersion = getCurrentVersion()
         return installedVersion != currentVersion
     }
 
-    suspend fun runSetup(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun runSetup(): SetupResult = withContext(Dispatchers.IO) {
         Logger.i(tag, "Starting first-run setup")
         val startTime = System.currentTimeMillis()
 
+        // Pre-flight: check available storage (~500MB needed for extraction)
+        val available = context.filesDir.usableSpace
+        val required = 500L * 1_048_576L
+        if (available < required) {
+            Logger.e(tag, "Insufficient storage: ${available / 1_048_576}MB available, ${required / 1_048_576}MB required")
+            return@withContext SetupResult.LOW_STORAGE
+        }
+
         try {
-            reportProgress("Creating directories...", 5)
+            reportProgress("Creating directories...", 2)
             createDirectories()
 
-            reportProgress("Extracting server files...", 15)
+            reportProgress("Extracting server files...", 5)
             extractAssetDir("vscode-reh", "server/vscode-reh")
 
             reportProgress("Extracting web client...", 40)
             extractAssetDir("vscode-web", "server/vscode-web")
 
-            reportProgress("Extracting server bootstrap...", 58)
+            reportProgress("Extracting server bootstrap...", 60)
             extractAssetFile("server.js", "server/server.js")
             extractAssetFile("process-monitor.js", "server/process-monitor.js")
 
             reportProgress("Extracting tools...", 62)
             extractAssetDir("usr", "usr")
 
-            reportProgress("Setting up git...", 66)
+            reportProgress("Setting up git...", 82)
             setupGitCore()
 
-            reportProgress("Setting up tools...", 68)
+            reportProgress("Setting up tools...", 85)
             setupToolSymlinks()
             setupRipgrepVscodeSymlink()
-            createNpmWrappers()
-            createStorageSymlinks()
-            createWelcomeProject()
             createBashrc()
             createBashProfile()
             createTmuxConf()
+            createNpmWrappers()  // After createBashrc — appends npm functions to .bashrc
+            createStorageSymlinks()
+            createWelcomeProject()
 
-            reportProgress("Setting up extensions...", 70)
+            reportProgress("Setting up extensions...", 88)
             extractBundledExtensions()
 
-            reportProgress("Configuring environment...", 90)
+            reportProgress("Configuring environment...", 97)
             createDefaultSettings()
 
             reportProgress("Done!", 100)
@@ -69,10 +79,10 @@ class FirstRunSetup(private val context: Context) {
 
             val elapsed = System.currentTimeMillis() - startTime
             Logger.i(tag, "First-run setup completed in ${elapsed}ms")
-            true
+            SetupResult.SUCCESS
         } catch (e: Exception) {
             Logger.e(tag, "First-run setup failed", e)
-            false
+            SetupResult.ERROR
         }
     }
 
@@ -300,11 +310,13 @@ class FirstRunSetup(private val context: Context) {
             }
         }
 
-        // Create default .npmrc if it doesn't exist
+        // Update .npmrc script-shell on every launch — nativeLibDir changes on APK reinstall
         val npmrc = File(context.filesDir, "home/.npmrc")
-        if (!npmrc.exists()) {
-            val bashPath = "$nativeLibDir/libbash.so"
-            npmrc.writeText("script-shell=$bashPath\n")
+        val bashPath = "$nativeLibDir/libbash.so"
+        val expectedContent = "script-shell=$bashPath\n"
+        if (!npmrc.exists() || npmrc.readText() != expectedContent) {
+            npmrc.writeText(expectedContent)
+            Logger.d(tag, "Updated .npmrc script-shell path")
         }
     }
 
@@ -427,10 +439,6 @@ npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
                 export SAF_MIRRORS_DIR='$safMirrorsDir'
                 alias ls='ls --color=auto'
                 alias ll='ls -la'
-
-                # npm/npx — shell functions (Android noexec prevents script wrappers)
-                npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" "${'$'}@"; }
-                npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
 
                 # On-demand toolchain env vars (Go, Ruby, Java, etc.)
                 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"

@@ -68,17 +68,53 @@ class SplashActivity : AppCompatActivity() {
             }
         }
 
+        runSetupWithRetry(setup, statusText, progressBar)
+    }
+
+    private fun runSetupWithRetry(
+        setup: FirstRunSetup,
+        statusText: TextView,
+        progressBar: ProgressBar
+    ) {
         lifecycleScope.launch {
-            val success = setup.runSetup()
-            if (success) {
-                if (shouldShowPicker()) {
-                    showToolchainPicker()
-                } else {
-                    launchMain()
+            val result = setup.runSetup()
+            when (result) {
+                FirstRunSetup.SetupResult.SUCCESS -> {
+                    if (shouldShowPicker()) showToolchainPicker() else launchMain()
                 }
-            } else {
-                statusText.text = getString(R.string.error_storage_full)
+                FirstRunSetup.SetupResult.LOW_STORAGE -> {
+                    showSetupError(statusText, progressBar, getString(R.string.error_storage_full), setup)
+                }
+                FirstRunSetup.SetupResult.ERROR -> {
+                    showSetupError(statusText, progressBar, getString(R.string.error_setup_failed), setup)
+                }
             }
+        }
+    }
+
+    private fun showSetupError(
+        statusText: TextView,
+        progressBar: ProgressBar,
+        message: String,
+        setup: FirstRunSetup
+    ) {
+        runOnUiThread {
+            statusText.text = message
+            progressBar.visibility = View.GONE
+            // Show retry button dynamically
+            val parent = statusText.parent as? android.view.ViewGroup ?: return@runOnUiThread
+            val retryButton = Button(this).apply {
+                text = getString(R.string.progress_retry)
+                setOnClickListener {
+                    // Reset UI and retry
+                    statusText.text = getString(R.string.extracting_message)
+                    progressBar.visibility = View.VISIBLE
+                    progressBar.progress = 0
+                    parent.removeView(this)
+                    runSetupWithRetry(setup, statusText, progressBar)
+                }
+            }
+            parent.addView(retryButton)
         }
     }
 

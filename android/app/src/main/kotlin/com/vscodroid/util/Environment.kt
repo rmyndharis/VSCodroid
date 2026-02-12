@@ -47,7 +47,6 @@ object Environment {
             "TERMINFO" to "$filesDir/usr/share/terminfo",
             "LANG" to "en_US.UTF-8",
             "PREFIX" to "$filesDir/usr",
-            "PYTHON_HOME" to "$filesDir/usr/lib/python3.12",
             "PYTHONHOME" to "$filesDir/usr",
             "PYTHONDONTWRITEBYTECODE" to "1",
             "GIT_EXEC_PATH" to "$filesDir/usr/lib/git-core",
