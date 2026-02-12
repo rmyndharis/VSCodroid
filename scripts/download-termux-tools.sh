@@ -301,12 +301,28 @@ for file in "$GIT_CORE_SRC"/*; do
         [ -L "$file" ] && real_file="$(cd "$(dirname "$file")" && readlink -f "$(basename "$file")" 2>/dev/null || echo "$file")"
 
         if [ -f "$real_file" ] && head -c 2 "$real_file" 2>/dev/null | grep -q '#!'; then
-            # Shell/Perl script — copy and fix shebangs
-            sed \
-                -e 's|#!/data/data/com.termux/files/usr/bin/sh|#!/system/bin/sh|g' \
-                -e 's|#!/data/data/com.termux/files/usr/bin/bash|#!/system/bin/sh|g' \
-                -e 's|#!.*/perl.*|#!/system/bin/sh|g' \
-                "$real_file" > "$GIT_CORE_DST/$name"
+            # Detect script type by content
+            if head -20 "$real_file" | grep -q '^use \|^require '; then
+                # Perl script — Perl is not bundled, remove entirely
+                echo "  Skipping Perl script: $name"
+                COPIED=$((COPIED - 1))  # offset the +1 below
+            elif head -1 "$real_file" | grep -q 'python'; then
+                # Python script with Termux shebang — niche tool, remove
+                echo "  Skipping Python script: $name"
+                COPIED=$((COPIED - 1))
+            elif [ "$name" = "git-instaweb" ]; then
+                # Needs httpd + perl, neither bundled — remove
+                echo "  Skipping $name (needs httpd + perl)"
+                COPIED=$((COPIED - 1))
+            else
+                # Shell script — fix shebangs and embedded Termux paths
+                sed \
+                    -e 's|#!/data/data/com.termux/files/usr/bin/sh|#!/system/bin/sh|g' \
+                    -e 's|#!/data/data/com.termux/files/usr/bin/bash|#!/system/bin/sh|g' \
+                    -e 's|/data/data/com.termux/files/usr/bin/sh|/system/bin/sh|g' \
+                    -e 's|/data/data/com.termux/files/usr/share/locale|$PREFIX/share/locale|g' \
+                    "$real_file" > "$GIT_CORE_DST/$name"
+            fi
         else
             # Binary — copy as-is
             cp -L "$file" "$GIT_CORE_DST/$name" 2>/dev/null || cp "$real_file" "$GIT_CORE_DST/$name"

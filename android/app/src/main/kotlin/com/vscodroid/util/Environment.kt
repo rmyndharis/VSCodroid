@@ -20,8 +20,8 @@ object Environment {
         else
             "/system/bin/sh"
 
-        // Use dumb terminal until real PTY (node-pty native) is available.
-        // Pipe-based terminal shim doesn't support ANSI escape sequences.
+        // Use xterm-256color for bundled bash (full PTY via node-pty native).
+        // Fallback to dumb terminal for system shell (basic compatibility).
         val term = if (File("$nativeLibDir/libbash.so").exists())
             "xterm-256color"
         else
