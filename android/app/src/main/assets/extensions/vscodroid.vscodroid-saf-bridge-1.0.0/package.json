@@ -1,0 +1,29 @@
+{
+  "name": "vscodroid-saf-bridge",
+  "displayName": "VSCodroid Folder Picker",
+  "description": "Open any folder on your device via Storage Access Framework",
+  "version": "1.0.0",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodroid.openFolderFromDevice",
+        "title": "VSCodroid: Open Folder from Device"
+      },
+      {
+        "command": "vscodroid.openRecentFolder",
+        "title": "VSCodroid: Open Recent Folder"
+      }
+    ]
+  }
+}
