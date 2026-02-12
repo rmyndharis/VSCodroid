@@ -201,10 +201,8 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Skip patterns: large auto-generated directories that would slow sync unnecessarily.
      */
-    private fun shouldSkip(name: String, isDir: Boolean): Boolean {
-        if (!isDir) return false
-        return name in SKIP_DIRECTORIES
-    }
+    private fun shouldSkip(name: String, isDir: Boolean): Boolean =
+        Companion.shouldSkip(name, isDir)
 
     // -- Internal: File Operations --
 
@@ -281,8 +279,14 @@ class SafSyncEngine(private val context: Context) {
         when (job.type) {
             SyncType.MODIFY -> {
                 val localFile = File(job.localPath)
-                if (localFile.exists() && job.safDocUri != null) {
+                if (!localFile.exists()) return
+                if (job.safDocUri != null) {
                     writeLocalToSaf(localFile, job.safDocUri)
+                } else if (job.safParentUri != null && job.safTreeUri != null) {
+                    // FileObserver may report MODIFY instead of CREATE for new files
+                    // (e.g., `echo > file` on Android API 36). Fall through to CREATE.
+                    Logger.d(tag, "MODIFY on unknown file, treating as CREATE: ${localFile.name}")
+                    createInSaf(localFile, job.safParentUri, job.safTreeUri)
                 }
             }
             SyncType.CREATE -> {
@@ -409,33 +413,21 @@ class SafSyncEngine(private val context: Context) {
         return DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocId)
     }
 
-    private fun guessMimeType(filename: String): String {
-        return when {
-            filename.endsWith(".txt") || filename.endsWith(".md") -> "text/plain"
-            filename.endsWith(".html") -> "text/html"
-            filename.endsWith(".js") || filename.endsWith(".ts") -> "text/javascript"
-            filename.endsWith(".json") -> "application/json"
-            filename.endsWith(".py") -> "text/x-python"
-            filename.endsWith(".kt") || filename.endsWith(".java") -> "text/plain"
-            filename.endsWith(".xml") -> "text/xml"
-            filename.endsWith(".css") -> "text/css"
-            filename.endsWith(".sh") -> "text/x-shellscript"
-            else -> "application/octet-stream"
-        }
-    }
+    private fun guessMimeType(filename: String): String =
+        Companion.guessMimeType(filename)
 
     companion object {
         private const val COPY_BUFFER_SIZE = 8192
         private const val WRITEBACK_POLL_MS = 200L
 
         /** Q2: Max file size to sync (50 MB). Larger files are skipped. */
-        private const val MAX_FILE_SIZE = 50L * 1024 * 1024
+        internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
         /**
          * Directories to skip during sync — auto-generated and too large.
          * Q3: Removed "build" (legitimate source dir) and ".vscode" (workspace settings).
          */
-        private val SKIP_DIRECTORIES = setOf(
+        internal val SKIP_DIRECTORIES = setOf(
             "node_modules",
             ".git",
             "__pycache__",
@@ -444,6 +436,28 @@ class SafSyncEngine(private val context: Context) {
             "venv",
             ".env"
         )
+
+        /** Testable: checks if a directory should be skipped during sync. */
+        internal fun shouldSkip(name: String, isDir: Boolean): Boolean {
+            if (!isDir) return false
+            return name in SKIP_DIRECTORIES
+        }
+
+        /** Testable: heuristic MIME type detection from filename extension. */
+        internal fun guessMimeType(filename: String): String {
+            return when {
+                filename.endsWith(".txt") || filename.endsWith(".md") -> "text/plain"
+                filename.endsWith(".html") -> "text/html"
+                filename.endsWith(".js") || filename.endsWith(".ts") -> "text/javascript"
+                filename.endsWith(".json") -> "application/json"
+                filename.endsWith(".py") -> "text/x-python"
+                filename.endsWith(".kt") || filename.endsWith(".java") -> "text/plain"
+                filename.endsWith(".xml") -> "text/xml"
+                filename.endsWith(".css") -> "text/css"
+                filename.endsWith(".sh") -> "text/x-shellscript"
+                else -> "application/octet-stream"
+            }
+        }
     }
 }
 

@@ -465,6 +465,49 @@ class MainActivity : AppCompatActivity() {
         )
         // Install JS interceptor so ExtraKeyRow Ctrl/Alt modifiers apply to soft keyboard input
         extraKeyRow?.keyInjector?.setupModifierInterceptor()
+        // Set up BroadcastChannel relay so browser extensions can reach AndroidBridge
+        injectBridgeRelay()
+    }
+
+    /**
+     * Injects a BroadcastChannel relay into the WebView main page.
+     *
+     * Browser extensions (which run in a Web Worker) cannot access AndroidBridge
+     * directly because addJavascriptInterface only injects into the main page context.
+     * This relay listens on a BroadcastChannel and forwards calls to AndroidBridge,
+     * bridging the gap between the Web Worker and the main page.
+     */
+    private fun injectBridgeRelay() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (typeof AndroidBridge === 'undefined') return;
+                if (window.__vscodroidRelayActive) return;
+                window.__vscodroidRelayActive = true;
+                var ch = new BroadcastChannel('vscodroid-bridge');
+                ch.onmessage = function(e) {
+                    var d = e.data;
+                    var token = (window.__vscodroid || {}).authToken;
+                    if (!token || !d || !d.cmd) return;
+                    try {
+                        if (d.cmd === 'openFolderPicker') {
+                            AndroidBridge.openFolderPicker(token);
+                            ch.postMessage({id: d.id, ok: true});
+                        } else if (d.cmd === 'getRecentFolders') {
+                            var result = AndroidBridge.getRecentFolders(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'openRecentFolder') {
+                            AndroidBridge.openRecentFolder(token, d.uri);
+                            ch.postMessage({id: d.id, ok: true});
+                        }
+                    } catch(err) {
+                        ch.postMessage({id: d.id, ok: false, error: String(err)});
+                    }
+                };
+            })();
+            """.trimIndent(),
+            null
+        )
     }
 
     private fun recreateWebView() {
