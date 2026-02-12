@@ -39,17 +39,17 @@ gantt
   section M1 — VS Code Core
     Fork code-server + patches  :m1a, after m0gate, 5d
     VS Code in WebView          :m1b, after m1a, 3d
+    File system setup           :m1c2, after m1b, 2d
     node-pty cross-compile      :m1c, after m0gate, 4d
     Git cross-compile           :m1d, after m0gate, 3d
     bash + tmux cross-compile   :m1e, after m0gate, 3d
-    Terminal + tmux integration :m1f, after m1b m1c m1e, 4d
-    Git bundling + SCM          :m1g, after m1b m1d, 2d
-    Extensions (Open VSX)       :m1h, after m1b, 3d
-    File system + integration   :m1i, after m1f m1g m1h, 3d
-    M1 validation gate          :milestone, m1gate, after m1i, 0d
+    Terminal + tmux integration :m1f, after m1c2 m1c m1e, 4d
+    Git bundling + SCM          :m1g, after m1c2 m1d, 2d
+    Extensions (Open VSX)       :m1h, after m1c2, 3d
+    M1 validation gate          :milestone, m1gate, after m1f m1g m1h, 0d
 
   section M2 — Mobile UX
-    Extra Key Row               :m2a, after m1gate, 4d
+    Extra Key Row + Trackpad    :m2a, after m1gate, 4d
     Keyboard handling           :m2b, after m1gate, 3d
     Touch + clipboard + back    :m2c, after m2a m2b, 3d
     Orientation + split-screen  :m2d, after m2c, 2d
@@ -58,33 +58,41 @@ gantt
     M2 validation gate          :milestone, m2gate, after m2f, 0d
 
   section M3 — Dev Environment
-    Python cross-compile        :m3a, after m2gate, 5d
+    Python + pip (Termux)       :m3a, after m2gate, 3d
     make cross-compile          :m3b, after m2gate, 2d
-    Package manager             :m3c, after m3a m3b, 5d
-    Language Picker + assets    :m3d, after m3c, 5d
-    Pre-bundled extensions      :m3e, after m2gate, 3d
-    First-run experience        :m3f, after m3d m3e, 4d
-    M3 validation gate          :milestone, m3gate, after m3f, 0d
+    npm bash functions          :m3c, after m3a m3b, 2d
+    Pre-bundled extensions      :m3d, after m2gate, 3d
+    First-run experience        :m3e, after m3c m3d, 4d
+    M3 validation gate          :milestone, m3gate, after m3e, 0d
 
   section M4 — Polish
-    worker_thread patch         :m4a, after m3gate, 6d
+    Error handling + logging    :m4a, after m3gate, 3d
     Memory optimization         :m4b, after m3gate, 4d
-    Startup optimization        :m4c, after m4b, 3d
-    Storage + GitHub OAuth      :m4d, after m3gate, 5d
-    External storage (SAF)      :m4e, after m4d, 3d
-    Extensive testing           :m4f, after m4a m4c m4e, 5d
-    Error handling + logging    :m4g, after m4f, 3d
+    Startup optimization        :m4c, after m4a m4b, 3d
+    Phantom process monitoring  :m4d, after m4c, 3d
+    Storage management          :m4e, after m4d, 3d
+    GitHub OAuth                :m4f, after m4e, 3d
+    External storage (SAF)      :m4g, after m4f, 5d
     M4 validation gate          :milestone, m4gate, after m4g, 0d
 
-  section M5 — Release
-    Branding + legal            :m5a, after m4gate, 5d
-    Play Store listing          :m5b, after m5a, 3d
-    CI/CD pipeline              :m5c, after m4gate, 10d
-    Internal testing            :m5d, after m5b m5c, 10d
-    Closed beta                 :m5e, after m5d, 10d
-    Open beta                   :m5f, after m5e, 14d
-    Production launch           :m5g, after m5f, 3d
-    M5 launch gate              :milestone, m5gate, after m5g, 0d
+  section M5 — Toolchain Ecosystem
+    worker_thread patch         :m5a, after m4gate, 6d
+    Package manager             :m5b, after m4gate, 5d
+    AssetPackManager            :m5c, after m5b, 4d
+    On-demand toolchains        :m5d, after m5c, 5d
+    Language Picker UI          :m5e, after m5d, 5d
+    M5 validation gate          :milestone, m5gate, after m5a m5e, 0d
+
+  section M6 — Release
+    SSH key management          :m6a, after m5gate, 3d
+    Extensive testing           :m6b, after m6a, 5d
+    CI/CD pipeline              :m6c, after m5gate, 10d
+    Branding + legal            :m6d, after m5gate, 5d
+    Documentation               :m6e, after m6d, 3d
+    Play Store listing          :m6f, after m6d m6e, 3d
+    Android App Bundle          :m6g, after m6b m6c m6f, 3d
+    Internal → beta → launch   :m6h, after m6g, 37d
+    M6 launch gate              :milestone, m6gate, after m6h, 0d
 ```
 
 ### 1.3 Work Streams
@@ -97,18 +105,18 @@ flowchart LR
     A1["Node.js"] --> A2["node-pty"] --> A3["Python"]
     A1b["Git"] --> A3
     A1c["bash + tmux"] --> A3
-    A3 --> A4["Toolchain asset packs"]
+    A3 --> A4["M5: Toolchain asset packs"]
   end
 
   subgraph WS2["Stream B: VS Code Integration"]
     B1["code-server fork"] --> B2["Patches"] --> B3["vscode-web + vscode-reh"]
-    B3 --> B4["Extensions"] --> B5["worker_thread patch"]
+    B3 --> B4["Extensions"] --> B5["M5: worker_thread patch"]
   end
 
   subgraph WS3["Stream C: Android Shell"]
-    C1["Project scaffold"] --> C2["WebView"] --> C3["Extra Key Row"]
-    C3 --> C4["Clipboard + touch"] --> C5["Language Picker"]
-    C5 --> C6["Play Store"]
+    C1["Project scaffold"] --> C2["WebView"] --> C3["Extra Key Row + GestureTrackpad"]
+    C3 --> C4["Clipboard + touch"] --> C5["M5: Language Picker"]
+    C5 --> C6["M6: Play Store"]
   end
 
   A1 --> B3
@@ -654,6 +662,7 @@ scripts/
    - Build server: `yarn gulp vscode-reh-min`
    - Verify output in `out-vscode-reh/`
    - Verify `@vscode/ripgrep` binary is included in `node_modules`
+   - Bundle ripgrep as `libripgrep.so` in `jniLibs/arm64-v8a/` (symlink created by `FirstRunSetup.setupToolSymlinks()`)
 
 5. **Day 5 — Package and scripts**:
    - Create `scripts/build-vscode.sh` (automates steps 2-4)
@@ -699,6 +708,16 @@ android/app/src/main/kotlin/com/vscodroid/
    - If not, extract from APK assets to app-private storage
    - Create required directories: `home/`, `home/.vscodroid/`, `home/.vscodroid/extensions/`
    - Track extraction version for future upgrades
+   - Configure VS Code settings (`settings.json`):
+     ```json
+     {
+       "terminal.integrated.profiles.linux": {
+         "bash": { "path": "/data/data/com.vscodroid/files/usr/bin/bash" }
+       },
+       "terminal.integrated.defaultProfile.linux": "bash",
+       "git.path": "/data/data/com.vscodroid/files/usr/bin/git"
+     }
+     ```
 
 2. **server.js** — bootstrap script (see Tech Spec §3.1):
    - Parse command-line arguments
@@ -896,9 +915,12 @@ android/app/src/main/kotlin/com/vscodroid/
 **Implementation steps**:
 
 1. Configure `GIT_EXEC_PATH` environment variable to point to extracted git-core helpers
-2. Verify Git works in VS Code terminal
-3. Verify VS Code SCM panel detects Git and shows status
-4. Test: `git init` → create file → `git add` → `git commit` → SCM panel reflects
+2. `FirstRunSetup.setupGitCore()` — create symlinks for git-core helper binaries:
+   - Extract `assets/usr/lib/git-core/` to app-private storage on first run
+   - Create symlinks: `git` → `libgit.so`, plus helper binaries (`git-remote-https`, `git-upload-pack`, etc.)
+3. Verify Git works in VS Code terminal
+4. Verify VS Code SCM panel detects Git and shows status
+5. Test: `git init` → create file → `git add` → `git commit` → SCM panel reflects
 
 **Acceptance criteria**:
 - [ ] `git --version` works in VS Code terminal
@@ -1006,7 +1028,7 @@ android/app/src/androidTest/    (instrumented tests)
 
 ```mermaid
 flowchart TD
-  M2T1["M2-T1: Extra Key Row<br/>4 days"] --> M2T3["M2-T3: Touch + clipboard + back<br/>3 days"]
+  M2T1["M2-T1: Extra Key Row + GestureTrackpad<br/>5 days"] --> M2T3["M2-T3: Touch + clipboard + back<br/>3 days"]
   M2T2["M2-T2: Keyboard handling<br/>3 days"] --> M2T3
   M2T3 --> M2T4["M2-T4: Orientation + split-screen<br/>2 days"]
   M2T3 --> M2T5["M2-T5: Accessibility baseline<br/>2 days"]
@@ -1017,21 +1039,24 @@ flowchart TD
 
 ---
 
-#### M2-T1: Extra Key Row
+#### M2-T1: Extra Key Row + GestureTrackpad
 
-**Effort**: 4 days | **Dependencies**: M1 gate
+**Effort**: 5 days | **Dependencies**: M1 gate
 
 **Files to create**:
 ```
 android/app/src/main/kotlin/com/vscodroid/
 └── keyboard/
-    ├── ExtraKeyRow.kt              (Custom ViewGroup)
-    ├── ExtraKeyButton.kt           (Individual key button)
-    └── KeyInjector.kt              (JS key event injection)
+    ├── ExtraKeyRow.kt              (ViewPager2-based multi-page key row)
+    ├── ExtraKeyButton.kt           (individual key button with long-press popup)
+    ├── KeyPageConfig.kt            (multi-page key layout configuration)
+    ├── KeyPageAdapter.kt           (RecyclerView.Adapter for ViewPager2 pages)
+    ├── KeyInjector.kt              (JS key event injection)
+    └── GestureTrackpad.kt          (3-speed drag-to-navigate trackpad)
 
 android/app/src/main/res/
 ├── layout/
-│   └── view_extra_key_row.xml      (key row layout)
+│   └── view_extra_key_row.xml      (ViewPager2 + dot indicators + trackpad)
 └── values/
     ├── dimens.xml                  (key sizes, 48dp minimum)
     └── colors.xml                  (key colors)
@@ -1039,33 +1064,48 @@ android/app/src/main/res/
 
 **Implementation steps**:
 
-1. **Day 1** — Design and layout:
-   - Create `ExtraKeyRow` as horizontal `RecyclerView` or custom `LinearLayout`
-   - Key set: `[Tab] [Esc] [Ctrl] [Alt] [←] [↑] [↓] [→] [{}] [()] [;] [:] ["] [/]`
-   - Each button ≥ 48dp × 48dp (accessibility requirement)
-   - Ctrl and Alt are toggle buttons (highlight when active)
+1. **Day 1** — Multi-page key row with ViewPager2:
+   - `KeyPageConfig.kt` defines page layouts:
+     - Page 1: `[Tab] [Esc] [Ctrl] [Alt] [←] [↑] [↓] [→]`
+     - Page 2: `[{] [}] [(] [)] [;] [:] ["] [/]`
+     - Page 3: `[|] [\] [<] [>] [=] [+] [-] [_]` (optional)
+   - `KeyPageAdapter.kt` — `RecyclerView.Adapter` for `ViewPager2` pages
+   - Dot indicators below the key row to show current page
 
-2. **Day 2** — Key injection:
+2. **Day 2** — Key injection + modifiers:
    - `KeyInjector.kt`: construct JavaScript `KeyboardEvent` and dispatch via `evaluateJavascript`
    - Handle modifier state (Ctrl held + S = Ctrl+S)
    - Map key names to `keyCode`, `code`, `key` values
+   - `setupModifierInterceptor()` — intercept physical keyboard modifier keys (Ctrl, Alt) and sync state with Extra Key Row toggle buttons
 
-3. **Day 3** — Visibility control:
+3. **Day 3** — Long-press popup + alternate keys:
+   - `ExtraKeyButton.showLongPressPopup()` — long-press on a key shows alternate keys
+     - Example: long-press `{` shows `[`, `<`, `(`
+     - Example: long-press `Ctrl` shows `Meta`, `Fn`
+   - Each button ≥ 48dp × 48dp (accessibility requirement)
+   - Ctrl and Alt are sticky toggle buttons (highlight when active)
+
+4. **Day 4** — GestureTrackpad:
+   - `GestureTrackpad.kt` — swipeable area (rightmost zone or dedicated area)
+   - 3-speed drag-to-navigate: slow drag = character-by-character, medium = word, fast = line
+   - Injected as arrow key events via `KeyInjector`
+   - Horizontal swipe = left/right cursor, vertical swipe = up/down cursor
+
+5. **Day 5** — Visibility + integration:
    - Use `WindowInsetsCompat.Type.ime()` to detect keyboard visibility
-   - Show Extra Key Row when keyboard appears, hide when it disappears
+   - Show Extra Key Row + GestureTrackpad when keyboard appears, hide when it disappears
    - Position above soft keyboard using `WindowInsets` padding
-
-4. **Day 4** — Integration and polish:
    - Wire into `activity_main.xml` layout
    - Test all key combinations: Ctrl+S, Ctrl+P, Ctrl+Shift+P, Ctrl+Z, etc.
    - Test with different keyboard apps (GBoard, Samsung Keyboard)
 
 **Acceptance criteria**:
-- [ ] Extra Key Row appears above soft keyboard
+- [ ] Multi-page Extra Key Row with ViewPager2 + dot indicators
 - [ ] All key buttons work: Tab, Esc, Ctrl, Alt, arrows, brackets, semicolons
-- [ ] Ctrl+S saves file in editor
-- [ ] Ctrl+P opens Quick Open
-- [ ] Ctrl+Shift+P opens Command Palette
+- [ ] Long-press on keys shows alternate key popup
+- [ ] GestureTrackpad navigates with 3-speed sensitivity
+- [ ] Modifier interceptor syncs physical keyboard state with toggle buttons
+- [ ] Ctrl+S saves file, Ctrl+P opens Quick Open, Ctrl+Shift+P opens Command Palette
 - [ ] Touch targets ≥ 48dp × 48dp
 
 ---
@@ -1246,21 +1286,22 @@ patches/vscodroid/
 | # | Criterion | Test Method |
 |---|-----------|-------------|
 | 1 | Comfortable typing with soft keyboard + Extra Key Row | Manual coding session |
-| 2 | Ctrl+S, Ctrl+P, Ctrl+Shift+P work | Key combination test |
-| 3 | Copy/paste works with other apps | Cross-app clipboard test |
-| 4 | Keystroke latency < 50ms | Instrumented measurement |
-| 5 | Portrait, landscape, split-screen work | Rotation test |
-| 6 | TalkBack works for native controls | TalkBack navigation test |
-| 7 | Touch targets ≥ 48dp | Layout Inspector measurement |
-| 8 | "Open with VSCodroid" works | Share from file manager |
-| 9 | Crash recovery works (WebView + Node.js) | Kill process tests |
-| 10 | Validated on at least 2 device models | Test on Pixel + Samsung |
+| 2 | Multi-page keys (ViewPager2) + GestureTrackpad work | Swipe page + drag cursor |
+| 3 | Ctrl+S, Ctrl+P, Ctrl+Shift+P work | Key combination test |
+| 4 | Copy/paste works with other apps | Cross-app clipboard test |
+| 5 | Keystroke latency < 50ms | Instrumented measurement |
+| 6 | Portrait, landscape, split-screen work | Rotation test |
+| 7 | TalkBack works for native controls | TalkBack navigation test |
+| 8 | Touch targets ≥ 48dp | Layout Inspector measurement |
+| 9 | "Open with VSCodroid" works | Share from file manager |
+| 10 | Crash recovery works (WebView + Node.js) | Kill process tests |
+| 11 | Validated on at least 2 device models | Test on Pixel + Samsung |
 
 ---
 
 ## 6. M3 — All-in-One Dev Environment
 
-**Goal**: Bundle Python, package manager, and on-demand toolchains.
+**Goal**: Bundle Python, npm, and essential tools for out-of-the-box development.
 **Duration**: 3-4 weeks (15-20 working days)
 **Entry criteria**: All M2 gate passed, validated on 2 devices, no P0/P1 regressions
 
@@ -1268,39 +1309,50 @@ patches/vscodroid/
 
 ```mermaid
 flowchart TD
-  M3T1["M3-T1: Python cross-compile<br/>5 days"] --> M3T3["M3-T3: Package manager<br/>5 days"]
+  M3T1["M3-T1: Python + pip from Termux<br/>3 days"] --> M3T3["M3-T3: npm bash functions<br/>2 days"]
   M3T2["M3-T2: make cross-compile<br/>2 days"] --> M3T3
-  M3T3 --> M3T4["M3-T4: Language Picker + asset packs<br/>5 days"]
-  M3T5["M3-T5: Pre-bundled extensions<br/>3 days"] --> M3T6["M3-T6: First-run experience<br/>4 days"]
-  M3T4 --> M3T6
-  M3T6 --> M3GATE["M3 GATE"]
+  M3T4["M3-T4: Pre-bundled extensions<br/>3 days"] --> M3T5["M3-T5: First-run experience<br/>4 days"]
+  M3T3 --> M3T5
+  M3T5 --> M3GATE["M3 GATE"]
 ```
 
 ---
 
-#### M3-T1: Cross-Compile Python 3
+#### M3-T1: Bundle Python 3 + pip from Termux
 
-**Effort**: 5 days | **Dependencies**: M2 gate
+**Effort**: 3 days | **Dependencies**: M2 gate
 
 **Files to create**:
 ```
-toolchains/
-└── build-python.sh
+scripts/
+└── download-python.sh              (download from Termux APT)
 
 android/app/src/main/
 ├── jniLibs/arm64-v8a/
-│   └── libpython.so              (Python binary)
+│   └── libpython.so                (Python binary)
 └── assets/
-    └── python-stdlib/            (Python standard library)
+    └── usr/lib/python3.12/         (stdlib + pip site-packages)
 ```
 
 **Implementation steps**:
 
-1. Use Termux build recipes for CPython 3.11+ as reference
-2. Cross-compile with NDK toolchain
-3. Bundle: `libpython.so` (binary) + `assets/python-stdlib/` (stdlib + pip)
-4. Strip `.pyc` files for size reduction
-5. Test: `python3 --version`, `pip install requests`
+1. **Day 1** — Download pre-compiled Python from Termux APT:
+   - Download `python` and `python-pip` packages from Termux APT repo
+   - Extract `.deb` packages, place binary as `libpython.so` in jniLibs
+   - Place stdlib in `assets/usr/lib/python3.12/`
+   - Place pip site-packages alongside stdlib
+
+2. **Day 2** — Setup and integration:
+   - Create symlinks: `python3` and `python` → `libpython.so` via `setupToolSymlinks()`
+   - Configure `PYTHONPATH` and `PYTHONHOME` environment variables
+   - Test: `python3 --version`, `python3 -c "import json; print('ok')"`
+
+3. **Day 3** — pip validation:
+   - Verify pip works: `pip install requests`
+   - Strip `.pyc` files for size reduction
+   - Test: import installed packages
+
+> **Note**: Using pre-compiled Termux packages instead of cross-compiling from source significantly reduces build complexity (3 days vs 5 days). The Termux packages are already patched and tested for ARM64 Android.
 
 **Acceptance criteria**:
 - [ ] `python3 --version` works on device
@@ -1316,13 +1368,13 @@ android/app/src/main/
 
 **Files to create**:
 ```
-toolchains/
-└── build-make.sh
+scripts/
+└── download-termux-tools.sh
 ```
 
 **Output**: `android/app/src/main/jniLibs/arm64-v8a/libmake.so`
 
-**Implementation steps** (see Tech Spec §1.9): Straightforward GNU make cross-compilation.
+**Implementation steps** (see Tech Spec §1.9): Download from Termux packages, similar to Python approach.
 
 **Acceptance criteria**:
 - [ ] `make --version` works on device
@@ -1330,107 +1382,41 @@ toolchains/
 
 ---
 
-#### M3-T3: Package Manager
+#### M3-T3: npm Integration via Bash Functions
 
-**Effort**: 5 days | **Dependencies**: M3-T1, M3-T2
+**Effort**: 2 days | **Dependencies**: M3-T1, M3-T2
 
-**Files to create**:
+**Files to modify**:
 ```
 android/app/src/main/kotlin/com/vscodroid/
 └── setup/
-    └── PackageManager.kt           (pkg command implementation)
-
-android/app/src/main/assets/
-└── bin/
-    └── vscodroid                   (shell wrapper script for `vscodroid pkg`)
+    └── FirstRunSetup.kt            (createNpmWrappers function)
 ```
 
 **Implementation steps**:
 
-1. Implement CLI: `vscodroid pkg search|install|remove|list|update|info`
-2. Repository index: compatible with Termux package format (deb, ARM64)
-3. Package download, extract, install to `$PREFIX/usr/`
-4. Dependency resolution (basic)
-5. Note: only available in sideloaded version (Play Store uses asset packs only)
+1. **Day 1** — Create npm bash functions:
+   - Define `npm` and `npx` as bash functions in `.bashrc` (not script wrappers)
+   - Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
+   - Bash functions required because Android's noexec restriction prevents running script files from app storage
+   - Create `.npmrc` with `script-shell` pointing to `libbash.so`
+
+2. **Day 2** — Validation:
+   - Test: `npm --version`, `npm init -y`, `npm install express`
+   - Test: `npx create-vite-app test-app`
+   - Verify npm cache directory is properly configured
+
+> **Android noexec note**: Android mounts app data partitions with `noexec`, so traditional npm shim scripts (`#!/usr/bin/env node`) cannot be executed directly. Bash functions defined in `.bashrc` bypass this by invoking Node.js with the npm CLI entry point as an argument.
 
 **Acceptance criteria**:
-- [ ] `vscodroid pkg search curl` returns results
-- [ ] `vscodroid pkg install curl` installs successfully
-- [ ] `vscodroid pkg list` shows installed packages
-- [ ] `vscodroid pkg remove curl` uninstalls cleanly
+- [ ] `npm --version` works
+- [ ] `npm init -y` creates package.json
+- [ ] `npm install express` installs successfully
+- [ ] `npx` works for running packages
 
 ---
 
-#### M3-T4: Language Picker + On-Demand Asset Packs
-
-**Effort**: 5 days | **Dependencies**: M3-T3
-
-**Files to create**:
-```
-android/app/src/main/kotlin/com/vscodroid/
-└── setup/
-    ├── ToolchainManager.kt         (asset pack management)
-    └── LanguagePickerActivity.kt   (first-run UI)
-
-android/app/src/main/res/
-└── layout/
-    └── activity_language_picker.xml
-
-toolchain_go/
-├── build.gradle.kts                (asset pack module)
-└── src/main/assets/                (Go ARM64 binaries)
-
-toolchain_rust/
-├── build.gradle.kts
-└── src/main/assets/
-
-toolchain_java/
-├── build.gradle.kts
-└── src/main/assets/
-
-toolchain_clang/
-├── build.gradle.kts
-└── src/main/assets/
-
-toolchain_ruby/
-├── build.gradle.kts
-└── src/main/assets/
-
-android/settings.gradle.kts         (register asset pack modules)
-```
-
-**Implementation steps** (see Tech Spec §7):
-
-1. **Day 1-2** — ToolchainManager:
-   - Integrate Play Asset Delivery (PAD) SDK
-   - Implement `listAvailable()`, `install()`, `uninstall()`, `isInstalled()`
-   - Handle download progress, error, retry
-
-2. **Day 3** — Language Picker UI:
-   - Checkbox list of available toolchains with size estimates
-   - "Install" button → `AssetPackManager.fetch()` for selected packs
-   - Progress bar per pack
-
-3. **Day 4** — Asset pack extraction:
-   - Extract toolchain to `$PREFIX/lib/<toolchain>/`
-   - Configure PATH and environment variables
-   - Create symlinks in `$PREFIX/bin/`
-
-4. **Day 5** — Settings > Toolchains page:
-   - Add/remove languages later
-   - Show installed toolchains and sizes
-   - Sideload detection: if not from Play Store, use bundled assets
-
-**Acceptance criteria**:
-- [ ] Language Picker UI shows during first run
-- [ ] Can select and install Go toolchain (on-demand)
-- [ ] `go version` works after install
-- [ ] Settings > Toolchains allows adding/removing
-- [ ] Sideload path works (direct asset extraction)
-
----
-
-#### M3-T5: Pre-Bundled Extensions
+#### M3-T4: Pre-Bundled Extensions
 
 **Effort**: 3 days | **Dependencies**: M2 gate | **Parallel with M3-T1**
 
@@ -1441,34 +1427,48 @@ android/app/src/main/assets/
     ├── pkief.material-icon-theme/
     ├── esbenp.prettier-vscode/
     ├── dbaeumer.vscode-eslint/
-    └── zhuangtongfa.material-theme/  (One Dark Pro or similar)
+    ├── ms-python.python/
+    ├── eamodio.gitlens/
+    ├── bradlc.vscode-tailwindcss/
+    ├── vscodroid.vscodroid-welcome-1.0.0/
+    ├── vscodroid.vscodroid-saf-bridge-1.0.0/
+    └── vscodroid.vscodroid-process-monitor-1.0.0/
 ```
 
 **Implementation steps**:
 
-1. Download VSIX files from Open VSX
-2. Extract to `assets/extensions/` directory
-3. FirstRunSetup copies to `~/.vscodroid/extensions/` on first launch
-4. Verify extensions load without internet
+1. **Day 1** — Download and bundle marketplace extensions:
+   - Download 6 VSIX files from Open VSX: Material Icon Theme, Prettier, ESLint, Python, GitLens, Tailwind CSS
+   - Extract to `assets/extensions/` directory
+
+2. **Day 2** — Develop 3 custom VSCodroid extensions:
+   - `vscodroid-welcome`: Welcome tab with quick actions ("Open Folder", "Clone Repo", "New File", tool versions)
+   - `vscodroid-saf-bridge`: VS Code UI for SAF folder management (used in M4)
+   - `vscodroid-process-monitor`: Phantom process monitoring UI (used in M4)
+
+3. **Day 3** — Integration:
+   - `FirstRunSetup.extractBundledExtensions()` extracts all 9 extensions
+   - `extensions.json` manifest auto-generated on first run
+   - Verify extensions load without internet (airplane mode)
 
 **Acceptance criteria**:
-- [ ] Pre-bundled extensions load on first launch (airplane mode)
-- [ ] Theme extension applies
-- [ ] Icon theme shows in File Explorer
+- [ ] All 9 extensions load on first launch (airplane mode)
+- [ ] Theme + icon theme apply correctly
 - [ ] ESLint activates on JS files
+- [ ] Custom extensions provide their respective UI
 
 ---
 
-#### M3-T6: First-Run Experience
+#### M3-T5: First-Run Experience
 
-**Effort**: 4 days | **Dependencies**: M3-T4, M3-T5
+**Effort**: 4 days | **Dependencies**: M3-T3, M3-T4
 
 **Files to create / modify**:
 ```
 android/app/src/main/kotlin/com/vscodroid/
 ├── SplashActivity.kt               (first-run progress screen)
 └── setup/
-    └── FirstRunSetup.kt            (update: extraction + welcome tab)
+    └── FirstRunSetup.kt            (update: extraction + welcome project)
 
 android/app/src/main/res/
 └── layout/
@@ -1477,24 +1477,27 @@ android/app/src/main/res/
 
 **Implementation steps**:
 
-1. **SplashActivity** flow:
+1. **Day 1** — `SplashActivity`:
    - Check if first run (shared preferences flag)
-   - Show progress: "Extracting core binaries..." with progress bar
-   - Extract: vscode-reh, vscode-web, python-stdlib, extensions
-   - Target: < 15 seconds for core extraction
-   - After extraction: launch LanguagePickerActivity (first time) or MainActivity
+   - Show progress: percentage-based progress bar with step labels
+   - Steps flow: create dirs → extract vscode-reh → extract vscode-web → extract tools → setup git → setup symlinks → extract extensions → configure settings
 
-2. **Welcome tab**:
-   - Create VS Code welcome tab extension or HTML page
-   - Quick actions: "Open Folder", "Clone Repo", "New File"
-   - Show detected tools and versions
+2. **Day 2** — `FirstRunSetup.runSetup()`:
+   - Percentage-based progress reporting via callback
+   - Create welcome project (`createWelcomeProject`)
+   - Configure VS Code settings (terminal profile, git path, etc.)
+   - Create npm bash function wrappers (`createNpmWrappers`)
+
+3. **Day 3-4** — Welcome extension + polish:
+   - Welcome extension provides quick-start tab with tool versions
+   - Subsequent launches skip extraction (< 5 sec to editor)
+   - Edge cases: interrupted extraction, reinstall, app update
 
 **Acceptance criteria**:
-- [ ] First-run extraction completes in < 15 seconds
-- [ ] Progress UI shows extraction status
+- [ ] First-run extraction completes with progress UI
+- [ ] All pre-installed tools work: `node`, `python3`, `pip`, `npm`, `git`, `make`
 - [ ] Welcome tab appears after first-run setup
 - [ ] Subsequent launches skip extraction (< 5 sec to editor)
-- [ ] All pre-installed tools work: `node --version`, `python3 --version`, `git --version`
 
 ---
 
@@ -1503,15 +1506,13 @@ android/app/src/main/res/
 | # | Criterion | Test Method |
 |---|-----------|-------------|
 | 1 | python3 and pip work out of the box | Terminal commands |
-| 2 | node and npm work out of the box | Terminal commands |
+| 2 | node and npm work out of the box (npm via bash functions) | Terminal commands |
 | 3 | git works out of the box | Terminal commands |
-| 4 | Language Picker UI works | First-run flow test |
-| 5 | On-demand toolchain install works (at least 1 language) | Install Go or Rust |
-| 6 | Installed toolchain works immediately | `go version` after install |
-| 7 | Package manager works (sideload) | `vscodroid pkg install` |
-| 8 | Pre-bundled extensions load offline | Airplane mode test |
-| 9 | First-run extraction < 15 seconds | Stopwatch |
-| 10 | RAM usage stable after Python + toolchain load | `dumpsys meminfo` |
+| 4 | make works out of the box | Terminal commands |
+| 5 | Pre-bundled extensions load offline (9 extensions) | Airplane mode test |
+| 6 | First-run extraction completes with progress UI | Visual inspection |
+| 7 | Welcome project and extension provide onboarding | First-run flow test |
+| 8 | RAM usage stable after tool usage | `dumpsys meminfo` |
 
 ---
 
@@ -1519,26 +1520,281 @@ android/app/src/main/res/
 
 **Goal**: Production-quality stability and performance.
 **Duration**: 3-4 weeks (15-20 working days)
-**Entry criteria**: All M3 gate passed, toolchain flow validated, no P0 defects
+**Entry criteria**: All M3 gate passed, no P0 defects
 
 ### 7.1 Task Breakdown
 
 ```mermaid
 flowchart TD
-  M4T1["M4-T1: worker_thread patch<br/>6 days"] --> M4T6["M4-T6: Extensive testing<br/>5 days"]
-  M4T2["M4-T2: Memory optimization<br/>4 days"] --> M4T3["M4-T3: Startup optimization<br/>3 days"]
-  M4T3 --> M4T6
-  M4T4["M4-T4: Storage + GitHub OAuth<br/>5 days"] --> M4T5["M4-T5: External storage (SAF)<br/>3 days"]
-  M4T5 --> M4T6
-  M4T6 --> M4T7["M4-T7: Error handling + logging<br/>3 days"]
+  M4T1["M4-T1: Error handling + logging<br/>3 days"] --> M4T3["M4-T3: Startup optimization<br/>3 days"]
+  M4T2["M4-T2: Memory optimization<br/>4 days"] --> M4T3
+  M4T3 --> M4T4["M4-T4: Phantom process monitoring<br/>3 days"]
+  M4T4 --> M4T5["M4-T5: Storage management<br/>3 days"]
+  M4T5 --> M4T6["M4-T6: GitHub OAuth<br/>3 days"]
+  M4T6 --> M4T7["M4-T7: External storage (SAF)<br/>5 days"]
   M4T7 --> M4GATE["M4 GATE"]
+```
+
+**Key change from original IP**: Error handling/logging is now first (foundational), worker_thread patch moved to M5, extensive testing moved to M6.
+
+---
+
+#### M4-T1: Error Handling & Logging
+
+**Effort**: 3 days | **Dependencies**: M3 gate | **Foundational task**
+
+**Files to create**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── util/
+    ├── CrashReporter.kt            (in-app crash capture)
+    └── Logger.kt                   (debug logging with tag filtering)
+```
+
+> **Why first?** Error handling and logging are foundational — all subsequent M4 tasks benefit from having proper crash capture and logging in place for debugging.
+
+**Implementation steps**:
+
+1. **CrashReporter.kt**:
+   - Initialize in `VSCodroidApp.onCreate()` (app-level, catches all crashes)
+   - Local-only, privacy-respecting (no remote telemetry)
+   - Capture uncaught exceptions + ANR detection
+   - Store crash logs in app-private directory
+
+2. **Logger.kt**:
+   - Tag-based logging with level filtering (DEBUG, INFO, WARN, ERROR)
+   - Debug logging toggle in settings
+   - "Report a Bug" option in settings → generates log bundle
+   - All VSCodroid components use Logger instead of raw `Log.d()`
+
+3. **User-facing error messages**:
+   - Map common error codes (E001-E305 from API Spec §7) to human-readable messages
+   - User sees helpful messages (not stack traces)
+
+**Acceptance criteria**:
+- [ ] `CrashReporter.init(this)` in Application.onCreate catches crashes
+- [ ] Logger provides tag-filtered logging
+- [ ] Debug logging toggle works in settings
+- [ ] Bug report generates useful log bundle
+- [ ] User-facing error messages for common failures
+
+---
+
+#### M4-T2: Memory Optimization
+
+**Effort**: 4 days | **Dependencies**: M3 gate | **Parallel with M4-T1**
+
+**Files to modify**:
+```
+patches/vscodroid/
+└── memory-hooks.diff               (low-memory signal handling)
+
+android/app/src/main/kotlin/com/vscodroid/
+└── MainActivity.kt                 (onTrimMemory handling)
+```
+
+**Implementation steps**:
+
+1. V8 `--max-old-space-size` tuning (512 MB baseline, test 384 MB on 4GB device)
+2. Lazy extension loading: defer non-essential extensions until first use
+3. `onTrimMemory()` → signal VS Code to reduce memory (close unused tabs, GC)
+4. Profile WebView heap usage with Chrome DevTools
+5. Test on 4GB RAM device
+
+**Acceptance criteria**:
+- [ ] Idle memory < 300 MB
+- [ ] Active memory < 700 MB
+- [ ] Works on 4GB RAM device without OOM
+- [ ] `onTrimMemory` reduces memory usage measurably
+
+---
+
+#### M4-T3: Startup Time Optimization
+
+**Effort**: 3 days | **Dependencies**: M4-T1, M4-T2
+
+**Implementation steps**:
+
+1. Pre-warm WebView in `Application.onCreate()` (throwaway WebView destroy pattern):
+   ```kotlin
+   // Pre-warm: loading the Chromium library is ~200-400ms.
+   // Creating and immediately destroying a throwaway WebView
+   // triggers the library load so the real WebView starts faster.
+   WebView(this).destroy()
+   ```
+2. Start Node.js server early (before Activity visible)
+3. HTTP caching for static assets (`Cache-Control: immutable`)
+4. Measure and optimize: target < 5 seconds to editor ready
+
+**Acceptance criteria**:
+- [ ] Cold start < 5 seconds on mid-range device
+- [ ] Warm start < 2 seconds
+
+---
+
+#### M4-T4: Phantom Process Monitoring
+
+**Effort**: 3 days | **Dependencies**: M4-T3
+
+**Files to create / modify**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── service/
+    └── PhantomProcessMonitor.kt    (process count tracking)
+```
+
+**Implementation steps**:
+
+1. Implement process counting and monitoring
+2. Track child processes spawned by Node.js (extension host, terminal sessions)
+3. Enforce budget: total child processes ≤ 5
+4. Integrate with `vscodroid-process-monitor` extension (from M3)
+5. Aggressive cleanup: kill idle processes when budget exceeded
+
+**Acceptance criteria**:
+- [ ] Process monitor tracks all child processes
+- [ ] Process count stays ≤ 5 in typical use (editor + 3 terminals)
+- [ ] Process monitor extension shows real-time count
+- [ ] `adb shell ps -A | grep vscodroid` confirms count
+
+---
+
+#### M4-T5: Storage Management
+
+**Effort**: 3 days | **Dependencies**: M4-T4
+
+**Files to create**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── setup/
+    └── StorageManager.kt           (track storage per component)
+```
+
+**Implementation steps**:
+
+1. Track storage usage per component (VS Code, extensions, toolchains, workspace)
+2. Settings UI: clear caches, show per-component sizes
+3. `StorageManager.isStorageLow()` → Toast warning when storage < threshold
+4. Handle low storage gracefully (prevent new installs, suggest cleanup)
+
+**Acceptance criteria**:
+- [ ] Storage usage visible in settings per component
+- [ ] Can clear caches from settings
+- [ ] Low storage warning appears at threshold
+- [ ] App doesn't crash on low storage
+
+---
+
+#### M4-T6: GitHub OAuth
+
+**Effort**: 3 days | **Dependencies**: M4-T5
+
+**Files to create / modify**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── bridge/
+    └── AndroidBridge.kt            (add startGitHubOAuth)
+
+patches/vscodroid/
+└── github-auth-android.diff        (OAuth via Chrome Custom Tabs)
+```
+
+**Implementation steps**:
+
+1. `startGitHubOAuth(scopes, authToken)` opens Chrome Custom Tabs
+2. Handle deep link callback: `vscodroid://oauth/github?code=...&state=...`
+3. Forward OAuth token to WebView via `window.vscodroid.onOAuthCallback()`
+4. VS Code's built-in GitHub auth uses the callback
+5. Test: login → push/pull to GitHub
+
+**Acceptance criteria**:
+- [ ] GitHub OAuth login works via Chrome Custom Tabs
+- [ ] Deep link callback properly handled
+- [ ] Git push/pull to GitHub works after auth
+- [ ] Token persists across app restarts
+
+---
+
+#### M4-T7: External Storage Access (SAF)
+
+**Effort**: 5 days | **Dependencies**: M4-T6
+
+**Files to create**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── storage/
+    ├── SafStorageManager.kt        (SAF document tree handling)
+    └── SafSyncEngine.kt            (bidirectional sync)
+
+patches/vscodroid/
+└── android-fs.diff                 (SAF bridge for external storage)
+```
+
+**Implementation steps**:
+
+1. **Day 1-2** — `SafStorageManager.kt`:
+   - SAF (Storage Access Framework) bridge for files outside app directory
+   - `ACTION_OPEN_DOCUMENT_TREE` for folder selection
+   - Persist URI permissions across restarts
+   - Map SAF URIs to virtual file paths for VS Code
+
+2. **Day 3-4** — `SafSyncEngine.kt`:
+   - Bidirectional sync between SAF documents and app-private mirror
+   - `FileObserver` watches local mirror for changes → write back to SAF
+   - Content provider queries for SAF → local mirror sync
+   - Handle conflicts gracefully
+
+3. **Day 5** — Integration:
+   - `vscodroid-saf-bridge` extension (from M3) provides UI
+   - "Open External Folder" option in Welcome tab
+   - Permission request UX with clear explanation
+
+**Acceptance criteria**:
+- [ ] Can open projects from external storage via SAF
+- [ ] File operations (read/write/create/delete) work on external files
+- [ ] Changes sync bidirectionally (SAF ↔ local mirror)
+- [ ] Permission request UX is clear
+- [ ] URI permissions persist across restarts
+
+---
+
+### 7.2 M4 Validation Gate
+
+| # | Criterion | Test Method |
+|---|-----------|-------------|
+| 1 | Error handling captures crashes locally | Trigger crash → verify log |
+| 2 | Startup < 5 seconds on mid-range device | Instrumented timing |
+| 3 | Idle memory < 300 MB, active < 700 MB | `dumpsys meminfo` |
+| 4 | Works on 4GB RAM device without OOM | Budget device test |
+| 5 | Phantom processes ≤ 5 in typical use | `adb shell ps` count |
+| 6 | GitHub push/pull works | OAuth + git push test |
+| 7 | External storage access works via SAF | Open project from /sdcard/ |
+| 8 | Storage management shows per-component usage | Settings UI check |
+
+---
+
+## 8. M5 — Toolchain Ecosystem
+
+**Goal**: Extensible toolchain delivery with in-app package manager and on-demand downloads.
+**Duration**: 4-6 weeks (20-30 working days)
+**Entry criteria**: All M4 gate passed, no P0 defects
+
+### 8.1 Task Breakdown
+
+```mermaid
+flowchart TD
+  M5T1["M5-T1: worker_thread Extension Host<br/>6 days"] --> M5T5["M5-T5: Language Picker UI<br/>5 days"]
+  M5T2["M5-T2: Package manager<br/>5 days"] --> M5T3["M5-T3: AssetPackManager<br/>4 days"]
+  M5T3 --> M5T4["M5-T4: On-demand toolchains<br/>5 days"]
+  M5T4 --> M5T5
+  M5T5 --> M5GATE["M5 GATE"]
 ```
 
 ---
 
-#### M4-T1: Extension Host worker_thread Patch
+#### M5-T1: Extension Host worker_thread Patch
 
-**Effort**: 6 days | **Dependencies**: M3 gate | **High complexity**
+**Effort**: 6 days | **Dependencies**: M4 gate | **High complexity**
 
 **Files to create**:
 ```
@@ -1571,220 +1827,295 @@ patches/vscodroid/
    - Main server process only restarts if worker recovery fails
 
 4. **Day 6** — Validation:
-   - Extension activation/deactivation parity test vs M3 baseline
+   - Extension activation/deactivation parity test vs M4 baseline
    - Fault injection: throw error in worker → verify restart
    - 2-hour stability test with extensions + terminal + SCM
-   - Phantom process count: verify at least -1 vs M3
+   - Phantom process count: verify at least -1 vs M4
 
 **Contingency**: If patch proves too complex after Day 4, fall back to `child_process.fork()` with more aggressive process management (see Risk Matrix T08).
 
 **Acceptance criteria**:
-- [ ] Extension Host runs as worker_thread
+- [ ] Extension Host runs as worker_thread instead of child_process.fork
 - [ ] Extensions activate and deactivate correctly
 - [ ] Worker crash → supervisor restart works
-- [ ] Phantom process count reduced by at least 1 vs M3
+- [ ] Phantom process count reduced by at least 1 vs M4
 - [ ] 2-hour stability test passes
 
 ---
 
-#### M4-T2: Memory Optimization
+#### M5-T2: Package Manager
 
-**Effort**: 4 days | **Dependencies**: M3 gate | **Parallel with M4-T1**
-
-**Files to modify**:
-```
-patches/vscodroid/
-└── memory-hooks.diff               (low-memory signal handling)
-
-android/app/src/main/kotlin/com/vscodroid/
-└── MainActivity.kt                 (onTrimMemory handling)
-```
-
-**Implementation steps**:
-
-1. V8 `--max-old-space-size` tuning (512 MB baseline, test 384 MB on 4GB device)
-2. Lazy extension loading: defer non-essential extensions
-3. `onTrimMemory()` → signal VS Code to reduce memory (close unused tabs, GC)
-4. Profile WebView heap usage with Chrome DevTools
-5. Test on 4GB RAM device
-
-**Acceptance criteria**:
-- [ ] Idle memory < 300 MB
-- [ ] Active memory < 700 MB
-- [ ] Works on 4GB RAM device without OOM
-- [ ] `onTrimMemory` reduces memory usage measurably
-
----
-
-#### M4-T3: Startup Time Optimization
-
-**Effort**: 3 days | **Dependencies**: M4-T2
-
-**Implementation steps**:
-
-1. Pre-warm WebView in `Application.onCreate()`
-2. Start Node.js server early (before Activity visible)
-3. HTTP caching for static assets (`Cache-Control: immutable`)
-4. Measure and optimize: target < 5 seconds to editor ready
-
-**Acceptance criteria**:
-- [ ] Cold start < 5 seconds on mid-range device
-- [ ] Warm start < 2 seconds
-
----
-
-#### M4-T4: Storage Management + GitHub OAuth
-
-**Effort**: 5 days | **Dependencies**: M3 gate | **Parallel with M4-T1**
-
-**Files to create / modify**:
-```
-android/app/src/main/kotlin/com/vscodroid/
-├── bridge/
-│   └── AndroidBridge.kt           (add startGitHubOAuth)
-└── setup/
-    └── StorageManager.kt          (track storage per component)
-
-patches/vscodroid/
-└── github-auth-android.diff       (OAuth via Chrome Custom Tabs)
-```
-
-**Implementation steps**:
-
-1. **Storage management** (3 days):
-   - Track storage per component (VS Code, extensions, toolchains, workspace)
-   - Settings UI: clear caches, remove toolchains
-   - Handle low storage gracefully
-
-2. **GitHub OAuth** (2 days):
-   - `startGitHubOAuth(scopes, authToken)` opens Chrome Custom Tabs
-   - Handle callback: `vscodroid://oauth/github?code=...&state=...`
-   - Forward to WebView via `onOAuthCallback()`
-   - Test: push/pull to GitHub
-
-**Acceptance criteria**:
-- [ ] Storage usage visible in settings
-- [ ] Can clear caches and remove toolchains
-- [ ] GitHub OAuth login works
-- [ ] Git push/pull to GitHub works
-- [ ] SSH key management works
-
----
-
-#### M4-T5: External Storage Access (SAF)
-
-**Effort**: 3 days | **Dependencies**: M4-T4
+**Effort**: 5 days | **Dependencies**: M4 gate | **Parallel with M5-T1**
 
 **Files to create**:
 ```
-patches/vscodroid/
-└── android-fs.diff                 (SAF bridge for external storage)
+android/app/src/main/kotlin/com/vscodroid/
+└── setup/
+    └── PackageManager.kt           (pkg command implementation)
+
+android/app/src/main/assets/
+└── bin/
+    └── vscodroid                   (shell wrapper script for `vscodroid pkg`)
 ```
 
 **Implementation steps**:
 
-1. SAF (Storage Access Framework) bridge for files outside app directory
-2. Or: `MANAGE_EXTERNAL_STORAGE` with Play Store justification
-3. Test: open project from `/sdcard/Projects/`
+1. Implement CLI: `vscodroid pkg search|install|remove|list|update|info`
+2. Repository index: compatible with Termux package format (deb, ARM64)
+3. Package download, extract, install to `$PREFIX/usr/`
+4. Dependency resolution (basic)
+5. Note: only available in sideloaded version (Play Store uses asset packs only)
 
 **Acceptance criteria**:
-- [ ] Can open projects from external storage
-- [ ] File operations (read/write/create/delete) work on external files
-- [ ] Permission request UX is clear
+- [ ] `vscodroid pkg search curl` returns results
+- [ ] `vscodroid pkg install curl` installs successfully
+- [ ] `vscodroid pkg list` shows installed packages
+- [ ] `vscodroid pkg remove curl` uninstalls cleanly
 
 ---
 
-#### M4-T6: Extensive Testing
+#### M5-T3: Play Store AssetPackManager Integration
 
-**Effort**: 5 days | **Dependencies**: M4-T1, M4-T3, M4-T5
+**Effort**: 4 days | **Dependencies**: M5-T2
+
+**Files to create**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── setup/
+    └── ToolchainManager.kt         (asset pack management)
+```
+
+**Implementation steps**:
+
+1. Integrate Play Asset Delivery (PAD) SDK
+2. Implement `listAvailable()`, `install()`, `uninstall()`, `isInstalled()`
+3. Handle download progress, error, retry
+4. Asset pack extraction to `$PREFIX/lib/<toolchain>/`
+5. Sideload detection: if not from Play Store, use bundled assets or package manager
+
+**Acceptance criteria**:
+- [ ] AssetPackManager integration works
+- [ ] Download progress tracking works
+- [ ] Sideload path works (direct asset extraction)
+
+---
+
+#### M5-T4: On-Demand Toolchains
+
+**Effort**: 5 days | **Dependencies**: M5-T3
+
+**Files to create**:
+```
+toolchain_go/
+├── build.gradle.kts                (asset pack module)
+└── src/main/assets/                (Go ARM64 binaries)
+
+toolchain_rust/
+├── build.gradle.kts
+└── src/main/assets/
+
+toolchain_java/
+├── build.gradle.kts
+└── src/main/assets/
+
+toolchain_clang/
+├── build.gradle.kts
+└── src/main/assets/
+
+toolchain_ruby/
+├── build.gradle.kts
+└── src/main/assets/
+
+android/settings.gradle.kts         (register asset pack modules)
+```
+
+**Implementation steps**:
+
+1. **Day 1-2** — Prepare toolchain asset packs:
+   - Cross-compile or download pre-built Go, Rust, Java, C++, Ruby for ARM64
+   - Package each as Android App Bundle asset pack module
+   - Configure `build.gradle.kts` with `assetPack` type
+
+2. **Day 3** — Asset pack extraction:
+   - Extract toolchain to `$PREFIX/lib/<toolchain>/`
+   - Configure PATH and environment variables
+   - Create symlinks in `$PREFIX/bin/`
+
+3. **Day 4-5** — Testing:
+   - Install each toolchain → verify version command works
+   - Compile and run a simple program per language
+   - Verify uninstall cleans up properly
+
+**Acceptance criteria**:
+- [ ] `go version` works after Go toolchain install
+- [ ] `rustc --version` works after Rust toolchain install
+- [ ] Each toolchain can compile and run a simple program
+- [ ] Uninstall removes toolchain cleanly
+
+---
+
+#### M5-T5: Language Picker UI
+
+**Effort**: 5 days | **Dependencies**: M5-T4, M5-T1
+
+**Files to create**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── setup/
+    └── LanguagePickerActivity.kt   (first-run + settings UI)
+
+android/app/src/main/res/
+└── layout/
+    └── activity_language_picker.xml
+```
+
+**Implementation steps**:
+
+1. **Day 1-2** — Language Picker UI:
+   - Checkbox list of available toolchains with size estimates
+   - "Install" button → `AssetPackManager.fetch()` for selected packs
+   - Progress bar per pack
+   - Shown during first run and in Settings > Toolchains
+
+2. **Day 3** — Settings > Toolchains page:
+   - Add/remove languages from Settings
+   - Show installed toolchains and sizes
+   - Update available indicator
+
+3. **Day 4-5** — Integration and polish:
+   - Wire into SplashActivity first-run flow
+   - Handle edge cases: partial download, interrupted install
+   - Test with slow network simulation
+
+**Acceptance criteria**:
+- [ ] Language Picker UI shows during first run
+- [ ] Can select and install toolchain on-demand
+- [ ] Settings > Toolchains allows adding/removing
+- [ ] Progress tracking and error handling work
+- [ ] Installed toolchains work immediately
+
+---
+
+### 8.2 M5 Validation Gate
+
+| # | Criterion | Test Method |
+|---|-----------|-------------|
+| 1 | worker_thread Extension Host works | Extension activation test |
+| 2 | Phantom process count reduced vs M4 | `adb shell ps` comparison |
+| 3 | Package manager works (sideload) | `vscodroid pkg install` |
+| 4 | On-demand toolchain install works (≥ 1 language) | Install Go or Rust |
+| 5 | Installed toolchain works immediately | `go version` after install |
+| 6 | Language Picker UI works | First-run flow test |
+| 7 | AssetPackManager integration works | Play Store test |
+| 8 | 2-hour stability test passes with worker_thread | Endurance test |
+
+---
+
+## 9. M6 — Release
+
+**Goal**: Launch on Google Play Store with proper branding, legal compliance, testing, and documentation.
+**Duration**: 6-8 weeks (30-40 working days)
+**Entry criteria**: All M5 gate passed, RC build completed
+
+### 9.1 Task Breakdown
+
+```mermaid
+flowchart TD
+  M6T1["M6-T1: SSH key management<br/>3 days"] --> M6T2["M6-T2: Extensive testing<br/>5 days"]
+  M6T3["M6-T3: CI/CD pipeline<br/>10 days"] --> M6T7["M6-T7: AAB build<br/>3 days"]
+  M6T4["M6-T4: Branding + legal<br/>5 days"] --> M6T5["M6-T5: Documentation<br/>3 days"]
+  M6T5 --> M6T6["M6-T6: Play Store listing<br/>3 days"]
+  M6T2 --> M6T7
+  M6T6 --> M6T7
+  M6T7 --> M6T8["M6-T8: Internal testing<br/>10 days"]
+  M6T8 --> M6T9["M6-T9: Beta + Launch<br/>27 days"]
+  M6T9 --> M6GATE["M6 GATE"]
+```
+
+---
+
+#### M6-T1: SSH Key Management
+
+**Effort**: 3 days | **Dependencies**: M5 gate
+
+**Files to create**:
+```
+android/app/src/main/kotlin/com/vscodroid/
+└── bridge/
+    └── SshKeyBridge.kt             (SSH key generation + management)
+```
+
+**Implementation steps**:
+
+1. SSH key generation via `ssh-keygen` (bundled from Termux openssh package)
+2. Key storage in app-private `~/.ssh/` directory
+3. Settings UI for managing SSH keys (generate, view public key, delete)
+4. Integration with Git for SSH-based push/pull
+5. Known hosts management
+
+**Acceptance criteria**:
+- [ ] SSH key generation works (`ssh-keygen -t ed25519`)
+- [ ] Public key viewable and copyable to clipboard
+- [ ] Git clone/push/pull via SSH works
+- [ ] Keys persist across app restarts
+
+---
+
+#### M6-T2: Extensive Testing
+
+**Effort**: 5 days | **Dependencies**: M6-T1
 
 **Implementation steps**:
 
 1. Test on 4 device models (Pixel 8, Samsung S23, budget 4GB, Samsung Tab S9)
 2. Test Android versions: 13, 14, 15, 16
 3. Test large files (10K+ lines), large projects (1000+ files)
-4. Test extensions: Python, ESLint, GitLens, themes, icon packs
+4. Test all extensions: Python, ESLint, GitLens, themes, custom extensions
 5. Test background/foreground transitions, split-screen, rotation
 6. Run all E2E tests (E2E-01 through E2E-14)
 7. Run all performance tests (Testing Strategy §3.4)
 8. Run backup & restore tests (Testing Strategy §3.8)
+9. SSH key and GitHub OAuth flow testing
+10. Worker_thread stability testing (2-hour endurance)
 
 **Acceptance criteria**:
 - [ ] All E2E tests pass on 4 device models
 - [ ] Performance targets met (startup < 5s, keystroke < 50ms, memory < 700MB)
 - [ ] Phantom processes ≤ 5 in typical use
 - [ ] No crash in 2 hours continuous use
+- [ ] SSH + OAuth flows work end-to-end
 - [ ] Backup/restore tests pass
 
 ---
 
-#### M4-T7: Error Handling & Logging
+#### M6-T3: CI/CD Pipeline
 
-**Effort**: 3 days | **Dependencies**: M4-T6
+**Effort**: 10 days | **Dependencies**: M5 gate | **Parallel with M6-T1**
 
 **Files to create**:
 ```
-android/app/src/main/kotlin/com/vscodroid/
-└── util/
-    ├── CrashReporter.kt            (in-app crash capture)
-    └── Logger.kt                   (debug logging toggle)
+.github/workflows/
+├── build.yml                       (lint + unit test + build)
+├── test.yml                        (integration tests on Firebase Test Lab)
+├── release.yml                     (build + sign + deploy to Play Store)
+└── patch-regression.yml            (monthly: apply patches to latest VS Code)
 ```
 
-**Implementation steps**:
+**Implementation steps** (see Release Plan §2):
 
-1. In-app crash reporting (local, privacy-respecting)
-2. User-facing error messages for common issues (E001-E305 from API Spec §7)
-3. Debug logging toggle in settings
-4. "Report a Bug" option in settings → generates log bundle
-
-**Acceptance criteria**:
-- [ ] Crashes captured locally
-- [ ] User sees helpful error messages (not stack traces)
-- [ ] Debug logging toggle works
-- [ ] Bug report generates useful log bundle
+1. **build.yml**: lint (ktlint, eslint, android lint) + unit tests + build APK
+   - Coverage gate: Kotlin ≥ 80%, JS ≥ 70%
+2. **test.yml**: integration tests on Firebase Test Lab ARM64 devices
+3. **release.yml**: tag → build AAB → sign → upload to Play Store
+4. **patch-regression.yml**: scheduled monthly, apply patches to latest VS Code
+5. Caching strategy for Node.js binary, VS Code build, Gradle
+6. Secrets management: keystore, Play Store API key
 
 ---
 
-### 7.2 M4 Validation Gate
+#### M6-T4: Branding + Legal Compliance
 
-| # | Criterion | Test Method |
-|---|-----------|-------------|
-| 1 | Phantom processes max 5 in typical use | `adb shell ps` during editor + 3 terminals + LSP |
-| 2 | Startup < 5 seconds on mid-range device | Instrumented timing |
-| 3 | No crash in 2 hours continuous use | Endurance test |
-| 4 | Works on 4GB RAM device without OOM | Budget device test |
-| 5 | GitHub push/pull works | OAuth + git push test |
-| 6 | External storage access works | Open project from /sdcard/ |
-| 7 | Tested on 4 device models | Device matrix |
-| 8 | Backup/restore works | `adb backup` test cycle |
-| 9 | All performance targets met | Performance test suite |
-
----
-
-## 8. M5 — Release
-
-**Goal**: Launch on Google Play Store.
-**Duration**: 6-8 weeks (30-40 working days)
-**Entry criteria**: All M4 gate passed, RC build completed, store listing ready
-
-### 8.1 Task Breakdown
-
-```mermaid
-flowchart TD
-  M5T1["M5-T1: Branding + legal<br/>5 days"] --> M5T2["M5-T2: Play Store listing<br/>3 days"]
-  M5T3["M5-T3: CI/CD pipeline<br/>10 days"] --> M5T4["M5-T4: Internal testing<br/>10 days"]
-  M5T2 --> M5T4
-  M5T4 --> M5T5["M5-T5: Closed beta<br/>10 days"]
-  M5T5 --> M5T6["M5-T6: Open beta<br/>14 days"]
-  M5T6 --> M5T7["M5-T7: Production launch<br/>3 days"]
-  M5T7 --> M5GATE["M5 GATE"]
-```
-
----
-
-#### M5-T1: Branding + Legal Compliance
-
-**Effort**: 5 days
+**Effort**: 5 days | **Dependencies**: M5 gate | **Parallel with M6-T1, M6-T3**
 
 **Files to create**:
 ```
@@ -1819,9 +2150,23 @@ docs/
 
 ---
 
-#### M5-T2: Play Store Listing
+#### M6-T5: Documentation
 
-**Effort**: 3 days | **Dependencies**: M5-T1
+**Effort**: 3 days | **Dependencies**: M6-T4
+
+**Implementation steps**:
+
+1. Final README.md update with badges, screenshots, feature list
+2. CHANGELOG.md for all milestones
+3. User guide: keyboard shortcuts, Extra Key Row, toolchain management
+4. Developer guide: build from source, patch application
+5. FAQ / troubleshooting document
+
+---
+
+#### M6-T6: Play Store Listing
+
+**Effort**: 3 days | **Dependencies**: M6-T4, M6-T5
 
 **Implementation steps**:
 
@@ -1833,92 +2178,76 @@ docs/
 
 ---
 
-#### M5-T3: CI/CD Pipeline
+#### M6-T7: Android App Bundle (AAB)
 
-**Effort**: 10 days | **Dependencies**: M4 gate | **Parallel with M5-T1**
+**Effort**: 3 days | **Dependencies**: M6-T2, M6-T3, M6-T6
 
-**Files to create**:
-```
-.github/workflows/
-├── build.yml                       (lint + unit test + build)
-├── test.yml                        (integration tests on Firebase Test Lab)
-├── release.yml                     (build + sign + deploy to Play Store)
-└── patch-regression.yml            (monthly: apply patches to latest VS Code)
-```
+**Implementation steps**:
 
-**Implementation steps** (see Release Plan §2):
+1. Build release AAB with all asset pack modules
+2. Sign with release keystore
+3. Verify AAB size < 200 MB (base module)
+4. Upload to Play Console for review
+5. Verify asset pack delivery works
 
-1. **build.yml**: lint (ktlint, eslint, android lint) + unit tests + build APK
-   - Coverage gate: Kotlin ≥ 80%, JS ≥ 70%
-2. **test.yml**: integration tests on Firebase Test Lab ARM64 devices
-3. **release.yml**: tag → build AAB → sign → upload to Play Store
-4. **patch-regression.yml**: scheduled monthly, apply patches to latest VS Code
-5. Caching strategy for Node.js binary, VS Code build, Gradle
-6. Secrets management: keystore, Play Store API key
+**Acceptance criteria**:
+- [ ] AAB base < 200 MB
+- [ ] Asset packs download on-demand correctly
+- [ ] App installs from Play Store and works
 
 ---
 
-#### M5-T4: Internal Testing
+#### M6-T8: Internal Testing
 
-**Effort**: 10 days | **Dependencies**: M5-T2, M5-T3
+**Effort**: 10 days | **Dependencies**: M6-T7
 
 **Promotion criteria** (Release Plan §1.3):
-- 100% M4 exit criteria pass
+- 100% M5 exit criteria pass
 - Zero open S1/S2 bugs
 - Crash-free rate ≥ 95% for 7 consecutive days
 
 ---
 
-#### M5-T5: Closed Beta
+#### M6-T9: Beta + Production Launch
 
-**Effort**: 10 days | **Dependencies**: M5-T4
+**Effort**: 27 days | **Dependencies**: M6-T8
 
-**Promotion criteria**:
+**Phase 1 — Closed beta** (10 days):
 - At least 50 active testers
 - No new S1 bugs in last 7 days
 - ANR rate < 0.5%
 - Extension install success ≥ 90%
 
----
-
-#### M5-T6: Open Beta
-
-**Effort**: 14 days | **Dependencies**: M5-T5
-
-**Promotion criteria**:
+**Phase 2 — Open beta** (14 days):
 - At least 500 beta testers
 - Crash-free rate ≥ 95% for 14 days
 - ANR rate < 0.5%
 - Play policy checklist complete
 
----
-
-#### M5-T7: Production Launch
-
-**Effort**: 3 days | **Dependencies**: M5-T6
-
-**Rollout**: 5% → 10% → 25% → 50% → 100% (see Release Plan §6.2)
-
-**Halt conditions**: crash-free < 90%, S1 reported by multiple users, ANR > 1%
+**Phase 3 — Production launch** (3 days):
+- Staged rollout: 5% → 10% → 25% → 50% → 100% (see Release Plan §6.2)
+- **Halt conditions**: crash-free < 90%, S1 reported by multiple users, ANR > 1%
 
 ---
 
-### 8.2 M5 Validation Gate
+### 9.2 M6 Validation Gate
 
 | # | Criterion | Test Method |
 |---|-----------|-------------|
-| 1 | App published on Play Store | Play Console |
-| 2 | Passes Play Store review | No policy violations |
-| 3 | Base AAB < 200 MB | AAB file size check |
-| 4 | No critical bugs in first 48 hours | Crash monitoring |
-| 5 | At least 500 beta testers before production | Play Console stats |
-| 6 | Security testing checklist complete | Security doc §7 |
+| 1 | SSH key management works | Generate + git push via SSH |
+| 2 | All E2E tests pass on 4 device models | Device matrix |
+| 3 | App published on Play Store | Play Console |
+| 4 | Passes Play Store review | No policy violations |
+| 5 | Base AAB < 200 MB | AAB file size check |
+| 6 | No critical bugs in first 48 hours | Crash monitoring |
+| 7 | At least 500 beta testers before production | Play Console stats |
+| 8 | Security testing checklist complete | Security doc §7 |
 
 ---
 
-## 9. Cross-Cutting Concerns
+## 10. Cross-Cutting Concerns
 
-### 9.1 Unit Test Development
+### 10.1 Unit Test Development
 
 Tests are written alongside implementation, not as a separate phase.
 
@@ -1927,35 +2256,39 @@ Tests are written alongside implementation, not as a separate phase.
 | M0 | ProcessManager, Environment, PortFinder | JUnit 5 + MockK |
 | M1 | FirstRunSetup, server bootstrap (Jest) | JUnit 5 + Jest |
 | M2 | ExtraKeyRow, KeyInjector, ClipboardBridge, AndroidBridge security | JUnit 5 + Espresso |
-| M3 | ToolchainManager, PackageManager | JUnit 5 |
-| M4 | StorageManager, CrashReporter | JUnit 5 |
+| M3 | npm bash functions, extension extraction | JUnit 5 |
+| M4 | StorageManager, CrashReporter, SafSyncEngine | JUnit 5 |
+| M5 | ToolchainManager, PackageManager, worker_thread supervisor | JUnit 5 + Jest |
+| M6 | CI pipeline validation, E2E test suite | Espresso + Firebase Test Lab |
 
 **Coverage targets**: Kotlin ≥ 80%, JS ≥ 70%
 
-### 9.2 Documentation Updates
+### 10.2 Documentation Updates
 
 | Milestone | Documentation Task |
 |-----------|-------------------|
 | M0 | Update Dev Guide §3 with actual build steps |
 | M1 | Document patch application process, known issues |
-| M2 | User guide: keyboard shortcuts, Extra Key Row |
-| M3 | User guide: toolchain management, package manager |
-| M4 | Performance tuning guide, troubleshooting |
-| M5 | README final update, CHANGELOG, release notes |
+| M2 | User guide: keyboard shortcuts, Extra Key Row, GestureTrackpad |
+| M3 | User guide: first-run setup, npm usage, extension management |
+| M4 | Performance tuning guide, SAF troubleshooting |
+| M5 | Toolchain management guide, package manager docs |
+| M6 | README final update, CHANGELOG, release notes, user guide |
 
-### 9.3 Security Checkpoints
+### 10.3 Security Checkpoints
 
 | Milestone | Security Task |
 |-----------|--------------|
 | M1 | Verify server binds localhost only, no telemetry requests |
 | M2 | Verify AndroidBridge origin + token enforcement |
-| M3 | Verify toolchain integrity (signed asset packs) |
-| M4 | Full security testing checklist (Security §7), backup exclusion test |
-| M5 | APK signature verification, dependency vulnerability scan |
+| M3 | Verify extension extraction integrity |
+| M4 | SAF permission scoping, OAuth token security, backup exclusion test |
+| M5 | Verify toolchain integrity (signed asset packs), worker_thread isolation |
+| M6 | Full security testing checklist (Security §7), APK signature, dependency scan |
 
 ---
 
-## 10. Risk Checkpoints
+## 11. Risk Checkpoints
 
 Embedded go/no-go decisions throughout the timeline:
 
@@ -1967,31 +2300,33 @@ Embedded go/no-go decisions throughout the timeline:
 | M1 Week 2 | VS Code renders in WebView? | Workbench loads | Debug WebView/server communication |
 | M1 Week 3 | node-pty works? | PTY creation succeeds | Fallback terminal mode (T06) |
 | M2 Week 1 | Keystroke latency OK? | < 50ms | Profile and optimize key injection path |
-| M3 Week 1 | Python compiles? | Runs on device | Use Termux Python binary (T10) |
-| M4 Week 1 | worker_thread patch works? | Extensions activate | Fall back to child_process.fork (T08) |
-| M5 Week 3 | Play Store accepts? | No rejection | Prepare appeal + APK distribution (P01) |
+| M3 Week 1 | Python from Termux works? | Runs on device | Cross-compile from source (T10) |
+| M4 Week 2 | SAF sync engine stable? | Bidirectional sync works | Fall back to `MANAGE_EXTERNAL_STORAGE` |
+| M5 Week 1 | worker_thread patch works? | Extensions activate | Fall back to child_process.fork (T08) |
+| M6 Week 3 | Play Store accepts? | No rejection | Prepare appeal + APK distribution (P01) |
 
 ---
 
-## 11. File Inventory Summary
+## 12. File Inventory Summary
 
 Total new files created across all milestones:
 
 | Category | Approx Count | Key Files |
 |----------|-------------|-----------|
-| **Kotlin sources** | ~25 files | MainActivity, NodeService, ProcessManager, AndroidBridge, ExtraKeyRow, ToolchainManager, etc. |
+| **Kotlin sources** | ~30 files | MainActivity, NodeService, ProcessManager, AndroidBridge, ExtraKeyRow, GestureTrackpad, ToolchainManager, SafStorageManager, SshKeyBridge, CrashReporter, etc. |
 | **Layouts (XML)** | ~5 files | activity_main, activity_splash, activity_language_picker, view_extra_key_row |
-| **Build scripts** | ~10 files | build-node.sh, build-python.sh, build-git.sh, build-bash.sh, build-tmux.sh, build-node-pty.sh, build-make.sh, build-all.sh, apply-patches.sh, deploy.sh |
-| **VS Code patches** | ~17 files | 9 code-server patches + 8 VSCodroid patches |
+| **Build/download scripts** | ~10 files | download-node.sh, download-python.sh, build-git.sh, build-bash.sh, build-tmux.sh, build-node-pty.sh, download-termux-tools.sh, build-all.sh, apply-patches.sh, deploy.sh |
+| **VS Code patches** | ~18 files | 9 code-server patches + 9 VSCodroid patches (incl. ext-host-worker, android-fs) |
 | **Gradle configs** | ~8 files | root + app + 5 asset pack modules + settings |
 | **CI workflows** | ~4 files | build.yml, test.yml, release.yml, patch-regression.yml |
-| **Test files** | ~10+ files | Unit tests (JUnit), integration tests (Espresso), test fixtures |
-| **Assets** | ~5 dirs | vscode-web/, vscode-reh/, python-stdlib/, extensions/, server.js |
+| **Test files** | ~15+ files | Unit tests (JUnit), integration tests (Espresso), E2E tests, test fixtures |
+| **Assets** | ~6 dirs | vscode-web/, vscode-reh/, usr/lib/python3.12/, extensions/ (9 extensions), server.js |
 | **Native binaries (.so)** | 8 files | libnode, libpython, libgit, libbash, libtmux, libmake, libc++_shared, libnode_pty |
+| **Custom extensions** | 3 dirs | vscodroid-welcome, vscodroid-saf-bridge, vscodroid-process-monitor |
 
 ---
 
-## 12. Definition of Done (Global)
+## 13. Definition of Done (Global)
 
 Every task is "done" when:
 
@@ -2005,7 +2340,7 @@ Every task is "done" when:
 
 ---
 
-## 13. Reference Cross-Links
+## 14. Reference Cross-Links
 
 | Topic | Primary Document | Section |
 |-------|-----------------|---------|
