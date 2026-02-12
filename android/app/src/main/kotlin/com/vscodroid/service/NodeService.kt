@@ -4,9 +4,11 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.vscodroid.R
 import com.vscodroid.VSCodroidApp
 import com.vscodroid.MainActivity
@@ -74,7 +76,12 @@ class NodeService : Service() {
         }
 
         if (!isServiceRunning) {
-            startForeground(VSCodroidApp.NOTIFICATION_ID, createNotification())
+            ServiceCompat.startForeground(
+                this,
+                VSCodroidApp.NOTIFICATION_ID,
+                createNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
             isServiceRunning = true
             launchServer()
         }

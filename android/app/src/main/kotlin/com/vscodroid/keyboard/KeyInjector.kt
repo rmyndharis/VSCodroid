@@ -34,7 +34,6 @@ class KeyInjector(private val webView: WebView) {
                     composed: true
                 };
                 target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
-                target.dispatchEvent(new KeyboardEvent('keypress', eventInit));
                 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
             })();
         """.trimIndent()

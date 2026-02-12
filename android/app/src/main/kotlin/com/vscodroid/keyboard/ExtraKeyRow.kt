@@ -94,6 +94,9 @@ class ExtraKeyRow @JvmOverloads constructor(
         ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
             val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
             visibility = if (imeVisible) View.VISIBLE else View.GONE
+            if (!imeVisible) {
+                resetModifiersIfNeeded()
+            }
             if (imeVisible) {
                 // Position ExtraKeyRow above the soft keyboard by setting bottom margin
                 val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -190,13 +193,13 @@ class ExtraKeyRow @JvmOverloads constructor(
                 Logger.d(tag, "Shift toggled: $shiftActive")
             }
             "{" -> {
+                // Only inject opening brace — Monaco auto-closes and positions cursor inside
                 keyInjector?.injectKey("{", ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
-                keyInjector?.injectKey("}", ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
                 resetModifiersIfNeeded()
             }
             "(" -> {
+                // Only inject opening paren — Monaco auto-closes and positions cursor inside
                 keyInjector?.injectKey("(", ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
-                keyInjector?.injectKey(")", ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
                 resetModifiersIfNeeded()
             }
             else -> {

@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
 
+    private var pendingFileUri: Uri? = null
     private lateinit var securityManager: SecurityManager
     private lateinit var safManager: SafStorageManager
 
@@ -97,6 +98,14 @@ class MainActivity : AppCompatActivity() {
         startAndBindService()
         checkPreviousCrash()
         checkStorageHealth()
+
+        // Capture file URI from launch intent for processing after VS Code loads.
+        // onNewIntent() handles intents when the activity is already running,
+        // but onCreate() intents are lost without this.
+        val launchUri = intent?.data
+        if (launchUri != null && launchUri.scheme != "vscodroid") {
+            pendingFileUri = launchUri
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -476,6 +485,11 @@ class MainActivity : AppCompatActivity() {
         )
         // Install JS interceptor so ExtraKeyRow Ctrl/Alt modifiers apply to soft keyboard input
         extraKeyRow?.keyInjector?.setupModifierInterceptor()
+        // Process pending file open intent from cold start (must run after VS Code loads)
+        pendingFileUri?.let { uri ->
+            pendingFileUri = null
+            handleIntent(Intent().apply { data = uri })
+        }
         // Inject safe area CSS for round-corner devices
         injectSafeAreaCSS()
         // Set up BroadcastChannel relay so browser extensions can reach AndroidBridge
