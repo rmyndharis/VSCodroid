@@ -25,6 +25,7 @@ class SplashActivity : AppCompatActivity() {
         setup.setupToolSymlinks()
         setup.setupRipgrepVscodeSymlink()
         setup.createNpmWrappers()
+        setup.ensureToolchainEnvSourcing()
         setup.updateSettingsNativeLibPaths()
 
         if (!setup.isFirstRun()) {

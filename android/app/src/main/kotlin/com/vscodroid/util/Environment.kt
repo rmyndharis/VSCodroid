@@ -2,6 +2,7 @@ package com.vscodroid.util
 
 import android.content.Context
 import android.net.Uri
+import com.vscodroid.setup.ToolchainManager
 import java.io.File
 import java.security.MessageDigest
 
@@ -26,10 +27,19 @@ object Environment {
         else
             "dumb"
 
-        return mapOf(
+        // Merge toolchain env vars (GOROOT, JAVA_HOME, etc.)
+        val toolchainEnv = getToolchainEnvironment(context)
+        val extraPath = toolchainEnv.remove("__TOOLCHAIN_EXTRA_PATH")
+        val basePath = "$nativeLibDir:$filesDir/usr/bin"
+        val path = if (extraPath != null)
+            "$basePath:$extraPath:/system/bin"
+        else
+            "$basePath:/system/bin"
+
+        val base = mapOf(
             "HOME" to homeDir,
             "TMPDIR" to "$cacheDir/tmp",
-            "PATH" to "$nativeLibDir:$filesDir/usr/bin:/system/bin",
+            "PATH" to path,
             "LD_LIBRARY_PATH" to "$nativeLibDir:$filesDir/usr/lib",
             "NODE_PATH" to "$filesDir/server/vscode-reh/node_modules",
             "SHELL" to shell,
@@ -50,6 +60,17 @@ object Environment {
             "VSCODROID_PORT" to port.toString(),
             "VSCODROID_VERSION" to getVersionName(context),
         )
+
+        return base + toolchainEnv
+    }
+
+    private fun getToolchainEnvironment(context: Context): MutableMap<String, String> {
+        return try {
+            ToolchainManager(context).getAllToolchainEnv().toMutableMap()
+        } catch (e: Exception) {
+            // Toolchain state file may not exist yet — not an error
+            mutableMapOf()
+        }
     }
 
     fun getNodePath(context: Context): String =

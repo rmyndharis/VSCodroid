@@ -53,6 +53,9 @@ android {
         }
     }
 
+    // On-demand toolchain asset packs (Play Asset Delivery)
+    assetPacks += listOf(":toolchain_go", ":toolchain_ruby", ":toolchain_java")
+
     lint {
         // CI: Don't abort on lint errors — report them but allow the build to pass.
         // A baseline file captures pre-existing issues so only NEW issues are flagged.

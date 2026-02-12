@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Build
 import android.webkit.JavascriptInterface
 import androidx.browser.customtabs.CustomTabsIntent
+import com.vscodroid.setup.ToolchainManager
+import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
@@ -237,6 +239,69 @@ class AndroidBridge(
         } catch (e: Exception) {
             Logger.e(tag, "Failed to start GitHub OAuth", e)
         }
+    }
+
+    // -- Toolchain Management --
+
+    private val toolchainManager by lazy { ToolchainManager(context) }
+
+    /**
+     * Returns JSON array of all available toolchains (installed or not).
+     * Each entry: { packName, displayName, description, estimatedSize, installed }
+     */
+    @JavascriptInterface
+    fun getAvailableToolchains(authToken: String): String {
+        if (!security.validateToken(authToken)) return "[]"
+        val installed = toolchainManager.getInstalledToolchains()
+        return JSONArray().apply {
+            ToolchainRegistry.available.forEach { tc ->
+                put(JSONObject().apply {
+                    put("packName", tc.packName)
+                    put("displayName", tc.displayName)
+                    put("description", tc.description)
+                    put("estimatedSize", tc.estimatedSize)
+                    put("installed", installed.contains(tc.packName.removePrefix("toolchain_")))
+                })
+            }
+        }.toString()
+    }
+
+    /**
+     * Returns JSON array of installed toolchain names (e.g. ["go", "ruby"]).
+     */
+    @JavascriptInterface
+    fun getInstalledToolchains(authToken: String): String {
+        if (!security.validateToken(authToken)) return "[]"
+        return JSONArray(toolchainManager.getInstalledToolchains()).toString()
+    }
+
+    /**
+     * Starts async download + install of a toolchain by pack name or short name.
+     */
+    @JavascriptInterface
+    fun installToolchain(name: String, authToken: String) {
+        if (!security.validateToken(authToken)) return
+        Logger.i(tag, "JS requested toolchain install: $name")
+        toolchainManager.install(name)
+    }
+
+    /**
+     * Removes a toolchain (deletes files, symlinks, env vars).
+     */
+    @JavascriptInterface
+    fun removeToolchain(name: String, authToken: String) {
+        if (!security.validateToken(authToken)) return
+        Logger.i(tag, "JS requested toolchain removal: $name")
+        toolchainManager.uninstall(name)
+    }
+
+    /**
+     * Cancels an in-progress toolchain download.
+     */
+    @JavascriptInterface
+    fun cancelToolchainInstall(name: String, authToken: String) {
+        if (!security.validateToken(authToken)) return
+        toolchainManager.cancel(name)
     }
 
     private fun getVersionName(): String {

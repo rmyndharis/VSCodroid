@@ -308,6 +308,25 @@ class FirstRunSetup(private val context: Context) {
         }
     }
 
+    /**
+     * Ensures .bashrc sources toolchain-env.sh for on-demand toolchain env vars.
+     * Safe to call on every launch — only appends if the sourcing line is missing.
+     */
+    fun ensureToolchainEnvSourcing() {
+        val bashrc = File(context.filesDir, "home/.bashrc")
+        if (bashrc.exists()) {
+            val content = bashrc.readText()
+            if (!content.contains("toolchain-env.sh")) {
+                bashrc.appendText("""
+
+# On-demand toolchain env vars (Go, Ruby, Java, etc.)
+[ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
+""")
+                Logger.i(tag, "Appended toolchain-env.sh sourcing to .bashrc")
+            }
+        }
+    }
+
     private fun isSymlink(file: File): Boolean = try {
         Os.lstat(file.absolutePath)
         file.canonicalPath != file.absolutePath
@@ -412,6 +431,9 @@ npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
                 # npm/npx — shell functions (Android noexec prevents script wrappers)
                 npm() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" "${'$'}@"; }
                 npx() { node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
+
+                # On-demand toolchain env vars (Go, Ruby, Java, etc.)
+                [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
 
                 # Start in the active folder (SAF or default projects dir)
                 if [ -f "${'$'}HOME/.vscodroid_folder" ]; then

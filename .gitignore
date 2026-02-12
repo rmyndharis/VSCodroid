@@ -44,6 +44,14 @@ yarn-error.log*
 !/android/app/src/main/assets/extensions/vscodroid.vscodroid-welcome-*/
 /android/app/src/main/assets/usr/
 
+# ===== Toolchain Asset Packs (populated by scripts/download-*.sh) =====
+/android/toolchain_go/src/main/assets/usr/
+/android/toolchain_go/src/main/assets/manifest.json
+/android/toolchain_ruby/src/main/assets/usr/
+/android/toolchain_ruby/src/main/assets/manifest.json
+/android/toolchain_java/src/main/assets/usr/
+/android/toolchain_java/src/main/assets/manifest.json
+
 # ===== Cross-compilation build artifacts =====
 /.build/
 /toolchains/build/
