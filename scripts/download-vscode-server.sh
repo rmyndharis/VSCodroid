@@ -256,31 +256,39 @@ else:
     print(f"  ExtHost worker_thread: no changes (already patched?)")
 PYEOF
 
-# Create IPC bridge shim for ptyHost Worker thread
-# Workers use parentPort.postMessage/on('message') instead of process.send/on('message').
-# This shim bridges the gap so bootstrap-fork.js works unchanged inside a Worker.
+# Patch bootstrap-fork.js to be Worker-aware (IPC bridge)
+# bootstrap-fork.js is the entry point loaded by both fork() AND Worker().
+# By prepending Worker detection + IPC bridge code at the top, all downstream
+# modules (ptyHostMain.js etc.) get working process.send / process.on('message')
+# / process.once('disconnect') for free when running as a worker_thread.
+# In a fork: isMainThread=true, parentPort=null -> bridge code is a no-op.
 echo ""
-echo "Creating pty-worker-shim.mjs..."
-cat > "vscode-reh/out/pty-worker-shim.mjs" <<'JSEOF'
-import { parentPort } from 'worker_threads';
+echo "Patching bootstrap-fork.js for Worker IPC bridge..."
+BOOTSTRAP_FORK_JS="vscode-reh/out/bootstrap-fork.js"
+python3 - "$BOOTSTRAP_FORK_JS" <<'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+    content = f.read()
 
-// Bridge Worker message channel to process IPC interface.
-// bootstrap-fork.js uses process.send() / process.on('message') for IPC.
-// In a Worker thread, these don't exist — we shim them via parentPort.
-process.send = (msg) => parentPort.postMessage(msg);
-parentPort.on('message', (msg) => process.emit('message', msg));
+bridge = 'import{isMainThread as __iMT,parentPort as __pP}from"worker_threads";if(!__iMT&&__pP){process.connected=true;process.send=function(m){try{__pP.postMessage(m);return true}catch(e){process.connected=false;return false}};process.disconnect=function(){process.connected=false;process.emit("disconnect")};__pP.on("message",function(m){if(m&&m.__type==="__vsc_disconnect"){process.disconnect();return}process.emit("message",m)});}\n'
 
-// Import the real bootstrap-fork
-await import('./bootstrap-fork.js');
-JSEOF
-echo "  Created pty-worker-shim.mjs"
+if content.startswith(bridge[:40]):
+    print(f"  SKIP: {path} already has Worker IPC bridge")
+else:
+    content = bridge + content
+    with open(path, 'w') as f:
+        f.write(content)
+    print(f"  Patched: {path} (Worker IPC bridge prepended)")
+PYEOF
 
-# Patch ptyHost to use worker_thread instead of child_process.fork()
-# The rg IPC class is shared by fileWatcher and ptyHost. We conditionally
-# use Worker only for ptyHost (serverName === "Pty Host").
+# Patch ptyHost to run as worker_thread instead of child_process.fork()
+# The rg IPC class (used by both ptyHost and fileWatcher) uses fork() by default.
+# We conditionally create a Worker instead when serverName==="Pty Host".
+# This saves 1 phantom process slot on Android 12+.
 # Two patches to server-main.js:
-#   1. Add worker_threads import alongside child_process
-#   2. Conditional fork/Worker in rg class based on serverName
+#   1. Add Worker import alongside fork import
+#   2. Replace fork with Worker for Pty Host (with graceful disconnect + normalized exit)
 echo ""
 echo "Patching ptyHost to use worker_thread..."
 python3 - "$SERVER_MAIN_JS" <<'PYEOF'
@@ -293,53 +301,40 @@ with open(path, 'r') as f:
 original = content
 patches = 0
 
-# Patch 1: Add worker_threads import alongside child_process
+# Patch 1: Add Worker import alongside fork import
 old = 'import{fork as XO}from"child_process"'
 new = 'import{fork as XO}from"child_process";import{Worker as __VW}from"worker_threads"'
 count = content.count(old)
-if count == 1:
+# Check if already patched (has __VW import)
+if 'import{Worker as __VW}from"worker_threads"' in content:
+    print(f"  Patch 1 (Worker import): SKIP (already present)")
+elif count == 1:
     content = content.replace(old, new)
     patches += 1
-    print(f"  Patch 1 (worker_threads import): OK")
+    print(f"  Patch 1 (Worker import): OK")
 else:
-    print(f"  Patch 1 (worker_threads import): SKIP (found {count}x, expected 1)")
+    print(f"  Patch 1 (Worker import): SKIP (found {count}x, expected 1)")
 
-# Patch 2: Replace fork with conditional Worker for ptyHost
-# The rg class's get m() getter calls: this.d=XO(this.i,e,t)
-# For ptyHost (serverName==="Pty Host"), use Worker with IPC shims.
-# For fileWatcher and others, keep using fork.
-# The Worker loads pty-worker-shim.mjs which bridges parentPort <-> process IPC.
-old = 'this.d=XO(this.i,e,t)'
-new = (
-    'this.d=this.j&&this.j.serverName==="Pty Host"'
-    '?(function(p,a,o){'
-    'var shimPath=p.replace(/[^\\/]+$/,"pty-worker-shim.mjs");'
-    'var ea=(o.execArgv||[]).filter(function(x){'
-    'return!/^--max-old-space-size/.test(x)&&!/^--max-semi-space-size/.test(x)});'
-    'var rl={maxOldGenerationSizeMb:256};'
-    'var w=new __VW(shimPath,{argv:a,env:o.env,execArgv:ea,resourceLimits:rl,stdout:true,stderr:true});'
-    'w.pid=w.threadId;'
-    'w.kill=function(){w.terminate()};'
-    'w.send=function(m){w.postMessage(m)};'
-    'w.connected=true;'
-    'w.on("exit",function(){w.connected=false});'
-    'return w})(this.i,e,t)'
-    ':XO(this.i,e,t)'
-)
-count = content.count(old)
-if count == 1:
-    content = content.replace(old, new)
+# Patch 2: Replace fork with Worker for Pty Host
+old2 = 'this.d=XO(this.i,e,t)'
+new2 = 'this.d=this.j&&this.j.serverName==="Pty Host"?(function(p,a,o){var ea=(o.execArgv||[]).filter(function(x){return!/^--max-old-space-size/.test(x)&&!/^--max-semi-space-size/.test(x)});var rl={maxOldGenerationSizeMb:256};var w=new __VW(p,{argv:a,env:o.env,execArgv:ea,resourceLimits:rl,stdout:true,stderr:true});w.pid=w.threadId;w._killed=false;var _on=w.on.bind(w);w.on=function(ev,fn){if(ev==="exit"){return _on(ev,function(code){w.connected=false;fn(w._killed?0:code,w._killed?"SIGTERM":null)})}return _on(ev,fn)};w.kill=function(){w._killed=true;w.connected=false;try{w.postMessage({__type:"__vsc_disconnect"})}catch(e){}setTimeout(function(){try{w.terminate()}catch(e){}},200)};w.send=function(m){if(!w.connected)return false;try{w.postMessage(m);return true}catch(e){w.connected=false;return false}};w.connected=true;w.disconnect=function(){w.connected=false};return w})(this.i,e,t):XO(this.i,e,t)'
+count = content.count(old2)
+# Check if already patched
+if 'this.j.serverName==="Pty Host"' in content:
+    print(f"  Patch 2 (ptyHost Worker): SKIP (already present)")
+elif count == 1:
+    content = content.replace(old2, new2)
     patches += 1
-    print(f"  Patch 2 (conditional fork/Worker): OK")
+    print(f"  Patch 2 (ptyHost Worker): OK")
 else:
-    print(f"  Patch 2 (conditional fork/Worker): SKIP (found {count}x, expected 1)")
+    print(f"  Patch 2 (ptyHost Worker): SKIP (found {count}x, expected 1)")
 
 if content != original:
     with open(path, 'w') as f:
         f.write(content)
     print(f"  ptyHost worker_thread: {patches}/2 patches applied")
 else:
-    print(f"  ptyHost worker_thread: no changes")
+    print(f"  ptyHost worker_thread: no changes (already patched?)")
 PYEOF
 
 # Replace native spdlog with JS shim
