@@ -471,7 +471,7 @@ _Order: audit code → configure release build → test on devices → validate 
      - [x] `ruby --version` → Ruby 3.4.1; `irb` eval ✓; `gem --version` 3.6.2 ✓
      - [x] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
      - [x] Verify toolchains persist across app restarts — all 3 survive force-stop+restart
-     - [ ] Verify uninstall cleans up correctly
+     - [x] Verify uninstall cleans up correctly — Go/Java/Ruby all uninstalled via bridge, symlinks removed, installRoots deleted, libs cleaned, core tools (bash/git/node/python) intact, toolchains.json empty, toolchain-env.sh deleted
      - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
    - **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
