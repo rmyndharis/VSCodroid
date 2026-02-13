@@ -406,9 +406,9 @@ M6 (Release)   → Play Store release
 
 ### Entry Criteria:
 
-- [ ] All M5 success criteria passed
-- [ ] Release candidate build completed with signed AAB
-- [ ] Store listing, privacy policy, and compliance artifacts ready
+- [x] All M5 success criteria passed
+- [x] Release candidate build completed with signed AAB (253 MB total, 133 MB base)
+- [x] Store listing, privacy policy, and compliance artifacts ready
 
 ### Tasks:
 
