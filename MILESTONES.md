@@ -420,6 +420,8 @@ _Ordered by dependency: fix bugs → verify features → harden → brand → sh
    - [x] Extension OAuth callback relay: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
    - [x] Persist extension secrets across app restarts: patch `isEncryptionAvailable()` → `true` in workbench.js so `SecretStorageService` uses IndexedDB instead of in-memory Map
    - [x] White screen on app reopen: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on main thread when reconnecting to already-running server; replaced with `isServerRunning()` (process liveness check, no I/O)
+   - [x] Mobile menu CSS: touch-friendly hamburger dropdown (44px touch targets, 14px font, 280px min-width) appended to workbench.css
+   - [x] Keyboard/ExtraKeyRow positioning: fix double-compensation (adjustResize + bottomMargin). Switch to edge-to-edge (`setDecorFitsSystemWindows=false`) with manual insets padding for consistent behavior on Android 13-16
 
 2. **SSH key management**
    - [x] Bundle OpenSSH client (`libssh.so`, `libssh-keygen.so`) with all deps (ldns, krb5, libdb, libresolv-wrapper)
@@ -513,22 +515,26 @@ _Order: audit code → configure release build → test on devices → validate 
     - [ ] Automated testing on Firebase Test Lab (physical ARM64 devices)
     - [x] Build toolchain zips and upload as GitHub Release assets — `scripts/package-toolchains.sh` + `release.yml`
     - [x] Fallback download URL served from GitHub Releases — README links to releases page
+    - [x] CI fix: node-pty subshell path resolved with ROOT_DIR — Build + Unit Tests green
 
 #### Phase 4 — Ship
 
 12. **Play Store listing** _(requires Google Play Developer account)_
-    - Title: "VSCodroid"
-    - Short description + full description with feature list
-    - Screenshots: phone + tablet (from task 8)
-    - Category: Developer Tools
-    - Content rating questionnaire
-    - Prepare for binary execution policy review (explain .so trick, local-only execution)
+    - [x] Title: "VSCodroid"
+    - [x] Short description + full description with feature list
+    - [x] Screenshots: phone + tablet (from task 8)
+    - [x] Category: Developer Tools
+    - [x] Content rating questionnaire
+    - [x] Foreground service permission declaration (video demo + written justification)
+    - [ ] Prepare for binary execution policy review (explain .so trick, local-only execution)
 
 13. **Launch**
-    - Internal testing track → closed beta → open beta → production
-    - Monitor crash reports (CrashReporter) and user feedback
-    - Hotfix pipeline for critical bugs
-    - Post-launch: respond to Play Store reviews
+    - [x] Internal testing track — AAB uploaded (versionCode 2)
+    - [x] Closed testing track — AAB v0.2.2-m6 (versionCode 4) uploaded, 12 testers added, 14-day countdown started
+    - [ ] Open beta (after 14-day closed testing period)
+    - [ ] Production release
+    - [ ] Monitor crash reports (CrashReporter) and user feedback
+    - [ ] Post-launch: respond to Play Store reviews
 
 ### Success Criteria:
 
@@ -540,7 +546,10 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] Tested on 3 device models across Android 13-16 (OnePlus flagship 16GB, POCO budget 4GB, Redmi mid-range 6GB)
 - [x] Go/Ruby/Java verified working on physical device after asset pack install — OnePlus CPH2791 (Android 16)
 - [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
-- [ ] App published on Play Store
+- [x] Play Store listing complete (title, description, screenshots, content rating, foreground service declaration)
+- [x] Closed testing track live — v0.2.2-m6 (versionCode 4), 12 testers, 14-day period started
+- [x] CI pipeline green (Build + Unit Tests passing)
+- [ ] App published on Play Store (waiting: 14-day closed testing → open beta → production)
 - [ ] Passes Play Store review (no policy violations)
 - [ ] No critical bugs in first 48 hours
 - [ ] At least 500 beta testers before production launch (see Release Plan §1.2)
