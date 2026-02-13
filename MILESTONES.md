@@ -480,7 +480,12 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Measure base APK size (without toolchains) — **133 MB** download, 138 MB APK (< 150 MB target)
    - [x] Verify per-device delivery sizes via bundletool — 133 MB for ARM64 SDK 33+
    - [x] Document per-toolchain on-demand sizes — Go 163 MB, Ruby 29 MB, Java 146 MB
-   - [ ] Test asset pack download flow end-to-end on internal track
+   - [x] Test HTTP fallback download flow end-to-end — all 3 toolchains verified on OnePlus CPH2791:
+     - Ruby: 9 MB ZIP, 3.9s total (download 2.9s + extract 0.5s + install 0.3s)
+     - Go: 53 MB ZIP, ~10s total (download 6.3s + extract 2.3s + install 1.1s)
+     - Java: 55 MB ZIP, ~11s total (download 9.2s + extract 1.6s + install 0.3s)
+     - Updated manifests with RUBYLIB, scriptWrappers, libSymlinks all functioning
+   - [ ] Test Play Asset Delivery flow on internal testing track
 
 #### Phase 3 — Branding & Store Presence
 
