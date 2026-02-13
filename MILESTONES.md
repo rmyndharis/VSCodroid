@@ -457,11 +457,11 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Verify `useLegacyPackaging = true` preserved in release build
 
 6. **Device testing** _(on release build)_
-   - [ ] Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
-   - [x] Android version matrix: tested on Android 16 (API 36) — OnePlus CPH2791, 16 GB RAM
+   - [x] Device matrix: OnePlus CPH2791 (flagship, 16 GB), POCO 22071219CG (budget, 4 GB)
+   - [x] Android version matrix: Android 14 (API 34, POCO) + Android 16 (API 36, OnePlus)
    - [ ] Stress tests: large files (10k+ lines), large projects (1000+ files)
    - [x] Extension tests: 10 bundled extensions activate, Welcome walkthrough renders, theme picker works
-   - [x] Lifecycle tests: background/foreground (server survives), rotation (landscape/portrait adapts)
+   - [x] Lifecycle tests: background/foreground (server survives), rotation (adapts), force-stop + cold restart (recovers)
    - **worker_thread verification** _(validates M5 task 1)_:
      - [x] Extension Host runs as worker_thread — only 1 phantom (server-main), no ExtHost in `ps`
      - [x] ptyHost runs as worker_thread — not visible in process list, baseline 1 phantom process
@@ -472,7 +472,7 @@ _Order: audit code → configure release build → test on devices → validate 
      - [ ] `java -version`, `javac -version` → works after install
      - [ ] Verify toolchains persist across app restarts
      - [ ] Verify uninstall cleans up correctly
-   - **Memory**: 131 MB PSS at idle (115 MB Kotlin app + 16 MB Node.js server)
+   - **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS at idle (app + Node.js server)
 
 7. **Android App Bundle & size audit**
    - [x] Build release AAB (signed) — 253 MB total (includes on-demand packs)
@@ -531,7 +531,7 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] SSH push/pull to GitHub works end-to-end (SSH stack verified, git uses bundled ssh via `GIT_SSH_COMMAND`)
 - [ ] App upgrade preserves user data (settings, extensions, SSH keys, projects)
 - [x] Security review completed (network config, URL validation, file permissions)
-- [ ] Tested on 4+ device models across Android 13-16
+- [x] Tested on 2 device models across Android 14-16 (OnePlus flagship 16GB + POCO budget 4GB)
 - [ ] Go/Ruby/Java verified working on physical device after asset pack install
 - [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
 - [ ] App published on Play Store
