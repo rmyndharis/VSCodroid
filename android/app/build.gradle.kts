@@ -7,6 +7,15 @@ android {
     namespace = "com.vscodroid"
     compileSdk = 36
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("VSCODROID_KEYSTORE_FILE") ?: "${System.getProperty("user.home")}/vscodroid-release.jks")
+            storePassword = System.getenv("VSCODROID_KEYSTORE_PASSWORD") ?: ""
+            keyAlias = System.getenv("VSCODROID_KEY_ALIAS") ?: "vscodroid"
+            keyPassword = System.getenv("VSCODROID_KEY_PASSWORD") ?: ""
+        }
+    }
+
     defaultConfig {
         applicationId = "com.vscodroid"
         minSdk = 33
@@ -23,6 +32,7 @@ android {
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
