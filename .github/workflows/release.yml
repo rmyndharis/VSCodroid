@@ -12,6 +12,7 @@ jobs:
   build-release:
     name: Build Release
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -23,41 +24,136 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 36
+
+      - name: Set up NDK
+        run: |
+          sdkmanager "ndk;27.2.12479018" --channel=0
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
+
+      # Cache downloaded tarballs/debs
+      - name: Cache download intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            server/*.tar.gz
+            toolchains/termux-packages/*.deb
+            toolchains/termux-packages/Packages
+            toolchains/build/npm/
+            toolchains/extensions/
+          key: downloads-${{ hashFiles('scripts/download-vscode-server.sh', 'scripts/download-termux-tools.sh', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh') }}
+          restore-keys: |
+            downloads-
+
+      # Download and prepare all core assets
+      - name: Download VS Code Server
+        run: bash scripts/download-vscode-server.sh
+
+      - name: Copy VS Code Server to assets
+        run: |
+          mkdir -p android/app/src/main/assets/
+          rm -rf android/app/src/main/assets/vscode-reh
+          cp -r server/vscode-reh android/app/src/main/assets/vscode-reh
+
+      - name: Download Termux tools
+        run: bash scripts/download-termux-tools.sh
+
+      - name: Download npm
+        run: bash scripts/download-npm.sh
+
+      - name: Download Python
+        env:
+          TERMUX_MIRROR: https://mirror.mwt.me/termux/main
+        run: bash scripts/download-python.sh
+
+      - name: Download extensions
+        run: bash scripts/download-extensions.sh
+
+      - name: Build node-pty
+        run: bash scripts/build-node-pty.sh
+
+      # libnode.so must exist as a GitHub release asset in a prior release,
+      # or be downloadable via the LIBNODE_URL secret.
+      - name: Fetch libnode.so
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LIBNODE_URL: ${{ secrets.LIBNODE_URL }}
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          LIBNODE="android/app/src/main/jniLibs/arm64-v8a/libnode.so"
+          if [ -f "$LIBNODE" ] && [ "$(wc -c < "$LIBNODE")" -gt 1000 ]; then
+            echo "libnode.so already exists ($(du -sh "$LIBNODE" | cut -f1))"
+            exit 0
+          fi
+          # Try direct URL first (e.g. from a build artifacts bucket)
+          if [ -n "${LIBNODE_URL:-}" ]; then
+            echo "Downloading libnode.so from LIBNODE_URL..."
+            curl -L --fail --show-error -o "$LIBNODE" "$LIBNODE_URL"
+            echo "Downloaded ($(du -sh "$LIBNODE" | cut -f1))"
+            exit 0
+          fi
+          # Fall back to latest GitHub release
+          echo "Downloading libnode.so from latest GitHub release..."
+          gh release download --repo "$REPO" \
+            --pattern "libnode.so" \
+            --dir android/app/src/main/jniLibs/arm64-v8a/
+          echo "Downloaded ($(du -sh "$LIBNODE" | cut -f1))"
+
+      - name: Verify assets
+        run: |
+          echo "=== Assets ==="
+          ls -la android/app/src/main/assets/ || true
+          echo ""
+          echo "=== jniLibs ==="
+          ls -la android/app/src/main/jniLibs/arm64-v8a/ || true
+          echo ""
+          LIBNODE="android/app/src/main/jniLibs/arm64-v8a/libnode.so"
+          LIBNODE_SIZE="$(wc -c < "$LIBNODE")"
+          if [ "$LIBNODE_SIZE" -lt 1000 ]; then
+            echo "ERROR: libnode.so is too small ($LIBNODE_SIZE bytes). Release build requires a real binary."
+            exit 1
+          fi
+
+      # Decode signing keystore from base64 secret
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 -d > android/keystore.jks
 
       - name: Build signed APK
+        working-directory: android
         env:
-          STORE_FILE: ${{ github.workspace }}/android/keystore.jks
-          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          cd android && ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file="$STORE_FILE" \
-            -Pandroid.injected.signing.store.password="$STORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+          VSCODROID_KEYSTORE_FILE: ${{ github.workspace }}/android/keystore.jks
+          VSCODROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
 
       - name: Build signed AAB
+        working-directory: android
         env:
-          STORE_FILE: ${{ github.workspace }}/android/keystore.jks
-          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          cd android && ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file="$STORE_FILE" \
-            -Pandroid.injected.signing.store.password="$STORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+          VSCODROID_KEYSTORE_FILE: ${{ github.workspace }}/android/keystore.jks
+          VSCODROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
@@ -74,13 +170,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: release-artifacts
           path: artifacts
 
-      - name: Install toolchain packaging dependencies
+      - name: Install packaging dependencies
         run: sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
 
       - name: Download toolchain assets
@@ -97,7 +193,7 @@ jobs:
           cd artifacts
           find . -type f \( -name "*.apk" -o -name "*.aab" \) -exec sha256sum {} \; > checksums.sha256
           for zip in ../toolchain-zips/*.zip; do
-            sha256sum "$zip" >> checksums.sha256
+            [ -f "$zip" ] && sha256sum "$zip" >> checksums.sha256
           done
 
       - name: Create GitHub Release

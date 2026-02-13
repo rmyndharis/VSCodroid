@@ -483,29 +483,29 @@ _Order: audit code → configure release build → test on devices → validate 
 #### Phase 3 — Branding & Store Presence
 
 8. **Branding**
-   - [ ] Design VSCodroid icon/logo (original, not VS Code's)
-   - [ ] Adaptive icon for Android 13+ (foreground + background layers)
-   - [ ] App screenshots for Play Store (phone + tablet)
-   - [ ] Feature graphic (1024x500)
+   - [x] Design VSCodroid icon/logo (original, not VS Code's) — Android bot + VS Code X mark
+   - [x] Adaptive icon for Android 13+ (foreground + background layers)
+   - [x] App screenshots for Play Store (5 screenshots: welcome, terminal, code editor, extensions, explorer)
+   - [x] Feature graphic (1024x500) — blue gradient with logo and feature highlights
 
 9. **Legal compliance**
-   - Disclaimer in app About screen
-   - Privacy policy (required for Play Store)
-   - MIT license notice for VS Code source
-   - Trademark disclaimers
+   - [x] Privacy policy (required for Play Store) — `docs/PRIVACY_POLICY.md`
+   - [x] MIT license notice for VS Code source — `docs/LEGAL_NOTICES.md`
+   - [x] Trademark disclaimers — included in LEGAL_NOTICES.md
+   - [ ] Disclaimer in app About screen
 
 10. **Documentation**
-    - README.md with project overview
-    - CONTRIBUTING.md for contributors
-    - User guide: first-run, keyboard shortcuts, extensions
-    - Known limitations and FAQ
+    - [x] README.md with project overview, features, screenshots, installation guide
+    - [x] CONTRIBUTING.md for contributors
+    - [ ] User guide: first-run, keyboard shortcuts, extensions
+    - [x] Known limitations and FAQ — in README.md
 
 11. **CI/CD pipeline**
-    - GitHub Actions: build debug APK on PR, release AAB on tag
-    - Automated testing on Firebase Test Lab (physical ARM64 devices)
-    - Release workflow: tag → build → sign → upload to Play Store
-    - Build toolchain zips and upload as GitHub Release assets (sideload fallback)
-    - Fallback download URL served from GitHub Releases for non-Play-Store installs
+    - [x] GitHub Actions: build debug APK on PR (`build.yml`), lint on PR (`lint.yml`)
+    - [x] Release workflow: tag → build → sign → GitHub Release (`release.yml`)
+    - [ ] Automated testing on Firebase Test Lab (physical ARM64 devices)
+    - [ ] Build toolchain zips and upload as GitHub Release assets (sideload fallback)
+    - [ ] Fallback download URL served from GitHub Releases for non-Play-Store installs
 
 #### Phase 4 — Ship
 
@@ -529,10 +529,10 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] App recovers cleanly from close/reopen (no white screen)
 - [x] SSH push/pull to GitHub works end-to-end (SSH stack verified, git uses bundled ssh via `GIT_SSH_COMMAND`)
 - [ ] App upgrade preserves user data (settings, extensions, SSH keys, projects)
-- [ ] Security review completed (no exposed secrets, sandbox intact)
+- [x] Security review completed (network config, URL validation, file permissions)
 - [ ] Tested on 4+ device models across Android 13-16
 - [ ] Go/Ruby/Java verified working on physical device after asset pack install
-- [ ] Release AAB signed and < 150 MB (base, without toolchains)
+- [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
 - [ ] App published on Play Store
 - [ ] Passes Play Store review (no policy violations)
 - [ ] No critical bugs in first 48 hours

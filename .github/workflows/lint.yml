@@ -1,0 +1,58 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Android Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 36
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Lint only needs compiled Kotlin, not runtime assets.
+      # Create minimal directory structure so Gradle does not fail.
+      - name: Create minimal asset stubs
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p android/app/src/main/assets/vscode-reh/out
+          mkdir -p android/app/src/main/assets/usr
+          mkdir -p android/app/src/main/assets/extensions
+          printf '\x7fELF' > android/app/src/main/jniLibs/arm64-v8a/libnode.so
+          dd if=/dev/zero bs=1 count=60 >> android/app/src/main/jniLibs/arm64-v8a/libnode.so 2>/dev/null
+
+      - name: Run lint
+        working-directory: android
+        run: ./gradlew lint
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: |
+            android/app/build/reports/lint-results-*.html
+            android/app/build/reports/lint-results-*.xml
+          retention-days: 14

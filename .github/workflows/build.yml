@@ -1,0 +1,196 @@
+name: Build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 36
+
+      - name: Set up NDK
+        run: |
+          sdkmanager "ndk;27.2.12479018" --channel=0
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Cache downloaded tarballs/debs (before extraction) to avoid re-downloading ~200MB
+      - name: Cache download intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            server/*.tar.gz
+            toolchains/termux-packages/*.deb
+            toolchains/termux-packages/Packages
+            toolchains/build/npm/
+            toolchains/extensions/
+          key: downloads-${{ hashFiles('scripts/download-vscode-server.sh', 'scripts/download-termux-tools.sh', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh') }}
+          restore-keys: |
+            downloads-
+
+      # Cache the generated assets directory (extracted, patched VS Code server + tools)
+      - name: Cache generated assets
+        id: cache-assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/app/src/main/assets/vscode-reh/
+            android/app/src/main/assets/usr/
+            android/app/src/main/assets/extensions/
+            android/app/src/main/jniLibs/arm64-v8a/
+            server/vscode-reh/
+          key: assets-${{ hashFiles('scripts/download-vscode-server.sh', 'scripts/download-termux-tools.sh', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/build-node-pty.sh') }}
+          restore-keys: |
+            assets-
+
+      - name: Install system dependencies
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y --no-install-recommends libarchive-tools
+
+      # Download and prepare all assets (only if not cached)
+      - name: Download VS Code Server
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: bash scripts/download-vscode-server.sh
+
+      - name: Copy VS Code Server to assets
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p android/app/src/main/assets/
+          rm -rf android/app/src/main/assets/vscode-reh
+          cp -r server/vscode-reh android/app/src/main/assets/vscode-reh
+
+      - name: Download Termux tools
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: bash scripts/download-termux-tools.sh
+
+      - name: Download npm
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: bash scripts/download-npm.sh
+
+      - name: Download Python
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        env:
+          TERMUX_MIRROR: https://mirror.mwt.me/termux/main
+        run: bash scripts/download-python.sh
+
+      - name: Download extensions
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: bash scripts/download-extensions.sh
+
+      - name: Build node-pty
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: bash scripts/build-node-pty.sh
+
+      # libnode.so: Download pre-built binary from latest GitHub release.
+      # If no release exists yet, create a stub so Gradle can produce an APK
+      # (it will crash at runtime without a real binary).
+      - name: Fetch libnode.so
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          LIBNODE="android/app/src/main/jniLibs/arm64-v8a/libnode.so"
+          if [ -f "$LIBNODE" ] && [ "$(wc -c < "$LIBNODE")" -gt 1000 ]; then
+            echo "libnode.so already exists ($(du -sh "$LIBNODE" | cut -f1))"
+            exit 0
+          fi
+          echo "Attempting to download libnode.so from latest GitHub release..."
+          if gh release download --repo "$REPO" \
+               --pattern "libnode.so" \
+               --dir android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null; then
+            echo "Downloaded libnode.so ($(du -sh "$LIBNODE" | cut -f1))"
+          else
+            echo "WARNING: libnode.so not found in releases. Creating stub."
+            echo "Build will succeed but APK will not run without a real libnode.so."
+            printf '\x7fELF' > "$LIBNODE"
+            dd if=/dev/zero bs=1 count=60 >> "$LIBNODE" 2>/dev/null
+          fi
+
+      - name: Verify assets
+        run: |
+          echo "=== Assets ==="
+          ls -la android/app/src/main/assets/ || true
+          echo ""
+          echo "=== jniLibs ==="
+          ls -la android/app/src/main/jniLibs/arm64-v8a/ || true
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 36
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Unit tests only need compiled Kotlin, not the full assets.
+      # Create minimal directory structure so Gradle does not fail.
+      - name: Create minimal asset stubs
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p android/app/src/main/assets/vscode-reh/out
+          mkdir -p android/app/src/main/assets/usr
+          mkdir -p android/app/src/main/assets/extensions
+          printf '\x7fELF' > android/app/src/main/jniLibs/arm64-v8a/libnode.so
+          dd if=/dev/zero bs=1 count=60 >> android/app/src/main/jniLibs/arm64-v8a/libnode.so 2>/dev/null
+
+      - name: Run unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest
