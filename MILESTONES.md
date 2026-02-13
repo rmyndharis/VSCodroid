@@ -474,10 +474,10 @@ _Order: audit code → configure release build → test on devices → validate 
      - [ ] Verify uninstall cleans up correctly
 
 7. **Android App Bundle & size audit**
-   - [ ] Build release AAB (signed)
-   - [ ] Measure base APK size (without toolchains) — target < 150 MB
-   - [ ] Verify per-device delivery sizes via bundletool
-   - [ ] Document per-toolchain on-demand sizes
+   - [x] Build release AAB (signed) — 253 MB total (includes on-demand packs)
+   - [x] Measure base APK size (without toolchains) — **133 MB** download, 138 MB APK (< 150 MB target)
+   - [x] Verify per-device delivery sizes via bundletool — 133 MB for ARM64 SDK 33+
+   - [x] Document per-toolchain on-demand sizes — Go 163 MB, Ruby 29 MB, Java 146 MB
    - [ ] Test asset pack download flow end-to-end on internal track
 
 #### Phase 3 — Branding & Store Presence
