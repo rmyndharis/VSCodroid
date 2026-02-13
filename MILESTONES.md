@@ -422,9 +422,25 @@ M6 (Release)   → Play Store release
    - [x] Migrate SSH config, .bashrc additions, settings.json across upgrades
    - [x] Handle stale symlinks after APK reinstall (nativeLibraryDir path changes)
 
-#### Phase 2 — Testing & Hardening
+#### Phase 2 — Hardening & Release Build
 
-4. **Device testing**
+*Order: audit code → configure release build → test on devices → validate bundle size.*
+
+4. **Security review**
+   - [ ] Audit WebView security: CSP headers, JS bridge exposure, localhost-only binding
+   - [ ] Verify no secrets in APK (no API keys, tokens, or private keys bundled)
+   - [ ] Review all workbench.js patches for unintended side effects
+   - [ ] Confirm Android app sandbox isolation (no world-readable files)
+   - [ ] Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
+
+5. **Release build & signing**
+   - [ ] Generate release signing keystore (store securely, NOT in repo)
+   - [ ] Configure `signingConfigs.release` in build.gradle.kts
+   - [ ] Enable R8/ProGuard minification for Kotlin code
+   - [ ] Test release build on device (ProGuard can break reflection-based code)
+   - [ ] Verify `useLegacyPackaging = true` preserved in release build
+
+6. **Device testing** *(on release build)*
    - [ ] Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
    - [ ] Android version matrix: 13, 14, 15, 16
    - [ ] Stress tests: large files (10k+ lines), large projects (1000+ files)
@@ -436,20 +452,6 @@ M6 (Release)   → Play Store release
      - [ ] `java -version`, `javac -version` → works after install
      - [ ] Verify toolchains persist across app restarts
      - [ ] Verify uninstall cleans up correctly
-
-5. **Security review**
-   - [ ] Audit WebView security: CSP headers, JS bridge exposure, localhost-only binding
-   - [ ] Verify no secrets in APK (no API keys, tokens, or private keys bundled)
-   - [ ] Review all workbench.js patches for unintended side effects
-   - [ ] Confirm Android app sandbox isolation (no world-readable files)
-   - [ ] Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
-
-6. **Release build & signing**
-   - [ ] Generate release signing keystore (store securely, NOT in repo)
-   - [ ] Configure `signingConfigs.release` in build.gradle.kts
-   - [ ] Enable R8/ProGuard minification for Kotlin code
-   - [ ] Test release build on device (ProGuard can break reflection-based code)
-   - [ ] Verify `useLegacyPackaging = true` preserved in release build
 
 7. **Android App Bundle & size audit**
    - [ ] Build release AAB (signed)
