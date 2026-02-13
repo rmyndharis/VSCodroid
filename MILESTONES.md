@@ -492,20 +492,20 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Privacy policy (required for Play Store) — `docs/PRIVACY_POLICY.md`
    - [x] MIT license notice for VS Code source — `docs/LEGAL_NOTICES.md`
    - [x] Trademark disclaimers — included in LEGAL_NOTICES.md
-   - [ ] Disclaimer in app About screen
+   - [x] Disclaimer in app About screen — `showAboutDialog()` with MIT/trademark/Open VSX notices
 
 10. **Documentation**
     - [x] README.md with project overview, features, screenshots, installation guide
     - [x] CONTRIBUTING.md for contributors
-    - [ ] User guide: first-run, keyboard shortcuts, extensions
+    - [x] User guide: first-run, keyboard shortcuts, extensions — `docs/USER_GUIDE.md`
     - [x] Known limitations and FAQ — in README.md
 
 11. **CI/CD pipeline**
     - [x] GitHub Actions: build debug APK on PR (`build.yml`), lint on PR (`lint.yml`)
     - [x] Release workflow: tag → build → sign → GitHub Release (`release.yml`)
     - [ ] Automated testing on Firebase Test Lab (physical ARM64 devices)
-    - [ ] Build toolchain zips and upload as GitHub Release assets (sideload fallback)
-    - [ ] Fallback download URL served from GitHub Releases for non-Play-Store installs
+    - [x] Build toolchain zips and upload as GitHub Release assets — `scripts/package-toolchains.sh` + `release.yml`
+    - [x] Fallback download URL served from GitHub Releases — README links to releases page
 
 #### Phase 4 — Ship
 
