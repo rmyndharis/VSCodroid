@@ -466,12 +466,13 @@ _Order: audit code → configure release build → test on devices → validate 
      - [x] Extension Host runs as worker_thread — only 1 phantom (server-main), no ExtHost in `ps`
      - [x] ptyHost runs as worker_thread — not visible in process list, baseline 1 phantom process
      - [x] Extensions activate correctly under worker_thread mode — 10 extensions loaded
-   - **Toolchain compatibility verification** _(requires physical device)_:
-     - [ ] `go version` → works after asset pack install
-     - [ ] `ruby --version`, `irb`, `gem` → works after install
-     - [ ] `java -version`, `javac -version` → works after install
-     - [ ] Verify toolchains persist across app restarts
+   - **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
+     - [x] `go version` → Go 1.25.6 android/arm64; hello world compile+run ✓
+     - [x] `ruby --version` → Ruby 3.4.1; `irb` eval ✓; `gem --version` 3.6.2 ✓
+     - [x] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
+     - [x] Verify toolchains persist across app restarts — all 3 survive force-stop+restart
      - [ ] Verify uninstall cleans up correctly
+     - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
    - **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 7. **Android App Bundle & size audit**
@@ -532,7 +533,7 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] App upgrade preserves user data (settings, extensions, SSH keys, projects) — verified v1→v2 upgrade on emulator
 - [x] Security review completed (network config, URL validation, file permissions)
 - [x] Tested on 3 device models across Android 13-16 (OnePlus flagship 16GB, POCO budget 4GB, Redmi mid-range 6GB)
-- [ ] Go/Ruby/Java verified working on physical device after asset pack install
+- [x] Go/Ruby/Java verified working on physical device after asset pack install — OnePlus CPH2791 (Android 16)
 - [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
 - [ ] App published on Play Store
 - [ ] Passes Play Store review (no policy violations)

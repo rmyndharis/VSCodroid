@@ -237,6 +237,19 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
+        // Delete library symlinks (versioned sonames)
+        val libSymlinks = manifestObj.optJSONObject("libSymlinks")
+        if (libSymlinks != null) {
+            for (linkName in libSymlinks.keys()) {
+                val linkFile = File(context.filesDir, "usr/lib/$linkName")
+                val linkExists = try { Os.lstat(linkFile.absolutePath); true } catch (e: Exception) { false }
+                if (linkExists) {
+                    linkFile.delete()
+                    Logger.d(tag, "Removed lib symlink: $linkName")
+                }
+            }
+        }
+
         // Delete libs that were copied to usr/lib/
         val libs = manifestObj.optJSONArray("libs")
         if (libs != null) {
@@ -364,6 +377,28 @@ class ToolchainManager(private val context: Context) {
                     Logger.d(tag, "Symlink: $linkName -> $target")
                 } catch (e: Exception) {
                     Logger.w(tag, "Failed to create symlink $linkName: ${e.message}")
+                }
+            }
+        }
+
+        // Create library symlinks (versioned sonames like libruby.so.3.4 → libruby.so)
+        // Android assets can't contain symlinks, so versioned sonames are created at install time.
+        val libSymlinks = manifest.optJSONObject("libSymlinks")
+        if (libSymlinks != null) {
+            val libDir = File(context.filesDir, "usr/lib")
+            for (linkName in libSymlinks.keys()) {
+                val targetName = libSymlinks.getString(linkName)
+                val targetFile = File(libDir, targetName)
+                val linkFile = File(libDir, linkName)
+                if (targetFile.exists()) {
+                    val linkExists = try { Os.lstat(linkFile.absolutePath); true } catch (e: Exception) { false }
+                    if (linkExists) linkFile.delete()
+                    try {
+                        Os.symlink(targetFile.absolutePath, linkFile.absolutePath)
+                        Logger.d(tag, "Lib symlink: $linkName -> $targetName")
+                    } catch (e: Exception) {
+                        Logger.w(tag, "Failed to create lib symlink $linkName: ${e.message}")
+                    }
                 }
             }
         }
@@ -652,6 +687,22 @@ class ToolchainManager(private val context: Context) {
                 sb.appendLine("export $key=\"$value\"")
             }
             sb.appendLine()
+
+            // Script wrappers — bash functions for scripts that can't execute directly
+            // on Android (noexec /data). Invokes scripts via their interpreter instead.
+            val scriptWrappers = tc.optJSONObject("scriptWrappers")
+            if (scriptWrappers != null) {
+                val interpreter = scriptWrappers.optString("interpreter", "")
+                val scripts = scriptWrappers.optJSONObject("scripts")
+                if (interpreter.isNotEmpty() && scripts != null) {
+                    sb.appendLine("# $name script wrappers (Android noexec)")
+                    for (scriptName in scripts.keys()) {
+                        val scriptPath = scripts.getString(scriptName)
+                        sb.appendLine("$scriptName() { $interpreter \"\$PREFIX/../$scriptPath\" \"\$@\"; }")
+                    }
+                    sb.appendLine()
+                }
+            }
 
             // Collect extra PATH dirs
             val pathDirs = tc.optJSONArray("pathDirs")

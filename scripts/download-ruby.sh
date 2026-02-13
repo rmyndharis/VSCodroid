@@ -21,19 +21,21 @@ REQUIRED_PACKAGES=(
     ruby
     libgmp
     libyaml
+    libandroid-execinfo
 )
 
 # Soname mapping for shared libraries
 get_sonames() {
     case "$1" in
-        ruby)    echo "libruby.so" ;;
-        libgmp)  echo "libgmp.so" ;;
-        libyaml) echo "libyaml-0.so" ;;
-        *)       echo "" ;;
+        ruby)                  echo "libruby.so" ;;
+        libgmp)                echo "libgmp.so" ;;
+        libyaml)               echo "libyaml-0.so" ;;
+        libandroid-execinfo)   echo "libandroid-execinfo.so" ;;
+        *)                     echo "" ;;
     esac
 }
 
-LIB_PACKAGES=(ruby libgmp libyaml)
+LIB_PACKAGES=(ruby libgmp libyaml libandroid-execinfo)
 
 echo "=== Downloading Ruby Toolchain ==="
 echo ""
@@ -186,25 +188,31 @@ find "$PACK_ASSETS/usr" -type d -name "man" -exec rm -rf {} + 2>/dev/null || tru
 AFTER_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 echo "  Ruby: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SIZE))K)"
 
-# --- Step 6: Write manifest.json ---
+# --- Step 6: Write toolchain_ruby.json ---
 echo ""
-echo "Writing manifest.json..."
+echo "Writing toolchain_ruby.json..."
 
-# Collect all binaries AND symlinks for the manifest (only include actually-copied files)
+# Collect binaries and script wrappers (only include actually-copied files)
 BINARIES='['
-SYMLINKS='{'
+SCRIPT_WRAPPERS='{'
 FIRST_BIN=true
-FIRST_SYM=true
+FIRST_SW=true
 for bin in ruby irb gem bundle bundler erb rdoc ri; do
     if [ -f "$PACK_ASSETS/usr/bin/$bin" ]; then
         [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
         BINARIES+="\"usr/bin/$bin\""
-        [ "$FIRST_SYM" = true ] && FIRST_SYM=false || SYMLINKS+=','
-        SYMLINKS+="\"$bin\":\"usr/bin/$bin\""
+        # All binaries except ruby itself are scripts needing wrappers
+        if [ "$bin" != "ruby" ]; then
+            [ "$FIRST_SW" = true ] && FIRST_SW=false || SCRIPT_WRAPPERS+=','
+            SCRIPT_WRAPPERS+="\"$bin\":\"usr/bin/$bin\""
+        fi
     fi
 done
 BINARIES+=']'
-SYMLINKS+='}'
+SCRIPT_WRAPPERS+='}'
+
+# Detect Ruby minor version for RUBYLIB path (e.g. 3.4.1-2 → 3.4.0)
+RUBY_MINOR=$(echo "$RUBY_VERSION" | sed 's/^[0-9]*://; s/\([0-9]*\.[0-9]*\)\..*/\1.0/')
 
 cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
@@ -212,14 +220,21 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
     "displayName": "Ruby",
     "version": "$RUBY_VERSION",
     "binaries": $BINARIES,
-    "symlinks": $SYMLINKS,
     "env": {
         "GEM_HOME": "\$HOME/.gem/ruby",
-        "GEM_PATH": "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems"
+        "GEM_PATH": "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems",
+        "RUBYLIB": "\$FILESDIR/usr/lib/ruby/$RUBY_MINOR:\$FILESDIR/usr/lib/ruby/$RUBY_MINOR/aarch64-linux-android"
     },
     "pathDirs": ["usr/bin"],
     "installRoot": "usr/lib/ruby",
-    "libs": ["libruby.so", "libgmp.so", "libyaml-0.so"]
+    "libs": ["libruby.so", "libgmp.so", "libyaml-0.so", "libandroid-execinfo.so"],
+    "libSymlinks": {
+        "libruby.so.${RUBY_MINOR%.*}": "libruby.so"
+    },
+    "scriptWrappers": {
+        "interpreter": "ruby",
+        "scripts": $SCRIPT_WRAPPERS
+    }
 }
 EOF
 echo "  toolchain_ruby.json written"
