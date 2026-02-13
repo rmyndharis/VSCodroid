@@ -409,10 +409,10 @@ if [ -d "$NODE_PTY_DIR" ]; then
     # Remove pipeTerminal.js shim if it exists (from previous builds)
     rm -f "$NODE_PTY_DIR/lib/pipeTerminal.js"
     # The Android ARM64 pty.node is pre-built by scripts/build-node-pty.sh
-    # and lives in the assets directory. The download script runs from a temp dir,
-    # so we check relative to the script location.
-    ANDROID_PTY_NODE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../android/app/src/main/assets/vscode-reh/node_modules/node-pty/build/Release" 2>/dev/null && pwd)/pty.node"
-    if [ -f "${ANDROID_PTY_NODE:-__none__}" ]; then
+    # and lives in the assets directory. Use ROOT_DIR (absolute) to avoid
+    # subshell cd failures when the directory doesn't exist yet (CI).
+    ANDROID_PTY_NODE="$ROOT_DIR/android/app/src/main/assets/vscode-reh/node_modules/node-pty/build/Release/pty.node"
+    if [ -f "$ANDROID_PTY_NODE" ]; then
         mkdir -p "$NODE_PTY_DIR/build/Release"
         cp "$ANDROID_PTY_NODE" "$NODE_PTY_DIR/build/Release/pty.node"
         echo "  Copied Android ARM64 pty.node"
