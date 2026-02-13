@@ -529,7 +529,7 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] Extension secrets persist across app restarts (OAuth tokens, API keys)
 - [x] App recovers cleanly from close/reopen (no white screen)
 - [x] SSH push/pull to GitHub works end-to-end (SSH stack verified, git uses bundled ssh via `GIT_SSH_COMMAND`)
-- [ ] App upgrade preserves user data (settings, extensions, SSH keys, projects)
+- [x] App upgrade preserves user data (settings, extensions, SSH keys, projects) — verified v1→v2 upgrade on emulator
 - [x] Security review completed (network config, URL validation, file permissions)
 - [x] Tested on 3 device models across Android 13-16 (OnePlus flagship 16GB, POCO budget 4GB, Redmi mid-range 6GB)
 - [ ] Go/Ruby/Java verified working on physical device after asset pack install
