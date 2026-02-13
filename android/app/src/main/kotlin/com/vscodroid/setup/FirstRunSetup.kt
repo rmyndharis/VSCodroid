@@ -27,7 +27,15 @@ class FirstRunSetup(private val context: Context) {
     }
 
     suspend fun runSetup(): SetupResult = withContext(Dispatchers.IO) {
-        Logger.i(tag, "Starting first-run setup")
+        val previousVersionCode = getPreviousVersionCode()
+        val currentVersionCode = getCurrentVersionCode()
+        val isUpgrade = previousVersionCode > 0
+
+        if (isUpgrade) {
+            Logger.i(tag, "Upgrading from versionCode $previousVersionCode to $currentVersionCode (${getCurrentVersion()})")
+        } else {
+            Logger.i(tag, "Fresh install, version ${getCurrentVersion()} (versionCode $currentVersionCode)")
+        }
         val startTime = System.currentTimeMillis()
 
         // Pre-flight: check available storage (~500MB needed for extraction)
@@ -77,6 +85,11 @@ class FirstRunSetup(private val context: Context) {
             createDefaultSettings()
 
             reportProgress("Done!", 100)
+
+            if (isUpgrade) {
+                runMigrations(previousVersionCode)
+            }
+
             markSetupComplete()
 
             val elapsed = System.currentTimeMillis() - startTime
@@ -688,8 +701,39 @@ npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx
         Logger.i(tag, "Generated extensions.json with ${entries.length()} entries")
     }
 
+    private fun runMigrations(fromVersionCode: Int) {
+        Logger.i(tag, "Running migrations from versionCode $fromVersionCode")
+
+        // Add new migrations at the bottom with the next versionCode.
+        // Each block runs for users upgrading FROM a version before the threshold.
+        // Example:
+        // if (fromVersionCode < 3) {
+        //     migrateToV3()  // e.g., add new .bashrc entries
+        // }
+
+        Logger.i(tag, "Migrations complete")
+    }
+
+    fun getPreviousVersionCode(): Int {
+        return prefs.getInt(KEY_VERSION_CODE, 0)
+    }
+
+    private fun getCurrentVersionCode(): Int {
+        return try {
+            context.packageManager.getPackageInfo(context.packageName, 0).let {
+                if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt()
+                else @Suppress("DEPRECATION") it.versionCode
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
     private fun markSetupComplete() {
-        prefs.edit().putString(KEY_VERSION, getCurrentVersion()).apply()
+        prefs.edit()
+            .putString(KEY_VERSION, getCurrentVersion())
+            .putInt(KEY_VERSION_CODE, getCurrentVersionCode())
+            .apply()
     }
 
     private fun getCurrentVersion(): String {
@@ -707,5 +751,6 @@ npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx
 
     companion object {
         private const val KEY_VERSION = "setup_version"
+        private const val KEY_VERSION_CODE = "setup_version_code"
     }
 }
