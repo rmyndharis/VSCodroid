@@ -133,11 +133,6 @@ else
 JSON
 fi
 
-# NOTE: Secret storage (vscode.secrets API) requires --password-store=basic at runtime.
-# Android has no system keyring (gnome-keyring/kwallet), so without this flag,
-# extensions using OAuth/token storage (e.g., Cline, GitHub) fail silently.
-# The flag is passed in server.js, not here — no build-time patch needed.
-
 # Patch vsda signing validation
 # VS Code uses a native binary (vsda.node) for client-server handshake validation.
 # The native binary is Linux x86_64 and won't work on Android ARM64.
@@ -583,6 +578,40 @@ c = re.sub(r\"script-src 'sha256-[^']*' 'self'\", \"script-src 'unsafe-inline' '
 with open(sys.argv[1], 'w') as f: f.write(c)
 " "$WEBVIEW_INDEX"
     echo "  Patched: $WEBVIEW_INDEX"
+fi
+
+# Patch callback.html for Android intent-based relay
+# VS Code's callback.html writes auth tokens to localStorage, but on Android the
+# callback opens in Chrome while the workbench runs in WebView — separate localStorage
+# domains. We add a redirect to vscodroid://callback after the localStorage write so
+# the Android app can relay the token back into the WebView's localStorage.
+CALLBACK_HTML="vscode-reh/out/vs/code/browser/workbench/callback.html"
+if [ -f "$CALLBACK_HTML" ]; then
+    echo ""
+    echo "Patching callback.html (Android intent-based auth relay)..."
+    python3 -c "
+import sys
+with open(sys.argv[1], 'r') as f: c = f.read()
+old = \"localStorage.setItem(\`vscode-web.url-callbacks[\${id}]\`, JSON.stringify(uri));\"
+relay = old + '''
+\t\t\t// VSCodroid: Relay callback to Android app via intent:// deep link.
+\t\t\t// On Android, callback.html opens in Chrome (system browser) while
+\t\t\t// the workbench runs in WebView — separate localStorage domains.
+\t\t\t// Must use intent:// URI format — Chrome blocks custom scheme navigation
+\t\t\t// (vscodroid://) from script context without user gesture. intent:// is
+\t\t\t// always allowed and resolves via the manifest intent-filter.
+\t\t\t// Must execute synchronously (no setTimeout) — async loses activation.
+\t\t\ttry {
+\t\t\t\tvar cd = encodeURIComponent(JSON.stringify({id: id, uri: uri}));
+\t\t\t\twindow.location.href = 'intent://callback?data=' + cd + '#Intent;scheme=vscodroid;end';
+\t\t\t} catch(e) {}'''
+if old in c:
+    c = c.replace(old, relay)
+    with open(sys.argv[1], 'w') as f: f.write(c)
+    print('  Patched: ' + sys.argv[1] + ' (added vscodroid://callback relay)')
+else:
+    print('  SKIP: localStorage.setItem pattern not found (already patched?)')
+" "$CALLBACK_HTML"
 fi
 
 # Bundle ripgrep for VS Code Search

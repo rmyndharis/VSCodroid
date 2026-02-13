@@ -68,6 +68,16 @@
                 <data android:scheme="vscodroid" android:host="oauth" />
             </intent-filter>
 
+            <!-- Extension callback relay: vscodroid://callback?data=... -->
+            <!-- Bridges localStorage gap between Chrome (callback.html) and WebView -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="vscodroid" android:host="callback" />
+            </intent-filter>
+
             <!-- Open code files by extension (file:// and content:// schemes).
                  mimeType is required for content:// URIs — use text/* plus specific
                  code-related types instead of */* to avoid matching photos/music/etc. -->

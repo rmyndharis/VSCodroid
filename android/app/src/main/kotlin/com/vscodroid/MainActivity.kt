@@ -112,6 +112,10 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val uri = intent.data
+        if (uri?.scheme == "vscodroid" && uri.host == "callback") {
+            handleExtensionCallback(uri)
+            return
+        }
         if (uri?.scheme == "vscodroid" && uri.host == "oauth") {
             handleOAuthCallback(uri)
             return
@@ -986,6 +990,42 @@ class MainActivity : AppCompatActivity() {
                 loadVSCode(serverPort)
             }
         }
+    }
+
+    /**
+     * Relays an extension auth callback from Chrome into the WebView's localStorage.
+     *
+     * VS Code's callback.html writes auth tokens to localStorage, but on Android
+     * the callback opens in Chrome while the workbench runs in WebView — separate
+     * localStorage domains. This method receives the token data via deep link
+     * (vscodroid://callback?data=ENCODED_JSON) and injects it into the WebView's
+     * localStorage so the workbench can pick it up.
+     */
+    private fun handleExtensionCallback(uri: Uri) {
+        val dataParam = uri.getQueryParameter("data") ?: return
+        Logger.i(tag, "Extension callback relay received")
+        val escaped = org.json.JSONObject.quote(dataParam)
+        webView?.evaluateJavascript("""
+            (function() {
+                try {
+                    var d = JSON.parse(decodeURIComponent($escaped));
+                    var key = 'vscode-web.url-callbacks[' + d.id + ']';
+                    var value = JSON.stringify(d.uri);
+                    localStorage.setItem(key, value);
+                    // Dispatch synthetic StorageEvent — VS Code's workbench monitors
+                    // localStorage via addEventListener("storage"), but that event only
+                    // fires when ANOTHER browsing context writes. Since evaluateJavascript
+                    // runs in the same context, we must dispatch it manually.
+                    window.dispatchEvent(new StorageEvent('storage', {
+                        key: key, newValue: value, oldValue: null,
+                        storageArea: localStorage, url: window.location.href
+                    }));
+                    console.log('[VSCodroid] Callback relay: injected token for id=' + d.id);
+                } catch(e) {
+                    console.error('[VSCodroid] Callback relay error:', e);
+                }
+            })();
+        """.trimIndent(), null)
     }
 
     /**
