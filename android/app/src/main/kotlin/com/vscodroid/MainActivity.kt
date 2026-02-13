@@ -88,6 +88,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge-to-edge: handle all insets manually for consistent behavior across
+        // Android 13-14 (adjustResize) and Android 15+ (edge-to-edge enforced).
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
 
         safManager = SafStorageManager(this)
@@ -362,7 +365,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupExtraKeyRow() {
         extraKeyRow = findViewById(R.id.extraKeyRow)
-        extraKeyRow?.setupWithRootView(window.decorView.rootView)
+        extraKeyRow?.setupWithRootView(findViewById(R.id.webViewContainer))
     }
 
     private fun setupBackNavigation() {

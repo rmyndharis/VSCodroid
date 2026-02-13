@@ -638,6 +638,28 @@ else:
 " "$WORKBENCH_JS"
 fi
 
+# Mobile-friendly CSS overrides for hamburger dropdown menu
+# Appends touch-optimized styles (larger touch targets, readable font sizes) to workbench.css.
+# Uses !important to override VS Code's minified rules that precede these.
+echo ""
+echo "Patching workbench.css (mobile-friendly menu overrides)..."
+WORKBENCH_CSS="vscode-reh/out/vs/code/browser/workbench/workbench.css"
+if [ -f "$WORKBENCH_CSS" ]; then
+    cat >> "$WORKBENCH_CSS" << 'CSSEOF'
+
+/* VSCodroid: Mobile-friendly hamburger menu overrides */
+.menubar-menu-items-holder { min-width: 280px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-item { min-height: 44px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-label { font-size: 14px !important; padding: 8px 24px 8px 12px !important; line-height: 28px !important; }
+.monaco-menu .submenu-indicator { font-size: 16px !important; }
+.monaco-menu .keybinding { font-size: 12px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; }
+CSSEOF
+    echo "  Appended mobile menu CSS overrides to $WORKBENCH_CSS"
+else
+    echo "  WARNING: $WORKBENCH_CSS not found, skipping CSS patch"
+fi
+
 # Bundle ripgrep for VS Code Search
 # @vscode/ripgrep expects a binary at node_modules/@vscode/ripgrep/bin/rg.
 # The REH archive includes an ARM64 rg binary — copy it to jniLibs for execute permission.

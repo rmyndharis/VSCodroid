@@ -92,23 +92,21 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     fun setupWithRootView(rootView: View) {
         ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+
+            // Pad container: top for status bar, bottom for max(nav bar, keyboard).
+            // This ensures the WebView content area shrinks when the keyboard opens,
+            // and ExtraKeyRow (gravity=bottom) sits right above it.
+            val bottomInset = maxOf(systemBars.bottom, ime.bottom)
+            v.setPadding(systemBars.left, systemBars.top, systemBars.right, bottomInset)
+
             visibility = if (imeVisible) View.VISIBLE else View.GONE
             if (!imeVisible) {
                 resetModifiersIfNeeded()
             }
-            if (imeVisible) {
-                // Position ExtraKeyRow above the soft keyboard by setting bottom margin
-                val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
-                val navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-                val bottomMargin = imeInsets.bottom - navInsets.bottom
-                val lp = layoutParams as? FrameLayout.LayoutParams
-                if (lp != null && lp.bottomMargin != bottomMargin) {
-                    lp.bottomMargin = bottomMargin
-                    layoutParams = lp
-                }
-            }
-            Logger.d(tag, "IME visible=$imeVisible")
+            Logger.d(tag, "IME visible=$imeVisible, bottomInset=$bottomInset")
             insets
         }
     }
