@@ -337,7 +337,7 @@ class ToolchainManager(private val context: Context) {
                 val binPath = binaries.getString(i)
                 val binFile = File(context.filesDir, binPath)
                 if (binFile.exists()) {
-                    binFile.setExecutable(true, false)
+                    binFile.setExecutable(true, true)
                     Logger.d(tag, "chmod +x: $binPath")
                 }
             }

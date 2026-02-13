@@ -191,7 +191,7 @@ class FirstRunSetup(private val context: Context) {
         // Set execute permission on all files in git-core
         gitCorePath.listFiles()?.forEach { file ->
             if (file.isFile && !file.name.startsWith(".")) {
-                file.setExecutable(true, false)
+                file.setExecutable(true, true)
             }
         }
 

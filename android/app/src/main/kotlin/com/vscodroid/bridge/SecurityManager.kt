@@ -1,5 +1,6 @@
 package com.vscodroid.bridge
 
+import android.net.Uri
 import com.vscodroid.util.Logger
 import java.security.SecureRandom
 
@@ -21,10 +22,14 @@ class SecurityManager(private val allowedPort: Int) {
         if (url.startsWith("https://") || url.startsWith("mailto:")) {
             return true
         }
-        // Allow http:// only for localhost (dev servers like Vite, NestJS)
-        if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) {
-            return true
-        }
+        // Allow http:// only for exact localhost/127.0.0.1 hosts (dev servers)
+        try {
+            val uri = Uri.parse(url)
+            val host = uri.host
+            if (uri.scheme == "http" && (host == "127.0.0.1" || host == "localhost")) {
+                return true
+            }
+        } catch (_: Exception) { }
         Logger.w(tag, "Blocked URL scheme: $url")
         return false
     }

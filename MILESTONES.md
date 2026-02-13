@@ -8,7 +8,7 @@ M1 (Core)      → VS Code running in WebView with extension support
 M2 (Mobile)    → Mobile UX: keyboard, touch, Android integration
 M3 (DevEnv)    → All-in-One: Python, npm, bundled tools & extensions
 M4 (Polish)    → Performance, SAF, GitHub OAuth, storage management
-M5 (Toolchain) → Package manager, on-demand languages, worker_thread
+M5 (Toolchain) → On-demand languages, Language Picker, Play Asset Delivery
 M6 (Release)   → Play Store release
 ```
 
@@ -21,6 +21,7 @@ M6 (Release)   → Play Store release
 **Deliverable**: Android app that launches VS Code REH (Remote Extension Host) server via bundled Node.js and renders the VS Code Workbench in a WebView.
 
 ### Entry Criteria:
+
 - [x] PRD, SRS, Architecture, and Technical Spec approved as M0 baseline
 - [x] ARM64 physical Android device (API 33+) available for testing
 - [x] Android SDK/NDK toolchain installed on development machine
@@ -55,6 +56,7 @@ M6 (Release)   → Play Store release
    - Process death detection via watchdog thread + exponential backoff auto-restart (up to 5 attempts)
 
 ### Success Criteria:
+
 - [x] Node.js ARM64 binary runs on physical ARM64 Android device
 - [x] VS Code REH server responds on localhost (health check via HTTP GET)
 - [x] WebView renders VS Code Workbench from localhost
@@ -72,6 +74,7 @@ M6 (Release)   → Play Store release
 **Deliverable**: Full VS Code UI with working editor, file explorer, extensions, and terminal.
 
 ### Entry Criteria:
+
 - [x] All M0 success criteria passed
 - [x] Node.js startup + localhost health check stable for 30 minutes on reference device
 - [x] Cross-compilation environment validated (Node.js + native module toolchain)
@@ -124,6 +127,7 @@ M6 (Release)   → Play Store release
    - ripgrep bundled as `libripgrep.so` for VS Code's search functionality (`FirstRunSetup.setupRipgrepVscodeSymlink`)
 
 ### Success Criteria:
+
 - [x] VS Code Workbench UI renders correctly in WebView
 - [x] Monaco Editor works (typing, syntax highlighting, multi-cursor)
 - [x] File explorer shows files, can create/edit/save
@@ -145,6 +149,7 @@ M6 (Release)   → Play Store release
 **Deliverable**: Comfortable coding experience on phone/tablet.
 
 ### Entry Criteria:
+
 - [x] All M1 success criteria passed
 - [x] No open P0 defects in M1 scope
 - [x] VS Code core session remains stable for 30 minutes (editing + terminal + extension)
@@ -154,7 +159,7 @@ M6 (Release)   → Play Store release
 1. **Extra Key Row** (`ExtraKeyRow.kt`, `KeyPageConfig.kt`, `KeyPageAdapter.kt`)
    - Multi-page native Android view using `ViewPager2` with dot indicators
    - Page 1: Tab, Esc, Ctrl (toggle), Alt (toggle), Shift (toggle), `GestureTrackpad`, {}, (), ;, :, ", /
-   - Page 2: additional symbols (|, `, &, _, [], <>, =, !, #, @)
+   - Page 2: additional symbols (|, `, &, \_, [], <>, =, !, #, @)
    - `GestureTrackpad`: 3-speed drag-to-navigate (Precise/Moderate/Fast gear based on cumulative distance)
    - Long-press popup for alternate keys (`showLongPressPopup`)
    - Key injection via `KeyInjector.injectKey()` dispatching JS `KeyboardEvent` to WebView
@@ -191,7 +196,7 @@ M6 (Release)   → Play Store release
    - Button min height enforced by ExtraKeyRow layout
 
 8. **Android Intent: "Open with VSCodroid"** (`AndroidManifest.xml`)
-   - Intent filter registered for broad code file types (text/*, application/json, etc.)
+   - Intent filter registered for broad code file types (text/\*, application/json, etc.)
    - File reception handled in `MainActivity.handleOpenFileIntent()`
 
 9. **Crash recovery** (`VSCodroidWebViewClient.kt`, `MainActivity.kt`)
@@ -200,6 +205,7 @@ M6 (Release)   → Play Store release
    - `onTrimMemory`: writes memory pressure file + notifies JS via `window.__vscodroid?.onLowMemory?.(level)`
 
 ### Success Criteria:
+
 - [x] Can comfortably type code using soft keyboard + Extra Key Row (multi-page with GestureTrackpad)
 - [x] Ctrl+S, Ctrl+P, Ctrl+Shift+P work via Extra Key Row modifier interceptor
 - [x] Copy/paste works between VSCodroid and other apps (`ClipboardBridge`)
@@ -219,6 +225,7 @@ M6 (Release)   → Play Store release
 **Deliverable**: User can write and run Python/JS code out of the box with pre-bundled extensions.
 
 ### Entry Criteria:
+
 - [x] All M2 success criteria passed
 - [x] M2 features validated on at least 2 physical device models
 - [x] No open P0/P1 regressions in keyboard, clipboard, and crash recovery flows
@@ -258,6 +265,7 @@ M6 (Release)   → Play Store release
    - Welcome extension provides quick-start tab
 
 ### Success Criteria:
+
 - [x] `python3` and `pip` work out of the box in terminal
 - [x] `node` and `npm` work out of the box in terminal (npm via bash functions)
 - [x] `git` works out of the box in terminal
@@ -277,6 +285,7 @@ M6 (Release)   → Play Store release
 **Deliverable**: App that doesn't crash, performs well, handles edge cases.
 
 ### Entry Criteria:
+
 - [x] All M3 success criteria passed
 - [x] No open P0 defects in M0-M3 scope
 
@@ -326,6 +335,7 @@ M6 (Release)   → Play Store release
    - `AndroidBridge`: JS bridge methods (`openSafFolder`, `getRecentFolders`, `openRecentFolder`)
 
 ### Success Criteria:
+
 - [x] CrashReporter and Logger initialized
 - [x] V8 memory limited to 512MB via `--max-old-space-size`
 - [x] WebView pre-warmed in Application.onCreate
@@ -345,11 +355,12 @@ M6 (Release)   → Play Store release
 **Deliverable**: Play Asset Delivery integration with Go, Ruby, and Java toolchains, plus a Language Picker UI.
 
 ### Entry Criteria:
+
 - [x] All M4 success criteria passed
 
 ### Tasks:
 
-1. **~~worker_thread Extension Host & ptyHost migration~~** *(completed during M4)*
+1. **~~worker_thread Extension Host & ptyHost migration~~** _(completed during M4)_
    - [x] Extension Host patched to run as `worker_threads.Worker()` instead of `child_process.fork()`
    - [x] ptyHost patched to run as `worker_threads.Worker()` with graceful disconnect
    - [x] Extensions load correctly under worker_thread mode
@@ -376,6 +387,7 @@ M6 (Release)   → Play Store release
    - [x] Size display per toolchain before download (`ToolchainPickerAdapter` shows `~${formatSize(info.estimatedSize)}`)
 
 ### Success Criteria:
+
 - [x] Extension Host runs as worker_thread (phantom process count reduced)
 - [x] ptyHost runs as worker_thread (additional phantom process saved)
 - [x] On-demand toolchains delivered via Play Asset Delivery (Go, Ruby, Java)
@@ -393,17 +405,18 @@ M6 (Release)   → Play Store release
 **Deliverable**: Published app with proper branding, legal compliance, and documentation.
 
 ### Entry Criteria:
+
 - [ ] All M5 success criteria passed
 - [ ] Release candidate build completed with signed AAB
 - [ ] Store listing, privacy policy, and compliance artifacts ready
 
 ### Tasks:
 
-*Ordered by dependency: fix bugs → verify features → harden → brand → ship.*
+_Ordered by dependency: fix bugs → verify features → harden → brand → ship._
 
 #### Phase 1 — Bug Fixes & Feature Completion
 
-1. **Stability & auth fixes** *(discovered during device testing)*
+1. **Stability & auth fixes** _(discovered during device testing)_
    - [x] Extension OAuth callback relay: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
    - [x] Persist extension secrets across app restarts: patch `isEncryptionAvailable()` → `true` in workbench.js so `SecretStorageService` uses IndexedDB instead of in-memory Map
    - [x] White screen on app reopen: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on main thread when reconnecting to already-running server; replaced with `isServerRunning()` (process liveness check, no I/O)
@@ -424,14 +437,17 @@ M6 (Release)   → Play Store release
 
 #### Phase 2 — Hardening & Release Build
 
-*Order: audit code → configure release build → test on devices → validate bundle size.*
+_Order: audit code → configure release build → test on devices → validate bundle size._
 
 4. **Security review**
-   - [ ] Audit WebView security: CSP headers, JS bridge exposure, localhost-only binding
-   - [ ] Verify no secrets in APK (no API keys, tokens, or private keys bundled)
-   - [ ] Review all workbench.js patches for unintended side effects
-   - [ ] Confirm Android app sandbox isolation (no world-readable files)
-   - [ ] Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
+   - [x] Audit WebView security: CSP headers, JS bridge exposure, localhost-only binding
+   - [x] Verify no secrets in APK (no API keys, tokens, or private keys bundled)
+   - [x] Review all workbench.js patches for unintended side effects
+   - [x] Confirm Android app sandbox isolation (no world-readable files)
+   - [x] Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
+   - [x] Fix: restrict cleartext HTTP to localhost only (network_security_config.xml)
+   - [x] Fix: use Uri.parse() for exact localhost host matching (prevents domain spoofing)
+   - [x] Fix: owner-only execute permissions on extracted binaries
 
 5. **Release build & signing**
    - [ ] Generate release signing keystore (store securely, NOT in repo)
@@ -440,13 +456,17 @@ M6 (Release)   → Play Store release
    - [ ] Test release build on device (ProGuard can break reflection-based code)
    - [ ] Verify `useLegacyPackaging = true` preserved in release build
 
-6. **Device testing** *(on release build)*
+6. **Device testing** _(on release build)_
    - [ ] Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
    - [ ] Android version matrix: 13, 14, 15, 16
    - [ ] Stress tests: large files (10k+ lines), large projects (1000+ files)
    - [ ] Extension tests: Python LSP, ESLint, GitLens, themes, icon packs
    - [ ] Lifecycle tests: background/foreground, split-screen, rotation, low memory
-   - **Toolchain compatibility verification** *(requires physical device)*:
+   - **worker_thread verification** _(validates M5 task 1)_:
+     - [ ] Extension Host runs as worker_thread (`adb shell ps` shows no separate ExtHost process)
+     - [ ] ptyHost runs as worker_thread (verify via process count)
+     - [ ] Extensions activate correctly under worker_thread mode
+   - **Toolchain compatibility verification** _(requires physical device)_:
      - [ ] `go version` → works after asset pack install
      - [ ] `ruby --version`, `irb`, `gem` → works after install
      - [ ] `java -version`, `javac -version` → works after install
@@ -484,10 +504,12 @@ M6 (Release)   → Play Store release
     - GitHub Actions: build debug APK on PR, release AAB on tag
     - Automated testing on Firebase Test Lab (physical ARM64 devices)
     - Release workflow: tag → build → sign → upload to Play Store
+    - Build toolchain zips and upload as GitHub Release assets (sideload fallback)
+    - Fallback download URL served from GitHub Releases for non-Play-Store installs
 
 #### Phase 4 — Ship
 
-12. **Play Store listing** *(requires Google Play Developer account)*
+12. **Play Store listing** _(requires Google Play Developer account)_
     - Title: "VSCodroid"
     - Short description + full description with feature list
     - Screenshots: phone + tablet (from task 8)
@@ -502,6 +524,7 @@ M6 (Release)   → Play Store release
     - Post-launch: respond to Play Store reviews
 
 ### Success Criteria:
+
 - [x] Extension secrets persist across app restarts (OAuth tokens, API keys)
 - [x] App recovers cleanly from close/reopen (no white screen)
 - [x] SSH push/pull to GitHub works end-to-end (SSH stack verified, git uses bundled ssh via `GIT_SSH_COMMAND`)
@@ -521,15 +544,15 @@ M6 (Release)   → Play Store release
 
 ## Timeline Summary
 
-| Milestone | Duration | Cumulative |
-|---|---|---|
-| M0 — Proof of Concept | 1-2 weeks | 1-2 weeks |
-| M1 — VS Code Core | 3-4 weeks | 5-6 weeks |
-| M2 — Mobile UX | 2-3 weeks | 7-9 weeks |
+| Milestone                       | Duration  | Cumulative  |
+| ------------------------------- | --------- | ----------- |
+| M0 — Proof of Concept           | 1-2 weeks | 1-2 weeks   |
+| M1 — VS Code Core               | 3-4 weeks | 5-6 weeks   |
+| M2 — Mobile UX                  | 2-3 weeks | 7-9 weeks   |
 | M3 — All-in-One Dev Environment | 3-4 weeks | 10-13 weeks |
-| M4 — Polish & Performance | 3-4 weeks | 13-17 weeks |
-| M5 — Toolchain Ecosystem | 3-4 weeks | 16-21 weeks |
-| M6 — Release | 6-8 weeks | 22-29 weeks |
+| M4 — Polish & Performance       | 3-4 weeks | 13-17 weeks |
+| M5 — Toolchain Ecosystem        | 3-4 weeks | 16-21 weeks |
+| M6 — Release                    | 6-8 weeks | 22-29 weeks |
 
 **Total: ~5-7 months from start to Play Store release.**
 
@@ -557,6 +580,7 @@ The hardest part is **M0 + M1** — getting Node.js and VS Code actually running
 Features planned for after Play Store launch, prioritized by user demand.
 
 ### Package Manager (`vscodroid pkg`)
+
 - Lightweight CLI for installing additional tools from Termux repository (2000+ packages)
 - `vscodroid pkg install <package>` — download, extract, configure PATH
 - `vscodroid pkg list` / `vscodroid pkg remove <package>` / `vscodroid pkg search <query>`
@@ -564,11 +588,13 @@ Features planned for after Play Store launch, prioritized by user demand.
 - Targets: PHP, Perl, Lua, and other tools beyond bundled/on-demand toolchains
 
 ### Additional On-demand Toolchains
+
 - **Rust** (rustc + cargo, ~100 MB) — high demand, self-contained
 - **C/C++** (clang/LLVM from Termux, ~84 MB) — large, needs careful stripping
 - Delivered via same Play Asset Delivery pipeline as Go/Ruby/Java
 
 ### Future Enhancements
+
 - Toolchain version management (multiple Go/Ruby/Java versions)
 - Automatic toolchain updates via Play Store asset pack updates
 - Community-contributed toolchain recipes
