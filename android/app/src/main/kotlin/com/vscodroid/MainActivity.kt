@@ -408,10 +408,12 @@ class MainActivity : AppCompatActivity() {
 
         // If the server is already running (activity recreated, rotation, etc.),
         // the launchServer() coroutine has already completed and won't fire again.
-        // Check immediately and load the WebView if the server is healthy.
+        // Check immediately and load the WebView if the server process is alive.
+        // Note: isServerRunning() checks process.isAlive (no I/O), whereas
+        // isServerHealthy() does HTTP — which throws NetworkOnMainThreadException.
         val service = nodeService ?: return
         val port = service.getPort()
-        if (port > 0 && service.isServerHealthy()) {
+        if (port > 0 && service.isServerRunning()) {
             Logger.i(tag, "Server already running on port $port, loading immediately")
             serverPort = port
             loadVSCode(port)
