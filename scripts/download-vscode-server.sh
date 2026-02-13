@@ -614,6 +614,30 @@ else:
 " "$CALLBACK_HTML"
 fi
 
+# Enable persisted secret storage
+# VS Code's browser credential service declares encryption unavailable, forcing
+# SecretStorageService to use in-memory storage (secrets lost on restart).
+# The encrypt/decrypt methods are already identity (no-op), so flipping this to
+# true just routes secrets to IndexedDB (persisted) instead of a RAM Map.
+# Same security as --password-store=basic on desktop Linux.
+WORKBENCH_JS="vscode-reh/out/vs/code/browser/workbench/workbench.js"
+if [ -f "$WORKBENCH_JS" ]; then
+    echo ""
+    echo "Patching workbench.js (enable persisted secret storage)..."
+    python3 -c "
+import sys
+with open(sys.argv[1], 'r') as f: c = f.read()
+old = 'isEncryptionAvailable(){return Promise.resolve(!1)}'
+new = 'isEncryptionAvailable(){return Promise.resolve(!0)}'
+if old in c:
+    c = c.replace(old, new)
+    with open(sys.argv[1], 'w') as f: f.write(c)
+    print('  Patched: ' + sys.argv[1] + ' (secret storage: in-memory -> persisted)')
+else:
+    print('  SKIP: isEncryptionAvailable pattern not found (already patched?)')
+" "$WORKBENCH_JS"
+fi
+
 # Bundle ripgrep for VS Code Search
 # @vscode/ripgrep expects a binary at node_modules/@vscode/ripgrep/bin/rg.
 # The REH archive includes an ARM64 rg binary — copy it to jniLibs for execute permission.
