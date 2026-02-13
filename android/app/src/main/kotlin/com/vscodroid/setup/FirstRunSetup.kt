@@ -294,15 +294,17 @@ class FirstRunSetup(private val context: Context) {
             Logger.d(tag, "Failed to chmod .ssh: ${e.message}")
         }
 
-        // Create default ssh_config if it doesn't exist
+        // Create default ssh_config if it doesn't exist.
+        // Uses absolute paths because Termux openssh resolves ~ to its
+        // compiled-in prefix (/data/data/com.termux/...), not $HOME.
         val sshConfig = File(sshDir, "config")
         if (!sshConfig.exists()) {
             sshConfig.writeText("""
                 Host *
                     StrictHostKeyChecking accept-new
-                    IdentityFile ~/.ssh/id_ed25519
+                    IdentityFile $homeDir/.ssh/id_ed25519
                     ServerAliveInterval 60
-                    UserKnownHostsFile ~/.ssh/known_hosts
+                    UserKnownHostsFile $homeDir/.ssh/known_hosts
             """.trimIndent() + "\n")
             try {
                 Os.chmod(sshConfig.absolutePath, 384) // 0600

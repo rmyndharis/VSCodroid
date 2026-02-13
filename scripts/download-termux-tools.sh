@@ -39,6 +39,10 @@ REQUIRED_PACKAGES=(
     make
     openssh
     libedit
+    ldns
+    krb5
+    libdb
+    libresolv-wrapper
 )
 
 # Soname mapping: returns space-separated soname(s) for a package.
@@ -61,6 +65,10 @@ get_sonames() {
         libevent)          echo "libevent-2.1.so libevent_core-2.1.so" ;;
         libandroid-glob)   echo "libandroid-glob.so" ;;
         libedit)           echo "libedit.so" ;;
+        ldns)              echo "libldns.so" ;;
+        krb5)              echo "libgssapi_krb5.so.2 libkrb5.so.3 libk5crypto.so.3 libkrb5support.so.0 libcom_err.so.3" ;;
+        libdb)             echo "libdb-18.1.so" ;;
+        libresolv-wrapper) echo "libresolv_wrapper.so" ;;
         *)                 echo "" ;;
     esac
 }
@@ -70,7 +78,8 @@ LIB_PACKAGES=(
     readline ncurses libiconv libandroid-support
     libcurl openssl pcre2 libexpat
     libnghttp2 libnghttp3 libngtcp2 libssh2 zlib
-    libevent libandroid-glob libedit
+    libevent libandroid-glob libedit ldns
+    krb5 libdb libresolv-wrapper
 )
 
 echo "=== Downloading Termux Tools (bash + git + tmux + make + ssh) ==="

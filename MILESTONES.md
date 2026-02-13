@@ -399,48 +399,37 @@ M6 (Release)   → Play Store release
 
 ### Tasks:
 
-1. **CI/CD pipeline**
-   - GitHub Actions: build Node.js ARM64, build VS Code, build APK
-   - Automated testing on Firebase Test Lab (physical ARM64 devices)
-   - Release workflow: tag -> build -> upload to Play Store
+*Ordered by dependency: fix bugs → verify features → harden → brand → ship.*
+
+#### Phase 1 — Bug Fixes & Feature Completion
+
+1. **Stability & auth fixes** *(discovered during device testing)*
+   - [x] Extension OAuth callback relay: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
+   - [x] Persist extension secrets across app restarts: patch `isEncryptionAvailable()` → `true` in workbench.js so `SecretStorageService` uses IndexedDB instead of in-memory Map
+   - [x] White screen on app reopen: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on main thread when reconnecting to already-running server; replaced with `isServerRunning()` (process liveness check, no I/O)
 
 2. **SSH key management**
-   - Generate SSH key pair from within app
-   - Store keys securely in app-private storage
-   - UI to copy public key (for adding to GitHub/GitLab)
-   - Configure git to use SSH key for push/pull
+   - [x] Bundle OpenSSH client (`libssh.so`, `libssh-keygen.so`) with all deps (ldns, krb5, libdb, libresolv-wrapper)
+   - [x] SSH config with absolute paths (Termux openssh resolves `~` to compiled-in prefix, not `$HOME`)
+   - [x] `GIT_SSH_COMMAND` env var configured in `Environment.kt`
+   - [ ] Generate SSH key pair from within app (command palette + AndroidBridge)
+   - [ ] UI to copy public key (for adding to GitHub/GitLab)
+   - [ ] Verify `git push`/`git pull` via SSH to GitHub end-to-end
 
-3. **Branding**
-   - Design VSCodroid icon/logo (original, not VS Code's)
-   - App screenshots for Play Store
-   - Feature graphic
+3. **App upgrade handling**
+   - [ ] Detect app version change on launch (compare stored version vs current)
+   - [ ] Re-extract updated assets on upgrade (vscode-reh, usr/lib, extensions) without losing user data
+   - [ ] Migrate SSH config, .bashrc additions, settings.json across upgrades
+   - [ ] Handle stale symlinks after APK reinstall (nativeLibraryDir path changes)
 
-4. **Legal compliance**
-   - Disclaimer in app About screen
-   - Privacy policy (required for Play Store)
-   - MIT license notice for VS Code source
-   - Trademark disclaimers
+#### Phase 2 — Testing & Hardening
 
-5. **Documentation**
-   - README.md with project overview
-   - CONTRIBUTING.md for contributors
-   - User guide: first-run, keyboard shortcuts, package manager
-   - Known limitations
-
-6. **Android App Bundle & APK size audit**
-   - Build release AAB (signed)
-   - Verify per-device delivery sizes
-   - Test on Play Store internal track
-   - [ ] Measure base APK size (without toolchains)
-   - [ ] Verify base APK stays < 150 MB
-   - [ ] Document per-toolchain on-demand sizes
-
-7. **Extensive testing**
-   - Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
-   - Android version matrix: 13, 14, 15, 16
-   - Stress tests: large files (10k+ lines), large projects (1000+ files)
-   - Extension tests: Python LSP, ESLint, GitLens, themes, icon packs
-   - Lifecycle tests: background/foreground, split-screen, rotation, low memory
+4. **Device testing**
+   - [ ] Device matrix: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
+   - [ ] Android version matrix: 13, 14, 15, 16
+   - [ ] Stress tests: large files (10k+ lines), large projects (1000+ files)
+   - [ ] Extension tests: Python LSP, ESLint, GitLens, themes, icon packs
+   - [ ] Lifecycle tests: background/foreground, split-screen, rotation, low memory
    - **Toolchain compatibility verification** *(requires physical device)*:
      - [ ] `go version` → works after asset pack install
      - [ ] `ruby --version`, `irb`, `gem` → works after install
@@ -448,24 +437,77 @@ M6 (Release)   → Play Store release
      - [ ] Verify toolchains persist across app restarts
      - [ ] Verify uninstall cleans up correctly
 
-8. **Play Store listing** *(requires Google Play Developer account)*
-   - Title: "VSCodroid"
-   - Description: feature list, compatibility notes
-   - Screenshots: phone + tablet
-   - Category: Developer Tools
-   - Content rating questionnaire
-   - Prepare for binary execution policy review
+5. **Security review**
+   - [ ] Audit WebView security: CSP headers, JS bridge exposure, localhost-only binding
+   - [ ] Verify no secrets in APK (no API keys, tokens, or private keys bundled)
+   - [ ] Review all workbench.js patches for unintended side effects
+   - [ ] Confirm Android app sandbox isolation (no world-readable files)
+   - [ ] Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
 
-9. **Launch**
-   - Internal testing track -> closed beta -> open beta -> production
-   - Monitor crash reports and user feedback
-   - Hotfix pipeline for critical bugs
+6. **Release build & signing**
+   - [ ] Generate release signing keystore (store securely, NOT in repo)
+   - [ ] Configure `signingConfigs.release` in build.gradle.kts
+   - [ ] Enable R8/ProGuard minification for Kotlin code
+   - [ ] Test release build on device (ProGuard can break reflection-based code)
+   - [ ] Verify `useLegacyPackaging = true` preserved in release build
+
+7. **Android App Bundle & size audit**
+   - [ ] Build release AAB (signed)
+   - [ ] Measure base APK size (without toolchains) — target < 150 MB
+   - [ ] Verify per-device delivery sizes via bundletool
+   - [ ] Document per-toolchain on-demand sizes
+   - [ ] Test asset pack download flow end-to-end on internal track
+
+#### Phase 3 — Branding & Store Presence
+
+8. **Branding**
+   - [ ] Design VSCodroid icon/logo (original, not VS Code's)
+   - [ ] Adaptive icon for Android 13+ (foreground + background layers)
+   - [ ] App screenshots for Play Store (phone + tablet)
+   - [ ] Feature graphic (1024x500)
+
+9. **Legal compliance**
+   - Disclaimer in app About screen
+   - Privacy policy (required for Play Store)
+   - MIT license notice for VS Code source
+   - Trademark disclaimers
+
+10. **Documentation**
+    - README.md with project overview
+    - CONTRIBUTING.md for contributors
+    - User guide: first-run, keyboard shortcuts, extensions
+    - Known limitations and FAQ
+
+11. **CI/CD pipeline**
+    - GitHub Actions: build debug APK on PR, release AAB on tag
+    - Automated testing on Firebase Test Lab (physical ARM64 devices)
+    - Release workflow: tag → build → sign → upload to Play Store
+
+#### Phase 4 — Ship
+
+12. **Play Store listing** *(requires Google Play Developer account)*
+    - Title: "VSCodroid"
+    - Short description + full description with feature list
+    - Screenshots: phone + tablet (from task 8)
+    - Category: Developer Tools
+    - Content rating questionnaire
+    - Prepare for binary execution policy review (explain .so trick, local-only execution)
+
+13. **Launch**
+    - Internal testing track → closed beta → open beta → production
+    - Monitor crash reports (CrashReporter) and user feedback
+    - Hotfix pipeline for critical bugs
+    - Post-launch: respond to Play Store reviews
 
 ### Success Criteria:
-- [ ] SSH push/pull to GitHub works
+- [x] Extension secrets persist across app restarts (OAuth tokens, API keys)
+- [x] App recovers cleanly from close/reopen (no white screen)
+- [ ] SSH push/pull to GitHub works end-to-end
+- [ ] App upgrade preserves user data (settings, extensions, SSH keys, projects)
+- [ ] Security review completed (no exposed secrets, sandbox intact)
 - [ ] Tested on 4+ device models across Android 13-16
 - [ ] Go/Ruby/Java verified working on physical device after asset pack install
-- [ ] Base APK/AAB size < 150 MB (toolchains delivered on-demand via M5)
+- [ ] Release AAB signed and < 150 MB (base, without toolchains)
 - [ ] App published on Play Store
 - [ ] Passes Play Store review (no policy violations)
 - [ ] No critical bugs in first 48 hours
