@@ -457,8 +457,8 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Verify `useLegacyPackaging = true` preserved in release build
 
 6. **Device testing** _(on release build)_
-   - [x] Device matrix: OnePlus CPH2791 (flagship, 16 GB), POCO 22071219CG (budget, 4 GB)
-   - [x] Android version matrix: Android 14 (API 34, POCO) + Android 16 (API 36, OnePlus)
+   - [x] Device matrix: OnePlus CPH2791 (flagship, 16 GB), POCO 22071219CG (budget, 4 GB), Redmi 2201117TY (mid-range, 6 GB)
+   - [x] Android version matrix: Android 13 (API 33, Redmi) + Android 14 (API 34, POCO) + Android 16 (API 36, OnePlus)
    - [ ] Stress tests: large files (10k+ lines), large projects (1000+ files)
    - [x] Extension tests: 10 bundled extensions activate, Welcome walkthrough renders, theme picker works
    - [x] Lifecycle tests: background/foreground (server survives), rotation (adapts), force-stop + cold restart (recovers)
@@ -472,7 +472,7 @@ _Order: audit code → configure release build → test on devices → validate 
      - [ ] `java -version`, `javac -version` → works after install
      - [ ] Verify toolchains persist across app restarts
      - [ ] Verify uninstall cleans up correctly
-   - **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS at idle (app + Node.js server)
+   - **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 7. **Android App Bundle & size audit**
    - [x] Build release AAB (signed) — 253 MB total (includes on-demand packs)
@@ -531,7 +531,7 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] SSH push/pull to GitHub works end-to-end (SSH stack verified, git uses bundled ssh via `GIT_SSH_COMMAND`)
 - [ ] App upgrade preserves user data (settings, extensions, SSH keys, projects)
 - [x] Security review completed (network config, URL validation, file permissions)
-- [x] Tested on 2 device models across Android 14-16 (OnePlus flagship 16GB + POCO budget 4GB)
+- [x] Tested on 3 device models across Android 13-16 (OnePlus flagship 16GB, POCO budget 4GB, Redmi mid-range 6GB)
 - [ ] Go/Ruby/Java verified working on physical device after asset pack install
 - [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
 - [ ] App published on Play Store
