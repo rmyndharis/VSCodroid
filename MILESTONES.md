@@ -453,7 +453,7 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Generate release signing keystore (store securely, NOT in repo)
    - [x] Configure `signingConfigs.release` in build.gradle.kts (env vars: VSCODROID_KEYSTORE_*)
    - [x] Enable R8/ProGuard minification for Kotlin code (already enabled, 165→138 MB)
-   - [ ] Test release build on device (ProGuard can break reflection-based code)
+   - [x] Test release build on device — R8 minification verified, no reflection/bridge issues, all components functional
    - [x] Verify `useLegacyPackaging = true` preserved in release build
 
 6. **Device testing** _(on release build)_
