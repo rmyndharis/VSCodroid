@@ -459,7 +459,7 @@ _Order: audit code → configure release build → test on devices → validate 
 6. **Device testing** _(on release build)_
    - [x] Device matrix: OnePlus CPH2791 (flagship, 16 GB), POCO 22071219CG (budget, 4 GB), Redmi 2201117TY (mid-range, 6 GB)
    - [x] Android version matrix: Android 13 (API 33, Redmi) + Android 14 (API 34, POCO) + Android 16 (API 36, OnePlus)
-   - [ ] Stress tests: large files (10k+ lines), large projects (1000+ files)
+   - [x] Stress tests: 12,720-line JS file opens with syntax highlighting; 1,100-file project loads in explorer (lazy virtualized); memory stable at 143-145 MB PSS; zero crashes
    - [x] Extension tests: 10 bundled extensions activate, Welcome walkthrough renders, theme picker works
    - [x] Lifecycle tests: background/foreground (server survives), rotation (adapts), force-stop + cold restart (recovers)
    - **worker_thread verification** _(validates M5 task 1)_:
