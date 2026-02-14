@@ -34,6 +34,20 @@
 
 ---
 
+> [!IMPORTANT]
+>
+> ### 🧪 Closed Testing — Now Live on Google Play!
+>
+> VSCodroid is now available as a **Closed Test** on Google Play:
+>
+> 🔗 **[play.google.com/apps/testing/com.vscodroid](https://play.google.com/apps/testing/com.vscodroid)**
+>
+> Since this is a closed test, your Google account email must be registered as a tester before you can access the download.
+>
+> **Want to join?** Send an email to **[yudhi@rmyndharis.com](mailto:yudhi@rmyndharis.com)** with the Google account email address you'd like registered as a tester.
+
+---
+
 > _What if the next great developer is holding a phone, not a laptop?_
 > _What if a career in software could start without buying expensive hardware?_
 > _What if all you needed was curiosity, effort, and the device already in your pocket?_
@@ -168,13 +182,15 @@ flowchart TD
 
 ## 🚀 Getting Started
 
-### Install from Release
+### Install from Google Play (Closed Testing)
 
-1. Download from [Releases](https://github.com/rmyndharis/VSCodroid/releases) (Play Store coming soon).
-2. Install on your Android device.
+1. **Request access** — Email [yudhi@rmyndharis.com](mailto:yudhi@rmyndharis.com) with your Google account email to be added as a tester.
+2. Once approved, install from [Google Play Closed Test](https://play.google.com/apps/testing/com.vscodroid).
 3. Open the app. Core binaries extract automatically (~5-10 seconds).
 4. Pick your languages (Go, Rust, Java, etc.). They install automatically.
 5. Start coding. Editor, terminal, and tools are ready.
+
+> You can also download APKs directly from [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases).
 
 ### What's Included
 

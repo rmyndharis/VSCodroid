@@ -19,9 +19,9 @@ set -euo pipefail
 #   ./scripts/package-toolchains.sh ruby java     # Package Ruby and Java
 #
 # Output:
-#   toolchain-zips/toolchain-go.zip    (~53 MB)
-#   toolchain-zips/toolchain-ruby.zip  (~10 MB)
-#   toolchain-zips/toolchain-java.zip  (~55 MB)
+#   toolchain-zips/toolchain_go.zip    (~53 MB)
+#   toolchain-zips/toolchain_ruby.zip  (~10 MB)
+#   toolchain-zips/toolchain_java.zip  (~55 MB)
 #
 # The ZIPs are intended to be attached to GitHub Releases so that sideloaded
 # APK users (not from Play Store) can download toolchains manually. The app's
@@ -75,7 +75,7 @@ for tc in "${REQUESTED[@]}"; do
     assets_dir="$(get_assets_dir "$tc")"
     manifest="$assets_dir/toolchain_$tc.json"
     usr_dir="$assets_dir/usr"
-    zip_file="$OUTPUT_DIR/toolchain-$tc.zip"
+    zip_file="$OUTPUT_DIR/toolchain_$tc.zip"
 
     echo "--- $tc ---"
 
@@ -124,7 +124,7 @@ for tc in "${REQUESTED[@]}"; do
     TOTAL_BYTES=$((TOTAL_BYTES + zip_bytes))
     PACKAGED=$((PACKAGED + 1))
 
-    echo "  Output: toolchain-$tc.zip (${zip_mb} MB)"
+    echo "  Output: toolchain_$tc.zip (${zip_mb} MB)"
     echo ""
 done
 
@@ -134,7 +134,7 @@ if [ "$PACKAGED" -gt 0 ]; then
     total_mb=$(echo "scale=1; $TOTAL_BYTES / 1048576" | bc)
     echo "  Packaged: $PACKAGED toolchain(s), ${total_mb} MB total"
     echo ""
-    ls -lh "$OUTPUT_DIR"/toolchain-*.zip 2>/dev/null
+    ls -lh "$OUTPUT_DIR"/toolchain_*.zip 2>/dev/null
     echo ""
     echo "Upload these ZIPs to GitHub Releases for sideload distribution."
 fi

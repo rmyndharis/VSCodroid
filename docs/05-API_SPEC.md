@@ -47,9 +47,9 @@ These methods are called from Kotlin via `evaluateJavascript()`:
 ```typescript
 // Injected function: dispatch keyboard event to VS Code
 interface KeyEvent {
-  key: string;       // "Tab", "Escape", "ArrowLeft", etc.
-  code: string;      // "Tab", "Escape", "ArrowLeft", etc.
-  keyCode: number;   // Legacy keyCode
+  key: string; // "Tab", "Escape", "ArrowLeft", etc.
+  code: string; // "Tab", "Escape", "ArrowLeft", etc.
+  keyCode: number; // Legacy keyCode
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
@@ -139,6 +139,35 @@ fun requestStoragePermission(authToken: String): Boolean
 // Returns: true if already granted
 ```
 
+#### Storage Management
+
+```kotlin
+@JavascriptInterface
+fun getRecentFolders(authToken: String): String
+// Returns JSON array of recently opened SAF folder URIs
+// Format: [{"uri": "content://...", "displayName": "MyProject", "lastOpened": 1700000000}]
+
+@JavascriptInterface
+fun openRecentFolder(authToken: String, uriString: String): Boolean
+// Re-opens a previously granted SAF folder by URI
+// Returns: true if URI is still valid and accessible
+
+@JavascriptInterface
+fun getStorageBreakdown(authToken: String): String
+// Returns JSON with per-component disk usage in bytes:
+// {"vscode_server": N, "extensions": N, "user_data": N, "logs": N,
+//  "tools": N, "saf_mirrors": N, "cache": N, "total": N}
+
+@JavascriptInterface
+fun clearCaches(authToken: String): Long
+// Clears npm-cache, tmp dir, crash logs, VS Code logs
+// Returns: number of bytes freed
+
+@JavascriptInterface
+fun getAvailableStorage(authToken: String): Long
+// Returns: available disk space in bytes
+```
+
 #### Device Info
 
 ```kotlin
@@ -190,6 +219,53 @@ fun logToNative(level: String, tag: String, message: String)
 // level: "debug", "info", "warn", "error"
 ```
 
+#### Crash Reporting
+
+```kotlin
+@JavascriptInterface
+fun getLastCrash(authToken: String): String?
+// Returns the most recent crash log text, or null if no crashes recorded
+// Privacy: crash logs are stored locally only, never transmitted
+
+@JavascriptInterface
+fun generateBugReport(authToken: String): String
+// Generates a comprehensive bug report containing:
+// - Device info (model, Android version, app version)
+// - Memory usage
+// - Recent crash logs (up to 3)
+// - Last 200 lines of Node.js server output
+
+@JavascriptInterface
+fun clearCrashLogs(authToken: String)
+// Clears all stored crash logs
+```
+
+#### SSH Key Management
+
+```kotlin
+@JavascriptInterface
+fun generateSshKey(authToken: String, keyType: String): String?
+// Generates an SSH keypair in ~/.ssh/
+// keyType: "ed25519" (default) or "rsa"
+// Returns: public key string, or null on failure
+```
+
+#### Toolchain Control
+
+```kotlin
+@JavascriptInterface
+fun cancelToolchainInstall(authToken: String)
+// Cancels an in-progress toolchain download/installation
+```
+
+#### About
+
+```kotlin
+@JavascriptInterface
+fun showAboutDialog(authToken: String)
+// Shows the native About dialog with version info, licenses, and links
+```
+
 ---
 
 ## 3. (B) VS Code Remote Protocol
@@ -198,22 +274,23 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 
 ### 3.1 HTTP Endpoints (Served by VS Code Server)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Serve vscode-web index.html |
-| `/static/**` | GET | Serve static assets (JS, CSS, fonts, images) |
-| `/healthz` | GET | Health check (returns 200 when server ready) |
-| `/vscode-remote-resource` | GET | Serve workspace files to web client |
+| Endpoint                  | Method | Description                                  |
+| ------------------------- | ------ | -------------------------------------------- |
+| `/`                       | GET    | Serve vscode-web index.html                  |
+| `/static/**`              | GET    | Serve static assets (JS, CSS, fonts, images) |
+| `/healthz`                | GET    | Health check (returns 200 when server ready) |
+| `/vscode-remote-resource` | GET    | Serve workspace files to web client          |
 
 ### 3.2 WebSocket Connection
 
-| Endpoint | Description |
-|----------|-------------|
+| Endpoint                 | Description                                    |
+| ------------------------ | ---------------------------------------------- |
 | `ws://localhost:PORT/ws` | Main RPC channel between web client and server |
 
 **Protocol**: VS Code's `IExtHostRpcProtocol` — binary-framed messages with JSON-RPC semantics.
 
 **Message types** (handled by VS Code internally):
+
 - File system operations (read, write, stat, readdir, watch)
 - Extension Host RPC (activate, deactivate, API calls)
 - Terminal I/O (create session, write, resize, kill)
@@ -284,6 +361,7 @@ Response timeout/error: Server not ready or crashed
 ```
 
 **Polling strategy**:
+
 ```
 Initial:   poll every 200ms for up to 30 seconds
 Running:   poll every 5 seconds (background watchdog)
@@ -371,34 +449,34 @@ flowchart TD
 
 ```typescript
 interface ToolchainManager {
-    // List available toolchains
-    listAvailable(): Promise<Toolchain[]>;
+  // List available toolchains
+  listAvailable(): Promise<Toolchain[]>;
 
-    // List installed toolchains
-    listInstalled(): Promise<Toolchain[]>;
+  // List installed toolchains
+  listInstalled(): Promise<Toolchain[]>;
 
-    // Request toolchain asset pack from Play Store and configure
-    install(id: string, onProgress: (percent: number) => void): Promise<void>;
+  // Request toolchain asset pack from Play Store and configure
+  install(id: string, onProgress: (percent: number) => void): Promise<void>;
 
-    // Remove installed toolchain (free storage)
-    uninstall(id: string): Promise<void>;
+  // Remove installed toolchain (free storage)
+  uninstall(id: string): Promise<void>;
 
-    // Check if toolchain asset pack is downloaded
-    isInstalled(id: string): boolean;
+  // Check if toolchain asset pack is downloaded
+  isInstalled(id: string): boolean;
 
-    // Check if toolchain needed for file type
-    suggestForFile(filename: string): Toolchain | null;
+  // Check if toolchain needed for file type
+  suggestForFile(filename: string): Toolchain | null;
 }
 
 interface Toolchain {
-    id: string;            // "go", "rust", "java"
-    name: string;          // "Go"
-    version: string;       // "1.22"
-    sizeMb: number;        // 60
-    installed: boolean;    // Whether asset pack is downloaded and extracted
-    installPath?: string;  // e.g., "$PREFIX/lib/go"
-    fileAssociations: string[];  // [".go", "go.mod"]
-    recommendedExtensions: string[];  // ["golang.Go"]
+  id: string; // "go", "rust", "java"
+  name: string; // "Go"
+  version: string; // "1.22"
+  sizeMb: number; // 60
+  installed: boolean; // Whether asset pack is downloaded and extracted
+  installPath?: string; // e.g., "$PREFIX/lib/go"
+  fileAssociations: string[]; // [".go", "go.mod"]
+  recommendedExtensions: string[]; // ["golang.Go"]
 }
 ```
 
@@ -432,37 +510,37 @@ Exit codes:
 
 ### 7.1 Server Errors
 
-| Code | Name | Description |
-|------|------|-------------|
-| E001 | SERVER_START_FAILED | Node.js failed to start |
-| E002 | SERVER_TIMEOUT | Server didn't become ready within timeout |
-| E003 | SERVER_CRASH | Server process exited unexpectedly |
-| E004 | SERVER_OOM | Server killed due to out-of-memory |
-| E005 | PORT_IN_USE | Localhost port already in use |
+| Code | Name                | Description                               |
+| ---- | ------------------- | ----------------------------------------- |
+| E001 | SERVER_START_FAILED | Node.js failed to start                   |
+| E002 | SERVER_TIMEOUT      | Server didn't become ready within timeout |
+| E003 | SERVER_CRASH        | Server process exited unexpectedly        |
+| E004 | SERVER_OOM          | Server killed due to out-of-memory        |
+| E005 | PORT_IN_USE         | Localhost port already in use             |
 
 ### 7.2 WebView Errors
 
-| Code | Name | Description |
-|------|------|-------------|
-| E101 | WEBVIEW_CRASH | WebView renderer process crashed |
-| E102 | WEBVIEW_TOO_OLD | WebView version below minimum (Chrome 105) |
-| E103 | WEBVIEW_LOAD_FAILED | Failed to load VS Code UI from localhost |
+| Code | Name                | Description                                |
+| ---- | ------------------- | ------------------------------------------ |
+| E101 | WEBVIEW_CRASH       | WebView renderer process crashed           |
+| E102 | WEBVIEW_TOO_OLD     | WebView version below minimum (Chrome 105) |
+| E103 | WEBVIEW_LOAD_FAILED | Failed to load VS Code UI from localhost   |
 
 ### 7.3 Binary Errors
 
-| Code | Name | Description |
-|------|------|-------------|
-| E201 | EXTRACT_FAILED | Failed to extract assets on first run |
-| E202 | BINARY_NOT_FOUND | Expected binary missing from nativeLibraryDir |
-| E203 | BINARY_NOT_EXECUTABLE | Binary lacks execute permission |
-| E204 | STORAGE_FULL | Insufficient storage for extraction |
+| Code | Name                  | Description                                   |
+| ---- | --------------------- | --------------------------------------------- |
+| E201 | EXTRACT_FAILED        | Failed to extract assets on first run         |
+| E202 | BINARY_NOT_FOUND      | Expected binary missing from nativeLibraryDir |
+| E203 | BINARY_NOT_EXECUTABLE | Binary lacks execute permission               |
+| E204 | STORAGE_FULL          | Insufficient storage for extraction           |
 
 ### 7.4 Toolchain Errors
 
-| Code | Name | Description |
-|------|------|-------------|
+| Code | Name            | Description                                          |
+| ---- | --------------- | ---------------------------------------------------- |
 | E301 | DOWNLOAD_FAILED | Toolchain asset pack download failed (network error) |
-| E302 | EXTRACT_FAILED | Toolchain asset pack extraction failed |
-| E303 | STORAGE_FULL | Insufficient storage for toolchain |
-| E304 | ASSET_NOT_FOUND | Toolchain not available in Play Store asset packs |
-| E305 | CONFIG_FAILED | Failed to configure PATH/env for toolchain |
+| E302 | EXTRACT_FAILED  | Toolchain asset pack extraction failed               |
+| E303 | STORAGE_FULL    | Insufficient storage for toolchain                   |
+| E304 | ASSET_NOT_FOUND | Toolchain not available in Play Store asset packs    |
+| E305 | CONFIG_FAILED   | Failed to configure PATH/env for toolchain           |

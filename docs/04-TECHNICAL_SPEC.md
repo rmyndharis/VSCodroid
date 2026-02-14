@@ -24,6 +24,7 @@ flowchart TD
 **Source**: Node.js LTS (e.g., v20.x), patched with Termux patches
 
 **Toolchain**:
+
 ```
 NDK_PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
 CC=$NDK_PATH/bin/aarch64-linux-android28-clang
@@ -33,6 +34,7 @@ RANLIB=$NDK_PATH/bin/llvm-ranlib
 ```
 
 **Configure flags**:
+
 ```bash
 ./configure \
   --dest-cpu=arm64 \
@@ -48,6 +50,7 @@ RANLIB=$NDK_PATH/bin/llvm-ranlib
 ```
 
 **Post-build**:
+
 ```bash
 # Strip debug symbols
 aarch64-linux-android-strip --strip-unneeded out/Release/node
@@ -60,6 +63,7 @@ file libnode.so  # ELF 64-bit LSB pie executable, ARM aarch64
 ```
 
 **16KB page alignment** (Android 16):
+
 ```bash
 # Add to configure/build flags
 LDFLAGS="-Wl,-z,max-page-size=16384"
@@ -70,6 +74,7 @@ LDFLAGS="-Wl,-z,max-page-size=16384"
 **Source**: CPython 3.11+, Termux build recipes as reference
 
 **Key considerations**:
+
 - Cross-compile with android-ndk toolchain
 - Bundle python3 binary + lib/python3.11/ stdlib
 - Include pip via ensurepip
@@ -81,6 +86,7 @@ LDFLAGS="-Wl,-z,max-page-size=16384"
 **Source**: node-pty npm package
 
 **Build**:
+
 ```bash
 # node-gyp cross-compile
 node-gyp rebuild \
@@ -96,6 +102,7 @@ cp build/Release/pty.node app/src/main/jniLibs/arm64-v8a/libnode_pty.so
 ### 1.5 code-server Build (VS Code)
 
 **Process**:
+
 ```bash
 # 1. Clone code-server fork
 git clone https://github.com/rmyndharis/code-server.git
@@ -122,13 +129,14 @@ yarn gulp vscode-reh-min
 # lib/vscode/node_modules/@vscode/ripgrep/bin/rg  → bundled inside vscode-reh assets
 ```
 
-**Note on ripgrep delivery**: VS Code search service uses `@vscode/ripgrep` from `node_modules` shipped with `vscode-reh`. It is delivered as a server dependency, not as a standalone `lib*.so` in `jniLibs`.
+**Note on ripgrep delivery**: VS Code search requires ripgrep for file search. The build script (`download-vscode-server.sh`) extracts the ARM64 `rg` binary from `@vscode/ripgrep` in `node_modules` (or downloads it from [microsoft/ripgrep-prebuilt](https://github.com/microsoft/ripgrep-prebuilt)) and bundles it as `libripgrep.so` in `jniLibs/arm64-v8a/`. A symlink `rg → libripgrep.so` is created at first run.
 
 ### 1.6 Git Cross-Compilation
 
 **Source**: Git 2.40+ (Termux recipes as baseline)
 
 **Toolchain**:
+
 ```bash
 CC=$NDK_PATH/bin/aarch64-linux-android28-clang
 AR=$NDK_PATH/bin/llvm-ar
@@ -136,6 +144,7 @@ RANLIB=$NDK_PATH/bin/llvm-ranlib
 ```
 
 **Configure/build**:
+
 ```bash
 make configure
 ./configure \
@@ -149,6 +158,7 @@ make install
 ```
 
 **Output artifacts**:
+
 - `libgit.so` (main git executable via `.so` trick)
 - `usr/lib/git-core/*` helper binaries
 
@@ -157,6 +167,7 @@ make install
 **Source**: bash 5.x (Termux-compatible patches)
 
 **Configure/build**:
+
 ```bash
 ./configure \
   --host=aarch64-linux-android \
@@ -168,6 +179,7 @@ make install
 ```
 
 **Output artifacts**:
+
 - `libbash.so`
 - `usr/share/bash/*` runtime files
 
@@ -176,10 +188,12 @@ make install
 **Source**: tmux 3.x
 
 **Dependencies**:
+
 - `libevent` (cross-compiled)
 - `ncurses`/terminfo data
 
 **Configure/build**:
+
 ```bash
 ./configure \
   --host=aarch64-linux-android \
@@ -192,6 +206,7 @@ make install
 ```
 
 **Output artifacts**:
+
 - `libtmux.so`
 - `usr/share/terminfo/*`
 
@@ -200,6 +215,7 @@ make install
 **Source**: GNU make 4.x
 
 **Configure/build**:
+
 ```bash
 ./configure \
   --host=aarch64-linux-android \
@@ -210,6 +226,7 @@ make install
 ```
 
 **Output artifacts**:
+
 - `libmake.so`
 
 ### 1.10 Gradle Build Configuration
@@ -489,15 +506,11 @@ flowchart TD
   CS --> CS8["github-auth.diff (OAuth flow)"]
   CS --> CS9["local-storage.diff (state persistence)"]
 
-  P --> VC["vscodroid/ (custom patches)"]
-  VC --> VC1["ext-host-worker.diff (Extension Host -> worker_thread)"]
-  VC --> VC2["terminal-tmux.diff (terminal -> tmux integration)"]
-  VC --> VC3["touch-ui.diff (mobile touch adjustments)"]
-  VC --> VC4["keyboard-aware.diff (virtual keyboard viewport handling)"]
-  VC --> VC5["android-fs.diff (Android file system bridge / SAF)"]
-  VC --> VC6["memory-hooks.diff (low-memory signal handling)"]
-  VC --> VC7["android-intent.diff (Open with VSCodroid)"]
-  VC --> VC8["orientation.diff (screen rotation handling)"]
+  P --> VC["vscodroid/ (inline patches in download-vscode-server.sh)"]
+  VC --> VC1["Extension Host → worker_thread (inline Python, 3 patches)"]
+  VC --> VC2["ptyHost → worker_thread (inline Python, 2 patches)"]
+  VC --> VC3["IPC bridge module injection (inline sed)"]
+  VC --> VC4["Future: touch-ui, keyboard-aware, android-fs, etc."]
 ```
 
 ### 6.2 Patch Application
@@ -518,15 +531,15 @@ for patch in patches/code-server/*.diff; do
     git -C "$VSCODE_DIR" apply "$patch"
 done
 
-# Apply VSCodroid patches
-for patch in patches/vscodroid/*.diff; do
-    echo "Applying: $patch"
-    git -C "$VSCODE_DIR" apply --check "$patch" || {
-        echo "FAILED: $patch"
-        exit 1
-    }
-    git -C "$VSCODE_DIR" apply "$patch"
-done
+# Apply VSCodroid-specific patches (inline in download-vscode-server.sh)
+# These are applied as Python string replacements during the server build.
+# Patches include:
+#   - Extension Host: child_process.fork() → worker_threads.Worker()
+#   - ptyHost: child_process.fork() → worker_threads.Worker()
+#   - IPC bridge: process.send/on("message") compatibility for worker_threads
+#
+# See: scripts/download-vscode-server.sh lines 198-337
+# Note: patches/vscodroid/ directory is reserved for future .diff-based patches.
 
 echo "All patches applied successfully"
 ```
@@ -536,6 +549,7 @@ echo "All patches applied successfully"
 This patch is implemented in M4 (M1-M3 still use `child_process.fork()`).
 
 **Primary VS Code files to patch** (paths may shift by upstream version):
+
 - `src/vs/workbench/api/node/extensionHostProcess.ts`
 - `src/vs/server/node/remoteExtensionHostAgentServer.ts`
 - `src/vs/workbench/services/extensions/common/extensionHostEnv.ts`
@@ -543,27 +557,30 @@ This patch is implemented in M4 (M1-M3 still use `child_process.fork()`).
 
 **Fork → Worker mapping**:
 
-| Existing behavior | worker_thread replacement |
-|-------------------|---------------------------|
+| Existing behavior                           | worker_thread replacement                                 |
+| ------------------------------------------- | --------------------------------------------------------- |
 | `child_process.fork(module, args, options)` | `new Worker(module, { argv, env, execArgv, workerData })` |
-| `child.send(message)` | `worker.postMessage(message)` |
-| `child.on('message', ...)` | `worker.on('message', ...)` |
-| `child.on('exit', code)` | `worker.on('exit', code)` |
-| `child.kill()` | `worker.terminate()` |
-| stdio pipes | worker message channel + explicit log forwarding |
+| `child.send(message)`                       | `worker.postMessage(message)`                             |
+| `child.on('message', ...)`                  | `worker.on('message', ...)`                               |
+| `child.on('exit', code)`                    | `worker.on('exit', code)`                                 |
+| `child.kill()`                              | `worker.terminate()`                                      |
+| stdio pipes                                 | worker message channel + explicit log forwarding          |
 
 **Crash isolation and supervision**:
+
 1. Worker runs inside main Node.js process, so crash handling must be explicit.
 2. Supervisor restarts Extension Host worker with exponential backoff.
 3. If restart budget exceeded (e.g., 3 crashes in 60s), server enters degraded mode and prompts user to disable problematic extensions.
 4. Main server process is only restarted if worker recovery fails repeatedly.
 
 **Compatibility constraints**:
+
 - Extensions that depend on process-level isolation or unsupported native binaries may fail.
 - Existing extension allowlist/denylist policy must be applied before worker activation.
 - Migration must preserve VS Code RPC protocol semantics (message framing and ordering).
 
 **Validation checklist (M4 gate)**:
+
 - Extension activation/deactivation parity test vs M3 baseline.
 - Fault injection: throw uncaught error in worker; verify supervisor restart.
 - Long-run stability: 2-hour session with extensions + terminal + SCM.
@@ -622,6 +639,7 @@ assetPacks += listOf(
 ```
 
 Each asset pack module:
+
 ```kotlin
 // toolchain_go/build.gradle.kts
 plugins {
@@ -657,6 +675,7 @@ class LanguagePickerActivity : AppCompatActivity() {
 ```
 
 **Flow**:
+
 1. First launch → check if Language Picker has been shown before
 2. Show Language Picker with checkboxes for each toolchain
 3. User selects languages, taps "Install"
@@ -738,6 +757,7 @@ Mapping to VS Code version:
 ```
 
 **Backup rules** (`res/xml/backup_rules.xml`):
+
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>

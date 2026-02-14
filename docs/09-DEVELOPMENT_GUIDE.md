@@ -10,27 +10,27 @@
 
 ### 1.1 Hardware
 
-| Requirement | Minimum | Recommended |
-|------------|---------|-------------|
-| Development machine | Any x86_64 with 16GB RAM | macOS/Linux, 32GB RAM, SSD |
-| Android device | ARM64, Android 13+, 4GB RAM | Pixel 7/8, 8GB RAM, Android 14+ |
-| USB cable | For ADB debugging | USB-C to USB-C |
+| Requirement         | Minimum                     | Recommended                     |
+| ------------------- | --------------------------- | ------------------------------- |
+| Development machine | Any x86_64 with 16GB RAM    | macOS/Linux, 32GB RAM, SSD      |
+| Android device      | ARM64, Android 13+, 4GB RAM | Pixel 7/8, 8GB RAM, Android 14+ |
+| USB cable           | For ADB debugging           | USB-C to USB-C                  |
 
 > **Note**: x86_64 Android emulators cannot run ARM64 binaries. You MUST have a physical ARM64 device for integration testing.
 
 ### 1.2 Software
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Android Studio | Latest stable with Android API 36 support | IDE, build tools, ADB |
-| Android SDK | API 33-36 | Compilation targets |
-| Android NDK | r27+ | Native binary cross-compilation |
-| JDK | 17 | Android build system |
-| Node.js | 20 LTS | VS Code build, development tools |
-| Yarn | 1.x (Classic) | VS Code build dependency |
-| Python | 3.11+ | Build scripts |
-| Git | 2.40+ | Version control |
-| Docker | Latest (optional) | Reproducible cross-compilation |
+| Tool           | Version                                   | Purpose                          |
+| -------------- | ----------------------------------------- | -------------------------------- |
+| Android Studio | Latest stable with Android API 36 support | IDE, build tools, ADB            |
+| Android SDK    | API 33-36                                 | Compilation targets              |
+| Android NDK    | r27+                                      | Native binary cross-compilation  |
+| JDK            | 17                                        | Android build system             |
+| Node.js        | 20 LTS                                    | VS Code build, development tools |
+| Yarn           | 1.x (Classic)                             | VS Code build dependency         |
+| Python         | 3.11+                                     | Build scripts                    |
+| Git            | 2.40+                                     | Version control                  |
+| Docker         | Latest (optional)                         | Reproducible cross-compilation   |
 
 ### 1.3 Installation
 
@@ -71,7 +71,7 @@ flowchart TD
   PATCH --> P2["vscodroid/ (custom patches)"]
 
   ROOT --> TOOL["toolchains/ (cross-compilation scripts)"]
-  TOOL --> T1["build-node.sh, build-python.sh, build-node-pty.sh"]
+  TOOL --> T1["build-node.sh, build-node-pty.sh"]
   TOOL --> T2["build-git.sh, build-bash.sh, build-tmux.sh"]
   TOOL --> T3["Dockerfile"]
 
@@ -83,10 +83,11 @@ flowchart TD
   TEST --> TE1["projects/ (fixtures)"]
   TEST --> TE2["extensions/ (fixtures)"]
 
-  ROOT --> GH[".github/workflows/ (planned)"]
-  GH --> G1["build.yml (planned)"]
-  GH --> G2["test.yml (planned)"]
-  GH --> G3["release.yml (planned)"]
+  ROOT --> GH[".github/workflows/"]
+  GH --> G1["build.yml"]
+  GH --> G2["lint.yml"]
+  GH --> G3["release.yml"]
+  GH --> G4["pages.yml"]
 ```
 
 ---
@@ -164,6 +165,7 @@ flowchart TD
 ```
 
 **Rules**:
+
 - `main` is always releasable
 - Feature branches from `develop`
 - PRs require at least 1 review
@@ -219,16 +221,14 @@ docs: add testing strategy document
 
 ### 5.3 Patches
 
-- Each patch file should do ONE thing
-- Include descriptive header comments:
-  ```diff
-  # ext-host-worker.diff
-  # Purpose: Run Extension Host as worker_thread instead of child_process.fork
-  # Files modified: src/vs/workbench/api/node/extensionHostProcess.ts
-  # Reason: Reduce phantom process count on Android
-  ```
-- Test patch with `git apply --check` before committing
-- Keep patches as small as possible
+- **code-server patches**: Standard `.diff` files in `patches/code-server/`, applied via `apply-patches.sh`
+- **VSCodroid patches**: Applied as **inline Python string replacements** in `scripts/download-vscode-server.sh` during the build process
+  - Extension Host → `worker_thread` (3 patches)
+  - ptyHost → `worker_thread` (2 patches)
+  - IPC bridge injection for `worker_threads` compatibility
+- Include descriptive header comments for each patch section
+- `patches/vscodroid/` directory is reserved for future `.diff`-based patches
+- Keep patches as small and focused as possible
 
 ---
 
@@ -275,14 +275,14 @@ adb shell ps -A | grep libnode
 
 ### 6.4 Common Issues
 
-| Issue | Diagnosis | Solution |
-|-------|-----------|---------|
-| Server won't start | Check Logcat for Node.js errors | Verify libnode.so exists and has execute permission |
-| WebView blank screen | Chrome DevTools → Console | Check if server is running, correct port |
-| Extension won't install | Chrome DevTools → Network | Check Open VSX connectivity |
-| Terminal not working | Server logs | Verify libtmux.so and libbash.so present |
-| Phantom process killed | `adb shell dumpsys activity processes` | Reduce child process count |
-| OOM crash | `adb shell dumpsys meminfo` | Reduce V8 heap, close unused features |
+| Issue                   | Diagnosis                              | Solution                                            |
+| ----------------------- | -------------------------------------- | --------------------------------------------------- |
+| Server won't start      | Check Logcat for Node.js errors        | Verify libnode.so exists and has execute permission |
+| WebView blank screen    | Chrome DevTools → Console              | Check if server is running, correct port            |
+| Extension won't install | Chrome DevTools → Network              | Check Open VSX connectivity                         |
+| Terminal not working    | Server logs                            | Verify libtmux.so and libbash.so present            |
+| Phantom process killed  | `adb shell dumpsys activity processes` | Reduce child process count                          |
+| OOM crash               | `adb shell dumpsys meminfo`            | Reduce V8 heap, close unused features               |
 
 ---
 
@@ -342,6 +342,8 @@ yarn gulp vscode-web-min                 # Build web client
 yarn gulp vscode-reh-min                 # Build server
 
 # --- Patches ---
-git -C server/lib/vscode apply --check patches/vscodroid/ext-host-worker.diff
-git -C server/lib/vscode diff > patches/vscodroid/new-patch.diff
+# code-server patches: applied via apply-patches.sh
+# VSCodroid patches: applied inline in scripts/download-vscode-server.sh
+# Verify worker_thread patches applied:
+grep -q 'worker_threads' server/vscode-reh/out/vs/workbench/api/node/*.js && echo "ExtHost patch OK"
 ```

@@ -1,0 +1,14 @@
+{
+    "name": "vscodroid-test-extension",
+    "displayName": "VSCodroid Test Extension",
+    "description": "Minimal test extension fixture",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./extension.js",
+    "contributes": {}
+}

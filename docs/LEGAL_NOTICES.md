@@ -257,9 +257,9 @@ All other trademarks are the property of their respective owners. The use of the
 
 For questions about licenses, trademarks, or legal notices:
 
-- **Email**: vscodroid@example.com
+- **Email**: yudhi@rmyndharis.com
 - **GitHub**: https://github.com/anthropics/vscodroid
 
 ---
 
-*This document was last updated on February 13, 2026.*
+_This document was last updated on February 13, 2026._

@@ -24,21 +24,27 @@ All code execution -- whether Node.js, Python, Bash, or any other bundled runtim
 VSCodroid requires the INTERNET permission for the following purposes only:
 
 ### Extension Marketplace (User-Initiated)
+
 When you browse, search for, or install extensions, the app connects to **Open VSX** (https://open-vsx.org), an open-source extension registry operated by the Eclipse Foundation. These requests are made by the VS Code Workbench running in the WebView, not by any analytics or tracking code. Open VSX has its own privacy policy at https://open-vsx.org/about.
 
 ### GitHub Authentication (User-Initiated)
+
 If you choose to sign in to GitHub from within the editor (for example, to use GitHub-related extensions), the app opens a standard OAuth flow in your system browser. VSCodroid does not store or transmit your GitHub credentials. Authentication tokens are stored locally in the app's private storage on your device.
 
 ### Toolchain Downloads (User-Initiated)
+
 Additional programming language toolchains (Go, Rust, Java, Ruby) can be downloaded on-demand via Google Play Asset Delivery. These downloads are handled by the Google Play Store infrastructure. VSCodroid does not collect any data during this process. Google's privacy policy applies to Play Store interactions: https://policies.google.com/privacy.
 
 ### Package Installation (User-Initiated)
+
 When you run commands like `npm install` or `pip install` in the terminal, those package managers connect to their respective registries (npmjs.com, pypi.org, etc.) to download packages. This is standard developer tooling behavior and is entirely under your control.
 
 ### SSH Connections (User-Initiated)
+
 If you use the bundled SSH client to connect to remote servers, those connections are initiated by you and go directly to the server you specify. VSCodroid does not proxy, monitor, or log SSH connections.
 
 ### Internal Communication (Localhost Only)
+
 The VS Code editor UI communicates with the local server process over `localhost` (127.0.0.1). This traffic never leaves your device. It is not accessible to other apps or devices on your network.
 
 ## What We Do NOT Do
@@ -98,9 +104,9 @@ https://github.com/anthropics/vscodroid
 
 If you have questions about this privacy policy, please contact us at:
 
-- **Email**: vscodroid@example.com
+- **Email**: yudhi@rmyndharis.com
 - **GitHub Issues**: https://github.com/anthropics/vscodroid/issues
 
 ---
 
-*VSCodroid is built from the MIT-licensed Code - OSS source code. It is not affiliated with or endorsed by Microsoft Corporation. "Visual Studio Code" and "VS Code" are trademarks of Microsoft Corporation.*
+_VSCodroid is built from the MIT-licensed Code - OSS source code. It is not affiliated with or endorsed by Microsoft Corporation. "Visual Studio Code" and "VS Code" are trademarks of Microsoft Corporation._

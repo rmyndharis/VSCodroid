@@ -29,31 +29,31 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Setup Android project**
-   - New Kotlin Android project (Gradle, minSdk 33, targetSdk 36)
-   - MainActivity with WebView (`VSCodroidWebView` configuration)
-   - SplashActivity for first-run extraction
+   - [x] New Kotlin Android project (Gradle, minSdk 33, targetSdk 36)
+   - [x] MainActivity with WebView (`VSCodroidWebView` configuration)
+   - [x] SplashActivity for first-run extraction
 
 2. **Cross-compile Node.js for ARM64 Android**
-   - Setup NDK r27 toolchain
-   - Apply Termux patches to Node.js source
-   - Build with: --dest-cpu=arm64 --dest-os=android --partly-static --with-intl=small-icu
-   - Strip binary, verify size
-   - Bundle as libnode.so in jniLibs/arm64-v8a/
+   - [x] Setup NDK r27 toolchain
+   - [x] Apply Termux patches to Node.js source
+   - [x] Build with: --dest-cpu=arm64 --dest-os=android --partly-static --with-intl=small-icu
+   - [x] Strip binary, verify size
+   - [x] Bundle as libnode.so in jniLibs/arm64-v8a/
 
 3. **Launch Node.js from Kotlin**
-   - Find binary path via `applicationInfo.nativeLibraryDir` (`Environment.getNodePath`)
-   - `ProcessBuilder` to launch Node.js with VS Code REH server script (`server/server.js`)
-   - Set environment variables (HOME, PATH, LD_LIBRARY_PATH, NODE_PATH, etc.)
-   - Poll localhost:PORT via HTTP health check until server responds (`ProcessManager.waitForReady`)
+   - [x] Find binary path via `applicationInfo.nativeLibraryDir` (`Environment.getNodePath`)
+   - [x] `ProcessBuilder` to launch Node.js with VS Code REH server script (`server/server.js`)
+   - [x] Set environment variables (HOME, PATH, LD_LIBRARY_PATH, NODE_PATH, etc.)
+   - [x] Poll localhost:PORT via HTTP health check until server responds (`ProcessManager.waitForReady`)
 
 4. **Load WebView pointing to localhost**
-   - Configure WebView settings (JS enabled, DOM storage, zoom disabled, etc.)
-   - Load `http://localhost:PORT/` with VS Code Workbench UI
-   - VS Code's internal WebSocket IPC handles bidirectional communication
+   - [x] Configure WebView settings (JS enabled, DOM storage, zoom disabled, etc.)
+   - [x] Load `http://localhost:PORT/` with VS Code Workbench UI
+   - [x] VS Code's internal WebSocket IPC handles bidirectional communication
 
 5. **Foreground Service**
-   - Foreground Service with `specialUse` type to keep Node.js alive (`NodeService`)
-   - Process death detection via watchdog thread + exponential backoff auto-restart (up to 5 attempts)
+   - [x] Foreground Service with `specialUse` type to keep Node.js alive (`NodeService`)
+   - [x] Process death detection via watchdog thread + exponential backoff auto-restart (up to 5 attempts)
 
 ### Success Criteria:
 
@@ -82,49 +82,49 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Build VS Code REH server for ARM64**
-   - Download pre-built VS Code Server (vscode-reh) for Linux ARM64
-   - Apply VSCodroid branding patch (`patches/code-server/product.diff`)
-   - Branding covers: nameShort, nameLong, applicationName, dataFolderName, Open VSX gallery, telemetry off
+   - [x] Download pre-built VS Code Server (vscode-reh) for Linux ARM64
+   - [x] Apply VSCodroid branding patch (`patches/code-server/product.diff`)
+   - [x] Branding covers: nameShort, nameLong, applicationName, dataFolderName, Open VSX gallery, telemetry off
 
 2. **Bundle VS Code server in APK**
-   - Package `vscode-reh/` output into app assets directory
-   - Extract to app-private storage on first run (`FirstRunSetup.extractAssetDir`)
-   - Launch via bundled Node.js binary (`ProcessManager.startServer`)
-   - Web client served by VS Code REH server (bundled in same assets)
+   - [x] Package `vscode-reh/` output into app assets directory
+   - [x] Extract to app-private storage on first run (`FirstRunSetup.extractAssetDir`)
+   - [x] Launch via bundled Node.js binary (`ProcessManager.startServer`)
+   - [x] Web client served by VS Code REH server (bundled in same assets)
 
 3. **File system**
-   - App-external workspace directory (`/storage/emulated/0/Android/data/<pkg>/files/projects`)
-   - Welcome project created on first run (`FirstRunSetup.createWelcomeProject`)
-   - File explorer works via VS Code
+   - [x] App-external workspace directory (`/storage/emulated/0/Android/data/<pkg>/files/projects`)
+   - [x] Welcome project created on first run (`FirstRunSetup.createWelcomeProject`)
+   - [x] File explorer works via VS Code
 
 4. **Cross-compile node-pty for ARM64 Android**
-   - Setup node-gyp cross-compilation with NDK (`scripts/build-node-pty.sh`)
-   - Build `pty.node` for arm64 Android (ELF 64-bit LSB shared object, ARM aarch64)
-   - Bundled inside `vscode-reh/node_modules/node-pty/build/Release/pty.node`
-   - Verify PTY creation works on Android
+   - [x] Setup node-gyp cross-compilation with NDK (`scripts/build-node-pty.sh`)
+   - [x] Build `pty.node` for arm64 Android (ELF 64-bit LSB shared object, ARM aarch64)
+   - [x] Bundled inside `vscode-reh/node_modules/node-pty/build/Release/pty.node`
+   - [x] Verify PTY creation works on Android
 
 5. **Terminal integration**
-   - Bundle bash shell as `libbash.so` in `jniLibs/arm64-v8a/`
-   - Configure terminal profile in VS Code settings (`terminal.integrated.profiles.linux`)
-   - TERMINFO configured via environment variables
-   - Symlinks created in `usr/bin/` via `FirstRunSetup.setupToolSymlinks`
+   - [x] Bundle bash shell as `libbash.so` in `jniLibs/arm64-v8a/`
+   - [x] Configure terminal profile in VS Code settings (`terminal.integrated.profiles.linux`)
+   - [x] TERMINFO configured via environment variables
+   - [x] Symlinks created in `usr/bin/` via `FirstRunSetup.setupToolSymlinks`
 
 6. **tmux bundling**
-   - Cross-compile tmux from Termux packages
-   - Bundle as `libtmux.so` in `jniLibs/arm64-v8a/`
-   - Configure `.tmux.conf` (mouse on, xterm-256color, status off)
-   - Available as standalone terminal multiplexer (manual usage)
+   - [x] Cross-compile tmux from Termux packages
+   - [x] Bundle as `libtmux.so` in `jniLibs/arm64-v8a/`
+   - [x] Configure `.tmux.conf` (mouse on, xterm-256color, status off)
+   - [x] Available as standalone terminal multiplexer (manual usage)
 
 7. **Git integration**
-   - Bundle Git as `libgit.so` in `jniLibs/arm64-v8a/`
-   - Configure `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_SSL_CAPATH` environment variables
-   - Setup git-core symlinks and exec path (`FirstRunSetup.setupGitCore`)
-   - Configure `git.path` in VS Code settings for SCM panel integration
+   - [x] Bundle Git as `libgit.so` in `jniLibs/arm64-v8a/`
+   - [x] Configure `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_SSL_CAPATH` environment variables
+   - [x] Setup git-core symlinks and exec path (`FirstRunSetup.setupGitCore`)
+   - [x] Configure `git.path` in VS Code settings for SCM panel integration
 
 8. **Extension marketplace**
-   - Open VSX gallery configured in `product.json` (`extensionsGallery.serviceUrl`)
-   - Verify search/browse/install works
-   - ripgrep bundled as `libripgrep.so` for VS Code's search functionality (`FirstRunSetup.setupRipgrepVscodeSymlink`)
+   - [x] Open VSX gallery configured in `product.json` (`extensionsGallery.serviceUrl`)
+   - [x] Verify search/browse/install works
+   - [x] ripgrep bundled as `libripgrep.so` for VS Code's search functionality (`FirstRunSetup.setupRipgrepVscodeSymlink`)
 
 ### Success Criteria:
 
@@ -157,52 +157,53 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Extra Key Row** (`ExtraKeyRow.kt`, `KeyPageConfig.kt`, `KeyPageAdapter.kt`)
-   - Multi-page native Android view using `ViewPager2` with dot indicators
-   - Page 1: Tab, Esc, Ctrl (toggle), Alt (toggle), Shift (toggle), `GestureTrackpad`, {}, (), ;, :, ", /
-   - Page 2: additional symbols (|, `, &, \_, [], <>, =, !, #, @)
-   - `GestureTrackpad`: 3-speed drag-to-navigate (Precise/Moderate/Fast gear based on cumulative distance)
-   - Long-press popup for alternate keys (`showLongPressPopup`)
-   - Key injection via `KeyInjector.injectKey()` dispatching JS `KeyboardEvent` to WebView
-   - Modifier interceptor (`setupModifierInterceptor`) intercepts soft keyboard input when Ctrl/Alt active
-   - Show/hide based on keyboard visibility (`WindowInsetsCompat`)
+   - [x] Multi-page native Android view using `ViewPager2` with dot indicators
+   - [x] Page 1: Tab, Esc, Ctrl (toggle), Alt (toggle), Shift (toggle), `GestureTrackpad`, {}, ()
+   - [x] Page 2: common symbols (;, :, ", /, |, `, &, \_)
+   - [x] Page 3: brackets & operators ([, ], <, >, =, !, #, @)
+   - [x] `GestureTrackpad`: 3-speed drag-to-navigate (Precise/Moderate/Fast gear based on cumulative distance)
+   - [x] Long-press popup for alternate keys (`showLongPressPopup`)
+   - [x] Key injection via `KeyInjector.injectKey()` dispatching JS `KeyboardEvent` to WebView
+   - [x] Modifier interceptor (`setupModifierInterceptor`) intercepts soft keyboard input when Ctrl/Alt active
+   - [x] Show/hide based on keyboard visibility (`WindowInsetsCompat`)
 
 2. **Keyboard handling**
-   - `windowSoftInputMode = adjustResize` (in `AndroidManifest.xml`)
-   - WebView viewport resizes when keyboard appears
-   - Cursor scrolls into view via VS Code's built-in behavior
+   - [x] `windowSoftInputMode = adjustResize` (in `AndroidManifest.xml`)
+   - [x] WebView viewport resizes when keyboard appears
+   - [x] Cursor scrolls into view via VS Code's built-in behavior
 
 3. **Touch optimization** (`VSCodroidWebView.kt`)
-   - Disable WebView zoom (`setSupportZoom(false)`, `textZoom = 100`)
-   - Long-press handled via WebView settings (`isLongClickable = false`)
-   - Touch scroll behavior via WebView defaults
+   - [x] Disable WebView zoom (`setSupportZoom(false)`, `textZoom = 100`)
+   - [x] Long-press handled via WebView settings (`isLongClickable = false`)
+   - [x] Touch scroll behavior via WebView defaults
 
 4. **Clipboard bridge** (`ClipboardBridge.kt`)
-   - `ClipboardBridge` class wrapping Android `ClipboardManager`
-   - Methods: `copyToClipboard()`, `readFromClipboard()`, `hasClipboardText()`
-   - Registered via `addJavascriptInterface` in `MainActivity.initBridge()`
+   - [x] `ClipboardBridge` class wrapping Android `ClipboardManager`
+   - [x] Methods: `copyToClipboard()`, `readFromClipboard()`, `hasClipboardText()`
+   - [x] Registered via `addJavascriptInterface` in `MainActivity.initBridge()`
 
 5. **Android back button** (`MainActivity.setupBackNavigation`)
-   - `onBackPressedDispatcher` callback
-   - Calls `window.AndroidBridge?.onBackPressed?.()` in WebView first
-   - Falls back to `moveTaskToBack(true)` if JS doesn't handle it
+   - [x] `onBackPressedDispatcher` callback
+   - [x] Calls `window.AndroidBridge?.onBackPressed?.()` in WebView first
+   - [x] Falls back to `moveTaskToBack(true)` if JS doesn't handle it
 
 6. **Screen orientation & split-screen**
-   - Supports portrait, landscape, and split-screen (`configChanges` in manifest)
-   - Configuration changes handled without recreating activity
+   - [x] Supports portrait, landscape, and split-screen (`configChanges` in manifest)
+   - [x] Configuration changes handled without recreating activity
 
 7. **Accessibility baseline**
-   - `contentDescription` set on every `ExtraKeyButton` with descriptive labels (e.g., "Control modifier", "Escape key")
-   - `GestureTrackpad` has `contentDescription = "Arrow key trackpad. Drag to move cursor."`
-   - Button min height enforced by ExtraKeyRow layout
+   - [x] `contentDescription` set on every `ExtraKeyButton` with descriptive labels (e.g., "Control modifier", "Escape key")
+   - [x] `GestureTrackpad` has `contentDescription = "Arrow key trackpad. Drag to move cursor."`
+   - [x] Button min height enforced by ExtraKeyRow layout
 
 8. **Android Intent: "Open with VSCodroid"** (`AndroidManifest.xml`)
-   - Intent filter registered for broad code file types (text/\*, application/json, etc.)
-   - File reception handled in `MainActivity.handleOpenFileIntent()`
+   - [x] Intent filter registered for broad code file types (text/\*, application/json, etc.)
+   - [x] File reception handled in `MainActivity.handleOpenFileIntent()`
 
 9. **Crash recovery** (`VSCodroidWebViewClient.kt`, `MainActivity.kt`)
-   - `onRenderProcessGone`: calls `recreateWebView()` — removes crashed WebView, creates new, re-setups, reloads VS Code
-   - Node.js death: auto-restart via `NodeService` + foreground service (`ProcessManager`)
-   - `onTrimMemory`: writes memory pressure file + notifies JS via `window.__vscodroid?.onLowMemory?.(level)`
+   - [x] `onRenderProcessGone`: calls `recreateWebView()` — removes crashed WebView, creates new, re-setups, reloads VS Code
+   - [x] Node.js death: auto-restart via `NodeService` + foreground service (`ProcessManager`)
+   - [x] `onTrimMemory`: writes memory pressure file + notifies JS via `window.__vscodroid?.onLowMemory?.(level)`
 
 ### Success Criteria:
 
@@ -233,36 +234,36 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Bundle Python 3 for ARM64 Android** (`scripts/download-python.sh`)
-   - Pre-compiled Python 3.12 from Termux APT repo
-   - `libpython.so` in `jniLibs/arm64-v8a/` + stdlib in `assets/usr/lib/python3.12/`
-   - pip included via `python-pip` Termux package (site-packages)
-   - Symlinks: `python3` and `python` → `libpython.so` via `setupToolSymlinks()`
+   - [x] Pre-compiled Python 3.12 from Termux APT repo
+   - [x] `libpython.so` in `jniLibs/arm64-v8a/` + stdlib in `assets/usr/lib/python3.12/`
+   - [x] pip included via `python-pip` Termux package (site-packages)
+   - [x] Symlinks: `python3` and `python` → `libpython.so` via `setupToolSymlinks()`
 
 2. **Bundle make** (`scripts/download-termux-tools.sh`)
-   - `libmake.so` in `jniLibs/arm64-v8a/`
-   - Symlink: `make` → `libmake.so` via `setupToolSymlinks()`
+   - [x] `libmake.so` in `jniLibs/arm64-v8a/`
+   - [x] Symlink: `make` → `libmake.so` via `setupToolSymlinks()`
 
 3. **npm integration** (`FirstRunSetup.createNpmWrappers`)
-   - npm/npx defined as bash functions in `.bashrc` (not script wrappers — Android noexec restriction)
-   - Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
-   - `.npmrc` created with `script-shell` pointing to `libbash.so`
+   - [x] npm/npx defined as bash functions in `.bashrc` (not script wrappers — Android noexec restriction)
+   - [x] Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
+   - [x] `.npmrc` created with `script-shell` pointing to `libbash.so`
 
 4. **Pre-bundled extensions** (`FirstRunSetup.extractBundledExtensions`)
-   - 6 marketplace extensions bundled offline in `assets/extensions/`:
+   - [x] 6 marketplace extensions bundled offline in `assets/extensions/`:
      - Material Icon Theme, ESLint, Prettier, Python, GitLens, Tailwind CSS
-   - 3 custom VSCodroid extensions:
+   - [x] 3 custom VSCodroid extensions:
      - `vscodroid.vscodroid-welcome-1.0.0` — welcome tab with quick actions
      - `vscodroid.vscodroid-saf-bridge-1.0.0` — SAF storage integration
      - `vscodroid.vscodroid-process-monitor-1.0.0` — phantom process monitoring
-   - `extensions.json` manifest auto-generated on first run
+   - [x] `extensions.json` manifest auto-generated on first run
 
 5. **First-run experience** (`SplashActivity.kt`, `FirstRunSetup.kt`)
-   - `SplashActivity` shows progress during first-run extraction
-   - `FirstRunSetup.runSetup()` with percentage-based progress reporting
-   - Steps: create dirs → extract vscode-reh → extract vscode-web → extract tools →
-     setup git → setup symlinks → extract extensions → configure settings
-   - Welcome project created (`createWelcomeProject`)
-   - Welcome extension provides quick-start tab
+   - [x] `SplashActivity` shows progress during first-run extraction
+   - [x] `FirstRunSetup.runSetup()` with percentage-based progress reporting
+   - [x] Steps: create dirs → extract vscode-reh → extract vscode-web → extract tools →
+         setup git → setup symlinks → extract extensions → configure settings
+   - [x] Welcome project created (`createWelcomeProject`)
+   - [x] Welcome extension provides quick-start tab
 
 ### Success Criteria:
 
@@ -292,47 +293,47 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Error handling & logging** (`Logger.kt`, `CrashReporter.kt`)
-   - `Logger` — structured logging with tag-based filtering
-   - `CrashReporter` — crash reporting initialized in `Application.onCreate`
-   - Low-storage Toast warnings in `MainActivity`
-   - Process crash exit code diagnostics in `ProcessManager`
+   - [x] `Logger` — structured logging with tag-based filtering
+   - [x] `CrashReporter` — crash reporting initialized in `Application.onCreate`
+   - [x] Low-storage Toast warnings in `MainActivity`
+   - [x] Process crash exit code diagnostics in `ProcessManager`
 
 2. **Memory optimization** (`ProcessManager.kt`, `MainActivity.kt`)
-   - V8 `--max-old-space-size=512` set in Node.js launch args
-   - `onTrimMemory` handler: writes memory pressure file + notifies VS Code JS layer
-   - WebView data directory isolated via `WebView.setDataDirectorySuffix("vscodroid")`
+   - [x] V8 `--max-old-space-size=512` set in Node.js launch args
+   - [x] `onTrimMemory` handler: writes memory pressure file + notifies VS Code JS layer
+   - [x] WebView data directory isolated via `WebView.setDataDirectorySuffix("vscodroid")`
 
 3. **Startup time optimization** (`VSCodroidApp.kt`, `SplashActivity.kt`)
-   - WebView pre-warm in `Application.onCreate` — creates and destroys throwaway WebView to trigger Chromium library preload (~200-400ms savings)
-   - `CrashReporter.init(this)` initialized in Application
-   - Node.js server starts during `SplashActivity` extraction
-   - Notification channel created early in Application
+   - [x] WebView pre-warm in `Application.onCreate` — creates and destroys throwaway WebView to trigger Chromium library preload (~200-400ms savings)
+   - [x] `CrashReporter.init(this)` initialized in Application
+   - [x] Node.js server starts during `SplashActivity` extraction
+   - [x] Notification channel created early in Application
 
 4. **Phantom process monitoring** (`process-monitor.js`, `vscodroid-process-monitor` extension)
-   - `process-monitor.js` extracted to `server/` on first run — monitors child process count
-   - `vscodroid.vscodroid-process-monitor` extension bundled — provides in-VS Code UI
-   - Exit code 137 (SIGKILL) handling in `ProcessManager` — detects OOM/phantom kill
-   - Extension Host and ptyHost run as `worker_threads.Worker()` (saves 2 phantom process slots)
+   - [x] `process-monitor.js` extracted to `server/` on first run — monitors child process count
+   - [x] `vscodroid.vscodroid-process-monitor` extension bundled — provides in-VS Code UI
+   - [x] Exit code 137 (SIGKILL) handling in `ProcessManager` — detects OOM/phantom kill
+   - [x] Extension Host and ptyHost run as `worker_threads.Worker()` (saves 2 phantom process slots)
 
 5. **Storage management** (`StorageManager.kt`, `AndroidBridge.kt`)
-   - `StorageManager.getStorageBreakdown()` — per-component usage tracking
-   - `StorageManager.clearCaches()` — clear temporary files
-   - `StorageManager.getAvailableStorage()` — check available space
-   - `StorageManager.isStorageLow()` — low storage warning with Toast
-   - Exposed to JS via `AndroidBridge` (`getStorageInfo`, `clearCaches`, `getAvailableStorage`)
+   - [x] `StorageManager.getStorageBreakdown()` — per-component usage tracking
+   - [x] `StorageManager.clearCaches()` — clear temporary files
+   - [x] `StorageManager.getAvailableStorage()` — check available space
+   - [x] `StorageManager.isStorageLow()` — low storage warning with Toast
+   - [x] Exposed to JS via `AndroidBridge` (`getStorageInfo`, `clearCaches`, `getAvailableStorage`)
 
 6. **GitHub OAuth integration** (`AndroidBridge.kt`, `MainActivity.kt`)
-   - `startGitHubAuth()` opens OAuth URL via Chrome Custom Tabs
-   - Deep link callback: `vscodroid://oauth/github?code=XXX&state=YYY`
-   - `handleOAuthCallback()` in `MainActivity` forwards to VS Code auth handler via JS
-   - Push/pull to GitHub works from VS Code SCM panel after auth
+   - [x] `startGitHubAuth()` opens OAuth URL via Chrome Custom Tabs
+   - [x] Deep link callback: `vscodroid://oauth/github?code=XXX&state=YYY`
+   - [x] `handleOAuthCallback()` in `MainActivity` forwards to VS Code auth handler via JS
+   - [x] Push/pull to GitHub works from VS Code SCM panel after auth
 
 7. **External storage access (SAF)** (`SafStorageManager.kt`, `SafSyncEngine.kt`, `vscodroid-saf-bridge` extension)
-   - Full Storage Access Framework implementation
-   - `SafStorageManager`: folder picker, persisted permissions, mirror directory management
-   - `SafSyncEngine`: initial sync + ongoing `FileObserver` for bidirectional sync
-   - `vscodroid.vscodroid-saf-bridge` extension: VS Code UI for SAF folder management
-   - `AndroidBridge`: JS bridge methods (`openSafFolder`, `getRecentFolders`, `openRecentFolder`)
+   - [x] Full Storage Access Framework implementation
+   - [x] `SafStorageManager`: folder picker, persisted permissions, mirror directory management
+   - [x] `SafSyncEngine`: initial sync + ongoing `FileObserver` for bidirectional sync
+   - [x] `vscodroid.vscodroid-saf-bridge` extension: VS Code UI for SAF folder management
+   - [x] `AndroidBridge`: JS bridge methods (`openSafFolder`, `getRecentFolders`, `openRecentFolder`)
 
 ### Success Criteria:
 
@@ -360,19 +361,19 @@ M6 (Release)   → Play Store release
 
 ### Tasks:
 
-1. **~~worker_thread Extension Host & ptyHost migration~~** _(completed during M4)_
+1. **worker_thread Extension Host & ptyHost migration** _(completed during M4)_
    - [x] Extension Host patched to run as `worker_threads.Worker()` instead of `child_process.fork()`
    - [x] ptyHost patched to run as `worker_threads.Worker()` with graceful disconnect
    - [x] Extensions load correctly under worker_thread mode
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
-2. **~~On-demand toolchain download scripts~~** (`scripts/download-go.sh`, `download-ruby.sh`, `download-java.sh`)
+2. **On-demand toolchain download scripts** (`scripts/download-go.sh`, `download-ruby.sh`, `download-java.sh`)
    - [x] Go from Termux `golang` package (179 MB asset pack, CGO_ENABLED=0)
    - [x] Ruby from Termux `ruby` + libgmp + libyaml (34 MB asset pack)
    - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn (146 MB asset pack)
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
 
-3. **~~Play Asset Delivery integration~~** (`ToolchainManager.kt`, `ToolchainRegistry.kt`)
+3. **Play Asset Delivery integration** (`ToolchainManager.kt`, `ToolchainRegistry.kt`)
    - [x] Gradle asset pack modules (`toolchain_go/`, `toolchain_ruby/`, `toolchain_java/`)
    - [x] `ToolchainManager`: fetch, progress tracking, copy to filesDir, chmod +x, symlinks, uninstall
    - [x] `ToolchainRegistry`: catalog of available toolchains with sizes
@@ -453,7 +454,7 @@ _Order: audit code → configure release build → test on devices → validate 
 
 5. **Release build & signing**
    - [x] Generate release signing keystore (store securely, NOT in repo)
-   - [x] Configure `signingConfigs.release` in build.gradle.kts (env vars: VSCODROID_KEYSTORE_*)
+   - [x] Configure `signingConfigs.release` in build.gradle.kts (env vars: VSCODROID*KEYSTORE*\*)
    - [x] Enable R8/ProGuard minification for Kotlin code (already enabled, 165→138 MB)
    - [x] Test release build on device — R8 minification verified, no reflection/bridge issues, all components functional
    - [x] Verify `useLegacyPackaging = true` preserved in release build
@@ -464,18 +465,18 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Stress tests: 12,720-line JS file opens with syntax highlighting; 1,100-file project loads in explorer (lazy virtualized); memory stable at 143-145 MB PSS; zero crashes
    - [x] Extension tests: 10 bundled extensions activate, Welcome walkthrough renders, theme picker works
    - [x] Lifecycle tests: background/foreground (server survives), rotation (adapts), force-stop + cold restart (recovers)
-   - **worker_thread verification** _(validates M5 task 1)_:
+   - [x] **worker_thread verification** _(validates M5 task 1)_:
      - [x] Extension Host runs as worker_thread — only 1 phantom (server-main), no ExtHost in `ps`
      - [x] ptyHost runs as worker_thread — not visible in process list, baseline 1 phantom process
      - [x] Extensions activate correctly under worker_thread mode — 10 extensions loaded
-   - **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
+   - [x] **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
      - [x] `go version` → Go 1.25.6 android/arm64; hello world compile+run ✓
      - [x] `ruby --version` → Ruby 3.4.1; `irb` eval ✓; `gem --version` 3.6.2 ✓
      - [x] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
      - [x] Verify toolchains persist across app restarts — all 3 survive force-stop+restart
      - [x] Verify uninstall cleans up correctly — Go/Java/Ruby all uninstalled via bridge, symlinks removed, installRoots deleted, libs cleaned, core tools (bash/git/node/python) intact, toolchains.json empty, toolchain-env.sh deleted
      - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
-   - **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
+   - [x] **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 7. **Android App Bundle & size audit**
    - [x] Build release AAB (signed) — 253 MB total (includes on-demand packs)

@@ -144,3 +144,4 @@ _docs/
 *.tmp
 *.bak
 *.orig
+toolchain-zips/
