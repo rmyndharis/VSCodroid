@@ -28,8 +28,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 36
 
       - name: Set up NDK
         run: |
@@ -174,8 +172,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 36
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
