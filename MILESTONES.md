@@ -516,6 +516,7 @@ _Order: audit code → configure release build → test on devices → validate 
     - [x] Build toolchain zips and upload as GitHub Release assets — `scripts/package-toolchains.sh` + `release.yml`
     - [x] Fallback download URL served from GitHub Releases — README links to releases page
     - [x] CI fix: node-pty subshell path resolved with ROOT_DIR — Build + Unit Tests green
+    - [x] CI fix: release workflow — remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated api-level param — Release workflow green
 
 #### Phase 4 — Ship
 
@@ -548,7 +549,7 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
 - [x] Play Store listing complete (title, description, screenshots, content rating, foreground service declaration)
 - [x] Closed testing track live — v0.2.2-m6 (versionCode 4), 12 testers, 14-day period started
-- [x] CI pipeline green (Build + Unit Tests passing)
+- [x] CI pipeline green (Build + Unit Tests + Release workflows all passing)
 - [ ] App published on Play Store (waiting: 14-day closed testing → open beta → production)
 - [ ] Passes Play Store review (no policy violations)
 - [ ] No critical bugs in first 48 hours
