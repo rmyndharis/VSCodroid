@@ -84,13 +84,13 @@ jobs:
       - name: Build node-pty
         run: bash scripts/build-node-pty.sh
 
-      # libnode.so must exist as a GitHub release asset in a prior release,
-      # or be downloadable via the LIBNODE_URL secret.
+      # libnode.so must exist as a GitHub release asset or be downloadable via LIBNODE_URL.
       - name: Fetch libnode.so
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           LIBNODE_URL: ${{ secrets.LIBNODE_URL }}
+          TAG: ${{ github.ref_name }}
         run: |
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           LIBNODE="android/app/src/main/jniLibs/arm64-v8a/libnode.so"
@@ -98,19 +98,27 @@ jobs:
             echo "libnode.so already exists ($(du -sh "$LIBNODE" | cut -f1))"
             exit 0
           fi
-          # Try direct URL first (e.g. from a build artifacts bucket)
+          # Try direct URL first
           if [ -n "${LIBNODE_URL:-}" ]; then
             echo "Downloading libnode.so from LIBNODE_URL..."
             curl -L --fail --show-error -o "$LIBNODE" "$LIBNODE_URL"
             echo "Downloaded ($(du -sh "$LIBNODE" | cut -f1))"
             exit 0
           fi
-          # Fall back to latest GitHub release
-          echo "Downloading libnode.so from latest GitHub release..."
-          gh release download --repo "$REPO" \
-            --pattern "libnode.so" \
-            --dir android/app/src/main/jniLibs/arm64-v8a/
-          echo "Downloaded ($(du -sh "$LIBNODE" | cut -f1))"
+          # Try current tag's release, then any release with libnode.so
+          for tag in "$TAG" ""; do
+            FLAG=""
+            [ -n "$tag" ] && FLAG="--tag $tag"
+            echo "Trying: gh release download $FLAG --pattern libnode.so ..."
+            if gh release download --repo "$REPO" $FLAG \
+                 --pattern "libnode.so" \
+                 --dir android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null; then
+              echo "Downloaded ($(du -sh "$LIBNODE" | cut -f1))"
+              exit 0
+            fi
+          done
+          echo "ERROR: libnode.so not found in any release. Upload it to a release first."
+          exit 1
 
       - name: Verify assets
         run: |
