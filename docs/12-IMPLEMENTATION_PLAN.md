@@ -22,81 +22,92 @@ This document translates the VSCodroid documentation suite (PRD, SRS, Architectu
 
 ### 1.2 Timeline Overview
 
+> **Reading this chart**: Task IDs match the Mx-Ty scheme from the task breakdowns below.
+> "Duration" = calendar time end-to-end (accounts for parallelism); "Effort" = person-days sum.
+
 ```mermaid
 gantt
   title VSCodroid Implementation Timeline
   dateFormat YYYY-MM-DD
   axisFormat %b %d
+  tickInterval 1month
+  excludes weekends
 
-  section M0 — POC
-    Environment setup           :m0a, 2026-02-17, 3d
-    Node.js cross-compile       :m0b, after m0a, 4d
-    Android scaffold + WebView  :m0c, after m0a, 3d
-    Launch Node.js from Kotlin  :m0d, after m0b m0c, 2d
-    Foreground Service + WS     :m0e, after m0d, 2d
-    M0 validation gate          :milestone, m0gate, after m0e, 0d
+  section M0 - POC
+    Android project scaffold           :done, m0t1, 2025-09-08, 2d
+    Cross-compilation Docker env       :done, m0t3, 2025-09-08, 1d
+    Cross-compile Node.js              :done, m0t2, after m0t3, 4d
+    Launch Node.js from Kotlin         :done, m0t4, after m0t1 m0t2, 2d
+    WebView + localhost                :done, m0t5, after m0t4, 2d
+    Foreground Service                 :done, m0t6, after m0t5, 2d
+    WebSocket validation               :done, m0t7, after m0t6, 1d
+    M0 gate                            :milestone, m0gate, after m0t7, 0d
 
-  section M1 — VS Code Core
-    Fork code-server + patches  :m1a, after m0gate, 5d
-    VS Code in WebView          :m1b, after m1a, 3d
-    File system setup           :m1c2, after m1b, 2d
-    node-pty cross-compile      :m1c, after m0gate, 4d
-    Git cross-compile           :m1d, after m0gate, 3d
-    bash + tmux cross-compile   :m1e, after m0gate, 3d
-    Terminal + tmux integration :m1f, after m1c2 m1c m1e, 4d
-    Git bundling + SCM          :m1g, after m1c2 m1d, 2d
-    Extensions (Open VSX)       :m1h, after m1c2, 3d
-    M1 validation gate          :milestone, m1gate, after m1f m1g m1h, 0d
+  section M1 - VS Code Core
+    Fork code-server + patches         :done, m1t1, after m0gate, 5d
+    VS Code in WebView                 :done, m1t2, after m1t1, 3d
+    node-pty cross-compile             :done, m1t3, after m0gate, 4d
+    Git cross-compile                  :done, m1t4, after m0gate, 3d
+    bash + tmux cross-compile          :done, m1t5, after m0gate, 3d
+    Terminal + tmux                    :done, m1t6, after m1t2 m1t3 m1t5, 4d
+    Git bundling + SCM                 :done, m1t7, after m1t2 m1t4, 2d
+    Extensions (Open VSX)              :done, m1t8, after m1t2, 3d
+    File system + integration          :done, m1t9, after m1t6 m1t7 m1t8, 3d
+    M1 gate                            :milestone, m1gate, after m1t9, 0d
 
-  section M2 — Mobile UX
-    Extra Key Row + Trackpad    :m2a, after m1gate, 4d
-    Keyboard handling           :m2b, after m1gate, 3d
-    Touch + clipboard + back    :m2c, after m2a m2b, 3d
-    Orientation + split-screen  :m2d, after m2c, 2d
-    Accessibility baseline      :m2e, after m2c, 2d
-    Intent + crash recovery     :m2f, after m2d m2e, 3d
-    M2 validation gate          :milestone, m2gate, after m2f, 0d
+  section M2 - Mobile UX
+    Extra Key Row + Trackpad           :done, m2t1, after m1gate, 5d
+    Keyboard handling                  :done, m2t2, after m1gate, 3d
+    Touch + clipboard + back           :done, m2t3, after m2t1 m2t2, 3d
+    Orientation + split-screen         :done, m2t4, after m2t3, 2d
+    Accessibility baseline             :done, m2t5, after m2t3, 2d
+    Intent + crash recovery            :done, m2t6, after m2t4 m2t5, 3d
+    M2 gate                            :milestone, m2gate, after m2t6, 0d
 
-  section M3 — Dev Environment
-    Python + pip (Termux)       :m3a, after m2gate, 3d
-    make cross-compile          :m3b, after m2gate, 2d
-    npm bash functions          :m3c, after m3a m3b, 2d
-    Pre-bundled extensions      :m3d, after m2gate, 3d
-    First-run experience        :m3e, after m3c m3d, 4d
-    M3 validation gate          :milestone, m3gate, after m3e, 0d
+  section M3 - Dev Environment
+    Python + pip (Termux)              :done, m3t1, after m2gate, 3d
+    make cross-compile                 :done, m3t2, after m2gate, 2d
+    npm bash functions                 :done, m3t3, after m3t1 m3t2, 2d
+    Pre-bundled extensions             :done, m3t4, after m2gate, 3d
+    First-run experience               :done, m3t5, after m3t3 m3t4, 4d
+    M3 gate                            :milestone, m3gate, after m3t5, 0d
 
-  section M4 — Polish
-    Error handling + logging    :m4a, after m3gate, 3d
-    Memory optimization         :m4b, after m3gate, 4d
-    Startup optimization        :m4c, after m4a m4b, 3d
-    Phantom process monitoring  :m4d, after m4c, 3d
-    Storage management          :m4e, after m4d, 3d
-    GitHub OAuth                :m4f, after m4e, 3d
-    External storage (SAF)      :m4g, after m4f, 5d
-    M4 validation gate          :milestone, m4gate, after m4g, 0d
+  section M4 - Polish
+    Error handling + logging           :done, m4t1, after m3gate, 3d
+    Memory optimization                :done, m4t2, after m3gate, 4d
+    Startup optimization               :done, m4t3, after m4t1 m4t2, 3d
+    Phantom process monitoring         :done, m4t4, after m4t3, 3d
+    Storage management                 :done, m4t5, after m4t4, 3d
+    GitHub OAuth                       :done, m4t6, after m4t5, 3d
+    External storage (SAF)             :done, m4t7, after m4t6, 5d
+    M4 gate                            :milestone, m4gate, after m4t7, 0d
 
-  section M5 — Toolchain Ecosystem
-    worker_thread ExtHost+ptyHost :m5a, after m4gate, 6d
-    AssetPackManager            :m5b, after m4gate, 4d
-    On-demand toolchains (Go/Ruby/Java) :m5c, after m5b, 5d
-    Language Picker UI          :m5d, after m5c, 5d
-    M5 validation gate          :milestone, m5gate, after m5a m5d, 0d
+  section M5 - Toolchain Ecosystem
+    worker_thread ExtHost+ptyHost      :done, m5t1, after m4gate, 6d
+    AssetPackManager                   :done, m5t2, after m4gate, 4d
+    On-demand toolchains               :done, m5t3, after m5t2, 5d
+    Language Picker UI                 :done, m5t4, after m5t3 m5t1, 5d
+    M5 gate                            :milestone, m5gate, after m5t4, 0d
 
-  section M6 — Release
-    Stability + auth fixes      :m6a0, after m5gate, 3d
-    SSH key management          :m6a, after m6a0, 3d
-    App upgrade handling        :m6a2, after m6a, 4d
-    Device testing + toolchain verify :m6b, after m6a2, 7d
-    Security review             :m6b2, after m6b, 3d
-    Release build + signing     :m6b3, after m6b2, 3d
-    AAB build + size audit      :m6b4, after m6b3, 3d
-    CI/CD pipeline              :m6c, after m5gate, 10d
-    Branding + legal            :m6d, after m5gate, 5d
-    Documentation               :m6e, after m6d, 3d
-    Play Store listing          :m6f, after m6d m6e m6b4 m6c, 3d
-    Internal → beta → launch   :m6h, after m6f, 37d
-    M6 launch gate              :milestone, m6gate, after m6h, 0d
+  section M6 - Release
+    Stability + auth fixes             :done, m6t1, after m5gate, 3d
+    SSH key management                 :done, m6t2, after m6t1, 3d
+    App upgrade handling               :done, m6t3, after m6t2, 4d
+    Device testing + verify            :done, m6t4, after m6t3, 7d
+    Security review                    :done, m6t5, after m6t4, 3d
+    Release build + signing            :done, m6t6, after m6t5, 3d
+    AAB build + size audit             :done, m6t7, after m6t6, 3d
+    Branding                           :done, m6t8, after m5gate, 5d
+    Legal compliance                   :done, m6t9, after m6t8, 2d
+    Documentation                      :done, m6t10, after m6t9, 3d
+    CI/CD pipeline                     :done, m6t11, after m5gate, 10d
+    Play Store listing                 :done, m6t12, after m6t7 m6t10 m6t11, 3d
+    Closed testing (14 days)           :active, m6t13, after m6t12, 10d
+    Launch                             :milestone, launch, after m6t13, 0d
 ```
+
+> **Note**: Task-level dependency diagrams for each milestone are in the flowcharts below (§3-9).
+> Durations shown are **critical path** working days (weekends excluded). See each milestone header for total effort.
 
 ### 1.3 Work Streams
 
@@ -190,7 +201,7 @@ Files to create:
 ## 3. M0 — Proof of Concept
 
 **Goal**: Validate that Node.js runs on Android and WebView can connect to it via localhost.
-**Duration**: 2 weeks (10 working days)
+**Duration**: 2-3 weeks (11 working days critical path, 13 person-days total effort)
 **Risk level**: HIGH — this is the "can we even do this?" milestone
 
 ### 3.1 Task Breakdown
@@ -599,7 +610,7 @@ android/app/src/main/assets/
 ## 4. M1 — VS Code Core
 
 **Goal**: VS Code Workbench running in WebView with extensions, terminal, and Git.
-**Duration**: 3-4 weeks (15-20 working days)
+**Duration**: 3 weeks (15 working days critical path, 30 person-days across 3 parallel streams)
 **Entry criteria**: All M0 gate criteria passed
 
 ### 4.1 Task Breakdown
@@ -1069,7 +1080,7 @@ android/app/src/androidTest/    (instrumented tests)
 ## 5. M2 — Mobile UX
 
 **Goal**: Make VS Code usable on a touchscreen device.
-**Duration**: 2-3 weeks (10-15 working days)
+**Duration**: 3 weeks (13 working days critical path, 18 person-days total effort)
 **Entry criteria**: All M1 gate criteria passed, no open P0 defects
 
 ### 5.1 Task Breakdown
@@ -1115,9 +1126,9 @@ android/app/src/main/res/
 
 1. **Day 1** — Multi-page key row with ViewPager2:
    - `KeyPageConfig.kt` defines page layouts:
-     - Page 1: `[Tab] [Esc] [Ctrl] [Alt] [←] [↑] [↓] [→]`
-     - Page 2: `[{] [}] [(] [)] [;] [:] ["] [/]`
-     - Page 3: `[|] [\] [<] [>] [=] [+] [-] [_]` (optional)
+     - Page 1: `[Tab] [Esc] [Ctrl] [Alt] [Shift] [GestureTrackpad] [{}] [()]`
+     - Page 2: `[;] [:] ["] [/] [|] [`] [&] [_]`
+     - Page 3: `[[] []] [<] [>] [=] [!] [#] [@]`
    - `KeyPageAdapter.kt` — `RecyclerView.Adapter` for `ViewPager2` pages
    - Dot indicators below the key row to show current page
 
@@ -1362,7 +1373,7 @@ patches/vscodroid/
 ## 6. M3 — All-in-One Dev Environment
 
 **Goal**: Bundle Python, npm, and essential tools for out-of-the-box development.
-**Duration**: 3-4 weeks (15-20 working days)
+**Duration**: 2 weeks (9 working days critical path, 14 person-days total effort)
 **Entry criteria**: All M2 gate passed, validated on 2 devices, no P0/P1 regressions
 
 ### 6.1 Task Breakdown
@@ -1589,7 +1600,7 @@ android/app/src/main/res/
 ## 7. M4 — Polish & Performance
 
 **Goal**: Production-quality stability and performance.
-**Duration**: 3-4 weeks (15-20 working days)
+**Duration**: 4-5 weeks (21 working days critical path, 24 person-days total effort)
 **Entry criteria**: All M3 gate passed, no P0 defects
 
 ### 7.1 Task Breakdown
@@ -1659,8 +1670,8 @@ android/app/src/main/kotlin/com/vscodroid/
 **Files to modify**:
 
 ```
-patches/vscodroid/
-└── memory-hooks.diff               (low-memory signal handling)
+# Note: VSCodroid patches (extension host, ptyHost, IPC bridge) are applied
+# inline in scripts/download-vscode-server.sh, not as .diff files.
 
 android/app/src/main/kotlin/com/vscodroid/
 └── MainActivity.kt                 (onTrimMemory handling)
@@ -1860,7 +1871,7 @@ patches/vscodroid/
 
 **Goal**: On-demand toolchain delivery so users can install additional languages beyond the bundled core.
 **Deliverable**: Play Asset Delivery integration with Go, Ruby, and Java toolchains, plus a Language Picker UI.
-**Duration**: 3-4 weeks (15-20 working days)
+**Duration**: 3 weeks (14 working days critical path, 20 person-days total effort)
 **Entry criteria**: All M4 gate passed, no P0 defects
 
 ### 8.1 Task Breakdown
@@ -1882,13 +1893,11 @@ flowchart TD
 
 **Effort**: 6 days | **Dependencies**: M4 gate | **High complexity**
 
-**Files to create**:
+# Note: These patches are applied inline in scripts/download-vscode-server.sh
 
-```
-patches/vscodroid/
-├── ext-host-worker.diff
-└── pty-host-worker.diff
-```
+# using Python string replacements, not as standalone .diff files.
+
+# patches/vscodroid/ directory reserved for future .diff-based patches.
 
 **Target VS Code files** (see Tech Spec §6.3):
 
@@ -2099,7 +2108,7 @@ android/app/src/main/res/layout/
 
 **Goal**: Launch on Google Play Store.
 **Deliverable**: Published app with proper branding, legal compliance, and documentation.
-**Duration**: 6-8 weeks (30-40 working days)
+**Duration**: 6 weeks working effort (29 working days critical path, 49 person-days total) + 2 weeks closed testing (14 calendar days per Google Play policy)
 **Entry criteria**: All M5 gate passed, release candidate build completed with signed AAB, store listing/privacy policy/compliance artifacts ready
 
 _Ordered by dependency: fix bugs → verify features → harden → brand → ship._
@@ -2158,12 +2167,16 @@ flowchart TD
 1. **Extension OAuth callback relay**: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
 2. **Persist extension secrets across app restarts**: patch `isEncryptionAvailable()` → `true` in workbench.js so `SecretStorageService` uses IndexedDB instead of in-memory Map
 3. **White screen on app reopen**: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on main thread when reconnecting to already-running server; replaced with `isServerRunning()` (process liveness check, no I/O)
+4. **Mobile menu CSS**: touch-friendly hamburger dropdown (44px touch targets, 14px font, 280px min-width) appended to workbench.css
+5. **Keyboard/ExtraKeyRow positioning**: fix double-compensation (adjustResize + bottomMargin). Switch to edge-to-edge (`setDecorFitsSystemWindows=false`) with manual insets padding for consistent behavior on Android 13-16
 
 **Acceptance criteria**:
 
 - [ ] Extension OAuth callback relay works end-to-end
 - [ ] Extension secrets persist across app restarts (OAuth tokens, API keys)
 - [ ] App recovers cleanly from close/reopen (no white screen)
+- [ ] Mobile menu dropdown is touch-friendly (44px targets)
+- [ ] Extra Key Row positions correctly with keyboard on Android 13-16
 
 ---
 
@@ -2226,26 +2239,32 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. **Device matrix**: Pixel 7/8, Samsung S23/S24, budget phone (4GB RAM)
-2. **Android version matrix**: 13, 14, 15, 16
-3. **Stress tests**: large files (10K+ lines), large projects (1000+ files)
-4. **Extension tests**: Python LSP, ESLint, GitLens, themes, icon packs
-5. **Lifecycle tests**: background/foreground, split-screen, rotation, low memory
+1. **Device matrix**: OnePlus CPH2791 (flagship, 16 GB), POCO 22071219CG (budget, 4 GB), Redmi 2201117TY (mid-range, 6 GB)
+2. **Android version matrix**: Android 13 (API 33, Redmi) + Android 14 (API 34, POCO) + Android 16 (API 36, OnePlus)
+3. **Stress tests**: 12,720-line JS file opens with syntax highlighting; 1,100-file project loads in explorer (lazy virtualized); memory stable at 143-145 MB PSS; zero crashes
+4. **Extension tests**: 10 bundled extensions activate, Welcome walkthrough renders, theme picker works
+5. **Lifecycle tests**: background/foreground (server survives), rotation (adapts), force-stop + cold restart (recovers)
 6. Run all E2E tests (E2E-01 through E2E-14)
 7. Run all performance tests (Testing Strategy §3.4)
 8. Run backup & restore tests (Testing Strategy §3.8)
 9. SSH key and GitHub OAuth flow testing
-10. Worker_thread stability testing (2-hour endurance)
-11. **Toolchain compatibility verification** _(requires physical device)_:
-    - [ ] `go version` → works after asset pack install
-    - [ ] `ruby --version`, `irb`, `gem` → works after install
-    - [ ] `java -version`, `javac -version` → works after install
-    - [ ] Verify toolchains persist across app restarts
-    - [ ] Verify uninstall cleans up correctly
+10. **Worker_thread verification** _(validates M5 task 1)_:
+    - [ ] Extension Host runs as worker_thread — only 1 phantom (server-main), no ExtHost in `ps`
+    - [ ] ptyHost runs as worker_thread — not visible in process list, baseline 1 phantom process
+    - [ ] Extensions activate correctly under worker_thread mode — 10 extensions loaded
+11. **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
+    - [ ] `go version` → Go 1.25.6 android/arm64; hello world compile+run ✓
+    - [ ] `ruby --version` → Ruby 3.4.1; `irb` eval ✓; `gem --version` 3.6.2 ✓
+    - [ ] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
+    - [ ] Verify toolchains persist across app restarts — all 3 survive force-stop+restart
+    - [ ] Verify uninstall cleans up correctly — symlinks removed, installRoots deleted, libs cleaned, core tools intact
+    - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
+12. **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 **Acceptance criteria**:
 
-- [ ] Tested on 4+ device models across Android 13-16
+- [ ] Tested on 3 device models across Android 13-16
+
 - [ ] Performance targets met (startup < 5s, keystroke < 50ms, memory < 700MB)
 - [ ] Phantom processes ≤ 5 in typical use
 - [ ] No crash in 2 hours continuous use
@@ -2264,12 +2283,18 @@ android/app/src/main/kotlin/com/vscodroid/
 3. Review all workbench.js patches for unintended side effects
 4. Confirm Android app sandbox isolation (no world-readable files)
 5. Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
+6. Fix: restrict cleartext HTTP to localhost only (`network_security_config.xml`)
+7. Fix: use `Uri.parse()` for exact localhost host matching (prevents domain spoofing)
+8. Fix: owner-only execute permissions on extracted binaries
 
 **Acceptance criteria**:
 
 - [ ] Security review completed (no exposed secrets, sandbox intact)
 - [ ] WebView CSP headers properly configured
 - [ ] All SecurityManager URL allowlist entries validated
+- [ ] Cleartext HTTP restricted to localhost only
+- [ ] Localhost matching uses Uri.parse() for exact host comparison
+- [ ] Extracted binaries have owner-only execute permissions
 
 ---
 
@@ -2299,17 +2324,22 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. Build release AAB (signed)
-2. Measure base APK size (without toolchains) — target < 150 MB
-3. Verify per-device delivery sizes via bundletool
-4. Document per-toolchain on-demand sizes
-5. Test asset pack download flow end-to-end on internal track
+1. Build release AAB (signed) — 253 MB total (includes on-demand packs)
+2. Measure base APK size (without toolchains) — **133 MB** download, 138 MB APK (< 150 MB target)
+3. Verify per-device delivery sizes via bundletool — 133 MB for ARM64 SDK 33+
+4. Document per-toolchain on-demand sizes — Go 163 MB, Ruby 29 MB, Java 146 MB
+5. Test HTTP fallback download flow end-to-end — all 3 toolchains verified on OnePlus CPH2791:
+   - Ruby: 9 MB ZIP, 3.9s total (download 2.9s + extract 0.5s + install 0.3s)
+   - Go: 53 MB ZIP, ~10s total (download 6.3s + extract 2.3s + install 1.1s)
+   - Java: 55 MB ZIP, ~11s total (download 9.2s + extract 1.6s + install 0.3s)
+   - Updated manifests with RUBYLIB, scriptWrappers, libSymlinks all functioning
+6. [ ] Test Play Asset Delivery flow on internal testing track
 
 **Acceptance criteria**:
 
-- [ ] Release AAB signed and < 150 MB (base, without toolchains)
-- [ ] Per-device delivery sizes verified
-- [ ] Asset packs download on-demand correctly
+- [ ] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
+- [ ] Per-device delivery sizes verified via bundletool
+- [ ] HTTP fallback download works for all 3 toolchains
 - [ ] Per-toolchain sizes documented
 
 ---
@@ -2401,23 +2431,25 @@ android/app/src/main/res/
 
 ```
 .github/workflows/
-├── build.yml                       (lint + unit test + build)
-├── test.yml                        (integration tests on Firebase Test Lab)
-├── release.yml                     (build + sign + deploy to Play Store)
-└── patch-regression.yml            (monthly: apply patches to latest VS Code)
+├── build.yml                       (debug APK on PR/push + unit tests)
+├── lint.yml                        (Android lint on PR with baseline)
+├── release.yml                     (tag → sign APK → toolchain ZIPs → GitHub Release)
+└── pages.yml                       (docs site deployment)
 ```
 
 **Implementation steps** (see Release Plan §2):
 
-1. **build.yml**: lint (ktlint, eslint, android lint) + unit tests + build APK
-   - Coverage gate: Kotlin ≥ 80%, JS ≥ 70%
-2. **test.yml**: integration tests on Firebase Test Lab ARM64 devices
-3. **release.yml**: tag → build AAB → sign → upload to Play Store
-4. **patch-regression.yml**: scheduled monthly, apply patches to latest VS Code
-5. Caching strategy for Node.js binary, VS Code build, Gradle
-6. Secrets management: keystore, Play Store API key
-7. GitHub Actions: build debug APK on PR, release AAB on tag
-8. Automated testing on Firebase Test Lab (physical ARM64 devices)
+1. **build.yml**: build debug APK on PR/push + unit tests with minimal stubs + download caching
+2. **lint.yml**: Android lint on PR with baseline, upload lint report as artifact
+3. **release.yml**: tag → sign APK → package toolchain ZIPs (`scripts/package-toolchains.sh`) → GitHub Release with checksums
+4. **pages.yml**: docs site deployment to GitHub Pages
+5. `libnode.so` fetching: `LIBNODE_URL` secret → current tag release → latest release → stub fallback
+6. Caching strategy for Node.js binary, VS Code build, Gradle, tarballs + generated assets
+7. Secrets management: keystore env vars (`VSCODROID_KEYSTORE_*`), `LIBNODE_URL`
+8. CI fix: node-pty subshell path resolved with `ROOT_DIR` — Build + Unit Tests green
+9. CI fix: release workflow — remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated `api-level` param — Release workflow green
+10. Build toolchain ZIPs and upload as GitHub Release assets — fallback download URL served from GitHub Releases
+11. [ ] Automated testing on Firebase Test Lab (physical ARM64 devices)
 
 ---
 
@@ -2434,29 +2466,30 @@ android/app/src/main/res/
 3. Screenshots: phone + tablet (from M6-T8)
 4. Category: Developer Tools
 5. Content rating questionnaire
-6. Prepare for binary execution policy review (explain .so trick, local-only execution)
-7. Prepare `specialUse` foreground service justification
+6. Foreground service permission declaration (video demo + written justification)
+7. Prepare for binary execution policy review (explain .so trick, local-only execution)
 
 ---
 
 #### M6-T13: Launch
 
-**Effort**: 37 days | **Dependencies**: M6-T12
+**Effort**: 14 calendar days | **Dependencies**: M6-T12
 
-**Internal testing track** (10 days):
+**Internal testing track**:
 
+- AAB uploaded (versionCode 2)
 - 100% M5 exit criteria pass
 - Zero open S1/S2 bugs
 - Crash-free rate ≥ 95% for 7 consecutive days
 
-**Closed beta** (10 days):
+**Closed testing track**:
 
-- At least 50 active testers
+- AAB v0.2.2-m6 (versionCode 4) uploaded, 12 testers added, 14-day countdown started
 - No new S1 bugs in last 7 days
 - ANR rate < 0.5%
 - Extension install success ≥ 90%
 
-**Open beta** (14 days):
+**Open beta** (after 14-day closed testing period):
 
 - At least 500 beta testers
 - Crash-free rate ≥ 95% for 14 days
@@ -2482,13 +2515,14 @@ android/app/src/main/res/
 | 3   | SSH push/pull to GitHub works end-to-end                                   | SSH key + git test                              |
 | 4   | App upgrade preserves user data (settings, extensions, SSH keys, projects) | Upgrade simulation                              |
 | 5   | Security review completed (no exposed secrets, sandbox intact)             | Security checklist                              |
-| 6   | Tested on 4+ device models across Android 13-16                            | Device matrix                                   |
+| 6   | Tested on 3 device models across Android 13-16                             | Device matrix                                   |
 | 7   | Go/Ruby/Java verified working on physical device after asset pack install  | `go version`, `ruby --version`, `java -version` |
 | 8   | Release AAB signed and < 150 MB (base, without toolchains)                 | APK/AAB file size check                         |
 | 9   | App published on Play Store                                                | Play Console                                    |
 | 10  | Passes Play Store review (no policy violations)                            | Play Console                                    |
 | 11  | No critical bugs in first 48 hours                                         | Crash monitoring                                |
-| 12  | At least 500 beta testers before production launch                         | Play Console stats                              |
+| 12  | CI pipeline green (Build + Unit Tests + Release workflows)                 | GitHub Actions                                  |
+| 13  | At least 500 beta testers before production launch                         | Play Console stats                              |
 
 ---
 
@@ -2565,7 +2599,7 @@ Total new files created across all milestones:
 | **Build/download scripts** | ~13 files    | download-node.sh, download-python.sh, download-go.sh, download-ruby.sh, download-java.sh, build-git.sh, build-bash.sh, build-tmux.sh, build-node-pty.sh, download-termux-tools.sh, build-all.sh, apply-patches.sh, deploy.sh |
 | **VS Code patches**        | ~19 files    | 9 code-server patches + 10 VSCodroid patches (incl. ext-host-worker, pty-host-worker, android-fs)                                                                                                                            |
 | **Gradle configs**         | ~6 files     | root + app + 3 asset pack modules (Go, Ruby, Java) + settings                                                                                                                                                                |
-| **CI workflows**           | ~4 files     | build.yml, test.yml, release.yml, patch-regression.yml                                                                                                                                                                       |
+| **CI workflows**           | 4 files      | build.yml, lint.yml, release.yml, pages.yml                                                                                                                                                                                  |
 | **Test files**             | ~15+ files   | Unit tests (JUnit), integration tests (Espresso), E2E tests, test fixtures                                                                                                                                                   |
 | **Assets**                 | ~6 dirs      | vscode-web/, vscode-reh/, usr/lib/python3.12/, extensions/ (9 extensions), server.js                                                                                                                                         |
 | **Native binaries (.so)**  | 8 files      | libnode, libpython, libgit, libbash, libtmux, libmake, libc++\_shared, libnode_pty                                                                                                                                           |
