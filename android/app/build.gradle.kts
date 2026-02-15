@@ -29,8 +29,8 @@ android {
         applicationId = "com.vscodroid"
         minSdk = 33
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.2-m6"
+        versionCode = 5
+        versionName = "0.2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
