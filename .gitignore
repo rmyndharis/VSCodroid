@@ -114,6 +114,8 @@ CLAUDE.md
 .cursorignore
 .cursorindexingignore
 .cursorrules
+# KiloCode
+.kilocode/
 # GitHub Copilot
 .copilot/
 .github/copilot-instructions.md
@@ -139,6 +141,7 @@ CLAUDE.md
 # Project AI planning docs
 docs/plans/
 _docs/
+plans/
 
 # ===== Misc =====
 *.tmp

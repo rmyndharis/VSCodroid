@@ -14,6 +14,7 @@ import android.webkit.WebView
 import android.widget.Toast
 import java.io.File
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.enableEdgeToEdge
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
 import androidx.activity.result.contract.ActivityResultContracts
@@ -87,11 +88,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // enableEdgeToEdge() must be called BEFORE super.onCreate().
+        // Handles status bar, navigation bar, and system bar styling automatically
+        // with backward compatibility across Android 13-16+.
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        // Edge-to-edge: handle all insets manually for consistent behavior across
-        // Android 13-14 (adjustResize) and Android 15+ (edge-to-edge enforced).
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
+
+        // Apply system bar insets as padding directly on the WebView so VS Code's
+        // title bar (breadcrumbs, back/forward, search) renders below the status bar.
+        // CSS env(safe-area-inset-*) may not report correct values after enableEdgeToEdge(),
+        // so we handle it at the native level.
+        val wv = findViewById<android.view.View>(R.id.webView)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(wv) { v, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
 
         safManager = SafStorageManager(this)
 

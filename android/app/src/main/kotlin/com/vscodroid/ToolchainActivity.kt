@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
@@ -23,6 +24,7 @@ class ToolchainActivity : AppCompatActivity() {
     private lateinit var adapter: ToolchainPickerAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_toolchain)
 

@@ -475,6 +475,70 @@ with open(path, 'w') as f:
 print(f"  Removed {removed} CDN/service URL(s)")
 PYEOF
 
+# Also remove configurationSync.store and editSessions.store from workbench.js
+# These are EMBEDDED in the JS (separate from product.json) and drive the
+# "Backup and Sync Settings" / "Turn on Cloud Changes" menu items.
+echo "Removing sync service config from workbench.js..."
+python3 - "$WORKBENCH_JS" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path, 'r') as f:
+    content = f.read()
+
+def remove_json_block(text, key):
+    pattern = f'"{key}"'
+    idx = text.find(pattern)
+    if idx == -1:
+        return text, False
+    colon = text.index(':', idx + len(pattern))
+    depth = 0
+    end = colon + 1
+    for j in range(end, len(text)):
+        if text[j] == '{': depth += 1
+        elif text[j] == '}':
+            depth -= 1
+            if depth == 0:
+                end = j + 1
+                break
+    start = idx
+    if start > 0 and text[start - 1] == ',':
+        start -= 1
+    elif end < len(text) and text[end] == ',':
+        end += 1
+    return text[:start] + text[end:], True
+
+content, r1 = remove_json_block(content, 'configurationSync.store')
+content, r2 = remove_json_block(content, 'editSessions.store')
+
+with open(path, 'w') as f:
+    f.write(content)
+removed = sum([r1, r2])
+print(f"  Removed {removed} sync config block(s) from workbench.js")
+PYEOF
+
+# Patch CompositeBar overflow calculation to use live DOM height.
+# VS Code's CompositeBar.O() uses a cached dimension (this.g.height) to calculate
+# how many Activity Bar icons fit. When we hide the Manage section via CSS, the
+# cached value is stale (calculated before CSS took effect). This patch makes it
+# read the live DOM clientHeight instead, so all icons fit in the freed space.
+echo "Patching CompositeBar overflow calculation..."
+python3 - "$WORKBENCH_JS" <<'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+    content = f.read()
+old = 'const a=this.H.orientation===1?this.g.height:this.g.width'
+new = 'const a=this.H.orientation===1?(document.querySelector(".activitybar .composite-bar")?.clientHeight||this.g.height):this.g.width'
+if old in content:
+    content = content.replace(old, new, 1)
+    with open(path, 'w') as f:
+        f.write(content)
+    print("  Patched CompositeBar.O() to use live DOM height")
+else:
+    print("  SKIP: CompositeBar pattern not found (already patched?)")
+PYEOF
+
 # Patch platform detection for Android
 # Termux-patched Node.js reports process.platform as "android" instead of "linux".
 # VS Code's minified code has several patterns that check for "linux":
@@ -654,6 +718,9 @@ if [ -f "$WORKBENCH_CSS" ]; then
 .monaco-menu .submenu-indicator { font-size: 16px !important; }
 .monaco-menu .keybinding { font-size: 12px !important; }
 .monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; }
+/* VSCodroid: Hide Accounts/Manage section in Activity Bar */
+.activitybar .content > div:has(.actions-container[aria-label="Manage"]) { display: none !important; }
+.activitybar .content > .composite-bar { flex-grow: 1 !important; }
 CSSEOF
     echo "  Appended mobile menu CSS overrides to $WORKBENCH_CSS"
 else
