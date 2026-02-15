@@ -1,7 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
+
+// Load signing config from signing.properties (local) or env vars (CI)
+val signingProps = Properties()
+rootProject.file("signing.properties").takeIf { it.exists() }?.inputStream()?.use { signingProps.load(it) }
+fun signingProp(key: String, envVar: String, fallback: String = "") =
+    signingProps.getProperty(key) ?: System.getenv(envVar) ?: fallback
 
 android {
     namespace = "com.vscodroid"
@@ -9,10 +17,11 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file(System.getenv("VSCODROID_KEYSTORE_FILE") ?: "${System.getProperty("user.home")}/vscodroid-release.jks")
-            storePassword = System.getenv("VSCODROID_KEYSTORE_PASSWORD") ?: ""
-            keyAlias = System.getenv("VSCODROID_KEY_ALIAS") ?: "vscodroid"
-            keyPassword = System.getenv("VSCODROID_KEY_PASSWORD") ?: ""
+            storeFile = file(signingProp("storeFile", "VSCODROID_KEYSTORE_FILE",
+                "${System.getProperty("user.home")}/vscodroid-release.jks"))
+            storePassword = signingProp("storePassword", "VSCODROID_KEYSTORE_PASSWORD")
+            keyAlias = signingProp("keyAlias", "VSCODROID_KEY_ALIAS", "vscodroid")
+            keyPassword = signingProp("keyPassword", "VSCODROID_KEY_PASSWORD")
         }
     }
 
