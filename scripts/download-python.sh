@@ -19,7 +19,15 @@ WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
 PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
 
-PYTHON_MAJOR_MINOR="3.12"
+# Auto-detect Python major.minor from Termux repo (e.g. "3.13" from "3.13.13-1")
+# Download Packages index early so we can parse the version before extraction.
+mkdir -p "$WORK_DIR"
+PACKAGES_FILE="$WORK_DIR/Packages"
+if [ ! -f "$PACKAGES_FILE" ] || [ -n "$(find "$PACKAGES_FILE" -mmin +60 2>/dev/null)" ]; then
+    curl -L --fail --show-error -o "$PACKAGES_FILE" "$PACKAGES_URL"
+fi
+PYTHON_FULL_VER=$(awk '/^Package: python$/{found=1} found && /^Version:/{print $2; exit}' "$PACKAGES_FILE")
+PYTHON_MAJOR_MINOR=$(echo "$PYTHON_FULL_VER" | grep -oE '^[0-9]+\.[0-9]+')
 
 # Packages to download (only Python-specific, not shared deps already in termux-tools)
 REQUIRED_PACKAGES=(
@@ -60,14 +68,8 @@ echo ""
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-# --- Step 1: Download and parse Packages index ---
-echo "Downloading Packages index..."
-if [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
-    curl -L --fail --show-error -o Packages "$PACKAGES_URL"
-    echo "  Downloaded: $(du -sh Packages | cut -f1)"
-else
-    echo "  Using cached Packages index (less than 1 hour old)"
-fi
+# --- Step 1: Packages index (already downloaded above for version detection) ---
+echo "Using Packages index: $(du -sh Packages | cut -f1) (Python ${PYTHON_MAJOR_MINOR} detected)"
 
 # Parse index to find Filename for each required package.
 echo ""
