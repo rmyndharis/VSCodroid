@@ -41,7 +41,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Install system dependencies
-        run: sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
+        # See build.yml: the runner's baked apt index goes stale as Ubuntu drops
+        # superseded versions from the pool, so refresh it before installing.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
 
       # Cache downloaded tarballs/debs
       - name: Cache download intermediates
@@ -174,7 +178,9 @@ jobs:
           path: artifacts
 
       - name: Install packaging dependencies
-        run: sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
 
       - name: Download toolchain assets
         run: |
