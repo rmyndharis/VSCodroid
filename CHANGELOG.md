@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Terminal profile picker was empty, leaving no way to switch terminals ([#3](https://github.com/rmyndharis/VSCodroid/issues/3))
+- App froze and had to be force-restarted after the server process was killed — automatic recovery never actually ran
+- A server restart now returns to the folder you had open instead of the default projects directory
+- A WebView rebuilt after a renderer crash no longer comes back without its Android bridge
+- Launching no longer crashes outright if refreshing tool paths fails
+- Comments and formatting in `settings.json` now survive the refresh of bundled tool paths
+- Build and release workflows no longer fail when the runner's package index is out of date
+
 ## [1.0.0] - 2026-04-21
 
 ### 🎉 First Production Release on Google Play Store!
