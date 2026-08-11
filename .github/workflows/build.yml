@@ -73,7 +73,12 @@ jobs:
 
       - name: Install system dependencies
         if: steps.cache-assets.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y --no-install-recommends libarchive-tools
+        # The runner image ships a baked apt index. Ubuntu keeps only the current
+        # version of a package in the pool, so once the indexed one is superseded
+        # the download 404s. Refresh the index before installing.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
 
       # Download and prepare all assets (only if not cached)
       - name: Download VS Code Server
