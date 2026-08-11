@@ -47,11 +47,20 @@ class SplashActivity : AppCompatActivity() {
 
         // Always validate tool symlinks — Android changes nativeLibraryDir
         // path on every reinstall, which breaks absolute symlinks in usr/bin/.
-        setup.setupToolSymlinks()
-        setup.setupRipgrepVscodeSymlink()
-        setup.createNpmWrappers()
-        setup.ensureToolchainEnvSourcing()
-        setup.updateSettingsNativeLibPaths()
+        //
+        // These touch the filesystem on the main thread at launch. Letting one
+        // throw would crash the app before it ever draws, leaving the user with a
+        // launch loop and no explanation; a genuinely broken install still surfaces
+        // later as a server error that says so.
+        try {
+            setup.setupToolSymlinks()
+            setup.setupRipgrepVscodeSymlink()
+            setup.createNpmWrappers()
+            setup.ensureToolchainEnvSourcing()
+            setup.updateSettingsNativeLibPaths()
+        } catch (e: Exception) {
+            Logger.e(tag, "Launch-time setup refresh failed", e)
+        }
 
         if (!setup.isFirstRun()) {
             Logger.i(tag, "Not first run, launching main activity")
