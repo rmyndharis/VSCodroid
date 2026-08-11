@@ -50,9 +50,6 @@ class MainActivity : AppCompatActivity() {
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
 
-    /** Folder the WebView is currently showing, so a server restart can return to it. */
-    private var activeFolder: String? = null
-
     private var pendingFileUri: Uri? = null
     private lateinit var securityManager: SecurityManager
     private lateinit var safManager: SafStorageManager
@@ -444,8 +441,20 @@ class MainActivity : AppCompatActivity() {
         // onServerReady routes a restart through here without a folder. Falling back
         // to the folder already on screen keeps the user's workspace instead of
         // dropping them back into the default projects directory.
-        navigateToFolder(port, folderPath ?: activeFolder ?: Environment.getProjectsDir(this))
+        navigateToFolder(port, folderPath ?: folderFromUrl(webView?.url) ?: Environment.getProjectsDir(this))
     }
+
+    /**
+     * The folder encoded in a workbench URL, if it still exists on disk.
+     *
+     * VS Code opens a folder by navigating this same WebView without going
+     * through Kotlin, so the URL is the only record of the open workspace that
+     * stays truthful. A folder that has since disappeared — a cleared SAF
+     * mirror, unmounted storage — is dropped so the caller falls back to the
+     * default rather than pinning the WebView to a dead path.
+     */
+    private fun folderFromUrl(url: String?): String? =
+        url?.let { Uri.parse(it).getQueryParameter("folder") }?.takeIf { File(it).isDirectory }
 
     /**
      * Initializes the WebView bridge, security manager, and clients.
@@ -494,7 +503,6 @@ class MainActivity : AppCompatActivity() {
      */
     private fun navigateToFolder(port: Int, folderPath: String) {
         val wv = webView ?: return
-        activeFolder = folderPath
         val url = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
         Logger.i(tag, "Loading VS Code at $url")
         wv.loadUrl(url)
@@ -992,7 +1000,7 @@ class MainActivity : AppCompatActivity() {
     private fun recreateWebView() {
         Logger.w(tag, "Recreating WebView after crash")
         val wv = webView ?: return
-        // Fix #4: Preserve last URL for folder context restoration
+        // Read the open folder off the dying WebView before it goes away
         val lastUrl = wv.url
         val container = findViewById<android.widget.FrameLayout>(R.id.webViewContainer)
         container.removeView(wv)
@@ -1008,12 +1016,10 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
         if (serverPort > 0) {
-            // Restore last URL if it was a localhost VS Code URL (preserves folder context)
-            if (lastUrl != null && lastUrl.startsWith("http://127.0.0.1")) {
-                webView?.loadUrl(lastUrl)
-            } else {
-                loadVSCode(serverPort)
-            }
+            // Always via loadVSCode so initBridge re-registers on the new WebView;
+            // loading the old URL directly would leave it without the bridge. The
+            // folder is carried over from the URL the destroyed WebView was showing.
+            loadVSCode(serverPort, folderFromUrl(lastUrl))
         }
     }
 
