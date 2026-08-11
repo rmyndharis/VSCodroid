@@ -211,6 +211,10 @@ class ProcessManager(private val context: Context) {
                 (pidMethod.invoke(process) as? Long)
             } else {
                 // Fallback for runtimes that only expose an internal pid field.
+                // This is the branch Android takes: its java.lang.Process has no
+                // pid(). On a desktop JVM the method is found but belongs to the
+                // package-private ProcessImpl, so invoking it fails and this
+                // returns null — do not assert on it from a JVM unit test.
                 val pidField = process.javaClass.getDeclaredField("pid")
                 pidField.isAccessible = true
                 pidField.getInt(process).toLong()

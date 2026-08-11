@@ -49,9 +49,10 @@ class SplashActivity : AppCompatActivity() {
         // path on every reinstall, which breaks absolute symlinks in usr/bin/.
         //
         // These touch the filesystem on the main thread at launch. Letting one
-        // throw would crash the app before it ever draws, leaving the user with a
-        // launch loop and no explanation; a genuinely broken install still surfaces
-        // later as a server error that says so.
+        // throw would crash the app before it ever draws, leaving a launch loop
+        // with no explanation. What survives a failure here is degraded rather
+        // than dead — tools missing from PATH, a stale terminal profile — and
+        // logcat is the only trace, so keep the message specific.
         try {
             setup.setupToolSymlinks()
             setup.setupRipgrepVscodeSymlink()
