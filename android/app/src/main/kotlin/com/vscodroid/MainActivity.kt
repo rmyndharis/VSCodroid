@@ -50,6 +50,9 @@ class MainActivity : AppCompatActivity() {
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
 
+    /** Folder the WebView is currently showing, so a server restart can return to it. */
+    private var activeFolder: String? = null
+
     private var pendingFileUri: Uri? = null
     private lateinit var securityManager: SecurityManager
     private lateinit var safManager: SafStorageManager
@@ -438,7 +441,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadVSCode(port: Int, folderPath: String? = null) {
         initBridge(port)
-        navigateToFolder(port, folderPath ?: Environment.getProjectsDir(this))
+        // onServerReady routes a restart through here without a folder. Falling back
+        // to the folder already on screen keeps the user's workspace instead of
+        // dropping them back into the default projects directory.
+        navigateToFolder(port, folderPath ?: activeFolder ?: Environment.getProjectsDir(this))
     }
 
     /**
@@ -488,6 +494,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun navigateToFolder(port: Int, folderPath: String) {
         val wv = webView ?: return
+        activeFolder = folderPath
         val url = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
         Logger.i(tag, "Loading VS Code at $url")
         wv.loadUrl(url)
