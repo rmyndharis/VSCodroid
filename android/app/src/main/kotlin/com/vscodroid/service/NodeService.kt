@@ -15,6 +15,7 @@ import com.vscodroid.MainActivity
 import com.vscodroid.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -43,6 +44,7 @@ class NodeService : Service() {
     private lateinit var processManager: ProcessManager
     private var restartCount = 0
     private var isServiceRunning = false
+    private var launchJob: Job? = null
 
     /** Invoked when the server is healthy and accepting connections. */
     var onServerReady: ((port: Int) -> Unit)? = null
@@ -115,7 +117,11 @@ class NodeService : Service() {
      * Notifies [onServerReady] on success or [onServerError] on failure/timeout.
      */
     private fun launchServer() {
-        serviceScope.launch(Dispatchers.IO) {
+        // A crash during startup restarts the server while the previous attempt is
+        // still inside waitForReady()'s 30s poll. Without this the two overlap and
+        // both report readiness for the same server.
+        launchJob?.cancel()
+        launchJob = serviceScope.launch(Dispatchers.IO) {
             val started = processManager.startServer()
             if (!started) {
                 Logger.e(tag, "Failed to start server process")

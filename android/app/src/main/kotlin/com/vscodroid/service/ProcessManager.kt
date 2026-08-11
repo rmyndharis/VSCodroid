@@ -57,20 +57,27 @@ class ProcessManager(private val context: Context) {
     /**
      * Starts the Node.js code-server process.
      *
-     * Allocates an available port, builds the command line from [Environment] paths,
-     * spawns the process, and begins output reading and watchdog monitoring.
+     * Allocates a port on the first call and keeps it for the lifetime of this
+     * instance, builds the command line from [Environment] paths, spawns the
+     * process, and begins output reading and watchdog monitoring.
      *
      * @return `true` if the process was spawned successfully, `false` on error or
-     *         if a process is already running.
+     *         if a live process is already running.
      */
     fun startServer(): Boolean {
-        if (serverProcess != null) {
+        // Liveness, not nullity: the crash path leaves the dead Process referenced,
+        // so a null check here refused every automatic restart attempt (issue #3).
+        if (isRunning()) {
             Logger.w(tag, "Server already running")
             return false
         }
 
         isShuttingDown = false
-        _port = PortFinder.findAvailablePort()
+        // Keep the port across restarts. The WebView's loaded URL and the bridge's
+        // allowed-origin check are both bound to it, and neither is rebuilt on restart.
+        if (_port == 0) {
+            _port = PortFinder.findAvailablePort()
+        }
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR exists — Android may clear cache between launches

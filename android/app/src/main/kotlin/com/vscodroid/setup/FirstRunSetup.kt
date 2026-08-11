@@ -424,19 +424,17 @@ npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx
      * reference this directory, so they must be refreshed on each launch.
      */
     fun updateSettingsNativeLibPaths() {
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
         val settingsFile = File(context.filesDir, "home/.vscodroid/User/settings.json")
         if (!settingsFile.exists()) return
 
-        val content = settingsFile.readText()
-        // Match any /data/app/<random>/<pkg-random>/lib/<arch> prefix
-        val pattern = Regex("""/data/app/[^"]+/lib/[^"]+""")
-        val updated = pattern.replace(content, nativeLibDir)
+        val updated = refreshManagedPaths(
+            settingsFile.readText(),
+            Environment.getBashPath(context),
+            Environment.getGitPath(context),
+        ) ?: return
 
-        if (updated != content) {
-            settingsFile.writeText(updated)
-            Logger.i(tag, "Updated nativeLibDir paths in settings.json")
-        }
+        settingsFile.writeText(updated)
+        Logger.i(tag, "Refreshed managed paths in settings.json")
     }
 
     private fun createWelcomeProject() {
@@ -753,4 +751,39 @@ npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx
         private const val KEY_VERSION = "setup_version"
         private const val KEY_VERSION_CODE = "setup_version_code"
     }
+}
+
+/**
+ * The bundled bash inside the terminal profile, and the bundled git. Both are
+ * anchored on their key and match only a nativeLibraryDir value, so a path the
+ * user chose themselves is left alone.
+ *
+ * The character class excludes braces deliberately: an earlier release used
+ * `/data/app/[^"]+/lib/[^"]+`, whose tail ran straight past the directory and
+ * swallowed the binary filename, leaving the terminal profile pointing at a
+ * directory (issue #3). Every quantifier here is fenced by the delimiter it
+ * must not cross.
+ */
+private val BASH_PROFILE_PATH = Regex(
+    """("terminal\.integrated\.profiles\.linux"\s*:\s*\{\s*"bash"\s*:\s*\{[^{}]*?"path"\s*:\s*)"/data/app/[^"]*["]"""
+)
+private val GIT_PATH = Regex("""("git\.path"\s*:\s*)"/data/app/[^"]*["]""")
+
+/**
+ * Points the two settings.json values that embed nativeLibraryDir back at the
+ * current install, returning the updated document or `null` when nothing needed
+ * changing.
+ *
+ * Substitutes the two values in place and leaves every other byte untouched.
+ * settings.json is JSONC: comments and trailing commas are legal there, so
+ * parsing the document to re-serialise it would strip the user's comments,
+ * escape every slash, and turn `["-i",]` into `["-i", null]`.
+ *
+ * A pattern that does not match changes nothing, so a file the user has
+ * restructured is left as they wrote it rather than mangled.
+ */
+internal fun refreshManagedPaths(content: String, bashPath: String, gitPath: String): String? {
+    var updated = BASH_PROFILE_PATH.replace(content) { "${it.groupValues[1]}\"$bashPath\"" }
+    updated = GIT_PATH.replace(updated) { "${it.groupValues[1]}\"$gitPath\"" }
+    return updated.takeIf { it != content }
 }
