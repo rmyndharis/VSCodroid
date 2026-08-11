@@ -18,6 +18,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Tests for [ProcessManager]'s start guard and port allocation.
@@ -81,11 +83,11 @@ class ProcessManagerTest {
     @Test
     fun `starts again after the process has died`() {
         // The crash path leaves this reference in place; it must not block a restart.
-        manager.serverProcessField = mockk<Process>(relaxed = true) {
-            every { isAlive } returns false
-        }
+        val dead = mockk<Process>(relaxed = true) { every { isAlive } returns false }
+        manager.serverProcessField = dead
 
-        assertTrue(manager.startServer(), "a dead server must be restartable")
+        assertTrue(startAndAwaitWatchdog(), "a dead server must be restartable")
+        assertNotEquals(dead, manager.serverProcessField, "the dead reference must be replaced")
     }
 
     @Test
@@ -97,14 +99,31 @@ class ProcessManagerTest {
             every { isAlive } returns false
         }
 
-        assertTrue(manager.startServer())
+        assertTrue(startAndAwaitWatchdog())
         assertEquals(45678, manager.port, "restart must reuse the original port")
     }
 
     @Test
     fun `allocates a port on the first start`() {
-        assertTrue(manager.startServer())
+        assertTrue(startAndAwaitWatchdog())
         assertNotEquals(0, manager.port, "the first start must allocate a port")
+    }
+
+    /**
+     * Starts the server and waits for the watchdog to report `/bin/echo` exiting.
+     *
+     * Waiting is what keeps the watchdog thread from outliving the test and
+     * logging through the Logger mock after `unmockkAll()` has torn it down,
+     * which collides with the next test class re-mocking the same object in this
+     * JVM. It also pins the watchdog itself: without it the latch never fires,
+     * and the watchdog is the mechanism the whole restart depends on.
+     */
+    private fun startAndAwaitWatchdog(): Boolean {
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        val started = manager.startServer()
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+        return started
     }
 }
 
