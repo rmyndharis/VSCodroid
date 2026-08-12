@@ -1,0 +1,121 @@
+name: Build Code - OSS server
+
+# Manual, and run once per VS Code version rather than once per app release: it
+# clones the VS Code source and runs a full gulp build, which takes around half
+# an hour. The tarball it publishes is what build.yml and release.yml then fetch,
+# so the expensive build happens when the version moves, not on every tag.
+on:
+  workflow_dispatch:
+    inputs:
+      vscode_version:
+        description: VS Code tag to build (defaults to the VSCODE_VERSION file)
+        default: ""
+        type: string
+      runner:
+        # Not a preference. Every native module in the tree is built for the
+        # build host and only two are overlaid afterwards; @vscode/ripgrep's
+        # postinstall in particular downloads a binary for whatever the host
+        # reports. On an x64 runner the tree builds green and then fails at exec
+        # on the device, with Search quietly returning nothing. The build script
+        # refuses to package an x86-64 tree, so a wrong runner fails the job
+        # rather than shipping.
+        description: Runner to build on (must be arm64)
+        default: ubuntu-24.04-arm
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the pinned version
+        id: pin
+        env:
+          # Through the environment, never interpolated into the script body: a
+          # workflow_dispatch input is attacker-controlled text as far as the
+          # shell is concerned, and this one lands in a URL and a tag name.
+          INPUT_VERSION: ${{ inputs.vscode_version }}
+        run: |
+          version="${INPUT_VERSION:-$(cat VSCODE_VERSION)}"
+          case "$version" in
+            *[!0-9.]*|"") echo "refusing version: $version" >&2; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building VS Code $version"
+
+          # .nvmrc at the tag is authoritative for the build host. Reading it
+          # here rather than hardcoding keeps a version bump from silently
+          # building on the wrong Node.
+          node_version=$(curl -fsSL \
+            "https://raw.githubusercontent.com/microsoft/vscode/${version}/.nvmrc")
+          echo "node=$node_version" >> "$GITHUB_OUTPUT"
+          echo "Building with Node $node_version"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.pin.outputs.node }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libkrb5-dev libsecret-1-dev libx11-dev \
+            libxkbfile-dev pkg-config python3 python3-setuptools
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: codeoss-npm-${{ steps.pin.outputs.version }}-${{ runner.arch }}
+          restore-keys: codeoss-npm-${{ steps.pin.outputs.version }}-
+
+      - name: Build
+        env:
+          VSCODE_VERSION: ${{ steps.pin.outputs.version }}
+          WORK: ${{ runner.temp }}/codeoss
+        run: |
+          mkdir -p "$WORK"
+          bash scripts/build-vscode-oss.sh
+
+      - name: Report cost
+        if: always()
+        run: |
+          df -h "${{ runner.temp }}" | tail -1
+          du -sh "${{ runner.temp }}/codeoss"/* 2>/dev/null || true
+
+      - name: Upload server tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}
+          path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
+      # The artifact above expires; this does not. build.yml and release.yml both
+      # fetch from here, so the tree a release ships is the one this job built
+      # rather than whatever a maintainer happened to have on disk.
+      #
+      # make_latest is false and the tag is deliberately not v-prefixed. Both
+      # matter: ToolchainRegistry sends every non-Play install to
+      # releases/latest/download/toolchain_*.zip, so making this the latest
+      # release would 404 every toolchain download; and release.yml triggers on
+      # v*, so a v-prefixed tag here would start an app release build.
+      - name: Publish the server tarball
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: server-${{ steps.pin.outputs.version }}
+          name: Code - OSS server ${{ steps.pin.outputs.version }}
+          body: |
+            Code - OSS `vscode-reh-web-linux-arm64` server tree for VS Code
+            ${{ steps.pin.outputs.version }}, built from source with the patches
+            and branding in this repository applied before the build.
+
+            Consumed by `scripts/fetch-vscode-oss.sh`. Not an app release.
+          make_latest: false
+          files: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
