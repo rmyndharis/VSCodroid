@@ -177,15 +177,56 @@ echo "  Go: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SIZE
 # --- Step 6: Write manifest.json ---
 echo ""
 echo "Writing manifest.json..."
+
+# The binaries list is what ToolchainManager chmods on install, and nothing else
+# gives these files an execute bit: asset archives carry no permissions and the
+# install copies them with Kotlin's copyTo, which does not preserve one. A
+# binary missing from this list therefore arrives unrunnable.
+#
+# It used to name two, `go` and `gofmt`, and `go` does not compile anything by
+# itself -- it forks compile, link, asm and the rest out of pkg/tool. Those
+# arrived without the bit, so `go build` failed with a permission error on both
+# delivery channels while the build stayed green. Someone had hand-corrected the
+# generated manifest on a working copy, but this file is gitignored, so the
+# correction could not travel and the next run overwrote it.
+#
+# Derived now, from exactly the set the verification step below sweeps: every ELF
+# under bin/ and pkg/tool/. The two agree by construction rather than by anyone
+# remembering to update both. The tool directory is found by traversal because
+# its name carries the platform, and the set is not fixed either -- Go 1.25.6
+# ships seven tools and 1.26.5 ships eight, which is precisely why a written list
+# was stale before it was written.
+GO_DIR="$PACK_ASSETS/usr/lib/go"
+for required in "$GO_DIR/bin" "$GO_DIR/pkg/tool"; do
+    if [ ! -d "$required" ]; then
+        echo "  ERROR: $required is missing from the pack -- the layout moved" >&2
+        exit 1
+    fi
+done
+
+is_elf() {
+    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
+GO_BINARIES='['
+FIRST_BIN=true
+while IFS= read -r obj; do
+    is_elf "$obj" || continue
+    [ "$FIRST_BIN" = true ] && FIRST_BIN=false || GO_BINARIES+=','
+    GO_BINARIES+="\"usr/lib/go/${obj#$GO_DIR/}\""
+done < <(find "$GO_DIR/bin" "$GO_DIR/pkg/tool" -type f | sort)
+GO_BINARIES+=']'
+echo "  binaries: $(echo "$GO_BINARIES" | tr ',' '\n' | wc -l | tr -d ' ') entries derived from the pack"
+
+# The symlinks stay bin/-only on purpose. They put a command on PATH, and only
+# `go` and `gofmt` are meant to be typed; the pkg/tool binaries are forked by
+# `go` through GOROOT and would only clutter usr/bin with names no one calls.
 cat > "$PACK_ASSETS/toolchain_go.json" << EOF
 {
     "name": "go",
     "displayName": "Go",
     "version": "$GO_VERSION",
-    "binaries": [
-        "usr/lib/go/bin/go",
-        "usr/lib/go/bin/gofmt"
-    ],
+    "binaries": $GO_BINARIES,
     "symlinks": {
         "go": "usr/lib/go/bin/go",
         "gofmt": "usr/lib/go/bin/gofmt"
@@ -225,19 +266,6 @@ echo "=== Verifying Go binaries ==="
 # between two readings of the same pack will rot in CI, and each widening erodes
 # what the gate means. Naming what runs does not rot: a wrong-arch bin/go still
 # fails, and a new .syso in src/ never becomes the gate's business.
-GO_DIR="$PACK_ASSETS/usr/lib/go"
-for required in "$GO_DIR/bin" "$GO_DIR/pkg/tool"; do
-    if [ ! -d "$required" ]; then
-        echo "  ERROR: $required is missing from the pack -- the layout moved and" >&2
-        echo "         this gate is no longer looking where the binaries are" >&2
-        exit 1
-    fi
-done
-
-is_elf() {
-    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
-}
-
 verify_failures=0
 verify_checked=0
 
