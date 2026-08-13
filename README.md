@@ -124,8 +124,8 @@ If you are **ready to learn**, you should be able to **start today**.
 - **Batteries Included** — Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
 - **Offline-First** — Code without an internet connection. Everything runs locally on your device.
 - **Mobile-Optimized** — Extra Key Row (Ctrl, Alt, Tab, Esc, arrows), touch-friendly UI, clipboard bridge.
-- **SSH Key Management** — Generate ed25519 keys and copy public keys from the command palette.
-- **Language Picker** — Select your languages, Go/Ruby/Java auto-install via Play Store.
+- **SSH Out of the Box** — Bundled OpenSSH client and `ssh-keygen`, preconfigured with sane defaults (ed25519, keepalive, `accept-new`).
+- **Language Picker** — Select your languages; Go/Ruby/Java install on demand — via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
 - **Dev Server Preview** — Open localhost URLs in your device's browser for web app testing.
 
 ## 📸 Screenshots
@@ -186,7 +186,7 @@ flowchart TD
 
 1. **Install** from [Google Play](https://play.google.com/store/apps/details?id=com.vscodroid).
 2. Open the app. Core binaries extract automatically (~5-10 seconds).
-3. Pick your languages (Go, Ruby, Java, etc.). They install automatically.
+3. Pick your languages (Go, Ruby, Java). They install automatically.
 4. Start coding. Editor, terminal, and tools are ready.
 
 > You can also download APKs directly from [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases).
@@ -196,18 +196,19 @@ flowchart TD
 | Tier                         | What                                                        | How                                                      |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
 | **Core (Base APK)**          | Node.js, npm, Python 3, Git, Bash, SSH, tmux, make, ripgrep | Available immediately                                    |
-| **Toolchains (Asset Packs)** | Go, Ruby, Java                                              | Select in Language Picker, auto-installed via Play Store |
+| **Toolchains (Asset Packs)** | Go, Ruby, Java                                              | Select in Language Picker — Play Asset Delivery, or direct download on sideloaded installs |
 
 ## 🔨 Building from Source
 
 ### Prerequisites
 
 - **Android Studio** latest stable version with Android API 36 support.
-- **Android NDK** r27+.
-- **Node.js** 20 LTS (for building VS Code).
-- **Yarn** 1.x Classic (for VS Code build).
-- **Python** 3.x (for node-gyp).
+- **Android NDK** r27+ (for cross-compiling the native addons).
+- **Python** 3.x (used by the download and verification scripts).
 - **Git**.
+
+You do **not** build VS Code locally: the server tree is built once per VS Code version by a
+separate workflow and fetched as a verified tarball by `scripts/fetch-vscode-oss.sh`.
 
 ### Build Steps
 
@@ -233,10 +234,10 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 
 | Metric                             | Size                   |
 | ---------------------------------- | ---------------------- |
-| Play Store download (core)         | ~150-200 MB            |
-| + Each toolchain (on-demand)       | 20-100 MB per language |
-| Installed storage (core)           | ~300-400 MB            |
-| Installed storage (all toolchains) | ~600-800 MB            |
+| Play Store download (core)         | ~135 MB                |
+| + Each toolchain (on-demand)       | 9-53 MB per language   |
+| Installed storage (core)           | ~400 MB                |
+| Installed storage (all toolchains) | ~750 MB                |
 | RAM usage (typical)                | ~400-700 MB            |
 
 ## 🤝 Contributing
