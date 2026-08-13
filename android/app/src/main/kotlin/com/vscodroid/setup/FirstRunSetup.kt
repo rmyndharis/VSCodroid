@@ -177,14 +177,23 @@ class FirstRunSetup(private val context: Context) {
     private fun extractAssetFile(assetPath: String, destPath: String) {
         val destFile = File(context.filesDir, destPath)
         destFile.parentFile?.mkdirs()
-        try {
-            context.assets.open(assetPath).use { input ->
-                FileOutputStream(destFile).use { output ->
-                    input.copyTo(output)
-                }
+
+        // Opening the asset is separated from writing it so the two failures can
+        // be told apart. They are not the same event: an absent asset is routine
+        // -- several are absent in builds that skip a download script -- while a
+        // copy that starts and then fails is not, and the single catch this
+        // replaced reported both as "Asset not found".
+        val input =
+            try {
+                context.assets.open(assetPath)
+            } catch (e: IOException) {
+                Logger.d(tag, "Asset not found: $assetPath (will be available after build)")
+                return
             }
-        } catch (e: IOException) {
-            Logger.d(tag, "Asset not found: $assetPath (will be available after build)")
+
+        val written = input.use { stream -> writeAtomically(destFile) { output -> stream.copyTo(output) } }
+        if (!written) {
+            Logger.w(tag, "Failed to write $destPath; it keeps whatever it held before")
         }
     }
 
@@ -1495,6 +1504,42 @@ internal fun retiredOwnExtensionDirs(present: List<String>, bundled: List<String
             name !in bundled &&
             base(name).let { it != null && it !in bundledBases }
     }
+}
+
+/**
+ * Writes [dest] through a temporary file, so a failure leaves no partial file
+ * under the name everything else checks for.
+ *
+ * Writing straight to the destination is what made a failed extraction
+ * indistinguishable from a complete one: the bytes written before the failure
+ * stay on disk, and every caller decides a file is present with `exists()`,
+ * which a truncated file satisfies. The reconciliation added for #18 could
+ * therefore accept a half-written interpreter runtime and never look again.
+ *
+ * The temporary file sits in the destination's own directory, so the rename is
+ * within one filesystem and needs no space of its own. Its name is derived from
+ * the destination rather than randomised, which means a copy killed outright --
+ * process death, not an exception -- leaves at most one stray file per
+ * destination, and the next attempt at the same asset truncates it. Sweeping
+ * for strays would cost a directory walk on every extraction to reclaim a file
+ * that the retry reclaims anyway, so there is no sweep.
+ *
+ * @return true if [dest] now holds what [write] produced. On false, [dest] is
+ *   untouched -- it keeps its previous contents, or stays absent.
+ */
+internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boolean {
+    val tmp = File(dest.parentFile, "${dest.name}.tmp~")
+    try {
+        FileOutputStream(tmp).use(write)
+    } catch (e: IOException) {
+        tmp.delete()
+        return false
+    }
+    if (!tmp.renameTo(dest)) {
+        tmp.delete()
+        return false
+    }
+    return true
 }
 
 /**
