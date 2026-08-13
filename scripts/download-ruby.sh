@@ -14,7 +14,16 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PACK_ASSETS="$ROOT_DIR/android/toolchain_ruby/src/main/assets"
 WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
-TERMUX_REPO="${TERMUX_MIRROR:-https://packages.termux.dev/apt/termux-main}"
+# The same mirror the rest of the family uses. packages.termux.dev was the
+# default here and is frequently down -- the reason every other download script
+# moved off it -- and the inconsistency was worse than either choice alone:
+# these scripts share one Packages index with a 60-minute freshness window and
+# one work directory, so whichever ran first left an index behind that the
+# others reused. Filenames and digests resolved from one host, .deb files
+# fetched from another. The digest check makes that loud rather than dangerous,
+# but a build failing because two mirrors are at different sync points is a
+# confusing way to spend an afternoon.
+TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
 PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
 
 REQUIRED_PACKAGES=(
@@ -223,7 +232,15 @@ for pkg in "${LIB_PACKAGES[@]}"; do
             cp -L "$src" "$PACK_ASSETS/usr/lib/$soname"
             echo "  $soname ($(du -sh "$PACK_ASSETS/usr/lib/$soname" | cut -f1))"
         else
-            echo "  WARNING: $soname not found in $pkg"
+            # Fatal, not a warning, for the same reason it is fatal in
+            # download-termux-tools.sh: a library missing here ships a pack
+            # whose binaries die at dlopen on a user's device, and the ELF
+            # verification below cannot see it -- it checks what is present, and
+            # this is about what is absent. The pack would install, the command
+            # would be on PATH, and it would fail on first use.
+            echo "  ERROR: $soname not found in $pkg (looked in $pkg_lib_dir)" >&2
+            [ -d "$pkg_lib_dir" ] && ls "$pkg_lib_dir"/*.so* 2>/dev/null | head -5 || true
+            exit 1
         fi
     done
 done

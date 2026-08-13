@@ -13,7 +13,16 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PACK_ASSETS="$ROOT_DIR/android/toolchain_go/src/main/assets"
 WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
-TERMUX_REPO="${TERMUX_MIRROR:-https://packages.termux.dev/apt/termux-main}"
+# The same mirror the rest of the family uses. packages.termux.dev was the
+# default here and is frequently down -- the reason every other download script
+# moved off it -- and the inconsistency was worse than either choice alone:
+# these scripts share one Packages index with a 60-minute freshness window and
+# one work directory, so whichever ran first left an index behind that the
+# others reused. Filenames and digests resolved from one host, .deb files
+# fetched from another. The digest check makes that loud rather than dangerous,
+# but a build failing because two mirrors are at different sync points is a
+# confusing way to spend an afternoon.
+TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
 PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
 
 REQUIRED_PACKAGES=(
