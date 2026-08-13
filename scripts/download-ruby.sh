@@ -41,6 +41,13 @@ get_sonames() {
 
 LIB_PACKAGES=(ruby libgmp libyaml libandroid-execinfo libffi)
 
+# Tells a real binary from a script by reading the file rather than the name.
+# Used twice: to decide which commands need an interpreter wrapper, and by the
+# verification step to skip files the ELF checker would reject for not being one.
+is_elf() {
+    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
 echo "=== Downloading Ruby Toolchain ==="
 echo ""
 
@@ -171,13 +178,22 @@ mkdir -p "$PACK_ASSETS/usr/bin" "$PACK_ASSETS/usr/lib"
 
 RUBY_USR="extracted/ruby/data/data/com.termux/files/usr"
 
-# Copy ruby binaries (resolve symlinks with cp -L)
-for bin in ruby irb gem bundle bundler erb rdoc ri; do
-    src="$RUBY_USR/bin/$bin"
-    if [ -f "$src" ] || [ -L "$src" ]; then
-        cp -L "$src" "$PACK_ASSETS/usr/bin/$bin"
-        echo "  bin/$bin"
-    fi
+# Every command the package ships, read from the package rather than from a list
+# kept here. The list used to be fixed and had drifted: it still named `ri`,
+# which upstream stopped shipping, and it missed rake, rdbg, rbs, racc,
+# syntax_suggest and typeprof, which upstream added. Nothing compared the two, so
+# `rake` -- the command most Ruby projects are driven by -- had never been in the
+# pack and said "command not found" with no sign of why. Deriving it means the
+# next addition arrives on its own, and arrives gated: the verification step
+# below sweeps whatever lands here.
+if [ ! -d "$RUBY_USR/bin" ]; then
+    echo "  ERROR: no bin directory in the ruby package at $RUBY_USR/bin" >&2
+    exit 1
+fi
+for src in "$RUBY_USR/bin"/*; do
+    [ -f "$src" ] || [ -L "$src" ] || continue
+    cp -L "$src" "$PACK_ASSETS/usr/bin/$(basename "$src")"
+    echo "  bin/$(basename "$src")"
 done
 
 # Copy ruby lib directory (stdlib + gems)
@@ -233,20 +249,30 @@ echo "  Ruby: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SI
 echo ""
 echo "Writing toolchain_ruby.json..."
 
-# Collect binaries and script wrappers (only include actually-copied files)
+# Built from what was actually copied, and split by reading each file rather than
+# by naming the exception. Only the interpreter is a real binary; every other
+# command is a Ruby script, and a script cannot be executed from filesDir at all
+# -- SELinux refuses it -- so each gets a shell function that hands the file to
+# `ruby` instead. Their shebangs point into Termux's own prefix and are never
+# used, which is exactly why passing the interpreter explicitly is what makes
+# them work here.
+#
+# Deciding by content matters beyond tidiness: if upstream ever ships a second
+# real binary, it lands in binaries and stays out of the wrappers on its own,
+# where a name-based rule would have handed it to `ruby` and produced a syntax
+# error nobody could place.
 BINARIES='['
 SCRIPT_WRAPPERS='{'
 FIRST_BIN=true
 FIRST_SW=true
-for bin in ruby irb gem bundle bundler erb rdoc ri; do
-    if [ -f "$PACK_ASSETS/usr/bin/$bin" ]; then
-        [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
-        BINARIES+="\"usr/bin/$bin\""
-        # All binaries except ruby itself are scripts needing wrappers
-        if [ "$bin" != "ruby" ]; then
-            [ "$FIRST_SW" = true ] && FIRST_SW=false || SCRIPT_WRAPPERS+=','
-            SCRIPT_WRAPPERS+="\"$bin\":\"usr/bin/$bin\""
-        fi
+for cmd in "$PACK_ASSETS/usr/bin"/*; do
+    [ -f "$cmd" ] || continue
+    name="$(basename "$cmd")"
+    [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
+    BINARIES+="\"usr/bin/$name\""
+    if ! is_elf "$cmd"; then
+        [ "$FIRST_SW" = true ] && FIRST_SW=false || SCRIPT_WRAPPERS+=','
+        SCRIPT_WRAPPERS+="\"$name\":\"usr/bin/$name\""
     fi
 done
 BINARIES+=']'
@@ -319,10 +345,6 @@ SONAME_LINKS="$WORK_DIR/ruby-soname-links"
 rm -rf "$SONAME_LINKS"
 mkdir -p "$SONAME_LINKS"
 ln -s "$PACK_ASSETS/usr/lib/libruby.so" "$SONAME_LINKS/libruby.so.${RUBY_MINOR%.*}"
-
-is_elf() {
-    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
-}
 
 verify_failures=0
 verify_checked=0

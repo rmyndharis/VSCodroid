@@ -2,7 +2,7 @@
     "name": "ruby",
     "displayName": "Ruby",
     "version": "3.4.1-2",
-    "binaries": ["usr/bin/ruby","usr/bin/irb","usr/bin/gem","usr/bin/bundle","usr/bin/bundler","usr/bin/erb","usr/bin/rdoc"],
+    "binaries": ["usr/bin/bundle","usr/bin/bundler","usr/bin/erb","usr/bin/gem","usr/bin/irb","usr/bin/racc","usr/bin/rake","usr/bin/rbs","usr/bin/rdbg","usr/bin/rdoc","usr/bin/ruby","usr/bin/syntax_suggest","usr/bin/typeprof"],
     "env": {
         "GEM_HOME": "$HOME/.gem/ruby",
         "GEM_PATH": "$HOME/.gem/ruby:$FILESDIR/usr/lib/ruby/gems",
@@ -16,6 +16,6 @@
     },
     "scriptWrappers": {
         "interpreter": "ruby",
-        "scripts": {"irb":"usr/bin/irb","gem":"usr/bin/gem","bundle":"usr/bin/bundle","bundler":"usr/bin/bundler","erb":"usr/bin/erb","rdoc":"usr/bin/rdoc"}
+        "scripts": {"bundle":"usr/bin/bundle","bundler":"usr/bin/bundler","erb":"usr/bin/erb","gem":"usr/bin/gem","irb":"usr/bin/irb","racc":"usr/bin/racc","rake":"usr/bin/rake","rbs":"usr/bin/rbs","rdbg":"usr/bin/rdbg","rdoc":"usr/bin/rdoc","syntax_suggest":"usr/bin/syntax_suggest","typeprof":"usr/bin/typeprof"}
     }
 }
