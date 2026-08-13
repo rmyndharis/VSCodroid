@@ -228,6 +228,26 @@ class FirstRunSetup(private val context: Context) {
         val libDir = File(context.filesDir, "usr/lib")
 
         if (!File(libDir, runtime).exists()) {
+            // extractAssetFile catches an IOException and leaves whatever it had
+            // already written. A copy that runs out of disk therefore produces a
+            // truncated libpython3.X.so, exists() accepts it, and this function
+            // never looks again -- a corrupt runtime that no later launch
+            // repairs. Refusing to start is the recoverable outcome: the trigger
+            // stays true, and the next launch with room retries.
+            //
+            // The payload is about 29 MB; the margin is for the temporary space
+            // the copies need. This addresses running out of disk, which is the
+            // reason a copy realistically fails here, not every way one can.
+            val required = 64L * 1_048_576L
+            val available = context.filesDir.usableSpace
+            if (available < required) {
+                Logger.w(
+                    tag,
+                    "Not extracting Python: ${available / 1_048_576} MB free, " +
+                        "${required / 1_048_576} MB needed. Python stays unavailable until there is room.",
+                )
+                return
+            }
             Logger.i(tag, "Python runtime $runtime is missing; extracting it and its stdlib")
             // Stdlib first, runtime last. The runtime's absence is what brought
             // us here, so writing it last means an interrupted extraction leaves
