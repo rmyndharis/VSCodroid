@@ -202,7 +202,77 @@ cat > "$PACK_ASSETS/toolchain_go.json" << EOF
 EOF
 echo "  toolchain_go.json written"
 
-# --- Step 7: Size summary ---
+# --- Step 7: Verify the binaries the device will actually run ---
+echo ""
+echo "=== Verifying Go binaries ==="
+# The pack reaches devices through Play Asset Delivery and the release ZIPs, and
+# nothing checked that anything in it could load. A wrong-architecture,
+# misaligned or dependency-missing binary produces a green build, a ZIP that
+# uploads, and a `go build` that dies on someone's phone with a linker message
+# nobody sees. The digest check cannot catch it: upstream's hash covers whatever
+# is in the file, correct or not.
+#
+# Gated: bin/ and pkg/tool/ -- what the device executes. Not the whole pack, and
+# that is deliberate. Step 5 above keeps src/ on purpose ("needed for go build"),
+# and a Go source tree legitimately carries foreign-architecture .syso link-time
+# objects: measured in this pack, ten of them across x86-64, ppc64le, s390x,
+# loong64 and riscv64, under src/runtime/race/ and src/crypto/internal/boring/.
+# They are inputs a cross-compiling linker may consume, never code Android loads.
+#
+# An exemption list over those paths was the obvious alternative and is a trap.
+# Two measurements a few hours apart disagreed on both the count and the set --
+# the second found a riscv64 object the first did not name. A list that rots
+# between two readings of the same pack will rot in CI, and each widening erodes
+# what the gate means. Naming what runs does not rot: a wrong-arch bin/go still
+# fails, and a new .syso in src/ never becomes the gate's business.
+GO_DIR="$PACK_ASSETS/usr/lib/go"
+for required in "$GO_DIR/bin" "$GO_DIR/pkg/tool"; do
+    if [ ! -d "$required" ]; then
+        echo "  ERROR: $required is missing from the pack -- the layout moved and" >&2
+        echo "         this gate is no longer looking where the binaries are" >&2
+        exit 1
+    fi
+done
+
+is_elf() {
+    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
+verify_failures=0
+verify_checked=0
+
+verify_object() {
+    local out
+    verify_checked=$((verify_checked + 1))
+    # The toolchain installs into filesDir/usr alongside the base APK's own
+    # libraries, so both directories are where a dependency may legitimately
+    # live. Without them the gate would reject binaries that work.
+    if ! out=$(python3 "$SCRIPT_DIR/verify-android-elf.py" "$1" \
+                   --lib-dir "$PACK_ASSETS/usr/lib" \
+                   --lib-dir "$ROOT_DIR/android/app/src/main/assets/usr/lib" 2>&1); then
+        echo "  FAILED  ${1#$PACK_ASSETS/}" >&2
+        # `|| true` because this file runs under pipefail: a grep that matched
+        # nothing would return 1 and kill the shell right here, in the one branch
+        # whose job is to say what went wrong.
+        echo "$out" | grep -v '^  ok' | sed 's/^/     /' >&2 || true
+        verify_failures=$((verify_failures + 1))
+    fi
+}
+
+while IFS= read -r obj; do
+    is_elf "$obj" && verify_object "$obj"
+done < <(find "$GO_DIR/bin" "$GO_DIR/pkg/tool" -type f)
+
+if [ "$verify_failures" -gt 0 ]; then
+    echo "" >&2
+    echo "  ERROR: $verify_failures of $verify_checked Go binaries would fail to" >&2
+    echo "         load on a device. Shipping them produces a working build and a" >&2
+    echo "         broken toolchain." >&2
+    exit 1
+fi
+echo "  $verify_checked binaries verified: architecture, dependencies, 16 KB alignment"
+
+# --- Step 8: Size summary ---
 echo ""
 echo "=== Go Toolchain Size Summary ==="
 echo "  Asset pack: $(du -sh "$PACK_ASSETS" | cut -f1) total"

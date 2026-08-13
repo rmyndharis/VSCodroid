@@ -22,6 +22,9 @@ REQUIRED_PACKAGES=(
     libgmp
     libyaml
     libandroid-execinfo
+    # fiddle, Ruby's stdlib FFI, links libffi and it was never bundled -- the
+    # extension shipped and could not load. Found by the ELF gate below.
+    libffi
 )
 
 # Soname mapping for shared libraries
@@ -31,11 +34,12 @@ get_sonames() {
         libgmp)                echo "libgmp.so" ;;
         libyaml)               echo "libyaml-0.so" ;;
         libandroid-execinfo)   echo "libandroid-execinfo.so" ;;
+        libffi)                echo "libffi.so" ;;
         *)                     echo "" ;;
     esac
 }
 
-LIB_PACKAGES=(ruby libgmp libyaml libandroid-execinfo)
+LIB_PACKAGES=(ruby libgmp libyaml libandroid-execinfo libffi)
 
 echo "=== Downloading Ruby Toolchain ==="
 echo ""
@@ -264,7 +268,7 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
     },
     "pathDirs": ["usr/bin"],
     "installRoot": "usr/lib/ruby",
-    "libs": ["libruby.so", "libgmp.so", "libyaml-0.so", "libandroid-execinfo.so"],
+    "libs": ["libruby.so", "libgmp.so", "libyaml-0.so", "libandroid-execinfo.so", "libffi.so"],
     "libSymlinks": {
         "libruby.so.${RUBY_MINOR%.*}": "libruby.so"
     },
@@ -276,7 +280,89 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 EOF
 echo "  toolchain_ruby.json written"
 
-# --- Step 7: Size summary ---
+# --- Step 7: Verify every binary the pack ships ---
+echo ""
+echo "=== Verifying Ruby binaries ==="
+# The pack reaches devices through Play Asset Delivery and the release ZIPs, and
+# nothing checked that anything in it could load. A wrong-architecture,
+# misaligned or dependency-missing binary produces a green build and a `ruby`
+# that dies on someone's phone with a linker message nobody sees; the digest
+# check cannot catch it, because upstream's hash covers whatever is in the file.
+#
+# The whole pack is swept, unlike Go: Ruby ships only what it loads -- the
+# interpreter, libruby, and around a hundred stdlib and gem extensions -- so
+# every ELF object in it is a promise that has to hold.
+#
+# The soname link directory is what makes this gate honest rather than noisy.
+# Every one of those extensions names libruby.so.3.4 in DT_NEEDED, but the pack
+# ships the file as libruby.so, because Android asset archives cannot carry
+# symlinks; ToolchainManager creates the versioned name at install time from the
+# manifest's libSymlinks. Verified against the pack as it sits on disk, all 103
+# objects would be reported as missing their runtime -- a gate failing on the
+# whole toolchain while the toolchain works. So the same link the device will
+# have is created here, from the same expression that writes the manifest, and
+# offered to the verifier as another place a dependency may live.
+#
+# The link is only created once its target is known to exist, and that check is
+# not decoration. The verifier resolves a dependency by looking for its name in
+# a lib-dir, not by following it, so a dangling link here would answer for a
+# runtime that is not in the pack -- and the placement step above only warns
+# when a library is missing rather than failing. Without this the gate could
+# report all 104 objects satisfied while the one library they all need was
+# absent, which is precisely the failure it exists to catch.
+if [ ! -f "$PACK_ASSETS/usr/lib/libruby.so" ]; then
+    echo "  ERROR: libruby.so is not in the pack -- every binary here links it," >&2
+    echo "         so the toolchain cannot work and the gate cannot be trusted" >&2
+    exit 1
+fi
+SONAME_LINKS="$WORK_DIR/ruby-soname-links"
+rm -rf "$SONAME_LINKS"
+mkdir -p "$SONAME_LINKS"
+ln -s "$PACK_ASSETS/usr/lib/libruby.so" "$SONAME_LINKS/libruby.so.${RUBY_MINOR%.*}"
+
+is_elf() {
+    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
+verify_failures=0
+verify_checked=0
+
+verify_object() {
+    local out
+    verify_checked=$((verify_checked + 1))
+    # The pack's own usr/lib, the install-time soname links, and the base APK's
+    # usr/lib -- toolchains install into filesDir/usr beside it, so libssl,
+    # libcrypto and libz resolve there at runtime. Without that last one the gate
+    # would reject binaries that work.
+    if ! out=$(python3 "$SCRIPT_DIR/verify-android-elf.py" "$1" \
+                   --lib-dir "$PACK_ASSETS/usr/lib" \
+                   --lib-dir "$SONAME_LINKS" \
+                   --lib-dir "$ROOT_DIR/android/app/src/main/assets/usr/lib" 2>&1); then
+        echo "  FAILED  ${1#$PACK_ASSETS/}" >&2
+        # `|| true` because this file runs under pipefail: a grep that matched
+        # nothing would return 1 and kill the shell right here, in the one branch
+        # whose job is to say what went wrong.
+        echo "$out" | grep -v '^  ok' | sed 's/^/     /' >&2 || true
+        verify_failures=$((verify_failures + 1))
+    fi
+}
+
+while IFS= read -r obj; do
+    is_elf "$obj" && verify_object "$obj"
+done < <(find "$PACK_ASSETS/usr" -type f)
+
+rm -rf "$SONAME_LINKS"
+
+if [ "$verify_failures" -gt 0 ]; then
+    echo "" >&2
+    echo "  ERROR: $verify_failures of $verify_checked Ruby binaries would fail to" >&2
+    echo "         load on a device. Shipping them produces a working build and a" >&2
+    echo "         broken toolchain." >&2
+    exit 1
+fi
+echo "  $verify_checked binaries verified: architecture, dependencies, 16 KB alignment"
+
+# --- Step 8: Size summary ---
 echo ""
 echo "=== Ruby Toolchain Size Summary ==="
 echo "  Asset pack: $(du -sh "$PACK_ASSETS" | cut -f1) total"
