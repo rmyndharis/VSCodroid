@@ -79,9 +79,44 @@ NODE_INCLUDE="$WORK_DIR/node-v$NODE_VERSION/include/node"
 if [ ! -d "$NODE_INCLUDE" ]; then
     echo ""
     echo "Downloading Node v$NODE_VERSION headers..."
-    curl -fsSL --show-error \
-        "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-headers.tar.gz" \
-        | tar xz -C "$WORK_DIR"
+    # Downloaded to a file rather than piped into tar, because a pipe leaves
+    # nothing to hash. These headers define the ABI every addon here is compiled
+    # against, so a substituted archive is a substituted ABI -- and this was the
+    # last fetch in the tree still taking bytes on trust after every other one
+    # was made to verify.
+    #
+    # Same shape as download-npm.sh: nodejs.org publishes SHASUMS256.txt per
+    # release, and the digest is kept in a sidecar so an offline rebuild against
+    # an already-verified archive still verifies rather than dying in the fetch.
+    # With neither the network nor a sidecar, fail closed.
+    HEADERS_TARBALL="node-v$NODE_VERSION-headers.tar.gz"
+    HEADERS_PATH="$WORK_DIR/$HEADERS_TARBALL"
+    HEADERS_SIDECAR="$HEADERS_PATH.sha256"
+    [ -f "$HEADERS_PATH" ] || curl -fsSL --show-error \
+        "https://nodejs.org/dist/v$NODE_VERSION/$HEADERS_TARBALL" -o "$HEADERS_PATH"
+
+    expected=$(curl -sL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" 2>/dev/null \
+        | awk -v f="$HEADERS_TARBALL" '$2 == f { print $1; exit }' || true)
+    if [ -n "$expected" ]; then
+        printf '%s\n' "$expected" > "$HEADERS_SIDECAR"
+    elif [ -f "$HEADERS_SIDECAR" ]; then
+        expected=$(cat "$HEADERS_SIDECAR")
+        echo "  sha256: using cached digest (SHASUMS256.txt unreachable)"
+    fi
+    if [ -z "$expected" ]; then
+        echo "  ERROR: no digest for $HEADERS_TARBALL (SHASUMS256.txt unreachable, no cached sidecar)" >&2
+        exit 1
+    fi
+    actual=$( (sha256sum "$HEADERS_PATH" 2>/dev/null || shasum -a 256 "$HEADERS_PATH") | cut -d' ' -f1)
+    if [ "$actual" != "$expected" ]; then
+        echo "  ERROR: $HEADERS_TARBALL does not match SHASUMS256.txt" >&2
+        echo "    published : $expected" >&2
+        echo "    downloaded: $actual" >&2
+        rm -f "$HEADERS_PATH"
+        exit 1
+    fi
+    echo "  sha256  : verified"
+    tar xz -C "$WORK_DIR" -f "$HEADERS_PATH"
 fi
 [ -d "$NODE_INCLUDE" ] || { echo "ERROR: headers missing at $NODE_INCLUDE" >&2; exit 1; }
 
