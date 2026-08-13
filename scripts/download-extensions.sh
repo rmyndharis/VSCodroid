@@ -46,6 +46,37 @@ OPENVSX_API="https://open-vsx.org/api"
 echo "=== Downloading bundled extensions from Open VSX ==="
 
 mkdir -p "$ASSETS_DIR"
+
+# Remove extensions this script no longer manages, before placing the ones it
+# does. Nothing here ever deleted, and the loop below skips a directory that
+# already exists -- so an extension dropped from the list above stayed in the
+# tree and shipped, which is how a removed 22 MB extension kept appearing in
+# APKs long after it was taken out. In CI it also came back from the assets
+# cache: restore-keys falls back to any earlier tree, and without this sweep
+# the run then saved that tree forward under its own key.
+#
+# The discriminator is git, not a name pattern: this project's own extensions
+# are committed here, downloaded ones are not. Where git cannot answer, keep
+# everything -- a sweep that guesses is worse than no sweep at all.
+if git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    managed=""
+    for entry in "${EXTENSIONS[@]}"; do
+        managed="$managed ${entry%@*}-${entry##*@}"
+    done
+    for dir in "$ASSETS_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        name=$(basename "$dir")
+        case " $managed " in *" $name "*) continue ;; esac
+        if git -C "$ROOT_DIR" ls-files --error-unmatch \
+            "android/app/src/main/assets/extensions/$name" >/dev/null 2>&1; then
+            continue
+        fi
+        echo "  Removing extension no longer bundled: $name ($(du -sh "$dir" | cut -f1))"
+        rm -rf "$dir"
+    done
+else
+    echo "  NOTE: not a git checkout; leaving existing extension directories alone"
+fi
 mkdir -p "$WORK_DIR"
 
 for EXT_SPEC in "${EXTENSIONS[@]}"; do

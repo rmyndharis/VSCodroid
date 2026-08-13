@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Extensions dropped from the bundled set are now removed from the build tree instead of lingering and shipping in development builds
 - The Node.js headers the native components are compiled against are now checked against the digest nodejs.org publishes, the last download in the build that was still taken on trust
 - The build now checks that the bundled SQLite database engine was compiled from the same version as the JavaScript shipped beside it, the last of the three native components without that check. A mismatch there shows up on device as chat failing to pick a model, an error several layers from its cause
 - The build now checks every binary the Python bundling step installs — the runtime, the shared libraries and all 75 extension modules — rather than the launcher alone, and refuses to continue when a library is missing or pip did not install. It also removes standard libraries left over from an earlier Python version instead of shipping them alongside the current one
