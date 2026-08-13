@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - VS Code upgraded 1.96.4 → 1.133.0
 - Node.js runtime upgraded to 24.18.0, now taken from Termux's `nodejs-lts` package — the previous hand-cross-compiled 20.18.1 segfaulted inside several CLI tools
 - Every bundled executable and shared library — the shell, git, tmux, make, ssh and the libraries they load — is now checked before packaging for the right architecture, dependencies that are actually present, and the page alignment Android 16 requires. Previously only the Node runtime and the native addons were, so a tool whose dependency had gone missing produced a successful build and an install where the terminal would not start
+- The Python bundling step now fails the build when the interpreter's runtime library is absent, installs that runtime under the exact name the launcher links against, and runs the same architecture, dependency and page-alignment check as every other bundled binary — the one it did not yet cover. It previously printed a note and carried on, which could ship a build where `python` failed on first use with a missing-library error
 
 ### Added
 - **GitHub Copilot Chat now works on device**: the bundled extension's platform packages are aliased under the name Android resolves, its SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic so model selection completes end to end

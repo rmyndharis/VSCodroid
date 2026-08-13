@@ -266,20 +266,26 @@ for pkg in "${LIB_PACKAGES[@]}"; do
     done
 done
 
-# Also need libpython shared library
-# Binary links against versioned SONAME (libpython3.12.so.1.0), not unversioned
+# Also need the libpython runtime the launcher links against. readelf -d on the
+# placed libpython.so needs the unversioned name (libpython3.x.so), not the
+# versioned .so.1.0 -- so the runtime must land under that unversioned name
+# whichever file the package ships. Termux currently ships only the unversioned
+# file; copying the versioned one to the unversioned name covers a package that
+# ever flips to versioned-only. A launcher with no runtime is a broken build, so
+# fail here rather than emit a note and ship an APK where python cannot start.
 LIBPYTHON_SRC="extracted/python/data/data/com.termux/files/usr/lib"
 LIBPYTHON_VERSIONED="libpython${PYTHON_MAJOR_MINOR}.so.1.0"
 LIBPYTHON_UNVERSIONED="libpython${PYTHON_MAJOR_MINOR}.so"
-if [ -f "$LIBPYTHON_SRC/$LIBPYTHON_VERSIONED" ] || [ -L "$LIBPYTHON_SRC/$LIBPYTHON_VERSIONED" ]; then
-    cp -L "$LIBPYTHON_SRC/$LIBPYTHON_VERSIONED" "$ASSETS_DIR/usr/lib/$LIBPYTHON_VERSIONED"
-    echo "  $LIBPYTHON_VERSIONED ($(du -sh "$ASSETS_DIR/usr/lib/$LIBPYTHON_VERSIONED" | cut -f1))"
-elif [ -f "$LIBPYTHON_SRC/$LIBPYTHON_UNVERSIONED" ] || [ -L "$LIBPYTHON_SRC/$LIBPYTHON_UNVERSIONED" ]; then
-    cp -L "$LIBPYTHON_SRC/$LIBPYTHON_UNVERSIONED" "$ASSETS_DIR/usr/lib/$LIBPYTHON_UNVERSIONED"
-    echo "  $LIBPYTHON_UNVERSIONED ($(du -sh "$ASSETS_DIR/usr/lib/$LIBPYTHON_UNVERSIONED" | cut -f1))"
+LIBPYTHON_DST="$ASSETS_DIR/usr/lib/$LIBPYTHON_UNVERSIONED"
+if [ -e "$LIBPYTHON_SRC/$LIBPYTHON_UNVERSIONED" ]; then
+    cp -L "$LIBPYTHON_SRC/$LIBPYTHON_UNVERSIONED" "$LIBPYTHON_DST"
+elif [ -e "$LIBPYTHON_SRC/$LIBPYTHON_VERSIONED" ]; then
+    cp -L "$LIBPYTHON_SRC/$LIBPYTHON_VERSIONED" "$LIBPYTHON_DST"
 else
-    echo "  NOTE: libpython shared lib not found (Python may be statically linked)"
+    echo "  ERROR: no libpython runtime ($LIBPYTHON_UNVERSIONED or $LIBPYTHON_VERSIONED) in $LIBPYTHON_SRC" >&2
+    exit 1
 fi
+echo "  $LIBPYTHON_UNVERSIONED ($(du -sh "$LIBPYTHON_DST" | cut -f1))"
 
 # --- Step 8: Size summary ---
 echo ""
@@ -300,8 +306,18 @@ for pkg in "${LIB_PACKAGES[@]}"; do
         [ -f "$ASSETS_DIR/usr/lib/$soname" ] && echo "  $soname: $(du -sh "$ASSETS_DIR/usr/lib/$soname" | cut -f1)"
     done
 done
-[ -f "$ASSETS_DIR/usr/lib/$LIBPYTHON_VERSIONED" ] && echo "  $LIBPYTHON_VERSIONED: $(du -sh "$ASSETS_DIR/usr/lib/$LIBPYTHON_VERSIONED" | cut -f1)"
 [ -f "$ASSETS_DIR/usr/lib/$LIBPYTHON_UNVERSIONED" ] && echo "  $LIBPYTHON_UNVERSIONED: $(du -sh "$ASSETS_DIR/usr/lib/$LIBPYTHON_UNVERSIONED" | cut -f1)"
+
+echo ""
+echo "=== Verify ==="
+# The launcher's DT_NEEDED names its runtime and every other lib it loads; this
+# fails the build if one is missing, the wrong arch, or not 16 KB-aligned -- the
+# check the old silent NOTE skipped. It also proves the runtime landed under the
+# name the launcher links: a mismatch shows up here as an unresolved DT_NEEDED,
+# not as a broken python on someone's device.
+python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNILIBS_DIR/libpython.so" \
+    --lib-dir "$ASSETS_DIR/usr/lib" \
+    --lib-dir "$JNILIBS_DIR"
 
 echo ""
 echo "=== Python download complete ==="
