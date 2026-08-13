@@ -266,6 +266,32 @@ class SettingsPathsTest {
         }
 
         @Test
+        fun `leaves a wrapper the user pointed somewhere of their own`() {
+            // The sibling paths document this rule and honour it; this one did
+            // not, and rewrote whatever it found at every launch.
+            val chosen = "/data/user/0/com.vscodroid/files/home/my-claude-wrapper.sh"
+            val before = settings(shell, git, args = "[]", claudeWrapper = chosen)
+            val result = refreshManagedPaths(before, shell, git, wrapper)
+
+            if (result != null) {
+                assertTrue(result.contains(chosen), "the user's wrapper was overwritten:\n$result")
+                assertTrue(!result.contains(wrapper), "the managed value was written anyway:\n$result")
+            }
+        }
+
+        @Test
+        fun `does not add a second wrapper beside the user's own`() {
+            // The trap in anchoring: once a user value stops matching, treating
+            // "did not match" as "not present" writes the key twice.
+            val chosen = "/data/user/0/com.vscodroid/files/home/my-claude-wrapper.sh"
+            val before = settings(shell, git, args = "[]", claudeWrapper = chosen)
+            val result = refreshManagedPaths(before, shell, git, wrapper) ?: before
+
+            val occurrences = Regex(""""claudeCode\.claudeProcessWrapper"""").findAll(result).count()
+            assertEquals(1, occurrences, "the key appears $occurrences times:\n$result")
+        }
+
+        @Test
         fun `re-points a wrapper the user has stale`() {
             val stale = settings(shell, git, args = "[]",
                 claudeWrapper = "/data/user/0/com.vscodroid/files/usr/bin/node-old")

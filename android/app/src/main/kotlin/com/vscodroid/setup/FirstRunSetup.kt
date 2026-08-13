@@ -858,7 +858,15 @@ claude() {
             Environment.getMuslLoaderPath(context),
         ) ?: return
 
-        settingsFile.writeText(updated)
+        // Atomic because this file is the user's, not ours -- it carries their
+        // editor preferences, and this runs at every launch. writeText truncates
+        // first, so a failure between truncate and write leaves settings.json
+        // empty or half-written, and the workbench reads that as "no settings"
+        // rather than as an error. What we came to change is one path.
+        if (!writeAtomically(settingsFile) { it.write(updated.toByteArray()) }) {
+            Logger.w(tag, "Could not refresh managed paths; settings.json is unchanged")
+            return
+        }
         Logger.i(tag, "Refreshed managed paths in settings.json")
     }
 
@@ -1213,7 +1221,13 @@ claude() {
             }
 
             if (dropped > 0 || added > 0) {
-                manifestFile.writeText(kept.toString(2))
+                // Same exposure as settings.json above: a truncated manifest
+                // is read as an empty extension list, so every bundled
+                // extension disappears rather than the write visibly failing.
+                if (!writeAtomically(manifestFile) { it.write(kept.toString(2).toByteArray()) }) {
+                    Logger.w(tag, "Could not rewrite the extensions manifest; it is unchanged")
+                    return
+                }
                 Logger.i(tag, "Reconciled extensions.json: $dropped stale dropped, $added bundled added")
             }
         } catch (e: Exception) {
@@ -1423,7 +1437,28 @@ private val SHELL_INTEGRATION_OFF = Regex(
     """("terminal\.integrated\.shellIntegration\.enabled"\s*:\s*)false"""
 )
 
-private val CLAUDE_WRAPPER = Regex("""("claudeCode\.claudeProcessWrapper"\s*:\s*)"[^"]*"""")
+/**
+ * The Claude Code wrapper path, under the same rule as the two paths above: it
+ * matches only a value this app wrote, so a wrapper the user pointed somewhere
+ * themselves is theirs to keep. Without an anchor this rewrote whatever it
+ * found on every launch, which the doc on those two says is exactly what none
+ * of them should do.
+ *
+ * Two managed shapes, not one. The current value lives in nativeLibraryDir and
+ * moves on every reinstall. The other is `filesDir/usr/bin/...`, which is what
+ * releases before the CLI stopped being bundled wrote there -- still ours to
+ * re-point, and the reason an anchor on `/data/app/` alone would have stranded
+ * those installs.
+ *
+ * [CLAUDE_WRAPPER_KEY] exists because refreshing and inserting are different
+ * decisions once the anchor is there. A user-chosen value no longer matches
+ * [CLAUDE_WRAPPER], and treating "did not match" as "not present" would write a
+ * second copy of the key beside theirs.
+ */
+private val CLAUDE_WRAPPER = Regex(
+    """("claudeCode\.claudeProcessWrapper"\s*:\s*)"(?:/data/app/|/data/(?:user/0|data)/[^"]*/files/usr/bin/)[^"]*""""
+)
+private val CLAUDE_WRAPPER_KEY = Regex(""""claudeCode\.claudeProcessWrapper"\s*:""")
 
 /**
  * Whether the user's settings already mention extension signature verification.
@@ -1623,10 +1658,14 @@ internal fun refreshManagedPaths(
     // PATH — so an install that predates the setting needs it added, not just
     // refreshed. The value names musl's loader in nativeLibraryDir, so like the
     // two paths above it moves on every reinstall and has to be rewritten here.
-    updated = if (CLAUDE_WRAPPER.containsMatchIn(updated)) {
-        CLAUDE_WRAPPER.replace(updated) { "${it.groupValues[1]}\"$claudeWrapper\"" }
-    } else {
-        insertSetting(updated, "claudeCode.claudeProcessWrapper", "\"$claudeWrapper\"")
+    updated = when {
+        // A managed value: refresh it, since nativeLibraryDir moves.
+        CLAUDE_WRAPPER.containsMatchIn(updated) ->
+            CLAUDE_WRAPPER.replace(updated) { "${it.groupValues[1]}\"$claudeWrapper\"" }
+        // Present, but pointing somewhere the user chose. Leave it, and do not
+        // insert beside it.
+        CLAUDE_WRAPPER_KEY.containsMatchIn(updated) -> updated
+        else -> insertSetting(updated, "claudeCode.claudeProcessWrapper", "\"$claudeWrapper\"")
     }
 
     // Signature verification cannot run here and refuses the install when it
