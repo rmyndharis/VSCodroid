@@ -38,6 +38,21 @@ const crypto = require('crypto');
 const { URL } = require('url');
 
 /**
+ * The address a socket call wants, from the hostname a URL parser gives.
+ *
+ * WHATWG keeps the brackets on an IPv6 literal -- new URL("http://[::1]/")
+ * reports "[::1]" -- while net.connect and http.request want the bare address
+ * and hand anything else to DNS. The bracketed form therefore resolves nothing
+ * and fails as ENOTFOUND naming a host that was never a name.
+ *
+ * @param {string} hostname
+ * @returns {string}
+ */
+function bareHost(hostname) {
+    return hostname.startsWith('[') ? hostname.slice(1, -1) : hostname;
+}
+
+/**
  * AggregateError -- what a failed Happy Eyeballs connect throws -- carries an
  * empty message, so the reason survives only in `errors`.
  *
@@ -177,7 +192,11 @@ function start(log) {
             }
             const upstream = http.request(
                 {
-                    host: target.hostname,
+                    // Brackets off, or an IPv6 literal reaches DNS as text.
+                    // The CONNECT leg below has always done this; this leg
+                    // never did, so http://[::1]:8080/ came back 502 with
+                    // ENOTFOUND naming an address rather than a name.
+                    host: bareHost(target.hostname),
                     port: target.port || 80,
                     method: req.method,
                     path: target.pathname + target.search,
@@ -280,10 +299,7 @@ function start(log) {
                 // The host still comes from the parser, which is the part that
                 // gets the bracketed IPv6 form right; it keeps the brackets and
                 // net.connect wants them off.
-                host = new URL(`http://${authority}`).hostname;
-                if (host.startsWith('[')) {
-                    host = host.slice(1, -1);
-                }
+                host = bareHost(new URL(`http://${authority}`).hostname);
                 if (!host) {
                     throw new Error('no host in CONNECT target');
                 }

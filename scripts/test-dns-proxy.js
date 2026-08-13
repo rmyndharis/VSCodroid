@@ -247,6 +247,24 @@ async function main() {
     assert.ok(closed.sawFin, 'the proxy announced Connection: close but never closed the connection');
 
     // --- IPv6 literals ----------------------------------------------------
+    // Both legs, because they had different bugs. The parser reports an IPv6
+    // hostname with its brackets, and every socket call here wants it without:
+    // the plain-HTTP leg passed the bracketed form to DNS and came back 502
+    // with ENOTFOUND naming an address, while the CONNECT leg had already
+    // learned to strip. Skipped where the loopback has no IPv6.
+    const origin6 = originServer();
+    const origin6Port = await new Promise((resolve) => {
+        origin6.once('error', () => resolve(null));
+        origin6.listen(0, '::1', () => resolve(origin6.address().port));
+    });
+    if (origin6Port) {
+        const viaLiteral = await proxiedGet(proxyPort, `http://[::1]:${origin6Port}/`, goodCredentials);
+        assert.strictEqual(viaLiteral.status, 200, 'a plain-HTTP request to an IPv6 literal was not forwarded');
+        origin6.close();
+    } else {
+        console.log('note -- no IPv6 loopback here, skipped the plain-HTTP IPv6 case');
+    }
+
     // "[::1]:443".split(':') yields ["[", "", "1]", "443"], so the pre-parser
     // form dialled a host named "[". Skipped where the loopback has no IPv6.
     const echo6 = net.createServer(echoHandler);
