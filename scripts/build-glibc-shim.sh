@@ -99,6 +99,32 @@ fi
 
 echo ""
 echo "--- stub libraries ---"
+# The loop below builds the names in STUBS. The generator, meanwhile, emits a
+# stub for whatever soname the addons actually name -- so a soname outside this
+# list produced a .c file that was written, never compiled, and never noticed:
+# the addon would ship with its DT_NEEDED unsatisfied and fail at dlopen with a
+# library nobody had built. The two lists have to agree, and the generator's is
+# the one derived from reality, so a disagreement is this list being out of date.
+#
+# The stem cannot be reversed into a soname -- libgcc_s.so.1 becomes
+# libgcc_s_so_1 and every underscore looks alike -- so the comparison runs the
+# other way, mapping each known name forward.
+for generated in "$GEN_DIR"/*.c; do
+    [ -e "$generated" ] || continue
+    stem="$(basename "$generated" .c)"
+    known=false
+    for stub in "${STUBS[@]}"; do
+        if [ "${stub//./_}" = "$stem" ]; then known=true; break; fi
+    done
+    if [ "$known" = false ]; then
+        echo "  ERROR: the addons need a stub this script does not build." >&2
+        echo "         Generated: $stem.c" >&2
+        echo "         Add its soname to STUBS above; without it the addon ships" >&2
+        echo "         with an unsatisfied DT_NEEDED and dies at dlopen." >&2
+        exit 1
+    fi
+done
+
 : > "$WORK_DIR/empty.c"
 for stub in "${STUBS[@]}"; do
     src="$WORK_DIR/empty.c"
@@ -136,3 +162,15 @@ for lib in libglibc-shim.so "${STUBS[@]}"; do
     echo "  --- $lib ---"
     python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT_DIR/$lib" --lib-dir "$OUT_DIR"
 done
+
+# And the question the loop above cannot ask. Everything up to here verifies
+# intent -- the generator emitted what it decided to emit, the compiler built
+# what it was handed, each library loads. None of it compares the addons against
+# the libraries that ship. This does: for every versioned symbol an addon
+# imports, the stub it names has to carry that symbol at that version.
+#
+# It runs only when addons were given, because with none there is nothing to
+# check and the stubs are deliberately empty.
+if [ "$#" -gt 0 ]; then
+    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --verify-against "$OUT_DIR"
+fi

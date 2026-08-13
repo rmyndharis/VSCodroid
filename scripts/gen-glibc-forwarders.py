@@ -82,7 +82,10 @@ UNSUPPORTED_LIBS = {"libstdc++.so.6"}
 LOADER_SONAME = "ld-linux-aarch64.so.1"
 
 SHT_DYNSYM, SHT_GNU_VERNEED, SHT_GNU_VERSYM = 11, 0x6FFFFFFE, 0x6FFFFFFF
+SHT_GNU_VERDEF = 0x6FFFFFFD
 STT_FUNC, STT_OBJECT = 2, 1
+STT_NOTYPE = 0
+TYPE_NAMES = {STT_NOTYPE: "STT_NOTYPE", STT_OBJECT: "STT_OBJECT", STT_FUNC: "STT_FUNC"}
 
 # Data imports cannot be a branch -- the addon reads the storage itself, so the
 # stub has to own a variable of the right type and fill it with Bionic's value
@@ -230,7 +233,11 @@ class Elf:
         return next((s for s in self.sections if s["type"] == want), None)
 
     def imports(self):
-        """Yield (soname, version, symbol, is_func) for every undefined import.
+        """Yield (soname, version, symbol, sym_type) for every undefined import.
+
+        sym_type is the raw STT_* value rather than a func/data flag. The
+        difference is load-bearing: STT_NOTYPE is neither, and collapsing it
+        into "not a function" made it look like a data symbol and get dropped.
 
         soname and version are None for imports with no version requirement --
         those bind by name alone and need no stub.
@@ -283,25 +290,162 @@ class Elf:
                 idx, = struct.unpack_from("<H", self.data, versym["offset"] + i * 2)
                 version, soname = vermap.get(idx & 0x7FFF, (None, None))
 
-            yield soname, version, name, (st_info & 0xF) == STT_FUNC
+            yield soname, version, name, st_info & 0xF
+
+
+    def exports(self):
+        """Yield (symbol, version) for every symbol this object defines.
+
+        The mirror of imports(), and the reason it exists: knowing what the
+        addons ask for says nothing about what the stubs ended up carrying.
+        Versions come from SHT_GNU_VERDEF rather than VERNEED -- a definition
+        names its own version, where an import names the one it requires.
+        """
+        dynsym = self._by_type(SHT_DYNSYM)
+        if not dynsym:
+            return
+        strtab = self.sections[dynsym["link"]]
+        versym = self._by_type(SHT_GNU_VERSYM)
+
+        # version index -> version name, skipping the base entry, which names
+        # the object itself rather than a version anything can bind to.
+        vermap = {}
+        verdef = self._by_type(SHT_GNU_VERDEF)
+        if verdef:
+            vstr = self.sections[verdef["link"]]
+            pos = verdef["offset"]
+            while True:
+                # Elf64_Verdef: version(2) flags(2) ndx(2) cnt(2) hash(4) aux(4) next(4)
+                _, vd_flags, vd_ndx, vd_cnt = struct.unpack_from("<HHHH", self.data, pos)
+                vd_aux, vd_next = struct.unpack_from("<II", self.data, pos + 12)
+                if not (vd_flags & 0x1) and vd_cnt:
+                    vda_name, = struct.unpack_from("<I", self.data, pos + vd_aux)
+                    vermap[vd_ndx] = self._cstr(vstr["offset"] + vda_name)
+                if not vd_next:
+                    break
+                pos += vd_next
+
+        count = dynsym["size"] // dynsym["entsize"]
+        for i in range(count):
+            off = dynsym["offset"] + i * dynsym["entsize"]
+            st_name, = struct.unpack_from("<I", self.data, off)
+            st_shndx, = struct.unpack_from("<H", self.data, off + 6)
+            if st_shndx == 0:            # imported, not defined here
+                continue
+            name = self._cstr(strtab["offset"] + st_name)
+            if not name:
+                continue
+            version = None
+            if versym:
+                idx, = struct.unpack_from("<H", self.data, versym["offset"] + i * 2)
+                version = vermap.get(idx & 0x7FFF)
+            yield name, version
+
+
+def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
+    """Check the addons against the stubs that were actually built.
+
+    Everything before this verifies intent: the generator emits what it decided
+    to emit, and the compiler builds what it was handed. This reads the finished
+    libraries and asks the only question that matters on a device -- for every
+    versioned symbol an addon imports, does the library it names carry that
+    symbol at that version. A stub that failed to build, a soname nobody
+    compiled, a symbol dropped between the two, all surface here as the same
+    kind of miss.
+    """
+    print("")
+    print("--- addon imports vs shipped stubs ---")
+
+    needed: dict = {}
+    for path in inputs:
+        for soname, version, name, _ in Elf(path).imports():
+            if soname is None or version is None:
+                continue
+            if RUNTIME_PROVIDED.match(name) or name in WEAK_OPTIONAL:
+                continue
+            needed.setdefault(soname, set()).add((name, version))
+
+    missing = []
+    for soname, wants in sorted(needed.items()):
+        stub = lib_dir / soname
+        if not stub.is_file():
+            missing.append((soname, "the library itself was not built", ""))
+            continue
+        try:
+            have = set(Elf(stub).exports())
+        except (ValueError, IndexError, struct.error) as e:
+            missing.append((soname, f"unreadable: {e}", ""))
+            continue
+        for name, version in sorted(wants):
+            if (name, version) not in have:
+                missing.append((soname, name, version))
+        print(f"  {soname:<24} {len(wants):4d} imports resolved")
+
+    if missing:
+        print(f"\n  ERROR: {len(missing)} import(s) are not in the libraries that ship:",
+              file=sys.stderr)
+        for soname, name, version in missing:
+            suffix = f"@{version}" if version else ""
+            print(f"    {soname}: {name}{suffix}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def report_unforwardable(unforwardable) -> int:
+    """Name what cannot be forwarded and fail, rather than noting it and going on.
+
+    The note was the bug: the build stayed green, the stub shipped without the
+    symbol, and the addon died at its first call to it -- three layers from the
+    line that decided to skip it.
+    """
+    print(f"\n  ERROR: {len(unforwardable)} import(s) cannot be forwarded, so the addon"
+          f"\n  that needs them would load without them and fail at the first call:",
+          file=sys.stderr)
+    for name, soname, kind in sorted(unforwardable):
+        print(f"    {name}  ({kind}, from {soname})", file=sys.stderr)
+    print("\n  A function is forwarded automatically. A data symbol needs an entry in"
+          "\n  DATA_SYMBOLS naming its C type -- guessing the type here corrupts memory"
+          "\n  rather than failing to link. An STT_NOTYPE import has to be identified"
+          "\n  before it can be either.", file=sys.stderr)
+    return 1
 
 
 def generate(inputs, out_dir: pathlib.Path):
     # soname -> version -> {symbol: is_func}
     wanted: dict = {}
-    skipped_data, skipped_runtime = set(), set()
+    unforwardable, skipped_runtime = set(), set()
 
     for path in inputs:
-        for soname, version, name, is_func in Elf(path).imports():
+        for soname, version, name, sym_type in Elf(path).imports():
             if RUNTIME_PROVIDED.match(name):
                 skipped_runtime.add(name)
                 continue
             if name in WEAK_OPTIONAL or soname is None:
                 continue
-            if not is_func and name not in DATA_SYMBOLS:
-                skipped_data.add(name)
+
+            # Three outcomes, and only the first two can be forwarded. A
+            # function becomes a branch; a data symbol becomes storage of the
+            # type DATA_SYMBOLS records. Anything else -- an object nobody has
+            # given a type, or an STT_NOTYPE import whose type the linker never
+            # wrote down -- cannot be turned into either without guessing, and
+            # guessing here means the addon reads a code address as a pointer.
+            # It used to be noted and skipped, which shipped an addon missing
+            # exactly the symbol the note named.
+            if sym_type == STT_FUNC:
+                is_func = True
+            elif sym_type == STT_OBJECT and name in DATA_SYMBOLS:
+                is_func = False
+            else:
+                unforwardable.add((name, soname, TYPE_NAMES.get(sym_type, str(sym_type))))
                 continue
             wanted.setdefault(soname, {}).setdefault(version, {})[name] = is_func
+
+    # Before the early exit below, not after: an addon whose only versioned
+    # import is one we cannot forward leaves `wanted` empty, and reporting
+    # "nothing to generate" there would turn the very case this check exists for
+    # into a silent success. Found by testing the failure direction.
+    if unforwardable:
+        return report_unforwardable(unforwardable)
 
     if not wanted:
         print("  nothing to generate: no versioned imports found")
@@ -437,14 +581,12 @@ def generate(inputs, out_dir: pathlib.Path):
         for name in pending:
             print(f"    {name}")
 
-    if skipped_data:
-        print(f"\n  data imports, not forwarded ({len(skipped_data)}) -- these must be"
-              f" defined in glibc-shim.c or the addon will still fail to load:")
-        for name in sorted(skipped_data):
-            print(f"    {name}")
     if skipped_runtime:
         print(f"\n  {len(skipped_runtime)} runtime-provided symbols skipped"
               f" (napi_*), as the loader defines those")
+
+    if unforwardable:
+        return report_unforwardable(unforwardable)
     return 0
 
 
@@ -488,10 +630,19 @@ def scan(roots):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inputs", nargs="*", type=pathlib.Path)
-    ap.add_argument("--out", type=pathlib.Path, required=True)
+    # Not required in --verify-against mode, which reads and writes nothing.
+    ap.add_argument("--out", type=pathlib.Path)
     ap.add_argument("--scan", type=pathlib.Path, action="append", default=[],
                     help="directory to search for glibc-built .node files")
+    ap.add_argument("--verify-against", type=pathlib.Path,
+                    help="check the addons against the stubs already built in this "
+                         "directory instead of generating; run after the build")
     args = ap.parse_args()
+
+    if not args.verify_against and args.out is None:
+        print("  ERROR: --out is required unless --verify-against is given",
+              file=sys.stderr)
+        return 1
 
     inputs = list(args.inputs)
     if args.scan:
@@ -511,6 +662,8 @@ def main():
         return 1
     if not inputs:
         return 0
+    if args.verify_against:
+        return verify_shipped(inputs, args.verify_against)
     return generate(inputs, args.out)
 
 
