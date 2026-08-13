@@ -237,7 +237,8 @@ check_pair @parcel/watcher "$WATCHER_VERSION" "$OUTPUT_ROOT/node_modules/@parcel
 # are one call.
 echo ""
 echo "@vscode/sqlite3..."
-SQLITE_SRC=$(fetch @vscode/sqlite3 5.1.12-vscode)
+SQLITE_VERSION=5.1.12-vscode
+SQLITE_SRC=$(fetch @vscode/sqlite3 "$SQLITE_VERSION")
 SQLITE_AMALGAMATION="$SQLITE_SRC/sqlite-autoconf-3390400"
 if [ ! -d "$SQLITE_AMALGAMATION" ]; then
     tar xzf "$SQLITE_SRC/deps/sqlite-autoconf-3390400.tar.gz" -C "$SQLITE_SRC"
@@ -271,6 +272,8 @@ mkdir -p "$(dirname "$SQLITE_OUT")"
     "$WORK_DIR/sqlite3.o"
 "$STRIP" "$SQLITE_OUT"
 verify "$SQLITE_OUT" @vscode/sqlite3 || failed=1
+check_pair @vscode/sqlite3 "$SQLITE_VERSION" \
+    "$OUTPUT_ROOT/node_modules/@vscode/sqlite3/package.json" || failed=1
 
 echo ""
 [ "$failed" -eq 0 ] || { echo "=== FAILED ==="; exit 1; }

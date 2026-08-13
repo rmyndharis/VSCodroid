@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The build now checks that the bundled SQLite database engine was compiled from the same version as the JavaScript shipped beside it, the last of the three native components without that check. A mismatch there shows up on device as chat failing to pick a model, an error several layers from its cause
 - Contributing guide's repository map matches the shipped binaries again: the Python runtime never lived in `jniLibs` (and its version is not pinned), while git's HTTPS helper and the musl loader do live there and were missing
 - README brought back in line with how the project actually builds and installs: local builds fetch the prebuilt server rather than needing Node and Yarn to build VS Code, SSH ships as the bundled OpenSSH client and `ssh-keygen` rather than a command-palette flow, toolchains install on sideloaded devices too (direct download) rather than Play-only, and the size table now carries figures measured from the release AAB
 - Contributing guide: review findings that are not fixed in the same pull request now get an issue, and rejected ones a stated reason, so nothing is left referenced only by its position in a discussion
