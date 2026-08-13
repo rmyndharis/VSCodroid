@@ -80,6 +80,11 @@ class FirstRunSetup(private val context: Context) {
 
             reportProgress("Extracting tools...", 62)
             extractAssetDir("usr", "usr")
+            // Extraction merges; it never removes. An upgrade that changes the
+            // bundled Python therefore writes the new stdlib beside the old one
+            // and leaves both. Here the runtime is already in place, so this is
+            // only the cleanup half.
+            reconcilePythonRuntimeLocked()
 
             reportProgress("Setting up git...", 82)
             setupGitCore()
@@ -135,7 +140,6 @@ class FirstRunSetup(private val context: Context) {
             "usr/bin",
             "usr/lib",
             "usr/lib/git-core",
-            "usr/lib/python3.12",
             "usr/share/terminfo",
         )
         for (dir in dirs) {
@@ -183,6 +187,97 @@ class FirstRunSetup(private val context: Context) {
             Logger.d(tag, "Asset not found: $assetPath (will be available after build)")
         }
     }
+
+    /**
+     * Re-extracts Python when the interpreter in the APK no longer matches the
+     * runtime in filesDir.
+     *
+     * The interpreter ships in the APK and every install replaces it. Its
+     * runtime library and stdlib travel in assets and reach filesDir only
+     * through first-run extraction, which [isFirstRun] gates on versionName. An
+     * install that changes the bundled Python without changing versionName --
+     * `adb install -r` of a rebuilt debug APK is the everyday case -- therefore
+     * leaves a new interpreter next to the previous runtime. Python then dies
+     * with `CANNOT LINK EXECUTABLE ... library "libpython3.X.so" not found`,
+     * naming a missing file rather than the install that removed it.
+     *
+     * The version is never hardcoded here. `scripts/download-python.sh` resolves
+     * it from the Termux index at build time, so the only honest source is the
+     * runtime's own filename, which encodes the version the interpreter was
+     * linked against. Reading it costs one `assets.list` of a single directory,
+     * so the common case -- nothing changed -- is a string comparison.
+     *
+     * Superseded copies are removed rather than left in place. A stdlib whose
+     * interpreter is gone cannot be used by the one that replaced it, and the
+     * tree is large enough to matter: an abandoned copy was found sitting
+     * beside the current one on a device. That does discard anything pip
+     * installed under the old version, which was already unreachable.
+     */
+    suspend fun reconcilePythonRuntime() = setupMutex.withLock { reconcilePythonRuntimeLocked() }
+
+    /**
+     * Caller must hold [setupMutex]. Two Splash instances can exist at once, and
+     * both would otherwise see the same missing runtime and extract over each
+     * other into the same files.
+     */
+    private fun reconcilePythonRuntimeLocked() {
+        // An APK with no Python at all is a legitimate build shape, and it must
+        // not be read as "every installed version is stale".
+        val runtime = pythonRuntimeInAssets() ?: return
+        val version = PYTHON_RUNTIME_NAME.find(runtime)?.groupValues?.get(1) ?: return
+        val libDir = File(context.filesDir, "usr/lib")
+
+        if (!File(libDir, runtime).exists()) {
+            Logger.i(tag, "Python runtime $runtime is missing; extracting it and its stdlib")
+            // Stdlib first, runtime last. The runtime's absence is what brought
+            // us here, so writing it last means an interrupted extraction leaves
+            // exactly the state we started from and the next launch retries. The
+            // alternative ordering can leave an interpreter that starts and then
+            // fails on import, which is a worse thing to debug than one that
+            // does not start at all.
+            extractAssetDir("usr/lib/python$version", "usr/lib/python$version")
+            extractAssetFile("usr/lib/$runtime", "usr/lib/$runtime")
+            // extractAssetFile swallows an IOException and logs at debug, which
+            // is right for an asset that is simply absent in some build shapes
+            // but wrong to stay quiet about here: the check that brought us in
+            // will be true again next launch, and the 23 MB will be attempted
+            // again every time. Say so once, at a level someone will see.
+            if (!File(libDir, runtime).exists()) {
+                Logger.w(tag, "Python runtime $runtime still missing after extraction; the APK assets look incomplete")
+            }
+        }
+
+        val present = libDir.listFiles()?.map { it.name } ?: return
+        for (name in supersededPythonEntries(present, runtime)) {
+            Logger.i(tag, "Removing superseded Python $name")
+            File(libDir, name).deleteRecursively()
+        }
+    }
+
+    /**
+     * Whether [reconcilePythonRuntime] has anything to do.
+     *
+     * Two directory listings and some string comparison, so it is safe to ask on
+     * the main thread at every launch. The work it gates is not: the stdlib is
+     * 23 MB across some 1100 files, and running that in `onCreate` would trade a
+     * broken Python for an ANR.
+     */
+    fun pythonRuntimeNeedsWork(): Boolean {
+        val runtime = pythonRuntimeInAssets() ?: return false
+        val libDir = File(context.filesDir, "usr/lib")
+        if (!File(libDir, runtime).exists()) return true
+        val present = libDir.listFiles()?.map { it.name } ?: return false
+        return supersededPythonEntries(present, runtime).isNotEmpty()
+    }
+
+    /** The `libpython3.X.so` this APK carries, or null if it carries none. */
+    private fun pythonRuntimeInAssets(): String? =
+        try {
+            context.assets.list("usr/lib")?.firstOrNull { PYTHON_RUNTIME_NAME.matches(it) }
+        } catch (e: IOException) {
+            Logger.w(tag, "Could not list usr/lib assets: ${e.message}")
+            null
+        }
 
     /**
      * Builds the single-file CA bundle git's curl insists on having.
@@ -1381,6 +1476,37 @@ internal fun retiredOwnExtensionDirs(present: List<String>, bundled: List<String
             base(name).let { it != null && it !in bundledBases }
     }
 }
+
+/**
+ * Names the entries in `usr/lib` that belong to a Python the APK no longer
+ * carries, given the runtime it does carry.
+ *
+ * Separated from the filesystem because the risk is one-directional and worth
+ * testing on its own: naming one entry too few wastes disk, while naming one
+ * too many deletes a stdlib that is still in use. Everything not recognisably
+ * a Python runtime or stdlib is left alone, so an unfamiliar name in `usr/lib`
+ * is never a candidate.
+ *
+ * @param present names in `usr/lib`, files and directories alike
+ * @param runtime the `libpython3.X.so` this build ships
+ */
+internal fun supersededPythonEntries(present: List<String>, runtime: String): List<String> {
+    val version = PYTHON_RUNTIME_NAME.find(runtime)?.groupValues?.get(1) ?: return emptyList()
+    val currentStdlib = "python$version"
+    return present.filter { name ->
+        when {
+            PYTHON_RUNTIME_NAME.matches(name) -> name != runtime
+            PYTHON_STDLIB_NAME.matches(name) -> name != currentStdlib
+            else -> false
+        }
+    }
+}
+
+// Anchored on purpose. The runtime is libpython3.13.so and the stdlib is
+// python3.13; an unanchored match would also claim libpython3.13.so.1.0 and any
+// directory that merely begins with the same letters.
+internal val PYTHON_RUNTIME_NAME = Regex("""^libpython(3\.\d+)\.so$""")
+internal val PYTHON_STDLIB_NAME = Regex("""^python3\.\d+$""")
 
 internal fun supersededExtensionDirs(present: List<String>, bundled: List<String>): List<String> {
     fun split(dir: String): Pair<String, String>? {

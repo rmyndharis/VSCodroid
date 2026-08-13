@@ -19,7 +19,9 @@ import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.util.Logger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : AppCompatActivity() {
@@ -68,6 +70,23 @@ class SplashActivity : AppCompatActivity() {
         }
 
         if (!setup.isFirstRun()) {
+            // The interpreter ships in the APK and every install replaces it,
+            // while its runtime and stdlib are extracted only when versionName
+            // changes. Reinstalling a rebuilt APK is exactly that gap, and it is
+            // the one case where "not first run" still has work to do. The check
+            // is two directory listings; the work it gates is 23 MB, so it runs
+            // off the main thread and holds this activity open while it does —
+            // lifecycleScope is cancelled the moment we finish for MainActivity.
+            if (setup.pythonRuntimeNeedsWork()) {
+                Logger.i(tag, "Bundled Python changed since the last extraction; reconciling")
+                setContentView(R.layout.activity_splash)
+                findViewById<TextView>(R.id.statusText).text = getString(R.string.status_updating_python)
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) { setup.reconcilePythonRuntime() }
+                    launchMain()
+                }
+                return
+            }
             Logger.i(tag, "Not first run, launching main activity")
             launchMain()
             return
