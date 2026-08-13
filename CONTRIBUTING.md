@@ -448,12 +448,32 @@ generated identifiers, broke on every version bump, and printed `SKIP` on a miss
    - Reference related issues (e.g., `Fixes #123`).
 3. Address review feedback and push updates.
 
+### Review Findings
+
+A review often turns up more than the change can carry: something adjacent, something
+pre-existing, something real but out of scope. Give every one of those a home before the
+PR merges.
+
+- **Fixed in the same PR** — nothing more to do.
+- **Not fixed** — open an issue, and link it from the review thread. One issue per finding,
+  titled so it can be found by name.
+- **Rejected** — say so in the thread, with the reason. "Checked, does not apply because X"
+  is a resolution; silence is not.
+
+The rule is that no finding leaves review referenced only by something ephemeral — a position
+in a list, "the second one", a number that exists nowhere in this repository. Those references
+stop meaning anything the moment the discussion scrolls away, and the finding is then either
+rediscovered at full cost or quietly assumed to be handled.
+
+An issue is cheap. Re-deriving a defect someone already found is not.
+
 ### PR Checklist
 
 - [ ] Tested on physical ARM64 device (if applicable)
 - [ ] No unrelated changes included
 - [ ] Commit messages follow Conventional Commits format
 - [ ] Documentation updated (if behavior changes)
+- [ ] Review findings left unfixed have issues, and rejected ones have a reason in the thread
 - [ ] Download scripts still work (if assets changed)
 - [ ] App builds without errors (`./gradlew assembleDebug`)
 

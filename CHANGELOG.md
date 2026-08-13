@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - README brought back in line with how the project actually builds and installs: local builds fetch the prebuilt server rather than needing Node and Yarn to build VS Code, SSH ships as the bundled OpenSSH client and `ssh-keygen` rather than a command-palette flow, toolchains install on sideloaded devices too (direct download) rather than Play-only, and the size table now carries figures measured from the release AAB
+- Contributing guide: review findings that are not fixed in the same pull request now get an issue, and rejected ones a stated reason, so nothing is left referenced only by its position in a discussion
 - **The VS Code server is now built from the MIT-licensed Code - OSS source** instead of downloading Microsoft's proprietary pre-built server, which could not legally be modified and redistributed inside an APK. The build applies this repository's patches and branding to readable source, is verified for tree shape, architecture and branding before it ships, and is published once per VS Code version
 - VS Code upgraded 1.96.4 → 1.133.0
 - Node.js runtime upgraded to 24.18.0, now taken from Termux's `nodejs-lts` package — the previous hand-cross-compiled 20.18.1 segfaulted inside several CLI tools
