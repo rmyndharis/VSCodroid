@@ -193,6 +193,79 @@ for pkg in "${LIB_PACKAGES[@]}"; do
     done
 done
 
+# --- Step 4b: Rebuild libandroid-spawn with 16 KB page alignment ---
+#
+# Termux's libandroid-spawn 0.3 is built with 4 KB segment alignment, and
+# libjava.so links it -- so on a device with 16 KB pages the JDK cannot load at
+# all. Not an optional component: the core. libandroid-shmem.so from the same
+# script is correctly 16 KB-aligned, so this is one upstream package rather than
+# a systemic problem, and the ELF gate below is what surfaced it.
+#
+# The package is two source files and two commands. It is AOSP's own posix_spawn
+# implementation, vendored in the termux-packages tree under BSD 2-Clause, so
+# rebuilding it is a recompile rather than a fork: the resulting library exports
+# the same 25 symbols as upstream's, verified by comparing both symbol tables.
+#
+# DELETE THIS STEP once upstream ships a 16 KB-aligned build. The check below
+# will keep working either way -- what it must never become is a reason to relax
+# the alignment requirement.
+echo ""
+echo "Rebuilding libandroid-spawn for 16 KB pages..."
+
+# Pinned to a commit rather than a branch, and each file checked against a
+# recorded digest: this source becomes a binary that spawns processes on a
+# user's device, and it arrives from a host that publishes no digest of its own.
+SPAWN_COMMIT="151a3ebdb6e409bcaa2b5aa74ae8e23447bf9e54"
+SPAWN_RAW="https://raw.githubusercontent.com/termux/termux-packages/$SPAWN_COMMIT/packages/libandroid-spawn"
+SPAWN_SHA_posix_spawn_cpp="5267405b1b14fcbe885bd815d9bd5dde94144dc90b319d6f4be17e47f43bcad3"
+SPAWN_SHA_posix_spawn_h="5cc27528237cf17727709eaab624f20878b71013b2eb265e3a6e6dae1e4294a0"
+SPAWN_SHA_LICENSE="511ce23b36ca7dd3858570d8ee3054ceed18e12d284f96661d030a82590a5954"
+
+SPAWN_SRC="$WORK_DIR/libandroid-spawn-src"
+rm -rf "$SPAWN_SRC"
+mkdir -p "$SPAWN_SRC"
+for f in posix_spawn.cpp posix_spawn.h LICENSE; do
+    curl -sL --fail --show-error -o "$SPAWN_SRC/$f" "$SPAWN_RAW/$f"
+    expected_var="SPAWN_SHA_$(echo "$f" | tr '.' '_')"
+    eval "expected=\$$expected_var"
+    actual=$( (sha256sum "$SPAWN_SRC/$f" 2>/dev/null || shasum -a 256 "$SPAWN_SRC/$f") | cut -d' ' -f1)
+    if [ "$actual" != "$expected" ]; then
+        echo "  ERROR: $f does not match the pinned digest" >&2
+        echo "    expected: $expected" >&2
+        echo "    actual  : $actual" >&2
+        exit 1
+    fi
+done
+echo "  source verified against pinned digests ($SPAWN_COMMIT)"
+
+# Same resolution order as build-native-addons.sh, which cross-compiles here too.
+if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+    NDK_DIR="$ANDROID_NDK_HOME"
+elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+    NDK_DIR="$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -1)"
+elif [ -d "$HOME/Library/Android/sdk/ndk" ]; then
+    NDK_DIR="$(ls -d "$HOME/Library/Android/sdk/ndk/"* 2>/dev/null | sort -V | tail -1)"
+else
+    echo "  ERROR: Cannot find Android NDK. Set ANDROID_NDK_HOME." >&2
+    exit 1
+fi
+HOST_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+NDK_BIN="$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin"
+# Google ships no darwin-arm64 host toolchain; on Apple Silicon the x86_64 one
+# runs under Rosetta.
+[ -d "$NDK_BIN" ] || NDK_BIN="$NDK_DIR/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+[ -d "$NDK_BIN" ] || { echo "  ERROR: no NDK toolchain at $NDK_BIN" >&2; exit 1; }
+
+(
+    cd "$SPAWN_SRC"
+    "$NDK_BIN/aarch64-linux-android33-clang++" -O2 -fPIC -I. -c posix_spawn.cpp -o posix_spawn.o
+    "$NDK_BIN/aarch64-linux-android33-clang++" -shared posix_spawn.o -o libandroid-spawn.so \
+        -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
+    "$NDK_BIN/llvm-strip" --strip-unneeded libandroid-spawn.so
+)
+cp "$SPAWN_SRC/libandroid-spawn.so" "$PACK_ASSETS/usr/lib/libandroid-spawn.so"
+echo "  libandroid-spawn.so rebuilt ($(du -sh "$PACK_ASSETS/usr/lib/libandroid-spawn.so" | cut -f1), 16 KB-aligned)"
+
 # --- Step 5: Strip unnecessary files ---
 echo ""
 echo "Stripping unnecessary files..."
@@ -207,6 +280,20 @@ rm -rf "$JDK_DIR/legal" 2>/dev/null || true
 rm -rf "$JDK_DIR/jmods" 2>/dev/null || true
 # Strip header files (not needed without JNI compilation)
 rm -rf "$JDK_DIR/include" 2>/dev/null || true
+
+# Three JDK libraries whose dependencies were never bundled and never can be
+# loaded here: libjavajpeg needs libjpeg.so.8, libjsound needs libasound.so,
+# liblcms needs liblcms2.so. None of the three is present in this pack or in the
+# base APK, so each fails at dlopen the moment something reaches for it -- they
+# were shipped broken rather than shipped useful.
+#
+# Removed rather than fixed by bundling the missing libraries, and the closure
+# was measured before deciding: nothing else in the pack names any of the three
+# in DT_NEEDED, so they are leaves and taking them out breaks no other object.
+# What they serve -- ImageIO's JPEG codec, colour management, and ALSA sound on
+# a platform with no ALSA -- a headless JDK on a phone does not reach. Shipping
+# the dependencies instead would add weight to make three unused paths work.
+rm -f "$JDK_DIR/lib/libjavajpeg.so" "$JDK_DIR/lib/libjsound.so" "$JDK_DIR/lib/liblcms.so"
 
 AFTER_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 echo "  Java: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SIZE))K)"
@@ -262,7 +349,65 @@ cat > "$PACK_ASSETS/toolchain_java.json" << EOF
 EOF
 echo "  toolchain_java.json written"
 
-# --- Step 7: Size summary ---
+# --- Step 7: Verify every binary the pack ships ---
+echo ""
+echo "=== Verifying Java binaries ==="
+# The pack reaches devices through Play Asset Delivery and the release ZIPs, and
+# nothing checked that anything in it could load. A wrong-architecture,
+# misaligned or dependency-missing binary produces a green build and a `java`
+# that dies on someone's phone with a linker message nobody sees; the digest
+# check cannot catch it, because upstream's hash covers whatever is in the file.
+#
+# The whole pack is swept, unlike Go. Go ships a source tree that legitimately
+# carries other architectures; the JDK ships only what it loads, so every ELF
+# object in it is a promise that has to hold. This gate is what found the
+# rebuild in step 4b and the three unloadable libraries pruned in step 5 -- both
+# were shipping before it existed.
+#
+# The lib-dirs are where a dependency may legitimately live: the JDK's own lib/
+# and lib/server/ (libjvm.so is in the latter and the launchers name it), the
+# pack's usr/lib for the Termux shims, and the base APK's usr/lib -- toolchains
+# install into filesDir/usr beside it, so libz, libiconv and libc++_shared
+# resolve there at runtime. Without that last one the gate would reject binaries
+# that work, which is the failure mode that makes a gate worse than none.
+is_elf() {
+    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
+verify_failures=0
+verify_checked=0
+
+verify_object() {
+    local out
+    verify_checked=$((verify_checked + 1))
+    if ! out=$(python3 "$SCRIPT_DIR/verify-android-elf.py" "$1" \
+                   --lib-dir "$PACK_ASSETS/usr/lib" \
+                   --lib-dir "$JDK_DIR/lib" \
+                   --lib-dir "$JDK_DIR/lib/server" \
+                   --lib-dir "$ROOT_DIR/android/app/src/main/assets/usr/lib" 2>&1); then
+        echo "  FAILED  ${1#$PACK_ASSETS/}" >&2
+        # `|| true` because this file runs under pipefail: a grep that matched
+        # nothing would return 1 and kill the shell right here, in the one branch
+        # whose job is to say what went wrong.
+        echo "$out" | grep -v '^  ok' | sed 's/^/     /' >&2 || true
+        verify_failures=$((verify_failures + 1))
+    fi
+}
+
+while IFS= read -r obj; do
+    is_elf "$obj" && verify_object "$obj"
+done < <(find "$PACK_ASSETS/usr" -type f)
+
+if [ "$verify_failures" -gt 0 ]; then
+    echo "" >&2
+    echo "  ERROR: $verify_failures of $verify_checked Java binaries would fail to" >&2
+    echo "         load on a device. Shipping them produces a working build and a" >&2
+    echo "         broken toolchain." >&2
+    exit 1
+fi
+echo "  $verify_checked binaries verified: architecture, dependencies, 16 KB alignment"
+
+# --- Step 8: Size summary ---
 echo ""
 echo "=== Java 17 Toolchain Size Summary ==="
 echo "  Asset pack: $(du -sh "$PACK_ASSETS" | cut -f1) total"

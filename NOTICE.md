@@ -37,7 +37,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | libcurl | MIT/X derivative | HTTP client for Git |
 | openssl | Apache 2.0 | TLS for Git, OpenSSH, Python, npm |
 | zlib | zlib License | Compression for Git, Python |
-| libffi | MIT | Foreign function interface for Python |
+| libffi | MIT | Foreign function interface (Python, Ruby toolchain) |
 | libbz2 | BSD-style | Compression for Python |
 | liblzma | Public Domain | Compression for Python |
 | libsqlite3 | Public Domain | Database for Python |
@@ -47,8 +47,8 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | libandroid-glob | BSD | Glob support for Make |
 | libgmp | LGPL v3 | Arbitrary precision math (Ruby toolchain) |
 | libyaml | MIT | YAML parsing (Ruby toolchain) |
-| libandroid-shmem | Apache 2.0 | Shared memory (Java toolchain) |
-| libandroid-spawn | Apache 2.0 | Process spawning (Java toolchain) |
+| libandroid-shmem | BSD 3-Clause | Shared memory (Java toolchain) |
+| libandroid-spawn | BSD 2-Clause | Process spawning (Java toolchain), built from source |
 | libc++_shared | Apache 2.0 / MIT | C++ standard library (NDK) |
 
 ## On-Demand Toolchains
