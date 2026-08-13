@@ -250,11 +250,29 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
-        // Delete libs that were copied to usr/lib/
+        // Delete libs that were copied to usr/lib/ -- but usr/lib is shared with
+        // the base install, and a manifest may name a library the base APK also
+        // ships. Ruby's libffi.so is the live case: Python's _ctypes links it, so
+        // deleting it here broke `import ctypes` until the next app update, with
+        // nothing pointing at the uninstall that caused it. What the base ships
+        // is read from the APK's own assets rather than kept as a list here; if
+        // that listing cannot be read, nothing is deleted -- a leftover library
+        // is reclaimed by the next install, a deleted base library is not.
         val libs = manifestObj.optJSONArray("libs")
         if (libs != null) {
-            for (i in 0 until libs.length()) {
-                val lib = File(context.filesDir, "usr/lib/${libs.getString(i)}")
+            val baseShipped = try {
+                context.assets.list("usr/lib")?.toSet()
+            } catch (e: Exception) {
+                Logger.w(tag, "Cannot list base usr/lib assets; keeping all libs: ${e.message}")
+                null
+            }
+            val names = (0 until libs.length()).map { libs.getString(it) }
+            val keep = names.toSet() - toolchainLibsSafeToRemove(names, baseShipped).toSet()
+            for (name in keep) {
+                Logger.i(tag, "Keeping $name: the base install ships it too")
+            }
+            for (name in toolchainLibsSafeToRemove(names, baseShipped)) {
+                val lib = File(context.filesDir, "usr/lib/$name")
                 if (lib.exists()) lib.delete()
             }
         }
@@ -776,4 +794,24 @@ class ToolchainManager(private val context: Context) {
         stateFile.parentFile?.mkdirs()
         stateFile.writeText(state.toString(2))
     }
+}
+
+/**
+ * Names the manifest `libs` entries an uninstall may delete from the shared
+ * `usr/lib`, given what the base APK ships there.
+ *
+ * Separated from the filesystem because the risk is one-directional, the same
+ * shape as [supersededPythonEntries]: removing one entry too few leaves a file
+ * the next install overwrites, while removing one too many deletes a library
+ * the base app loads -- and that stays broken until the next version bump
+ * re-extracts assets, with the error naming the library rather than the
+ * uninstall that removed it.
+ *
+ * @param libs the manifest's `libs` entries
+ * @param baseShipped names the base APK ships in `usr/lib`, or null when the
+ *   listing could not be read -- in which case nothing is safe to remove
+ */
+internal fun toolchainLibsSafeToRemove(libs: List<String>, baseShipped: Set<String>?): List<String> {
+    if (baseShipped == null) return emptyList()
+    return libs.filter { it !in baseShipped }
 }
