@@ -130,16 +130,17 @@ VSCodroid/
 │   │   │   │   └── extensions/           # Pre-bundled extensions
 │   │   │   ├── jniLibs/arm64-v8a/     # Native binaries (.so trick for exec permission)
 │   │   │   │   ├── libnode.so            # Node.js (~48 MB)
-│   │   │   │   ├── libpython.so          # Python launcher
-│   │   │   │   ├── libpython3.12.so      # Python shared library
+│   │   │   │   ├── libpython.so          # Python launcher (its libpython3.x.so
+│   │   │   │   │                         #   runtime lives in assets/usr/lib)
 │   │   │   │   ├── libgit.so             # Git
+│   │   │   │   ├── libgit-remote-curl.so # Git's HTTPS transport helper
 │   │   │   │   ├── libbash.so            # Bash
 │   │   │   │   ├── libtmux.so            # tmux
 │   │   │   │   ├── libmake.so            # make
 │   │   │   │   ├── libssh.so             # OpenSSH client
 │   │   │   │   ├── libssh-keygen.so      # ssh-keygen
 │   │   │   │   ├── libripgrep.so         # ripgrep (for VS Code Search)
-│   │   │   │   └── libc++_shared.so      # NDK C++ stdlib
+│   │   │   │   └── libldmusl.so          # musl loader (runs the Claude Code CLI)
 │   │   │   └── res/                   # Android resources, layouts
 │   │   └── build.gradle.kts
 │   ├── toolchain_go/              # Go on-demand asset pack
