@@ -61,6 +61,14 @@ class ToolchainManager(private val context: Context) {
         private const val MAX_RETRIES = 2
         private const val DOWNLOAD_BUFFER_SIZE = 8192
         private const val MAX_REDIRECTS = 5
+
+        /**
+         * Records that a toolchain's binaries have had their execute bit checked.
+         * Kept in the toolchain's own state entry rather than as one global flag,
+         * so a toolchain installed later is marked without being walked, and a
+         * repair that fails partway is retried only for what it did not finish.
+         */
+        private const val KEY_EXEC_REPAIRED = "execBitsChecked"
     }
 
     private val listener = AssetPackStateUpdateListener { state ->
@@ -429,6 +437,10 @@ class ToolchainManager(private val context: Context) {
                 state.remove(i)
             }
         }
+        // Installed by this version, so its binaries already carry the execute
+        // bit and the repair pass has nothing to do here. Marking it now is what
+        // keeps that pass from walking a several-thousand-file tree to confirm it.
+        manifest.put(KEY_EXEC_REPAIRED, true)
         state.put(manifest)
         writeState(state)
         regenerateEnvFile()
@@ -778,6 +790,109 @@ class ToolchainManager(private val context: Context) {
         return env
     }
 
+    // -- Repair of installs from earlier app versions --
+
+    /**
+     * Gives back the execute bit to binaries an older install left without one.
+     *
+     * A toolchain keeps the manifest it was installed with: it is persisted into
+     * `toolchains.json`, `filesDir` survives app updates, and nothing rewrites it
+     * at launch. So a packaging fix reaches new installs only, and the install
+     * that was already there stays exactly as wrong as it was.
+     *
+     * For Go that is the difference between working and not. The execute bit is
+     * set on the manifest's `binaries` entries and nowhere else -- the recursive
+     * copy grants none, because `copyTo` does not carry modes -- and an earlier
+     * manifest named `go` and `gofmt` alone. `go` compiles nothing by itself; it
+     * forks `compile`, `link` and `asm` out of `pkg/tool`, and those arrived
+     * unrunnable. The user sees a permission error naming a path, with nothing
+     * connecting it to the version they installed under.
+     *
+     * The payload is already on disk, so this needs no download and no reinstall:
+     * every ELF object under the install root gets the bit, which is the same
+     * rule the packaging gates use to decide what is a binary. Scripts are
+     * deliberately not included -- SELinux refuses to execute anything under
+     * `filesDir` that is not loaded as a library, which is why the manifests
+     * wrap scripts in shell functions instead.
+     *
+     * Runs once per toolchain, recorded in its own state entry. A tree of several
+     * thousand files is not something to walk on every launch, and an install
+     * that never had the problem is marked without being walked at all.
+     */
+    fun repairInstalledToolchains() {
+        ioExecutor.execute {
+            try {
+                repairInstalledToolchainsSync()
+            } catch (e: Exception) {
+                // A failed repair leaves the marker unset, so the next launch
+                // tries again. Nothing else depends on it having run.
+                Logger.w(tag, "Toolchain repair pass failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun repairInstalledToolchainsSync() {
+        val state = readState()
+        var changed = false
+
+        for (i in 0 until state.length()) {
+            val entry = state.optJSONObject(i) ?: continue
+            if (entry.optBoolean(KEY_EXEC_REPAIRED, false)) continue
+
+            val name = entry.optString("name", "?")
+            val installRoot = entry.optString("installRoot", "")
+            val root = if (installRoot.isEmpty()) null else File(context.filesDir, installRoot)
+
+            if (root != null && root.isDirectory) {
+                val fixed = markExecutablesUnder(root)
+                if (fixed > 0) {
+                    Logger.i(tag, "Restored the execute bit on $fixed binaries in $name")
+                }
+            }
+            // Marked either way: a toolchain with no install root, or one whose
+            // tree is gone, has nothing this pass can do for it now or later.
+            entry.put(KEY_EXEC_REPAIRED, true)
+            changed = true
+        }
+
+        if (changed) writeState(state)
+    }
+
+    /**
+     * Marks every ELF object under [root] executable, returning how many needed it.
+     *
+     * Symlinks are stepped over rather than followed: the link's target may sit
+     * outside this toolchain -- `usr/lib` is shared with the base install -- and
+     * a repair has no business changing permissions there.
+     */
+    private fun markExecutablesUnder(root: File): Int {
+        var fixed = 0
+        root.walkTopDown()
+            .onEnter { !isSymlink(it) }
+            .forEach { file ->
+                if (!file.isFile || isSymlink(file)) return@forEach
+                if (!isElf(file)) return@forEach
+                if (file.canExecute()) return@forEach
+                if (file.setExecutable(true, true)) fixed++
+            }
+        return fixed
+    }
+
+    private fun isSymlink(file: File): Boolean = try {
+        android.system.OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun isElf(file: File): Boolean = try {
+        file.inputStream().use { input ->
+            val header = ByteArray(4)
+            input.read(header) == 4 && isElfHeader(header)
+        }
+    } catch (e: Exception) {
+        false
+    }
+
     // -- State persistence --
 
     private fun readState(): JSONArray {
@@ -795,6 +910,20 @@ class ToolchainManager(private val context: Context) {
         stateFile.writeText(state.toString(2))
     }
 }
+
+/**
+ * Whether these opening bytes are an ELF object's.
+ *
+ * The same four bytes the packaging gates read. Separated so the repair pass can
+ * be checked against real files rather than a mock that would only agree with
+ * the implementation it was written from.
+ */
+internal fun isElfHeader(header: ByteArray): Boolean =
+    header.size >= 4 &&
+        header[0] == 0x7F.toByte() &&
+        header[1] == 'E'.code.toByte() &&
+        header[2] == 'L'.code.toByte() &&
+        header[3] == 'F'.code.toByte()
 
 /**
  * Names the manifest `libs` entries an uninstall may delete from the shared

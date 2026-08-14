@@ -65,6 +65,13 @@ class SplashActivity : AppCompatActivity() {
             setup.ensureToolchainEnvSourcing()
             setup.ensurePromptFix()
             setup.updateSettingsNativeLibPaths()
+            // A toolchain keeps the manifest it was installed with, so a
+            // packaging fix never reaches an install that already exists. This
+            // gives those binaries back the execute bit they should have had.
+            // It returns immediately — the walk itself runs on the toolchain
+            // I/O thread, because the trees involved have thousands of files
+            // and this block is on the main thread.
+            ToolchainManager(this).repairInstalledToolchains()
         } catch (e: Exception) {
             Logger.e(tag, "Launch-time setup refresh failed", e)
         }
