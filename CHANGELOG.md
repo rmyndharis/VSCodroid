@@ -71,6 +71,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The session token every editor-to-Android call carries is compared in a way that takes the same time whether the first character differs or the last. Nothing was reachable through the previous comparison, and that is the point: its safety rested on the token being 32 random bytes rather than on the comparison, and the comparison is where that property should be stated
 
 ### Fixed
+- In landscape, the editor no longer extends under the punch-hole camera. The
+  cutout is its own inset, separate from the system bars; portrait masked the
+  gap because the status bar is at least as tall as the hole
+- The Toolchains screen drew its title and back arrow under the status bar --
+  colliding with the clock -- and its grid under the navigation bar. It now
+  respects both, and an instrumented test pins it
+- The first-run toolchain picker anchored its Skip and Continue buttons where a
+  3-button navigation bar covers them, on a screen that is shown exactly once
+- Status bar icons were invisible when the device was in light mode: the app is
+  always dark, but the system bars followed the device theme, drawing a dark
+  clock on a dark background. The bars are now pinned to light-on-dark
+- Upgraded androidx.activity to 1.13.0 (re-applies edge-to-edge styling on
+  configuration changes, which this app relies on -- it handles rotation
+  without being recreated) and Material Components to stable 1.14.0. Play's
+  "deprecated APIs for edge-to-edge" warning is triggered by these libraries'
+  own compatibility code and remains -- expected; see docs/PLAY_EDGE_TO_EDGE.md
 - The low-storage warning now names something you can actually do. It said "Clear caches in Settings" and there is no Settings screen in the app, so a user who was running out of space was sent looking for a place that does not exist. Two commands now exist and the warning quotes one of them exactly as the Command Palette lists it: **VSCodroid: Show Storage Usage** breaks down what is using space, largest first, and **VSCodroid: Clear Caches** deletes cached data and tells you how many bytes it freed -- a command that claims to free space without saying how much cannot be told apart from one that did nothing. Both were fully implemented on the Android side already and reachable by nothing: the relay that carries them to the editor had a branch for each, and no caller
 - Tap targets stay finger-sized whichever way you hold the device. The roomier spacing for file tree rows, editor tabs and activity bar icons was applied by screen width, so turning a phone to landscape — the orientation you turn to for more room for code — dropped it back to the desktop sizing, while the finger doing the tapping stayed exactly the same size. It now follows the pointer rather than the screen: anywhere the pointer is a fingertip gets the roomier spacing, which includes touch tablets, and anywhere a mouse or trackpad is in use keeps the compact desktop layout. That last part cuts both ways — a device driven by a mouse in a narrow window, such as a Chromebook without a touchscreen, now keeps the compact layout where the old width rule would have given it the roomier one
 - The session token the editor uses to call into Android is now required by every one of those calls. Twenty-two of the twenty-eight already took it and checked it; six took no token at all, so the rule the surface was built on held for most of it rather than all of it. All twenty-eight now check, and a test enumerates them so one added later cannot skip it
