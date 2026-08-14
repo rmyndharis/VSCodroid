@@ -242,6 +242,14 @@ jobs:
           VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew bundleRelease
 
+      # Before the release is published, because the alternative is finding out
+      # at Play upload with the GitHub release already public -- one version
+      # shipping through two channels with different contents.
+      - name: Check the bundle against Play's size limits
+        run: |
+          python3 scripts/check-bundle-size.py \
+            android/app/build/outputs/bundle/release/app-release.aab
+
       - name: Package toolchain ZIPs
         run: |
           bash scripts/package-toolchains.sh

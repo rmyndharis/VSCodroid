@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The release now checks the app bundle against the store's size limits before publishing anything, rather than measuring it and carrying on. A bundle that has grown too large previously failed at store upload with the download release already public, leaving one version shipping through two channels with different contents
 - Extensions dropped from the bundled set are now removed from the build tree instead of lingering and shipping in development builds
 - The Node.js headers the native components are compiled against are now checked against the digest nodejs.org publishes, the last download in the build that was still taken on trust
 - The build now checks that the bundled SQLite database engine was compiled from the same version as the JavaScript shipped beside it, the last of the three native components without that check. A mismatch there shows up on device as chat failing to pick a model, an error several layers from its cause
