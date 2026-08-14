@@ -75,6 +75,31 @@ class SupersededExtensionsTest {
     }
 
     @Test
+    fun `a non-numeric component is not treated as zero`() {
+        // The case above never reaches the numeric guard. Its three names are
+        // dropped earlier, by the `current[id] ?: return@filter false` lookup:
+        // "extensions.json" and the un-versioned directory do not split into an
+        // id the bundled set knows, and "ms-python.python-2026.4.0-rc1" splits
+        // on its LAST dash, so its id is "ms-python.python-2026.4.0" -- also
+        // unknown. Measured: making a non-numeric component parse as 0 instead
+        // of refusing left that test green.
+        //
+        // This one uses an id the bundled set does know AND a version with no
+        // dash in it, so split() keeps the id intact and the version really is
+        // compared. Both matter: split cuts at the LAST dash, so "5.35.0-rc1"
+        // would leave the id as "PKief.material-icon-theme-5.35.0", which the
+        // bundled set does not contain -- dropped before the guard again.
+        //
+        // Scored with "x" as 0, 5.35.x looks older than the bundled 5.37.0 and
+        // gets deleteRecursively()d, taking a directory the app did not ship.
+        val present = bundled + "PKief.material-icon-theme-5.35.x"
+        assertTrue(
+            supersededExtensionDirs(present, bundled).isEmpty(),
+            "a version with a non-numeric component must be left alone, not scored as 0",
+        )
+    }
+
+    @Test
     fun `treats a missing trailing component as zero`() {
         val present = bundled + "ms-python.python-2026.4"
         assertTrue(supersededExtensionDirs(present, bundled).isEmpty())

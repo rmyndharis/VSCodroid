@@ -292,6 +292,27 @@ class SettingsPathsTest {
         }
 
         @Test
+        fun `re-points the shape production actually writes`() {
+            // Every other case here uses the legacy filesDir shape, so the
+            // /data/app/ alternative in CLAUDE_WRAPPER was matched by nothing.
+            // Measured: deleting that alternative left all nine of these green,
+            // while no real install would ever have its wrapper re-pointed.
+            //
+            // Production writes this shape and only this shape --
+            // Environment.getMuslLoaderPath() returns
+            // "${nativeLibraryDir}/libldmusl.so" -- and nativeLibraryDir moves on
+            // every reinstall, which is the entire reason the value is rewritten.
+            val stale = settings(shell, git, args = "[]",
+                claudeWrapper = "$oldDir/libldmusl.so")
+            val result = requireNotNull(refreshManagedPaths(stale, shell, git, wrapper)) {
+                "a wrapper under the old nativeLibraryDir must be re-pointed"
+            }
+
+            assertTrue(result.contains(""""claudeCode.claudeProcessWrapper": "$wrapper""""))
+            assertTrue(!result.contains(oldDir), "stale nativeLibraryDir survived:\n$result")
+        }
+
+        @Test
         fun `re-points a wrapper the user has stale`() {
             val stale = settings(shell, git, args = "[]",
                 claudeWrapper = "/data/user/0/com.vscodroid/files/usr/bin/node-old")
