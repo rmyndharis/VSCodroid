@@ -54,6 +54,11 @@ VSCODE_VERSION="${VSCODE_VERSION:?pass it in from the repo VSCODE_VERSION file}"
 # the clone below would follow it without a word -- the release digest and
 # check-patch-fingerprints.py both protect the artifact, but nothing protected
 # the link from the source to it, which ran through that name.
+#
+# What the pin asserts is stronger than "this is where the tag pointed". All
+# twelve patches in patches/ were applied to this commit, in order, and applied
+# cleanly. So the bar for changing this file is not that the new tag resolved --
+# it is that the patches still apply to what it resolved to.
 VSCODE_COMMIT="${VSCODE_COMMIT:?pass it in from the repo VSCODE_COMMIT file}"
 case "$VSCODE_COMMIT" in
     *[!0-9a-f]*|"")
@@ -112,6 +117,10 @@ cd "$SRC"
 # patched, built, and published under this version's name. Nothing downstream
 # can catch that -- the tarball digest and the patch fingerprints both describe
 # whatever was built, not what it was supposed to be built from.
+#
+# Its position is load-bearing and cheap on purpose: this runs before npm ci,
+# so a wrong pin costs seconds instead of the half hour a full build takes.
+# Moving it later would keep the check and lose that.
 HEAD_COMMIT="$(git rev-parse HEAD)"
 if [ "$HEAD_COMMIT" != "$VSCODE_COMMIT" ]; then
     cat >&2 <<EOF
@@ -132,7 +141,9 @@ if [ "$HEAD_COMMIT" != "$VSCODE_COMMIT" ]; then
       write the SHA it prints into VSCODE_COMMIT:
           git ls-remote https://github.com/microsoft/vscode.git 'refs/tags/$VSCODE_VERSION*'
       Take the ^{} line if there is one; that is the commit an annotated tag
-      points at, and it is what a clone leaves at HEAD.
+      points at, and it is what a clone leaves at HEAD. Resolving it is half
+      the job: the pin means the patches apply to that commit, so let the
+      Patches stage below run before you treat the new SHA as good.
 
     * Upstream moved the tag onto a different commit. Nothing here can tell
       that apart from the case above, which is the point of pinning: read what
