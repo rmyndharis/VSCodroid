@@ -24,7 +24,9 @@ const HOME_DIR = process.env.HOME || '/data/data/com.vscodroid/files/home';
 const SERVER_DIR = path.dirname(__filename);
 const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
 
-// Product configuration override — port-dependent fields set at runtime below
+// Product configuration override. Applied with a shallow Object.assign, so each
+// nested object here replaces the built one whole. Nothing below depends on the
+// port; the comment here said it did, and the branding overlay repeated it.
 const productOverrides = {
     nameShort: 'VSCodroid',
     nameLong: 'VSCodroid',
