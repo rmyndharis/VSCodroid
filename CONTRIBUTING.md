@@ -263,6 +263,37 @@ checkouts differed.
 
 ## The on-device test suite
 
+**Before testing an APK built in a worktree, copy the artifact trees into it.**
+
+```bash
+MAIN=/path/to/the/main/checkout
+for d in jniLibs assets/vscode-reh assets/usr; do
+    cp -R "$MAIN/android/app/src/main/$d" android/app/src/main/$d
+done
+```
+
+`jniLibs/`, `assets/vscode-reh` and `assets/usr` are gitignored build output that
+the download scripts fill in. A fresh worktree has none of them, and nothing
+fails: the build is green, the APK is written, `adb install` succeeds, the splash
+screen appears. Then the screen goes white and stays white, because the APK
+contains **zero** native libraries and the server cannot start:
+
+```
+Cannot run program ".../lib/arm64/libnode.so": error=2, No such file or directory
+```
+
+`error=2` is the string to search for, because nothing else points here. A white
+screen after a successful setup reads as a WebView or server problem, and every
+visible clue leads away from an APK that is structurally complete and empty of
+content. The same hole has also produced an APK carrying no server files at all,
+noticed only because its size looked wrong rather than because anything
+reported it.
+
+A worktree has one other missing-file trap, and the contrast is the point: without
+`local.properties` the build dies in well under a second, loudly and at the right
+place. This one costs more precisely because it passes every gate first.
+
+
 `scripts/device-test.sh` installs the APK and checks that what shipped actually
 runs: the server answers, every bundled tool starts, and Python imports the ten
 modules that need a bundled library behind them.
