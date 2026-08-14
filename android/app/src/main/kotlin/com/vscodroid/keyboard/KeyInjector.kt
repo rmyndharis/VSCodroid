@@ -67,9 +67,16 @@ class KeyInjector(private val webView: WebView) {
      * when ExtraKeyRow modifiers (Ctrl/Alt) are active. Instead of inserting text,
      * it dispatches modified KeyboardEvents so VS Code shortcuts work.
      *
+     * The listener resolves each character through [KeyMapping]'s table, serialized in
+     * here as a lookup object, so it answers from the same definitions [injectKey] uses
+     * for the key row. Deriving the fields from the character instead only works for
+     * letters and digits, where the character's own code point happens to equal the
+     * keyCode; for punctuation the two differ and VS Code matches no binding.
+     *
      * Call once after the page finishes loading.
      */
     fun setupModifierInterceptor() {
+        val keyLookup = KeyMapping.toJsLookup()
         val js = """
             (function() {
                 if (window.__vscodroid_modifier_interceptor) return;
@@ -78,6 +85,8 @@ class KeyInjector(private val webView: WebView) {
                 window.__vscodroid.ctrl = false;
                 window.__vscodroid.alt = false;
                 window.__vscodroid.shift = false;
+
+                var KEYS = $keyLookup;
 
                 document.addEventListener('beforeinput', function(e) {
                     var mod = window.__vscodroid;
@@ -120,10 +129,20 @@ class KeyInjector(private val webView: WebView) {
                     var chars = e.data;
                     for (var i = 0; i < chars.length; i++) {
                         var ch = chars[i];
-                        var upper = ch.toUpperCase();
-                        var code = /[a-zA-Z]/.test(ch) ? 'Key' + upper :
+                        var def = KEYS[ch];
+                        var code, keyCode, shiftKey = !!mod.shift;
+                        if (def) {
+                            code = def[0];
+                            keyCode = def[1];
+                            // The character carries Shift on a US layout, so the event
+                            // has to as well or VS Code sees a different chord.
+                            if (def[2]) shiftKey = true;
+                        } else {
+                            var upper = ch.toUpperCase();
+                            code = /[a-zA-Z]/.test(ch) ? 'Key' + upper :
                                    /[0-9]/.test(ch) ? 'Digit' + ch : '';
-                        var keyCode = upper.charCodeAt(0);
+                            keyCode = upper.charCodeAt(0);
+                        }
 
                         init = {
                             key: ch,
@@ -132,7 +151,7 @@ class KeyInjector(private val webView: WebView) {
                             which: keyCode,
                             ctrlKey: !!mod.ctrl,
                             altKey: !!mod.alt,
-                            shiftKey: !!mod.shift,
+                            shiftKey: shiftKey,
                             metaKey: false,
                             bubbles: true,
                             cancelable: true,

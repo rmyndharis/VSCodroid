@@ -27,7 +27,10 @@ class KeyMappingTest {
         }
 
         @ParameterizedTest(name = "shift-required key: {0}")
-        @ValueSource(strings = ["{", "}", "(", ")", ":", "\"", "|", "~", "!", "#", "@", "&", "_", "<", ">"])
+        @ValueSource(strings = [
+            "{", "}", "(", ")", ":", "\"", "|", "~", "!", "#", "@", "&", "_", "<", ">",
+            "+", "*", "%", "?", "^", "$"
+        ])
         fun `shift-required characters have requiresShift true`(key: String) {
             val keyDef = KeyMapping.getKeyDef(key)
             assertNotNull(keyDef, "KeyDef for '$key' should exist")
@@ -35,7 +38,7 @@ class KeyMappingTest {
         }
 
         @ParameterizedTest(name = "non-shift key: {0}")
-        @ValueSource(strings = [";", "/", "[", "]", "\\", "`", "'", "="])
+        @ValueSource(strings = [";", "/", "[", "]", "\\", "`", "'", "=", ",", ".", "-"])
         fun `non-shift characters have requiresShift false`(key: String) {
             val keyDef = KeyMapping.getKeyDef(key)
             assertNotNull(keyDef, "KeyDef for '$key' should exist")
@@ -125,6 +128,138 @@ class KeyMappingTest {
         @Test
         fun `Space has correct keyCode 32`() {
             assertEquals(32, KeyMapping.getKeyDef(" ")!!.keyCode)
+        }
+    }
+
+    @Nested
+    inner class PunctuationCoverageTest {
+
+        /**
+         * A comma reaches VS Code only if the event carries `Comma`/188. Deriving the
+         * fields from the character gives `''`/44, which matches no binding, so Ctrl+,
+         * did nothing. This is the specific case behind that.
+         */
+        @Test
+        fun `comma maps to Comma and 188 without shift`() {
+            val def = KeyMapping.getKeyDef(",")
+            assertNotNull(def, "',' must be mapped")
+            assertEquals("Comma", def!!.code)
+            assertEquals(188, def.keyCode)
+            assertFalse(def.requiresShift, "',' is unshifted; '<' is the shifted one")
+        }
+
+        @Test
+        fun `comma and less-than share a physical key but differ in shift`() {
+            val comma = KeyMapping.getKeyDef(",")!!
+            val lessThan = KeyMapping.getKeyDef("<")!!
+            assertEquals(comma.code, lessThan.code, "same physical key")
+            assertEquals(comma.keyCode, lessThan.keyCode)
+            assertFalse(comma.requiresShift)
+            assertTrue(lessThan.requiresShift)
+        }
+
+        @ParameterizedTest(name = "every US-layout punctuation character is mapped: {0}")
+        @ValueSource(strings = [
+            "`", "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")",
+            "-", "_", "=", "+", "[", "{", "]", "}", "\\", "|",
+            ";", ":", "'", "\"", ",", "<", ".", ">", "/", "?"
+        ])
+        fun `every printable US punctuation character has a definition`(key: String) {
+            val def = KeyMapping.getKeyDef(key)
+            assertNotNull(def, "'$key' has no definition, so it falls back to the letter heuristic")
+            assertTrue(def!!.code.isNotEmpty(), "'$key' needs a physical code")
+            assertTrue(def.keyCode > 0, "'$key' needs a keyCode")
+        }
+
+        @ParameterizedTest(name = "keyCode is the unshifted key's code, not the character's: {0}")
+        @ValueSource(strings = ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"])
+        fun `shifted digit symbols carry the digit keyCode`(key: String) {
+            val def = KeyMapping.getKeyDef(key)!!
+            assertTrue(def.requiresShift, "'$key' is typed with Shift")
+            assertTrue(def.code.startsWith("Digit"), "'$key' sits on a digit key, got ${def.code}")
+            assertEquals(
+                def.code.removePrefix("Digit").first().code,
+                def.keyCode,
+                "keyCode must be the digit's code, not '$key'.code"
+            )
+        }
+    }
+
+    @Nested
+    inner class JsLookupTest {
+
+        @Test
+        fun `is a single object literal`() {
+            val lookup = KeyMapping.toJsLookup()
+            assertTrue(lookup.startsWith("{"), "must open as an object")
+            assertTrue(lookup.endsWith("}"), "must close as an object")
+        }
+
+        @Test
+        fun `carries one entry per mapping`() {
+            val lookup = KeyMapping.toJsLookup()
+            // Every entry contributes exactly one `:[`, so this counts entries without
+            // needing to parse, and moves when the table does.
+            val entries = Regex(":\\[").findAll(lookup).count()
+            val known = listOf(
+                "Tab", "Escape", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown",
+                "{", "}", "(", ")", ";", ":", "\"", "/", "[", "]", "|", "\\", "~", "`",
+                "'", "=", "!", "#", "@", "&", "_", "<", ">", ",", ".", "-", "+", "*",
+                "%", "?", "^", "$", "Enter", "Backspace", " "
+            )
+            assertEquals(known.size, entries, "one entry per mapping")
+            for (key in known) {
+                assertNotNull(KeyMapping.getKeyDef(key), "'$key' should be in the table")
+            }
+        }
+
+        @ParameterizedTest(name = "lookup carries the definition for: {0}")
+        @ValueSource(strings = [",", ".", "-", "+", "*", "%", "?", "^", ";", "/", "="])
+        fun `lookup value matches the KeyDef`(key: String) {
+            val def = KeyMapping.getKeyDef(key)!!
+            val expected = "\"$key\":[\"${def.code}\",${def.keyCode},${if (def.requiresShift) 1 else 0}]"
+            assertTrue(
+                KeyMapping.toJsLookup().contains(expected),
+                "lookup should contain $expected"
+            )
+        }
+
+        /**
+         * `"` and `\` are both keys in the table. Unescaped, either one ends the JS
+         * string it sits in and the whole object becomes a syntax error, which would
+         * take the interceptor down with it rather than degrade.
+         */
+        @Test
+        fun `escapes the quote and backslash keys`() {
+            val lookup = KeyMapping.toJsLookup()
+            assertTrue(lookup.contains("\"\\\"\":[\"Quote\""), "the '\"' key must be escaped")
+            assertTrue(lookup.contains("\"\\\\\":[\"Backslash\""), "the '\\' key must be escaped")
+        }
+
+        /**
+         * Scans the way a parser would, honouring escapes. An unescaped `"` inside a
+         * key ends that string early, which shifts every string boundary after it —
+         * so the count is what catches it, not the appearance of any one entry.
+         */
+        @Test
+        fun `every key and code is a properly terminated string`() {
+            val lookup = KeyMapping.toJsLookup()
+            var i = 0
+            var strings = 0
+            while (i < lookup.length) {
+                if (lookup[i] == '"') {
+                    i++
+                    while (i < lookup.length && lookup[i] != '"') {
+                        if (lookup[i] == '\\') i++
+                        i++
+                    }
+                    assertTrue(i < lookup.length, "unterminated string after $strings strings")
+                    strings++
+                }
+                i++
+            }
+            val entries = Regex(":\\[").findAll(lookup).count()
+            assertEquals(2 * entries, strings, "each entry is exactly one key and one code")
         }
     }
 }
