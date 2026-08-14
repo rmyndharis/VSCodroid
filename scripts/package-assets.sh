@@ -17,7 +17,11 @@ if [ -d "$REH_SRC" ]; then
     cp -r "$REH_SRC" "$ASSETS_DIR/vscode-reh"
     echo "  ✓ vscode-reh: $(du -sh "$ASSETS_DIR/vscode-reh" | cut -f1)"
 else
-    echo "  ⚠ vscode-reh not found (run fetch-vscode-oss.sh first)"
+    # Fatal rather than a warning: this copy is the only thing that puts the
+    # server into the APK, so carrying on produces a build that installs, opens,
+    # and has no editor in it.
+    echo "  ERROR: $REH_SRC not found. Run fetch-vscode-oss.sh first." >&2
+    exit 1
 fi
 
 # Server bootstrap

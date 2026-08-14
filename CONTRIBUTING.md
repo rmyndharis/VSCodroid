@@ -54,39 +54,62 @@ Before you can build the APK, the `android/app/src/main/assets/` and `android/ap
 
 Run the download scripts in this order:
 
+This is the order CI uses, and the order matters — each step below notes why.
+
 ```bash
-# 1. Fetch the Code - OSS server tree built by the build-vscode-oss workflow
+# 1. Fetch the Code - OSS server tree built by the build-vscode-oss workflow.
+#    This leaves it in server/, not in assets/.
 ./scripts/fetch-vscode-oss.sh
 
-# 2. Download Termux tools (bash, git, tmux, make, openssh) and Node's libraries
+# 2. Copy that tree into assets/. Nothing else does this, and an APK built
+#    without it installs and opens with no editor in it.
+./scripts/package-assets.sh
+
+# 3. Termux tools (bash, git, tmux, make, openssh) and the shared libraries the
+#    bundled binaries link against. Wipes and repopulates assets/usr/lib.
 ./scripts/download-termux-tools.sh
 
-# 2b. The Node runtime. After step 2, which places the libraries it links against
-./scripts/download-node.sh
-
-# 3. Download npm
+# 4. npm
 ./scripts/download-npm.sh
 
-# 4. Download Python 3
+# 5. Python 3
 ./scripts/download-python.sh
 
-# 5. Download pre-bundled extensions
+# 6. Pre-bundled extensions
 ./scripts/download-extensions.sh
 
-# 6. Build the Bionic native addons (requires NDK)
+# 7. musl's loader. Without it the Claude Code CLI cannot start: its binary is
+#    musl-linked and Android has no loader for it.
+./scripts/download-musl-loader.sh
+
+# 8. The Node runtime. After step 3, which places the libraries it links against
+./scripts/download-node.sh
+
+# 9. Bionic native addons (requires NDK). After step 8, so the build can check
+#    each addon against the runtime it will load in.
 ./scripts/build-native-addons.sh
 
-# 7. (Optional) Download on-demand toolchains
+# 10. The glibc compatibility shim. Last, because step 3 wipes assets/usr/lib
+#     and the stubs it generates live there. Without it the prebuilt native
+#     addons fail to load at runtime.
+./scripts/build-glibc-shim.sh \
+    --scan android/app/src/main/assets/vscode-reh \
+    --scan android/app/src/main/assets/extensions
+
+# 11. (Optional) On-demand toolchains
 ./scripts/download-go.sh
 ./scripts/download-ruby.sh
 ./scripts/download-java.sh
 ```
 
-Alternatively, run them all at once:
+Alternatively, run steps 1–10 and the APK build in one go:
 
 ```bash
 ./scripts/build-all.sh
 ```
+
+`scripts/check-build-steps.py` runs in CI and fails when this list, `build-all.sh`
+and the workflows stop agreeing about which scripts a build needs.
 
 **Tip:** Termux mirrors can be slow. Set `TERMUX_MIRROR` for faster downloads:
 
@@ -205,9 +228,12 @@ Each script downloads pre-built binaries and places them in the correct location
 | `download-node.sh` | Installs Termux's `nodejs-lts` as `libnode.so`. Run after `download-termux-tools.sh`, which places the libraries it links against | `jniLibs/arm64-v8a/libnode.so` |
 | `verify-android-elf.py` | Checks a binary can load on Android: aarch64, no unbundled dependency, 16 KB-aligned segments. Used by the two scripts above | exit status |
 | `download-npm.sh` | Extracts npm from Node.js linux-arm64 tarball | `assets/usr/lib/node_modules/npm/` |
-| `download-python.sh` | Downloads Python 3.12 + deps from Termux | `jniLibs/arm64-v8a/`, `assets/usr/lib/python3.12/` |
+| `download-python.sh` | Downloads Python + deps from Termux. The version is whatever the Termux index currently carries, detected at download time rather than pinned here | `jniLibs/arm64-v8a/`, `assets/usr/lib/python<major.minor>/` |
 | `download-extensions.sh` | Downloads marketplace extensions from Open VSX (supports `publisher.name@version` pinning) | `assets/extensions/` |
-| `build-native-addons.sh` | Cross-compiles node-pty and `@parcel/watcher` for Bionic using the NDK, with 16 KB page alignment | `assets/vscode-reh/node_modules/{node-pty,@parcel/watcher}/build/Release/*.node` |
+| `download-musl-loader.sh` | Extracts musl's dynamic loader from the Alpine package. The Claude Code CLI ships as a musl binary and Android has no loader for it | `jniLibs/arm64-v8a/libldmusl.so` |
+| `build-native-addons.sh` | Cross-compiles node-pty, `@parcel/watcher` and `@vscode/sqlite3` for Bionic using the NDK, with 16 KB page alignment. Checks each `.node` against the JavaScript version shipped beside it | `assets/vscode-reh/node_modules/*/build/Release/*.node` |
+| `build-glibc-shim.sh` | Scans the packaged tree for addons built against glibc and generates versioned stub libraries so Bionic's loader accepts them. Run last: `download-termux-tools.sh` wipes the directory the stubs live in | `assets/usr/lib/libglibc-shim.so` and per-soname stubs |
+| `package-toolchains.sh` | Zips the toolchain asset-pack directories for the GitHub Release that non-Play installs download from | `toolchain-zips/toolchain_*.zip` |
 | `download-go.sh` | Downloads Go toolchain from Termux | `toolchain_go/src/main/assets/` |
 | `download-ruby.sh` | Downloads Ruby + deps from Termux | `toolchain_ruby/src/main/assets/` |
 | `download-java.sh` | Downloads OpenJDK 17 + deps from Termux | `toolchain_java/src/main/assets/` |
@@ -215,7 +241,7 @@ Each script downloads pre-built binaries and places them in the correct location
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).
 - `fetch-vscode-oss.sh` needs the `gh` CLI authenticated, or `VSCODE_OSS_URL` pointing at a tarball.
-- The Node.js binary (`libnode.so`) is cross-compiled separately and checked in or provided as a release artifact. See CLAUDE.md for cross-compilation details.
+- The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools; `toolchains/build-node.sh` is what remains of it and is not part of any build.
 
 ## Building
 

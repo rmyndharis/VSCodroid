@@ -43,6 +43,11 @@ jobs:
           printf '\x7fELF' > android/app/src/main/jniLibs/arm64-v8a/libnode.so
           dd if=/dev/zero bs=1 count=60 >> android/app/src/main/jniLibs/arm64-v8a/libnode.so 2>/dev/null
 
+      # Reads no assets and needs no toolchain, so it runs before the slow part
+      # and reports the mismatch on its own rather than inside a lint report.
+      - name: Check the documented build steps match the workflows
+        run: python3 scripts/check-build-steps.py
+
       - name: Run lint
         working-directory: android
         run: ./gradlew lint

@@ -17,8 +17,10 @@ check_command() {
 
 echo ""
 echo "Checking prerequisites..."
+# No yarn: nothing in this repository uses it. The server tree is fetched
+# prebuilt, and building it from source (build-vscode-oss.sh) runs npm inside a
+# container.
 check_command node
-check_command yarn
 check_command git
 check_command python3
 
@@ -62,9 +64,8 @@ echo "  ✓ Directories created"
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "Next steps:"
-echo "  1. Cross-compile Node.js:  ./toolchains/build-node.sh"
-echo "  2. Fetch the server:       ./scripts/fetch-vscode-oss.sh"
-echo "  3. Package assets:         ./scripts/package-assets.sh"
-echo "  4. Build APK:              cd android && ./gradlew assembleDebug"
-echo "  5. Deploy:                 ./scripts/deploy.sh"
+# Deliberately not a build recipe. This script is step one of build-all.sh, and
+# a second copy of the sequence here is the drift that left the documented steps
+# missing two scripts. build-all.sh runs it; CONTRIBUTING.md explains it.
+echo "Prerequisites are in place. To prepare assets and build:"
+echo "  ./scripts/build-all.sh"
