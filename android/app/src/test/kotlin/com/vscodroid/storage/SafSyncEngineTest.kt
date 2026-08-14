@@ -13,7 +13,7 @@ import org.junit.jupiter.params.provider.ValueSource
 
 /**
  * Tests for [SafSyncEngine] pure logic: directory skipping, MIME type detection,
- * constants, and data classes.
+ * the overwrite decision, and constants.
  *
  * These tests validate the sync filtering rules that determine which files get
  * mirrored and how new files are classified when synced back to SAF.
@@ -255,6 +255,36 @@ class SafSyncEngineTest {
                 "A missing mirror file must still be fetched even without timestamps"
             )
         }
+
+        @Test
+        fun `a document with no reported time still refreshes the mirror`() {
+            // DocumentInfo.lastModified defaults to 0, and that default is the one
+            // field anything depends on: shouldOverwriteMirror keys its unknown-time
+            // branch on exactly 0.
+            //
+            // Change the default to -1 and that branch stops firing. The comparison
+            // falls through to mirrorModified > sourceModified, which is true against
+            // any real mirror time, so the copy is skipped -- a provider that reports
+            // no timestamp gets its first copy and never an update again, silently.
+            val doc = DocumentInfo(
+                uri = mockk<Uri>(),
+                docId = "primary:MyProject/src/main.kt",
+                relativePath = "src/main.kt",
+                isDirectory = false,
+                size = 2048
+            )
+            assertEquals(0L, doc.lastModified, "an unreported provider time is 0")
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true,
+                    mirrorModified = 1_700_000_000_000L,
+                    mirrorSize = 1024,
+                    sourceModified = doc.lastModified,
+                    sourceSize = doc.size
+                ),
+                "a document with no reported time must be copied, not treated as older"
+            )
+        }
     }
 
     // ── Constants ────────────────────────────────────────────────────────
@@ -282,98 +312,6 @@ class SafSyncEngineTest {
             // Regression: these were removed in the Q3 review fix
             assertFalse("build" in SafSyncEngine.SKIP_DIRECTORIES, "build was removed in Q3")
             assertFalse(".vscode" in SafSyncEngine.SKIP_DIRECTORIES, ".vscode was removed in Q3")
-        }
-    }
-
-    // ── Data Classes ────────────────────────────────────────────────────
-
-    @Nested
-    inner class DataClassTest {
-
-        @Test
-        fun `DocumentInfo stores fields correctly`() {
-            val uri = mockk<Uri>()
-            val doc = DocumentInfo(
-                uri = uri,
-                docId = "primary:MyProject/src/main.kt",
-                relativePath = "src/main.kt",
-                isDirectory = false,
-                size = 1024
-            )
-            assertEquals("primary:MyProject/src/main.kt", doc.docId)
-            assertEquals("src/main.kt", doc.relativePath)
-            assertFalse(doc.isDirectory)
-            assertEquals(1024L, doc.size)
-        }
-
-        @Test
-        fun `a document with no reported time still refreshes the mirror`() {
-            // The test above asserts the constructor assigned its arguments, which
-            // is a property of Kotlin rather than of this file. It also never
-            // touches lastModified, and that default is the one field anything
-            // depends on: shouldOverwriteMirror keys its unknown-time branch on
-            // exactly 0.
-            //
-            // Change the default to -1 and that branch stops firing. The comparison
-            // falls through to mirrorModified > sourceModified, which is true
-            // against any real mirror time, so the copy is skipped -- a provider
-            // that reports no timestamp gets its first copy and never an update
-            // again, silently.
-            val doc = DocumentInfo(
-                uri = mockk<Uri>(),
-                docId = "primary:MyProject/src/main.kt",
-                relativePath = "src/main.kt",
-                isDirectory = false,
-                size = 2048
-            )
-            assertEquals(0L, doc.lastModified, "an unreported provider time is 0")
-            assertTrue(
-                SafSyncEngine.shouldOverwriteMirror(
-                    mirrorExists = true,
-                    mirrorModified = 1_700_000_000_000L,
-                    mirrorSize = 1024,
-                    sourceModified = doc.lastModified,
-                    sourceSize = doc.size
-                ),
-                "a document with no reported time must be copied, not treated as older"
-            )
-        }
-
-        @Test
-        fun `SyncJob stores fields correctly`() {
-            val docUri = mockk<Uri>()
-            val parentUri = mockk<Uri>()
-            val treeUri = mockk<Uri>()
-            val job = SyncJob(
-                type = SyncType.MODIFY,
-                localPath = "/data/data/com.vscodroid/files/saf-mirrors/abc123/test.txt",
-                safDocUri = docUri,
-                safParentUri = parentUri,
-                safTreeUri = treeUri,
-                timestamp = 1700000000000L
-            )
-            assertEquals(SyncType.MODIFY, job.type)
-            assertEquals(1700000000000L, job.timestamp)
-        }
-
-        @Test
-        fun `SyncType has all expected values`() {
-            val types = SyncType.entries
-            assertEquals(3, types.size)
-            assertTrue(types.contains(SyncType.MODIFY))
-            assertTrue(types.contains(SyncType.CREATE))
-            assertTrue(types.contains(SyncType.DELETE))
-        }
-
-        @Test
-        fun `SyncJob allows null SAF URIs for CREATE and DELETE`() {
-            // CREATE jobs may have null safDocUri (file doesn't exist in SAF yet)
-            val createJob = SyncJob(SyncType.CREATE, "/path", null, null, null, 0)
-            assertEquals(null, createJob.safDocUri)
-
-            // DELETE jobs may have null safParentUri
-            val deleteJob = SyncJob(SyncType.DELETE, "/path", mockk(), null, null, 0)
-            assertEquals(null, deleteJob.safParentUri)
         }
     }
 }

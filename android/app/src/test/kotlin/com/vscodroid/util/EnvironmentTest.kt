@@ -34,64 +34,6 @@ class EnvironmentTest {
     }
 
     @Nested
-    inner class PathMethodsTest {
-
-        @Test
-        fun `getNodePath returns nativeLibraryDir + libnode_so`() {
-            val result = Environment.getNodePath(context)
-            assertEquals("$mockNativeLibDir/libnode.so", result)
-        }
-
-        @Test
-        fun `getServerScript returns filesDir + server_server_js`() {
-            val result = Environment.getServerScript(context)
-            assertEquals("${mockFilesDir}/server/server.js", result)
-        }
-
-        @Test
-        fun `getHomeDir returns filesDir + home`() {
-            val result = Environment.getHomeDir(context)
-            assertEquals("${mockFilesDir}/home", result)
-        }
-
-        @Test
-        fun `getUserDataDir returns filesDir + home_vscodroid`() {
-            val result = Environment.getUserDataDir(context)
-            assertEquals("${mockFilesDir}/home/.vscodroid", result)
-        }
-
-        @Test
-        fun `getExtensionsDir returns filesDir + home_vscodroid_extensions`() {
-            val result = Environment.getExtensionsDir(context)
-            assertEquals("${mockFilesDir}/home/.vscodroid/extensions", result)
-        }
-
-        @Test
-        fun `getLogsDir returns filesDir + home_vscodroid_data_logs`() {
-            val result = Environment.getLogsDir(context)
-            assertEquals("${mockFilesDir}/home/.vscodroid/data/logs", result)
-        }
-
-        @Test
-        fun `getServerDir returns filesDir + server`() {
-            val result = Environment.getServerDir(context)
-            assertEquals("${mockFilesDir}/server", result)
-        }
-
-        @Test
-        fun `getBashPath returns nativeLibraryDir + libbash_so`() {
-            val result = Environment.getBashPath(context)
-            assertEquals("$mockNativeLibDir/libbash.so", result)
-        }
-
-        @Test
-        fun `getGitPath returns nativeLibraryDir + libgit_so`() {
-            val result = Environment.getGitPath(context)
-            assertEquals("$mockNativeLibDir/libgit.so", result)
-        }
-    }
-
-    @Nested
     inner class SafPathsTest {
 
         @Test
@@ -163,6 +105,21 @@ class EnvironmentTest {
             val userData = Environment.getUserDataDir(context)
             val logs = Environment.getLogsDir(context)
             assertTrue(logs.startsWith(userData), "Logs dir should be under user data dir")
+        }
+
+        @Test
+        fun `each bundled binary getter names its own file`() {
+            // The nine per-getter cases that used to sit above restated the string
+            // concatenation each getter performs: change the implementation and the
+            // test is edited to match, which is a restatement rather than a verdict.
+            // They are gone, but one mutation went with them that nothing else here
+            // can see -- every getter returns an absolute path whichever binary it
+            // names, so a copy-paste that has getNodePath hand back libgit.so passes
+            // every assertion in this class.
+            //
+            // getBashPath is deliberately absent: it has no production caller.
+            assertEquals("libnode.so", Environment.getNodePath(context).substringAfterLast('/'))
+            assertEquals("libgit.so", Environment.getGitPath(context).substringAfterLast('/'))
         }
     }
 }

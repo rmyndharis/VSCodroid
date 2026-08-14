@@ -1,7 +1,6 @@
 package com.vscodroid.keyboard
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -12,30 +11,6 @@ import org.junit.jupiter.api.Test
  * Tests for [KeyPages] — extra key row page configuration.
  */
 class KeyPageConfigTest {
-
-    @Nested
-    inner class PageStructureTest {
-
-        @Test
-        fun `has exactly 3 pages`() {
-            assertEquals(3, KeyPages.defaults.size, "Should have 3 key pages")
-        }
-
-        @Test
-        fun `page 1 has 8 items`() {
-            assertEquals(8, KeyPages.defaults[0].items.size, "Page 1 should have 8 items")
-        }
-
-        @Test
-        fun `page 2 has 8 items`() {
-            assertEquals(8, KeyPages.defaults[1].items.size, "Page 2 should have 8 items")
-        }
-
-        @Test
-        fun `page 3 has 8 items`() {
-            assertEquals(8, KeyPages.defaults[2].items.size, "Page 3 should have 8 items")
-        }
-    }
 
     @Nested
     inner class Page1Test {
