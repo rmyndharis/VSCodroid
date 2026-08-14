@@ -17,6 +17,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.zip.ZipInputStream
@@ -98,6 +99,16 @@ class ToolchainManager(private val context: Context) {
         private const val MAX_RETRIES = 2
         private const val DOWNLOAD_BUFFER_SIZE = 8192
         private const val MAX_REDIRECTS = 5
+
+        /**
+         * Ceiling on the digest manifest read into memory.
+         *
+         * Three lines of `sha256sum` output today, so this is roughly five
+         * hundred times what it needs. It is a ceiling rather than a budget: an
+         * origin that answers this URL with something enormous should cost a
+         * refusal, not the process.
+         */
+        private const val MANIFEST_MAX_CHARS = 64 * 1024
 
         /**
          * Records that a toolchain's binaries have had their execute bit checked.
@@ -638,6 +649,11 @@ class ToolchainManager(private val context: Context) {
 
                 tempDir.mkdirs()
 
+                // Resolved before the payload, not after. A release that cannot
+                // vouch for this ZIP should cost a few hundred bytes and a clear
+                // refusal, rather than 179 MB and then a refusal.
+                val expectedDigest = publishedDigestFor(url)
+
                 // Download
                 downloadWithRetries(packName, url, zipFile, estimatedSize, download)
 
@@ -645,6 +661,23 @@ class ToolchainManager(private val context: Context) {
                     Logger.i(tag, "HTTP download cancelled for $packName")
                     return@execute
                 }
+
+                // The check this path did not have. Content-Length says the
+                // transfer finished; only this says the bytes are the ones the
+                // release published. Everything below it -- extraction, chmod,
+                // symlinks into usr/ -- treats the archive as trusted, so this
+                // is the last point at which it can be refused.
+                val actualDigest = sha256Of(zipFile)
+                if (!actualDigest.equals(expectedDigest, ignoreCase = true)) {
+                    Logger.e(
+                        tag,
+                        "Digest mismatch for $packName: the release publishes $expectedDigest, " +
+                            "the download hashes to $actualDigest. Not installing it.",
+                    )
+                    onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                    return@execute
+                }
+                Logger.i(tag, "$packName matches the digest the release publishes")
 
                 // Extract — report as TRANSFERRING (file copy phase)
                 onStateChange?.invoke(packName, AssetPackStatus.TRANSFERRING, 90)
@@ -713,29 +746,17 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Downloads a file from the given URL using HttpURLConnection.
-     * Manually follows redirects (GitHub → CDN) up to MAX_REDIRECTS hops.
-     * Reports progress via onStateChange as DOWNLOADING status.
+     * Opens [url], following redirects (GitHub → CDN) up to MAX_REDIRECTS hops,
+     * and hands the connected 200 response to [body].
      *
-     * Refuses a body shorter or longer than the server said it would send. That
-     * is a narrow guarantee and worth stating as narrowly as it holds: it
-     * catches a transfer that ends early -- a connection dropped mid-stream, a
-     * proxy that closes a chunked body without finishing it -- which otherwise
-     * reaches [extractZip] as a truncated archive and can install as a toolchain
-     * missing whatever came after the cut. It is *not* an integrity check. A
-     * payload that arrives complete and wrong, from a release that was built
-     * wrong or an origin that was tampered with, matches its own Content-Length
-     * and passes here. Only a published digest answers that, and there is no
-     * manifest to read one from.
+     * Shared by the two things this class fetches, which is the point: they must
+     * agree about timeouts, redirects and transfer encoding or the digest one of
+     * them publishes describes a body the other one did not receive. [what]
+     * names the artifact so a 404 says which of them is missing from the
+     * release.
      */
     @Throws(IOException::class)
-    private fun downloadFile(
-        packName: String,
-        url: String,
-        destFile: File,
-        estimatedSize: Long,
-        download: HttpDownload,
-    ) {
+    private fun <T> withRedirects(url: String, what: String, body: (HttpURLConnection) -> T): T {
         var currentUrl = url
         var redirects = 0
 
@@ -746,8 +767,8 @@ class ToolchainManager(private val context: Context) {
                 conn.readTimeout = HTTP_TIMEOUT_MS
                 conn.instanceFollowRedirects = false
                 conn.setRequestProperty("User-Agent", "VSCodroid")
-                // Asked for explicitly, because the length check below is only
-                // sound if the body arrives as the header describes it.
+                // Asked for explicitly, because the length check in downloadFile
+                // is only sound if the body arrives as the header describes it.
                 // HttpURLConnection otherwise advertises gzip on its own and
                 // decodes it transparently, which leaves Content-Length
                 // measuring the compressed stream while the loop counts the
@@ -769,65 +790,142 @@ class ToolchainManager(private val context: Context) {
                 }
 
                 if (responseCode == 404) {
-                    throw IOException("404 Not Found: $currentUrl — toolchain ZIP not uploaded to release?")
+                    throw IOException("404 Not Found: $currentUrl — $what not uploaded to release?")
                 }
 
                 if (responseCode != 200) {
                     throw IOException("HTTP $responseCode from $currentUrl")
                 }
 
-                // Two different numbers, kept apart. The progress denominator may
-                // fall back to estimatedSize, which is a constant written into
-                // ToolchainRegistry by hand; the completeness check may not,
-                // because that constant goes stale the moment a payload is
-                // rebuilt and would then fail every download of a healthy file.
-                // Only a length the server actually sent is evidence of
-                // anything.
-                val declaredBytes = conn.contentLengthLong
-                val totalBytes = if (declaredBytes > 0) declaredBytes else estimatedSize
-
-                onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, 0)
-
-                var bytesRead = 0L
-                BufferedInputStream(conn.inputStream).use { input ->
-                    FileOutputStream(destFile).use { output ->
-                        val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
-                        var len: Int
-
-                        while (input.read(buffer).also { len = it } != -1) {
-                            if (download.cancelled) {
-                                throw IOException("Download cancelled")
-                            }
-                            output.write(buffer, 0, len)
-                            bytesRead += len
-                            val percent = if (totalBytes > 0) {
-                                ((bytesRead * 85) / totalBytes).toInt().coerceAtMost(85)
-                            } else 0
-                            onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, percent)
-                        }
-                    }
-                }
-
-                if (!isCompleteTransfer(declaredBytes, bytesRead)) {
-                    // The counts are logged rather than put in the message, and
-                    // that is not a style choice: downloadWithRetries decides
-                    // whether an error is retryable by looking for "404" as a
-                    // substring of the message, so any byte count printed there
-                    // is a number that can turn a retryable truncation into an
-                    // immediate failure by coincidence.
-                    Logger.w(tag, "Short read for $packName: $bytesRead bytes of $declaredBytes declared")
-                    throw IOException("Incomplete download for $packName; the connection ended early")
-                }
-
-                Logger.i(tag, "Downloaded $packName: ${destFile.length() / 1_000_000} MB")
-                return  // Success
-
+                return body(conn)
             } finally {
                 conn.disconnect()
             }
         }
 
         throw IOException("Too many redirects ($MAX_REDIRECTS) for $url")
+    }
+
+    /**
+     * Reads the release's digest manifest.
+     *
+     * Bounded rather than read whole. The body is a few hundred bytes of
+     * `sha256sum` output, and this function exists because the payload it
+     * describes is not to be taken on trust -- reading an unbounded remote body
+     * into memory on the way to saying so would be the same trust by another
+     * name. A body cut at the bound either still carries the line for this ZIP
+     * or does not, and a line cut mid-way fails the 64-hex test in
+     * [digestFromManifest]; both end in a refusal rather than a wrong digest.
+     */
+    @Throws(IOException::class)
+    private fun fetchManifest(url: String): String =
+        withRedirects(url, "digest manifest") { conn ->
+            val buffer = CharArray(MANIFEST_MAX_CHARS)
+            conn.inputStream.bufferedReader().use { reader ->
+                var total = 0
+                while (total < buffer.size) {
+                    val n = reader.read(buffer, total, buffer.size - total)
+                    if (n < 0) break
+                    total += n
+                }
+                String(buffer, 0, total)
+            }
+        }
+
+    /**
+     * The digest the release publishes for [zipName], or a refusal.
+     *
+     * Fetched before the ZIP rather than after, so a release that cannot vouch
+     * for its payload costs a few hundred bytes instead of 179 MB.
+     *
+     * There is no fallback, and that is the whole change: silently installing
+     * what nothing vouches for is the behaviour being removed, so it cannot be
+     * what happens when the manifest is missing. A release without one -- or
+     * with one that does not name this ZIP -- fails the install and says why.
+     * Releases cannot reach that state unnoticed: the same step in `release.yml`
+     * that packages the ZIPs writes this manifest and fails the release if a ZIP
+     * named in [ToolchainRegistry] is missing from either.
+     */
+    @Throws(IOException::class)
+    private fun publishedDigestFor(zipUrl: String): String {
+        val zipName = zipUrl.substringAfterLast('/')
+        val manifest = fetchManifest(manifestUrlFor(zipUrl))
+        return digestFromManifest(manifest, zipName)
+            ?: throw IOException(
+                "The release's digest manifest does not name $zipName; refusing to install a " +
+                    "payload nothing vouches for"
+            )
+    }
+
+    /**
+     * Downloads the toolchain ZIP, reporting progress as DOWNLOADING.
+     *
+     * Refuses a body shorter or longer than the server said it would send, which
+     * is worth stating as narrowly as it holds: it catches a transfer that ends
+     * early -- a connection dropped mid-stream, a proxy closing a chunked body
+     * without finishing it -- and it says nothing at all about whether the bytes
+     * are the right ones. A payload that arrives complete and wrong matches its
+     * own Content-Length and passes here.
+     *
+     * That second question is answered by the caller rather than here, against
+     * the digest the release publishes; see [publishedDigestFor]. The two checks
+     * are kept apart because they fail differently: a short read is a transfer
+     * fault and worth retrying, so it is thrown from inside the retry loop,
+     * while a complete body whose digest is wrong is not going to become right
+     * on the third attempt.
+     */
+    @Throws(IOException::class)
+    private fun downloadFile(
+        packName: String,
+        url: String,
+        destFile: File,
+        estimatedSize: Long,
+        download: HttpDownload,
+    ): Unit = withRedirects(url, "toolchain ZIP") { conn ->
+        // Two different numbers, kept apart. The progress denominator may
+        // fall back to estimatedSize, which is a constant written into
+        // ToolchainRegistry by hand; the completeness check may not,
+        // because that constant goes stale the moment a payload is
+        // rebuilt and would then fail every download of a healthy file.
+        // Only a length the server actually sent is evidence of
+        // anything.
+        val declaredBytes = conn.contentLengthLong
+        val totalBytes = if (declaredBytes > 0) declaredBytes else estimatedSize
+
+        onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, 0)
+
+        var bytesRead = 0L
+        BufferedInputStream(conn.inputStream).use { input ->
+            FileOutputStream(destFile).use { output ->
+                val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
+                var len: Int
+
+                while (input.read(buffer).also { len = it } != -1) {
+                    if (download.cancelled) {
+                        throw IOException("Download cancelled")
+                    }
+                    output.write(buffer, 0, len)
+                    bytesRead += len
+                    val percent = if (totalBytes > 0) {
+                        ((bytesRead * 85) / totalBytes).toInt().coerceAtMost(85)
+                    } else 0
+                    onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, percent)
+                }
+            }
+        }
+
+        if (!isCompleteTransfer(declaredBytes, bytesRead)) {
+            // The counts are logged rather than put in the message, and
+            // that is not a style choice: downloadWithRetries decides
+            // whether an error is retryable by looking for "404" as a
+            // substring of the message, so any byte count printed there
+            // is a number that can turn a retryable truncation into an
+            // immediate failure by coincidence.
+            Logger.w(tag, "Short read for $packName: $bytesRead bytes of $declaredBytes declared")
+            throw IOException("Incomplete download for $packName; the connection ended early")
+        }
+
+        Logger.i(tag, "Downloaded $packName: ${destFile.length() / 1_000_000} MB")
     }
 
     /**
@@ -1178,6 +1276,95 @@ internal fun isElfHeader(header: ByteArray): Boolean =
  */
 internal fun isCompleteTransfer(declaredBytes: Long, receivedBytes: Long): Boolean =
     declaredBytes <= 0L || receivedBytes == declaredBytes
+
+/** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
+private const val MANIFEST_NAME = "toolchains.sha256"
+
+/**
+ * Where to find the digest manifest for a toolchain ZIP: beside it.
+ *
+ * Derived from the ZIP's own URL rather than written down separately, and that
+ * is the point rather than brevity. Both come from `releases/latest/download/`,
+ * which is a moving target -- it names whichever release is newest at the moment
+ * of the request. Two independently-written URLs pointing at "latest" can be
+ * read either side of a release being published, and the failure that produces
+ * is a digest from one release checked against a payload from another: a refused
+ * install with nothing wrong, and no way to tell it apart from the tampering
+ * this check exists to catch. Sharing the directory does not eliminate that
+ * window, but it removes the second constant that could drift from the first.
+ */
+internal fun manifestUrlFor(zipUrl: String): String =
+    zipUrl.substringBeforeLast('/') + "/" + MANIFEST_NAME
+
+/**
+ * The digest a `sha256sum` manifest publishes for [fileName], or null when it
+ * publishes none it can be trusted to mean.
+ *
+ * Separated from the network for the same reason as the other decisions in this
+ * package, and here the one-directional risk is the sharpest in the file:
+ * returning null costs a refused install that a re-release fixes, while
+ * returning a digest the manifest did not really state for this file defeats the
+ * entire check -- and it defeats it silently, because the comparison downstream
+ * then passes.
+ *
+ * So every doubt resolves to null:
+ *
+ *  - a line whose first field is not exactly 64 hex characters is not a digest,
+ *    including a line the read bound cut in half, and is skipped;
+ *  - two lines naming this file with *different* digests are ambiguous, and a
+ *    manifest that cannot make up its mind is refused outright rather than
+ *    resolved by taking the first or the last;
+ *  - no line at all is a refusal, which is what a release published without a
+ *    manifest entry for this ZIP produces.
+ *
+ * Names are compared as bare filenames. `sha256sum` writes whatever path it was
+ * handed, and prefixes a `*` in binary mode; both are stripped so a manifest
+ * generated from a build directory still matches the flattened asset name a
+ * device downloads.
+ */
+internal fun digestFromManifest(manifest: String, fileName: String): String? {
+    var found: String? = null
+    for (raw in manifest.lineSequence()) {
+        val line = raw.trim()
+        if (line.isEmpty() || line.startsWith("#")) continue
+
+        val parts = line.split(WHITESPACE, limit = 2)
+        if (parts.size != 2) continue
+
+        val digest = parts[0].lowercase()
+        if (!SHA256_HEX.matches(digest)) continue
+
+        val name = parts[1].trim().removePrefix("*").substringAfterLast('/')
+        if (name != fileName) continue
+
+        if (found != null && found != digest) return null
+        found = digest
+    }
+    return found
+}
+
+private val WHITESPACE = Regex("""\s+""")
+private val SHA256_HEX = Regex("""^[0-9a-f]{64}$""")
+
+/**
+ * The SHA-256 of [file], lowercase hex.
+ *
+ * Streamed rather than read whole: the payloads are up to 179 MB and this runs
+ * on a phone, where holding one in a byte array to hash it is how a verification
+ * step becomes the reason an install dies.
+ */
+internal fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(64 * 1024)
+    file.inputStream().buffered().use { input ->
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
 
 /**
  * The name a toolchain is persisted under, from either form callers use.

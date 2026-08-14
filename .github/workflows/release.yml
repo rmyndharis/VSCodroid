@@ -331,6 +331,28 @@ jobs:
           done
           [ "$missing" -eq 0 ]
 
+          # The digest manifest every non-Play install verifies against before
+          # it extracts anything. Written here rather than in the release job
+          # because this is the one place the ZIPs sit under the exact names a
+          # device asks for: the release flattens its assets to bare filenames,
+          # so a manifest generated from artifact paths would name files nobody
+          # downloads, and the app would refuse every toolchain.
+          ( cd toolchain-zips && sha256sum *.zip > toolchains.sha256 )
+          cat toolchain-zips/toolchains.sha256
+
+          # The same gate as above, from the other side, and it is load-bearing
+          # rather than tidy. ToolchainManager.publishedDigestFor has no
+          # fallback by design -- a ZIP the manifest does not name cannot be
+          # installed at all -- so a release that packages a ZIP and omits its
+          # digest breaks that toolchain for every sideloaded user, including
+          # ones already on it. Failing here is the cheap end of that.
+          for zip_name in $zips; do
+            if ! grep -q "  $zip_name\$" toolchain-zips/toolchains.sha256; then
+              echo "::error::$zip_name is packaged but absent from toolchains.sha256; sideloaded installs would refuse it."
+              exit 1
+            fi
+          done
+
       - name: Report artifact sizes
         run: |
           ls -la android/app/build/outputs/apk/release/*.apk \
@@ -346,6 +368,7 @@ jobs:
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
             toolchain-zips/*.zip
+            toolchain-zips/toolchains.sha256
 
   github-release:
     name: GitHub Release
@@ -381,4 +404,5 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*.aab
             artifacts/**/*.zip
+            artifacts/**/toolchains.sha256
             artifacts/checksums.sha256
