@@ -651,28 +651,38 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Fix #2: Injects CSS to enlarge touch targets for phone-sized screens.
-     * Only active when screen width < 600px (phones, not tablets).
+     * Active at a viewport of 600px or narrower (phones, not tablets).
      * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
+     *
+     * The width test is a media query rather than a `window.innerWidth` check because
+     * this runs once per page load while the viewport keeps changing after it.
+     * MainActivity declares `configChanges` for `orientation`, `screenSize` and
+     * `screenLayout` (AndroidManifest.xml:48), so a rotation or a split-screen resize
+     * does not recreate the activity, and with no `onConfigurationChanged` nothing
+     * re-invokes this injection — a snapshot taken here held until something reloaded
+     * the page, such as switching folders. Letting the browser re-evaluate the query
+     * covers both directions and every later resize for free.
      */
     private fun injectTouchTargetCSS() {
         webView?.evaluateJavascript(
             """
             (function() {
                 if (document.getElementById('vscodroid-touch-css')) return;
-                if (window.innerWidth > 600) return;
                 var s = document.createElement('style');
                 s.id = 'vscodroid-touch-css';
                 s.textContent = [
                     '/* VSCodroid: Enlarged touch targets for mobile */',
-                    '.monaco-list-row { min-height: 36px !important; padding: 2px 0 !important; }',
-                    '.tabs-container .tab { min-height: 40px !important; }',
-                    '.activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
-                    '.activitybar .action-label { min-height: 44px !important; }',
-                    '.statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
-                    '.context-view .action-item { min-height: 40px !important; }',
-                    '.context-view .action-label { padding: 6px 12px !important; }',
-                    '.slider { min-width: 12px !important; }',
-                    '.quick-input-list .monaco-list-row { min-height: 36px !important; }'
+                    '@media (max-width: 600px) {',
+                    '  .monaco-list-row { min-height: 36px !important; padding: 2px 0 !important; }',
+                    '  .tabs-container .tab { min-height: 40px !important; }',
+                    '  .activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
+                    '  .activitybar .action-label { min-height: 44px !important; }',
+                    '  .statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
+                    '  .context-view .action-item { min-height: 40px !important; }',
+                    '  .context-view .action-label { padding: 6px 12px !important; }',
+                    '  .slider { min-width: 12px !important; }',
+                    '  .quick-input-list .monaco-list-row { min-height: 36px !important; }',
+                    '}'
                 ].join('\n');
                 document.head.appendChild(s);
             })();
