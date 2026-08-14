@@ -12,12 +12,70 @@
 #   --device SERIAL  Target specific device (passed as adb -s SERIAL)
 #   --verbose        Show full adb output
 #   --timeout N      Server-ready timeout in seconds (default: 120)
+#   --self-check     Resolve every expectation this suite derives, then exit.
+#                    Needs no device, so CI can run it.
+#
+# WHEN TO RUN THIS
+#
+# It needs a device or emulator, and nothing runs it automatically. That is a
+# measured conclusion rather than an omission: GitHub's arm64 runners expose no
+# /dev/kvm, and nine of the eleven bundled executables ask for
+# /system/bin/linker64, so executing them anywhere needs an Android system image
+# -- 2.1 GB, inside a partitioned disk image. The issue tracker carries the
+# evidence and the options.
+#
+# So it is on a person, and the moments that matter are:
+#
+#   * before tagging a release;
+#   * after changing scripts/download-*.sh or scripts/build-*.sh, which decide
+#     what gets bundled;
+#   * after a Node, Python or VS Code version bump.
+#
+# This suite once demanded Node v20.x for two releases after the runtime moved
+# to 24.18.0. Nothing caught it, because nothing ran it. The versions it checks
+# are now read from the tree instead of written here, and --self-check verifies
+# those readings still resolve -- but neither of those is a substitute for
+# running it.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 APK_PATH="$ROOT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 PKG="com.vscodroid.debug"
+
+# ── Derived expectations ───────────────────────────────────────────
+# Every version this suite asserts is read from the tree rather than written
+# here. Defined once, so --self-check validates the same readings the tests use;
+# a second copy for the self-check would be exactly the drift this prevents.
+
+derive_node_expected() {
+    # The version the native addons are compiled against. The runtime has to
+    # equal it -- an addon built for one Node and loaded by another is the
+    # defect check_pair exists for -- so that is where "which Node" lives.
+    sed -n 's/^NODE_VERSION="${NODE_VERSION:-\([0-9.]*\)}".*/\1/p' \
+        "$ROOT_DIR/scripts/build-native-addons.sh" | head -1
+}
+
+derive_npm_expected() {
+    # The packaged tree is the better source -- it is what actually shipped --
+    # but a checkout that only installed the APK does not have it. The constant
+    # the download script uses is the fallback, so this stays derived rather
+    # than skipped.
+    local pkg="$ROOT_DIR/android/app/src/main/assets/usr/lib/node_modules/npm/package.json"
+    local v
+    v=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$pkg" 2>/dev/null)
+    [ -n "$v" ] || v=$(sed -n 's/^NPM_VERSION="\([0-9.]*\)".*/\1/p' \
+        "$ROOT_DIR/scripts/download-npm.sh" | head -1)
+    printf '%s' "$v"
+}
+
+derive_py_expected() {
+    # Resolved from the Termux index at build time, so it moves without warning
+    # and there is no number in this repository to compare against -- only the
+    # library that actually shipped.
+    ls "$ROOT_DIR"/android/app/src/main/assets/usr/lib/libpython3.*.so 2>/dev/null \
+        | head -1 | sed 's/.*libpython\(3\.[0-9]*\)\.so/\1/'
+}
 
 # Auto-detect adb if not in PATH
 if ! command -v adb &>/dev/null; then
@@ -38,6 +96,7 @@ SKIP_INSTALL=false
 DEVICE=""
 VERBOSE=false
 TIMEOUT=120
+SELF_CHECK=false
 
 # Parse args
 while [ $# -gt 0 ]; do
@@ -47,6 +106,7 @@ while [ $# -gt 0 ]; do
         --device)      DEVICE="$2"; shift ;;
         --verbose)     VERBOSE=true ;;
         --timeout)     TIMEOUT="$2"; shift ;;
+        --self-check)  SELF_CHECK=true ;;
         -h|--help)
             sed -n '2,/^$/s/^# //p' "$0"
             exit 0 ;;
@@ -142,6 +202,55 @@ DATA_DIR=""  # resolved after device check via run-as pwd
 
 # ── Header ─────────────────────────────────────────────────────────
 printf "\n${BOLD}${CYAN}=== VSCodroid Device Test Suite ===${RESET}\n\n"
+
+# ═══════════════════════════════════════════════════════════════════
+# --self-check: can this suite still read what it asserts?
+# ═══════════════════════════════════════════════════════════════════
+# Nothing runs the suite automatically, so its own rot goes unseen until someone
+# opens it -- which is how it came to demand Node v20.x two releases after the
+# runtime moved. Reading the versions from the tree fixed that class and
+# introduced a smaller one: the readings themselves can stop resolving when a
+# source file is renamed or reformatted, and a derivation that yields nothing
+# looks the same as one that has not run.
+#
+# This resolves each of them and fails when one comes back empty. It needs no
+# device, so CI can run it, and it is the only part of this suite that can be
+# automated at all.
+if $SELF_CHECK; then
+    printf "${BOLD}Self-check: expectations this suite derives${RESET}\n"
+
+    NODE_V=$(derive_node_expected)
+    if [ -n "$NODE_V" ]; then
+        pass "node expectation ($NODE_V, from scripts/build-native-addons.sh)"
+    else
+        fail "node expectation" "NODE_VERSION unreadable in scripts/build-native-addons.sh"
+    fi
+
+    NPM_V=$(derive_npm_expected)
+    if [ -n "$NPM_V" ]; then
+        pass "npm expectation ($NPM_V)"
+    else
+        fail "npm expectation" \
+            "neither the packaged tree nor NPM_VERSION in scripts/download-npm.sh is readable"
+    fi
+
+    # The only one with no source in the repository: the bundled Python version
+    # comes from the Termux index at download time. Where the assets exist it is
+    # checked; where they do not it is reported as unresolved rather than passed
+    # over, because a skip nobody sees is what this suite exists to remove.
+    PY_V=$(derive_py_expected)
+    if [ -n "$PY_V" ]; then
+        pass "python expectation ($PY_V, from the bundled libpython)"
+    else
+        skip "python expectation" \
+            "no assets tree in this checkout; resolvable only where the build ran"
+    fi
+
+    printf "\n  ${GREEN}%d passed${RESET}, ${RED}%d failed${RESET}, ${YELLOW}%d skipped${RESET}\n\n" \
+        "$PASS" "$FAIL" "$SKIP"
+    [ "$FAIL" -eq 0 ] || printf "${RED}Failures:${RESET}%b\n\n" "$FAILURES"
+    exit $([ "$FAIL" -eq 0 ] && echo 0 || echo 1)
+fi
 
 # ═══════════════════════════════════════════════════════════════════
 # TEST 1: device_connected
@@ -401,12 +510,10 @@ run_tool_code() {
 
 # Test 15: node
 NODE_OUT=$(run_tool "files/usr/bin/node" --version)
-# Derived, not pinned. This asserted v20.x while the runtime moved to 24.18.0 --
-# the test would have failed every build had anything run it. The version the
-# native addons are compiled against is the one the runtime has to be: a
-# disagreement between those two is itself the defect, so read it from there.
-NODE_EXPECTED=$(sed -n 's/^NODE_VERSION="${NODE_VERSION:-\([0-9.]*\)}".*/\1/p' \
-    "$ROOT_DIR/scripts/build-native-addons.sh" | head -1)
+# Derived, not pinned: this asserted v20.x while the runtime moved to 24.18.0,
+# so it would have failed every build had anything run it. See
+# derive_node_expected for where the number comes from.
+NODE_EXPECTED=$(derive_node_expected)
 if [ -z "$NODE_EXPECTED" ]; then
     fail "tool_node" "could not read NODE_VERSION from build-native-addons.sh"
 elif echo "$NODE_OUT" | grep -q "^v${NODE_EXPECTED}$"; then
@@ -421,20 +528,9 @@ NPM_OUT=$($ADB shell run-as "$PKG" env \
     "PATH=$DATA_DIR/files/usr/bin:$NATIVE_LIB_DIR" \
     "LD_LIBRARY_PATH=$DATA_DIR/files/usr/lib:$NATIVE_LIB_DIR" \
     files/usr/bin/node files/usr/lib/node_modules/npm/bin/npm-cli.js --version 2>&1)
-# npm ships as files, so what it should report is readable rather than guessable.
-# The pinned "10.x" here happens to be right today; it is derived anyway, because
-# being right today is exactly what the node assertion above was until it wasn't.
-NPM_PKG="$ROOT_DIR/android/app/src/main/assets/usr/lib/node_modules/npm/package.json"
-NPM_EXPECTED=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" \
-    "$NPM_PKG" 2>/dev/null)
-# The packaged tree is the better source -- it is what actually shipped -- but a
-# CI checkout that only installed the APK does not have it. Falling back to the
-# constant the download script uses keeps this derived rather than skipped: a
-# silent skip in CI is the shape this whole suite exists to remove.
-if [ -z "$NPM_EXPECTED" ]; then
-    NPM_EXPECTED=$(sed -n 's/^NPM_VERSION="\([0-9.]*\)".*/\1/p' \
-        "$ROOT_DIR/scripts/download-npm.sh" | head -1)
-fi
+# Was pinned to "10.x", which happened to be right; being right today is exactly
+# what the node assertion above was until it wasn't. See derive_npm_expected.
+NPM_EXPECTED=$(derive_npm_expected)
 if [ -z "$NPM_EXPECTED" ]; then
     fail "tool_npm" "could not determine the expected npm version from tree or script"
 elif [ "$NPM_OUT" = "$NPM_EXPECTED" ]; then
@@ -445,11 +541,9 @@ fi
 
 # Test 17: python3
 PYTHON_OUT=$(run_tool "files/usr/bin/python3" --version)
-# The bundled Python version is resolved from the Termux index at build time,
-# so it moves without warning. Derive what to expect from the library that
-# actually shipped rather than pinning a number here that goes stale silently.
-PY_EXPECTED=$(ls "$ROOT_DIR"/android/app/src/main/assets/usr/lib/libpython3.*.so 2>/dev/null \
-    | head -1 | sed 's/.*libpython\(3\.[0-9]*\)\.so/\1/')
+# See derive_py_expected: there is no number in this repository to compare
+# against, only the library that actually shipped.
+PY_EXPECTED=$(derive_py_expected)
 if [ -z "$PY_EXPECTED" ]; then
     skip "tool_python" "no bundled libpython to compare against"
 elif echo "$PYTHON_OUT" | grep -q "Python ${PY_EXPECTED}"; then

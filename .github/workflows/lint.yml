@@ -55,6 +55,12 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # The device suite itself cannot run here -- no /dev/kvm on GitHub's arm64
+      # runners, and the bundled binaries need Android's linker. What can run is
+      # the part that rots silently: the versions it derives from the tree.
+      - name: Check the device suite can still read what it asserts
+        run: bash scripts/device-test.sh --self-check
+
       - name: Run lint
         working-directory: android
         run: ./gradlew lint

@@ -243,6 +243,38 @@ Each script downloads pre-built binaries and places them in the correct location
 - `fetch-vscode-oss.sh` needs the `gh` CLI authenticated, or `VSCODE_OSS_URL` pointing at a tarball.
 - The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools; `toolchains/build-node.sh` is what remains of it and is not part of any build.
 
+## Testing on a device
+
+`scripts/device-test.sh` installs the APK and checks that what shipped actually
+runs: the server answers, every bundled tool starts, and Python imports the ten
+modules that need a bundled library behind them.
+
+**Nothing runs it automatically, and that is a measured conclusion rather than an
+oversight.** GitHub's arm64 runners expose no `/dev/kvm`, so an emulator there
+runs under full software emulation; and nine of the eleven bundled executables
+request `/system/bin/linker64`, so running them under `qemu-user` needs Android's
+Bionic from a system image — 2.1 GB, inside a partitioned disk image. Both routes
+were attempted and measured; the issue tracker carries the evidence.
+
+So it falls to a person. Run it:
+
+- before tagging a release;
+- after changing anything under `scripts/download-*.sh` or `scripts/build-*.sh`,
+  which decide what gets bundled;
+- after a Node, Python or VS Code version bump.
+
+```bash
+bash scripts/device-test.sh                 # build, install, and test
+bash scripts/device-test.sh --skip-build    # test an APK you already built
+bash scripts/device-test.sh --self-check    # no device: just check the suite reads its own expectations
+```
+
+This suite once demanded Node `v20.x` for two releases after the runtime moved to
+24.18.0, and the drift was found by reading it rather than by running it. The
+versions it checks are now read from the build rather than written down, and
+`--self-check` runs in CI to confirm those readings still resolve — but neither
+replaces running it on a device.
+
 ## Building
 
 ### Debug Build
