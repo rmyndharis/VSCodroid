@@ -1,5 +1,6 @@
 package com.vscodroid.webview
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -11,19 +12,162 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import java.io.ByteArrayInputStream
 import java.io.FilterInputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * The directories this app publishes to content rendered inside the WebView,
+ * whatever folder is open. [resourceRootsInForce] adds the open folder to them.
+ *
+ * Resolved once and handed in as plain strings rather than being derived from a
+ * Context inside the client: a WebViewClient lives as long as the WebView
+ * holding it, and the Context available where it is constructed is the
+ * Activity's.
+ *
+ * Canonicalised here so that [resolveWebviewResource] compares two paths in the
+ * same form. That function resolves the request before testing it, so a root
+ * left as written would be tested against something it cannot equal wherever a
+ * link sits anywhere along either path -- and the shape of that failure is
+ * every extension resource silently 404ing, which reads as anything but a path
+ * problem.
+ *
+ * Deliberately not a claim that any particular root does contain one. The point
+ * is that nothing here needs to know, which is what keeps this correct when the
+ * layout underneath changes. A root that cannot be canonicalised is dropped,
+ * costing that root its resources and granting nothing.
+ */
+internal fun publishedResourceRoots(context: Context): List<String> = listOf(
+    // Built-in extensions ship inside the server tree, so this is what
+    // markdown preview, the notebook renderers and Simple Browser load their
+    // own assets from.
+    Environment.getServerDir(context),
+    // Installed and bundled extensions.
+    Environment.getExtensionsDir(context),
+    // The two places a workspace normally lives. Kept here as well as arriving
+    // through the open-folder supplier, because that supplier answers nothing
+    // until the first navigation completes, and resources requested during that
+    // first load would otherwise be refused.
+    Environment.getProjectsDir(context),
+    Environment.getSafMirrorsDir(context),
+).mapNotNull(::canonicalOrNull)
+
+/**
+ * The file a resource request names, or null if it is not a published resource.
+ *
+ * The published roots are named individually rather than described by a prefix
+ * because everything this app owns -- the SSH private key written without a
+ * passphrase, the server's connection token -- shares a prefix with everything
+ * it serves. A prefix test over app-private storage admits all of it, so it can
+ * only ever stop a traversal out of the sandbox, never a read within it.
+ *
+ * Symbolic links are resolved rather than normalised away lexically. A
+ * workspace is a published root and a workspace is routinely a checked-out
+ * repository, so a link inside one is attacker-supplied in the ordinary case;
+ * `..` handling alone would follow it out.
+ *
+ * The canonical path is what comes back, not the path as asked for, so that the
+ * file opened is the file that was checked.
+ */
+internal fun resolveWebviewResource(requestedPath: String, roots: List<String>): File? {
+    val canonical = canonicalOrNull(requestedPath) ?: return null
+    // Compared with the separator appended: a root's name is also a prefix of
+    // its siblings' names, and creating such a sibling is within reach of
+    // anything running in the extension host.
+    return if (roots.any { canonical.startsWith("$it/") }) File(canonical) else null
+}
+
+/**
+ * The locations that must not be readable through a resource request, whatever
+ * folder happens to be open.
+ *
+ * Canonicalised once here rather than on every request, which is what lets
+ * [workspaceRootOrNull] take them as a precondition instead of resolving them
+ * itself.
+ */
+internal fun sensitiveLocations(context: Context): List<String> = listOf(
+    Environment.getConnectionTokenPath(context),
+    Environment.getSshDir(context),
+).mapNotNull(::canonicalOrNull)
+
+/**
+ * The open folder as a resource root, or null if publishing it would publish
+ * something that must stay unreadable.
+ *
+ * The workspace has to be a root — VS Code's own `localResourceRoots` includes
+ * it, and without it a markdown preview cannot show an image sitting next to
+ * the file being previewed. It cannot be a *static* root, because the user
+ * chooses it: opening the home directory would publish the SSH key, which is
+ * the whole thing being closed here.
+ *
+ * Overlap is tested in **both** directions. Containment alone would let the
+ * user open `~/.ssh` itself as the workspace and get the directory published
+ * because it contains nothing sensitive — it *is* the sensitive thing.
+ *
+ * [sensitive] is expected already canonical; [sensitiveLocations] is what
+ * produces it, and doing that work here would put it on every request.
+ */
+internal fun workspaceRootOrNull(candidatePath: String?, sensitive: List<String>): String? {
+    val candidate = candidatePath?.let(::canonicalOrNull) ?: return null
+    return if (sensitive.any { overlaps(candidate, it) }) null else candidate
+}
+
+/**
+ * The roots in force for one request: the published set, plus the open folder
+ * when it is safe to publish.
+ *
+ * Both entry points go through here so that the two cannot drift apart. A
+ * rejection is reported because the failure it causes — resources missing from
+ * the user's own workspace — otherwise looks like a bug rather than a refusal.
+ * Nothing is logged in the ordinary case: an accepted folder and an absent one
+ * are both silent, so this only speaks when the workspace holds a location that
+ * must stay unreadable.
+ */
+internal fun resourceRootsInForce(
+    published: List<String>, sensitive: List<String>, candidate: String?
+): List<String> {
+    val workspace = workspaceRootOrNull(candidate, sensitive)
+    if (candidate != null && workspace == null) {
+        Logger.w(
+            "WebViewClient",
+            "Workspace not published as a resource root, it holds a sensitive location: $candidate"
+        )
+    }
+    return published + listOfNotNull(workspace)
+}
+
+/**
+ * Whether two canonical paths name the same place or one holds the other.
+ *
+ * Symmetric on purpose. Both arguments are directories-or-files whose
+ * relationship matters in either order, and the separator is appended on each
+ * side for the same reason it is in [resolveWebviewResource]: a name is also a
+ * prefix of its siblings' names.
+ */
+private fun overlaps(a: String, b: String): Boolean =
+    a == b || a.startsWith("$b/") || b.startsWith("$a/")
+
+private fun canonicalOrNull(path: String): String? =
+    try {
+        File(path).canonicalPath
+    } catch (e: IOException) {
+        null
+    }
+
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
+    private val resourceRoots: List<String>,
+    private val sensitiveLocations: List<String>,
+    private val openFolder: () -> String?,
     private val connectionToken: () -> String?,
     private val onCrash: () -> Unit,
-    private val onPageLoaded: () -> Unit
+    private val onPageLoaded: (String?) -> Unit
 ) : WebViewClient() {
 
     private val tag = "WebViewClient"
@@ -56,16 +200,30 @@ class VSCodroidWebViewClient(
      * Local path format: /{quality}-{commit}/static/{path}
      */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-        return interceptCdnRequest(request, allowedPort, connectionToken())
+        return interceptCdnRequest(
+            request, allowedPort, connectionToken(), resourceRoots, sensitiveLocations, openFolder
+        )
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
         Logger.d(tag, "Page loading: $url")
     }
 
+    /**
+     * Carries the URL, because this is the only notice Kotlin gets when VS Code
+     * switches folders on its own — it navigates this WebView without going
+     * through us, so the URL is the only truthful record of the open workspace.
+     *
+     * That this notice is *sufficient* is a property of the shipped bundles, not
+     * an assumption: neither `out/vs/code/browser/workbench/workbench.js` nor
+     * `out/vs/workbench/workbench.web.main.internal.js` contains a single
+     * `pushState` or `replaceState`, so the workbench cannot change its URL
+     * without a real navigation. That is why there is no
+     * `doUpdateVisitedHistory` override here; re-run the grep before adding one.
+     */
     override fun onPageFinished(view: WebView, url: String?) {
         Logger.i(tag, "Page loaded: $url")
-        onPageLoaded()
+        onPageLoaded(url)
     }
 
     override fun onReceivedError(
@@ -99,13 +257,6 @@ class VSCodroidWebViewClient(
         /** VS Code assets are versioned by commit hash — safe to cache forever. */
         private const val CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 
-        /** Paths that file-scheme resource requests are allowed to read from. */
-        private val ALLOWED_PATH_PREFIXES = listOf(
-            "/data/data/",     // App-private storage (filesDir, cacheDir)
-            "/data/user/",     // Multi-user variant of app-private storage
-            "/storage/",       // External storage (projects dir)
-        )
-
         /**
          * Register a ServiceWorkerClient to intercept service worker script fetches.
          *
@@ -115,13 +266,29 @@ class VSCodroidWebViewClient(
          * register their service-worker.js (needed for vscode-resource: loading).
          *
          * Must be called before the WebView loads any page that uses service workers.
+         *
+         * Takes the same roots and the same open-folder supplier as the client
+         * constructor, and for the same reason: this is the second way a
+         * resource request reaches [interceptCdnRequest], so anything applied to
+         * only one of them leaves the other answering from the old rules. Both
+         * compose them through [resourceRootsInForce] rather than each doing it,
+         * so there is one rule and not two copies of one.
          */
-        fun setupServiceWorkerInterception(port: Int, connectionToken: () -> String?) {
+        fun setupServiceWorkerInterception(
+            port: Int,
+            resourceRoots: List<String>,
+            sensitiveLocations: List<String>,
+            openFolder: () -> String?,
+            connectionToken: () -> String?
+        ) {
             try {
                 val swController = ServiceWorkerController.getInstance()
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
-                        return interceptCdnRequest(request, port, connectionToken())
+                        return interceptCdnRequest(
+                            request, port, connectionToken(),
+                            resourceRoots, sensitiveLocations, openFolder
+                        )
                     }
                 })
                 Logger.i(TAG, "ServiceWorkerClient registered for CDN interception on port $port")
@@ -139,7 +306,12 @@ class VSCodroidWebViewClient(
          * 3. HASH.vscode-cdn.net — VS Code static assets → rewrite to localhost
          */
         internal fun interceptCdnRequest(
-            request: WebResourceRequest, port: Int, token: String?
+            request: WebResourceRequest,
+            port: Int,
+            token: String?,
+            resourceRoots: List<String>,
+            sensitiveLocations: List<String>,
+            openFolder: () -> String?
         ): WebResourceResponse? {
             val uri = request.url
             val host = uri.host ?: return null
@@ -161,7 +333,14 @@ class VSCodroidWebViewClient(
             // Service workers are disabled; we serve these directly from the filesystem.
             val resourceAuthority = "vscode-resource.vscode-cdn.net"
             if (host.endsWith(".$resourceAuthority")) {
-                return interceptResourceRequest(uri, host, resourceAuthority, port, token)
+                // Composed here rather than by each caller, so that neither
+                // entry point can forget to. The supplier is invoked only on
+                // this branch: the other two answer without touching the
+                // filesystem, and every workbench asset takes one of them.
+                return interceptResourceRequest(
+                    uri, host, resourceAuthority, port, token,
+                    resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder())
+                )
             }
 
             val path = uri.path ?: return null
@@ -186,7 +365,8 @@ class VSCodroidWebViewClient(
          * all sub-resource requests from webview iframes, making SWs unnecessary.
          */
         private fun interceptResourceRequest(
-            uri: Uri, host: String, resourceAuthority: String, port: Int, token: String?
+            uri: Uri, host: String, resourceAuthority: String, port: Int, token: String?,
+            resourceRoots: List<String>
         ): WebResourceResponse? {
             val prefix = host.removeSuffix(".$resourceAuthority")
             val parts = prefix.split("+", limit = 2)
@@ -198,12 +378,8 @@ class VSCodroidWebViewClient(
                 // Local file resource — serve directly from filesystem.
                 // Both "file" and "vscode-remote" schemes use local paths in VSCodroid
                 // since the server runs on the same device.
-                val file = File(path)
-                // Validate canonical path stays within app-accessible directories
-                // to prevent path traversal via ../../ in crafted URLs.
-                val canonical = file.canonicalPath
-                if (!ALLOWED_PATH_PREFIXES.any { canonical.startsWith(it) }) {
-                    Logger.w(TAG, "Path traversal blocked: $canonical")
+                val file = resolveWebviewResource(path, resourceRoots) ?: run {
+                    Logger.w(TAG, "Resource outside the published roots refused: $path")
                     return notFound("Access denied")
                 }
                 if (!file.exists() || !file.isFile) {

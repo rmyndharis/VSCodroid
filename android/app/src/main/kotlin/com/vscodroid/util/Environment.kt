@@ -135,6 +135,18 @@ object Environment {
     fun getHomeDir(context: Context): String =
         "${context.filesDir}/home"
 
+    /**
+     * Where the SSH identity lives.
+     *
+     * Named here rather than composed at each call site because callers now
+     * include ones that must exclude it rather than reach into it: the key is
+     * generated without a passphrase for mobile UX, so any code deciding what
+     * may be read has to be able to say "not this directory" without writing
+     * the path out and going stale when the layout moves.
+     */
+    fun getSshDir(context: Context): String =
+        "${getHomeDir(context)}/.ssh"
+
     fun getUserDataDir(context: Context): String =
         "${context.filesDir}/home/.vscodroid"
 
