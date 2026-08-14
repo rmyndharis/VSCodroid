@@ -227,13 +227,36 @@ class ProcessManager(private val context: Context) {
      * exit, falls back to [Process.destroyForcibly]. Sets [isShuttingDown] to
      * suppress watchdog crash callbacks.
      */
+    /**
+     * Stops the server, waiting briefly for it to go before killing it.
+     *
+     * The wait is short because it is paid on whichever thread calls this, and
+     * the Stop action on the notification calls it from Service.onDestroy --
+     * the main thread. A five-second wait there does not trip the service ANR
+     * timeout, which is far longer, but the main thread is shared: any input
+     * dispatched behind it waits too, and that timeout is five seconds. The
+     * freeze users reported is input starving, not the service stalling.
+     *
+     * It is not moved to a background thread, and that is deliberate. Android
+     * will not kill the process while a lifecycle callback is running, so
+     * waiting here is what keeps [Process.destroyForcibly] reachable. Hand the
+     * wait to another thread and a process killed the moment onDestroy returns
+     * leaves Node reparented to init and still running -- trading a freeze for
+     * an orphan, which is worse and much harder to notice.
+     *
+     * A second is enough because it is not the real mechanism: server.js
+     * forwards SIGTERM to the editor server it forked (assets/server.js:215),
+     * so a healthy shutdown finishes in milliseconds. The budget exists for a
+     * server that has stopped responding to signals, and for that case the
+     * forcible kill below is the answer rather than a longer wait.
+     */
     fun stopServer() {
         isShuttingDown = true
         Logger.i(tag, "Stopping server...")
         serverProcess?.let { process ->
             try {
                 process.destroy()
-                val exited = process.waitFor(5, TimeUnit.SECONDS)
+                val exited = process.waitFor(GRACEFUL_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 if (exited) {
                     Logger.i(tag, "Server stopped with exit code ${process.exitValue()}")
                 } else {
@@ -381,6 +404,14 @@ internal fun signalName(signum: Int): String = when (signum) {
     15 -> "SIGTERM"
     else -> "signal $signum"
 }
+
+/**
+ * How long a deliberate stop waits before killing the server outright.
+ *
+ * Short on purpose: this is paid on the caller's thread, and the notification's
+ * Stop action calls it on the main thread. See [ProcessManager.stopServer].
+ */
+internal const val GRACEFUL_STOP_TIMEOUT_MS = 1_000L
 
 /** What every device ran before the ceiling was derived, and the fallback. */
 internal const val HEAP_CEILING_DEFAULT_MB = 512

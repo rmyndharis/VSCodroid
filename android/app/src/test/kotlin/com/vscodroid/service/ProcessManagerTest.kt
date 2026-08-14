@@ -8,6 +8,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
+import io.mockk.verify
 import io.mockk.Runs
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -141,6 +142,31 @@ class ProcessManagerTest {
             flagWhenDestroyed.get(),
             "isShuttingDown must already be true when the process is destroyed"
         )
+    }
+
+    @Test
+    fun `a stop that does not finish in time force-kills rather than waiting on`() {
+        // Two invariants in one, and the issue that prompted this asked for
+        // neither directly. The wait must be BOUNDED -- the notification's Stop
+        // action reaches here on the main thread, and anything dispatched behind
+        // it waits too, which is what users saw as a freeze. And when the budget
+        // elapses the process must be killed outright, because shortening a wait
+        // without the forcible kill trades a freeze for an orphaned Node.
+        val process = mockk<Process>(relaxed = true) {
+            every { isAlive } returns true
+            // The server ignores SIGTERM in this scenario -- the case the budget
+            // exists for.
+            every { waitFor(any(), any()) } returns false
+        }
+        manager.serverProcessField = process
+
+        manager.stopServer()
+
+        verify(exactly = 1) { process.waitFor(any(), any()) }
+        verify(exactly = 1) { process.destroyForcibly() }
+        // The unbounded overload would hang the caller forever, which is the
+        // shape this replaced elsewhere in the app.
+        verify(exactly = 0) { process.waitFor() }
     }
 
     // -- Connection token --

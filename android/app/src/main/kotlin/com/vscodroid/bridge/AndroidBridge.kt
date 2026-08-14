@@ -17,6 +17,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+/**
+ * How long generateSshKey waits for ssh-keygen before killing it.
+ *
+ * Generous relative to the work -- key generation is arithmetic and finishes in
+ * well under a second -- because the number is not a performance budget. It is
+ * the point at which "slow" becomes "never", and the caller is a WebView bridge
+ * method whose JavaScript side has no timeout of its own.
+ */
+private const val KEYGEN_TIMEOUT_SECONDS = 60L
+
 class AndroidBridge(
     private val context: Context,
     private val security: SecurityManager,
@@ -349,7 +359,20 @@ class AndroidBridge(
             }.start()
 
             val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
+            // Bounded, because an unbounded wait here parks the JavaScript caller
+            // for as long as the binary hangs -- and the caller is a WebView
+            // bridge method, so what the user sees is a dialog that never
+            // returns and a UI element stuck mid-action. Key generation is
+            // arithmetic and finishes in well under a second; a minute means it
+            // is not going to finish at all.
+            if (!process.waitFor(KEYGEN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                Logger.e(tag, "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s; killed")
+                result.put("success", false)
+                result.put("error", "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s")
+                return result.toString()
+            }
+            val exitCode = process.exitValue()
 
             if (exitCode == 0 && keyFile.exists()) {
                 // Set correct permissions (600 for private key, 644 for public)
