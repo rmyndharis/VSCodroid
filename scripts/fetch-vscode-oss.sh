@@ -108,6 +108,35 @@ echo "=== Verify ==="
 python3 "$ROOT_DIR/scripts/verify-server-tree.py" "$DEST"
 
 echo
+echo "=== Patches ==="
+# The same check build-vscode-oss.sh runs on its own output, here against the
+# tree that will actually ship.
+#
+# This is the gate nothing else on this side can stand in for. A server tarball
+# built before a patch landed has the same filename, the same version, and a
+# digest that verifies -- a digest proves the bytes are intact, not that they are
+# the right bytes. verify-server-tree.py does not help either: it checks the
+# shape of the tree, and a tree missing a patch has exactly the right shape.
+# Without this, a patch could sit in patches/ while every build quietly shipped a
+# server that predates it, and the first symptom would be on a user's device.
+if ! python3 "$ROOT_DIR/scripts/check-patch-fingerprints.py" "$DEST"; then
+    cat >&2 <<EOF
+
+  This server tree is missing at least one patch this checkout applies.
+
+  It is almost certainly older than patches/. The fix is to rebuild and publish
+  the server -- run the "Build Code - OSS server" workflow -- and then remove
+
+      $TARBALL
+
+  before running this again. A cached tarball is only refetched when the digest
+  on the release changes, so a rebuild that has not been published will not
+  reach you no matter how many times you retry.
+EOF
+    exit 1
+fi
+
+echo
 echo "=== ripgrep ==="
 # rg cannot run from where the rest of the tree lives. SELinux denies
 # execute_no_trans on app_data_file for targetSdk >= 29, so anything under
