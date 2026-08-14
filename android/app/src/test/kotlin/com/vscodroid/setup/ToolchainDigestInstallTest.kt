@@ -160,8 +160,10 @@ class ToolchainDigestInstallTest {
         Collections.synchronizedList(mutableListOf())
     private val settled = CountDownLatch(1)
 
-    private val zipPath = "/download/toolchain_test.zip"
-    private val manifestPath = "/download/toolchains.sha256"
+    /** Both derived from one directory, so a test can move the release. */
+    private var releaseDir = "/download"
+    private val zipPath get() = "$releaseDir/toolchain_test.zip"
+    private val manifestPath get() = "$releaseDir/toolchains.sha256"
 
     /** A minimal but real pack: [ToolchainManager.installFromDirectory] needs this manifest. */
     private val zipBytes: ByteArray = ByteArrayOutputStream().also { out ->
@@ -223,6 +225,17 @@ class ToolchainDigestInstallTest {
 
         server = LoopbackServer()
         server.start()
+        mockkObject(ToolchainRegistry)
+        publishFrom("/download")
+    }
+
+    /**
+     * Points the registry, and therefore both URLs, at [dir] on the loopback
+     * server. A test moves the release when the *shape of the URL* is what it
+     * is about.
+     */
+    private fun publishFrom(dir: String) {
+        releaseDir = dir
         publishManifest(null)
 
         val fixture = ToolchainRegistry.ToolchainInfo(
@@ -234,7 +247,6 @@ class ToolchainDigestInstallTest {
             downloadUrl = zipUrl,
         )
 
-        mockkObject(ToolchainRegistry)
         every { ToolchainRegistry.available } returns listOf(fixture)
         // `find` is stubbed as well as `available`, and it has to be: inside the
         // object's own body Kotlin reads the backing field rather than calling
@@ -398,6 +410,39 @@ class ToolchainDigestInstallTest {
             "one failed manifest request ended the install: $events",
         )
         assertEquals(2, timesRequested(manifestPath), "the manifest request was not retried")
+    }
+
+    /**
+     * Retryability is decided by the exception's type, not by whether `"404"`
+     * happens to appear in its text.
+     *
+     * Three of the retryable messages carry a URL -- a redirect with no
+     * `Location`, a non-200 status, and running out of hops -- and after
+     * GitHub's redirect that URL is a signed `objects.githubusercontent.com`
+     * link full of hex. A 64-character hex string contains `404` about 1.5% of
+     * the time (measured over 400k samples), and such a URL has several hex
+     * components, so a real slice of transient failures used to be read as
+     * permanent and given up on after one attempt instead of three.
+     *
+     * The release directory here contains `404` for exactly that reason: the
+     * server answers 503 once, which is retryable, and its message carries the
+     * URL. Restoring `e.message?.contains("404")` in place of the
+     * `MissingFromRelease` catch turns this red -- the install gives up on the
+     * first attempt and reports FAILED.
+     */
+    @Test
+    fun `a retryable failure whose URL contains 404 is still retried`() {
+        publishFrom("/releases/a404b/download")
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        server.transientFailures = mapOf(manifestPath to 1)
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "a transient failure was treated as permanent because its URL contained 404: $events",
+        )
+        assertEquals(2, timesRequested(manifestPath), "the request was not retried")
     }
 
     /**

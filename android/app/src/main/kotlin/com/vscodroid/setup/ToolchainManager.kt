@@ -78,6 +78,27 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
+     * A request the release cannot answer, now or on a third attempt.
+     *
+     * Retryability used to be decided by looking for `"404"` as a substring of
+     * the exception message, which was fine while every message was written
+     * with that in mind and stopped being fine as soon as the messages carried
+     * a URL. Three of the retryable ones do -- a redirect with no `Location`,
+     * a non-200 status, and running out of redirect hops -- and after GitHub's
+     * redirect the URL is a signed `objects.githubusercontent.com` link full of
+     * hex. A 64-character hex string contains `404` about **1.5%** of the time
+     * (measured over 400k samples; analytically 62/4096), and such a URL has
+     * several hex components. So a small but real slice of transient failures
+     * was being classified permanent and given up on after one attempt.
+     *
+     * A type instead of a spelling. The exception says what it is rather than
+     * hoping its prose reads a particular way, and the cost of getting it wrong
+     * is one-directional either way: this only ever ends an install sooner than
+     * it needed to, never installs something it should not have.
+     */
+    private class MissingFromRelease(message: String) : IOException(message)
+
+    /**
      * The token for each pack with a download outstanding, so [cancel] can find
      * it by name.
      *
@@ -735,9 +756,10 @@ class ToolchainManager(private val context: Context) {
      * install after one read timeout, having transferred nothing. Hardening the
      * payload is no good if it lowers the odds of getting one.
      *
-     * Does not retry on 404, which stays right for both. A ZIP not uploaded to
-     * the release will not appear on the third attempt, and neither will a
-     * manifest that the release does not carry.
+     * The one thing it does not retry is [MissingFromRelease], which stays
+     * right for both: a ZIP not uploaded to the release will not appear on the
+     * third attempt, and neither will a manifest the release does not carry.
+     * Everything else gets all three.
      */
     @Throws(IOException::class)
     private fun <T> retrying(what: String, download: HttpDownload, attempt: () -> T): T {
@@ -750,11 +772,14 @@ class ToolchainManager(private val context: Context) {
                     Thread.sleep(backoffMs)
                 }
                 return attempt()
+            } catch (e: MissingFromRelease) {
+                // Must precede the IOException catch below, which it extends.
+                // The release does not carry this file; asking twice more only
+                // spends six seconds arriving at the same answer.
+                throw e
             } catch (e: IOException) {
                 lastException = e
                 if (download.cancelled) throw e
-                // Don't retry on 404
-                if (e.message?.contains("404") == true) throw e
                 Logger.w(tag, "Attempt $n failed for $what: ${e.message}")
             }
         }
@@ -806,7 +831,7 @@ class ToolchainManager(private val context: Context) {
                 }
 
                 if (responseCode == 404) {
-                    throw IOException("404 Not Found: $currentUrl — $what not uploaded to release?")
+                    throw MissingFromRelease("404 Not Found: $currentUrl — $what not uploaded to release?")
                 }
 
                 if (responseCode != 200) {
@@ -945,14 +970,16 @@ class ToolchainManager(private val context: Context) {
         }
 
         if (!isCompleteTransfer(declaredBytes, bytesRead)) {
-            // The counts are logged rather than put in the message, and
-            // that is not a style choice: retrying() decides
-            // whether an error is retryable by looking for "404" as a
-            // substring of the message, so any byte count printed there
-            // is a number that can turn a retryable truncation into an
-            // immediate failure by coincidence.
-            Logger.w(tag, "Short read for $packName: $bytesRead bytes of $declaredBytes declared")
-            throw IOException("Incomplete download for $packName; the connection ended early")
+            // The counts belong in the message. They were held out of it and
+            // logged separately, because retryability was decided by looking
+            // for "404" as a substring and a byte count that happened to read
+            // 404 would have turned a retryable truncation into an immediate
+            // failure. That predicate is a type now, so the workaround has
+            // nothing left to work around, and the retry loop logs the message
+            // on every attempt.
+            throw IOException(
+                "Incomplete download for $packName: received $bytesRead bytes of $declaredBytes declared"
+            )
         }
 
         Logger.i(tag, "Downloaded $packName: ${destFile.length() / 1_000_000} MB")
