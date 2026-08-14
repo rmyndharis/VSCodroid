@@ -46,9 +46,15 @@ PATCH_ID = re.compile(r"^(\d{4})-.*\.patch$")
 # Where a minifier is free to add or drop whitespace. A pattern is written the way
 # one esbuild version happened to emit it -- `case"android"`, `==="/callback"` --
 # and the next version choosing `case "android"` or single quotes would fail rows
-# that describe a tree which is still correct. Matching tolerantly costs nothing:
-# these patterns are anchored on string literals and comparisons, and no bundle
-# contains a near-miss that only differs by a space.
+# that describe a tree which is still correct.
+#
+# What the tolerance costs, stated rather than waved past: a space in a pattern
+# becomes \s*, so `.activitybar .composite-bar` also matches the compound selector
+# `.activitybar.composite-bar`, which is different CSS. Measured, not supposed. That
+# is accepted because no minifier merges descendant selectors -- doing so changes
+# what the rule matches -- so the looser form describes a bundle that cannot occur.
+# The mapping cannot be \s+ instead: a space is exactly where a minifier is most
+# likely to differ, and demanding one fails the rows this exists for.
 PUNCTUATION = set("=(){}[],:;<>!+-*/&|?.")
 QUOTES = "\"'"
 
