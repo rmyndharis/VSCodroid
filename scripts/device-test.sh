@@ -374,6 +374,28 @@ run_tool() {
         "$tool_path" "$@" 2>&1
 }
 
+# run_tool_code TOOL CODE — for a `-c` argument, which contains spaces.
+#
+# `adb shell` joins its arguments with a space and hands the result to the
+# device's shell, so quoting applied on this side is consumed here and never
+# reaches the device. `run_tool python3 -c "import bz2"` arrives as
+# `python3 -c import bz2`, which is a syntax error with bz2 as argv[1], and
+# `bash -c "echo ok"` runs echo with no arguments at all. Measured against a
+# device rather than assumed: `adb shell sh -c echo hello` prints an empty line.
+#
+# So the code is quoted for the remote shell instead. That breaks if the code
+# itself contains a single quote, which is a real limit rather than a
+# theoretical one, so it is refused rather than silently mis-parsed.
+run_tool_code() {
+    local tool_path="$1" code="$2"
+    case "$code" in
+        *"'"*)
+            echo "run_tool_code: code must not contain a single quote: $code" >&2
+            return 2 ;;
+    esac
+    run_tool "$tool_path" -c "'$code'"
+}
+
 # Test 15: node
 NODE_OUT=$(run_tool "files/usr/bin/node" --version)
 # Derived, not pinned. This asserted v20.x while the runtime moved to 24.18.0 --
@@ -450,7 +472,7 @@ else
 fi
 
 # Test 19b: bash actually starts
-BASH_OUT=$(run_tool "files/usr/bin/bash" -c 'echo bash-ok')
+BASH_OUT=$(run_tool_code "files/usr/bin/bash" "echo bash-ok")
 if [ "$BASH_OUT" = "bash-ok" ]; then
     pass "tool_bash"
 else
@@ -470,8 +492,9 @@ fi
 # import would report only the first one to break.
 PY_MODULE_FAILURES=""
 for module in bz2 lzma sqlite3 ssl ctypes curses.panel dbm.gnu zlib readline pip; do
-    MOD_OUT=$(run_tool "files/usr/bin/python3" -c "import $module")
-    if [ -n "$MOD_OUT" ]; then
+    MOD_OUT=$(run_tool_code "files/usr/bin/python3" "import $module")
+    MOD_RC=$?
+    if [ "$MOD_RC" -ne 0 ] || [ -n "$MOD_OUT" ]; then
         PY_MODULE_FAILURES="$PY_MODULE_FAILURES $module"
         vlog "import $module: $MOD_OUT"
     fi
