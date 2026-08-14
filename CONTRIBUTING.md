@@ -301,7 +301,7 @@ disconnected. Two of these shipped: `heapCeilingMb` and the port-reuse branch in
 runs with every one of their tests still green. The tests named the right
 behaviour and never checked that anything used it.
 
-Two habits catch it, and they are cheap:
+Three habits catch it, and they are cheap:
 
 **Assert at the far end of the wire.** Something downstream can usually already
 observe the value. `ProcessManagerTest` spawns `/bin/echo` and merges stderr
@@ -316,6 +316,18 @@ bug; 3 GB derives 384 and the test bites. `findAvailablePort()` scans upward
 from a fixed default, so the first remembered port and a fresh scan return the
 same number, and a test comparing two calls to each other moves with the bug
 instead of catching it -- holding the first port forces the paths apart.
+
+**Before asserting that something did not change, prove the code that would have
+changed it actually ran.** "Unchanged" is the same result for "correctly guarded"
+and "never reached", and nothing in the run distinguishes them. `settings.json` is
+written through `writeAtomically` so a failed write leaves the user's file intact
+-- but the method returns early when there is nothing to refresh, several lines
+above the write. A test asserting the file survived a failed write passes just as
+happily when the refresh decided there was nothing to do and no write was ever
+attempted. The fix is to make the success case assert the file *did* change, which
+establishes that the write path is reachable with that fixture; only then does the
+failure case mean anything. The same reasoning applies to any `verify(exactly = 0)`
+and to every "still exists", "was not deleted", "was left alone".
 
 When the thing being judged is a guard rather than a test, measure the tree it
 will guard, not the tree that caused it to be written. A rule for the welcome

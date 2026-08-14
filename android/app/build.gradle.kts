@@ -132,6 +132,10 @@ dependencies {
     testImplementation(libs.junit.jupiter.api)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testImplementation(libs.mockk)
+    // The android.jar stub throws "not mocked" from every org.json method, which puts
+    // any code that parses a manifest out of reach of a JVM test. No unit test parsed
+    // JSON before this, so replacing the stub cannot change an existing verdict.
+    testImplementation("org.json:json:20250107")
 
     // Instrumented Testing (JUnit 4, runs on device)
     androidTestImplementation(libs.androidx.test.ext.junit)
