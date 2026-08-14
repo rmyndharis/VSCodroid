@@ -25,6 +25,7 @@ import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
+import com.vscodroid.util.padForSystemBars
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -206,6 +207,8 @@ class SplashActivity : AppCompatActivity() {
 
     private fun showToolchainPicker() {
         setContentView(R.layout.layout_toolchain_picker)
+        findViewById<View>(R.id.pickerRoot)
+            .padForSystemBars(basePx = (24 * resources.displayMetrics.density).toInt())
 
         val grid = findViewById<RecyclerView>(R.id.toolchainGrid)
         val continueBtn = findViewById<Button>(R.id.continueButton)
@@ -235,6 +238,8 @@ class SplashActivity : AppCompatActivity() {
 
     private fun startDownloads(packNames: List<String>) {
         setContentView(R.layout.layout_toolchain_progress)
+        findViewById<View>(R.id.progressRoot)
+            .padForSystemBars(basePx = (24 * resources.displayMetrics.density).toInt())
 
         val container = findViewById<LinearLayout>(R.id.progressContainer)
         val cancelBtn = findViewById<Button>(R.id.cancelButton)
