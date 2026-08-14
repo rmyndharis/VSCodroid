@@ -25,9 +25,9 @@ import kotlin.concurrent.thread
  * back to the original SAF location via [ContentResolver].
  *
  * ## Conflict Resolution
- * Local changes win when both sides changed: the mirror is only replaced when the
- * source differs in size, carries no timestamp, or is newer than the copy already
- * held. External changes are picked up the next time the folder is opened, which is
+ * Local changes win when both sides changed: the mirror is replaced only when the
+ * source is newer, carries no timestamp, or matches in time while differing in size.
+ * External changes are picked up the next time the folder is opened, which is
  * the only refresh that exists — there is no "Refresh from device" action, and
  * nothing calls [com.vscodroid.util.StorageManager.clearSafMirrors] either, so a
  * mirror cannot be cleared from inside the app.
@@ -242,21 +242,27 @@ class SafSyncEngine(private val context: Context) {
      * Copies a single SAF document to a local file.
      */
     private fun copyDocumentToLocal(docUri: Uri, dest: File, sourceModified: Long) {
+        // Written beside the destination and moved into place only once the stream
+        // finished. Writing straight to dest would truncate it first, so a copy cut
+        // short — by an exception, or by the process being killed mid-stream — would
+        // leave a short file carrying a fresh timestamp. That is indistinguishable
+        // from an unsaved local edit, and the sync decision has to tell them apart.
+        val partial = File(dest.parentFile, "${dest.name}$PARTIAL_SUFFIX")
         try {
             context.contentResolver.openInputStream(docUri)?.use { input ->
-                FileOutputStream(dest).use { output ->
+                FileOutputStream(partial).use { output ->
                     input.copyTo(output, COPY_BUFFER_SIZE)
                 }
             }
-            // Stamp the mirror with the source's own time so later syncs compare
-            // two timestamps from the same clock rather than a provider's against
-            // the local filesystem's.
-            if (sourceModified > 0) dest.setLastModified(sourceModified)
+            // Stamp with the source's own time so later syncs compare two timestamps
+            // from the same clock rather than a provider's against the filesystem's.
+            if (sourceModified > 0) partial.setLastModified(sourceModified)
+            if (!partial.renameTo(dest)) {
+                partial.delete()
+                Logger.w(tag, "Could not move ${partial.name} into place")
+            }
         } catch (e: Exception) {
-            // FileOutputStream truncates before the first byte arrives, so a failure
-            // here leaves a short file behind. Remove it: a half copy carrying a fresh
-            // mtime would otherwise be mistaken for a local edit worth keeping.
-            dest.delete()
+            partial.delete()
             Logger.w(tag, "Failed to copy ${docUri.lastPathSegment} → ${dest.name}: ${e.message}")
         }
     }
@@ -474,6 +480,9 @@ class SafSyncEngine(private val context: Context) {
         private const val COPY_BUFFER_SIZE = 8192
         private const val WRITEBACK_POLL_MS = 200L
 
+        /** Suffix for a copy still being written; moved into place when complete. */
+        private const val PARTIAL_SUFFIX = ".vscodroid-partial"
+
         /** Q2: Max file size to sync (50 MB). Larger files are skipped. */
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
@@ -506,11 +515,22 @@ class SafSyncEngine(private val context: Context) {
             mirrorSize: Long,
             sourceModified: Long,
             sourceSize: Long
-        ): Boolean =
-            !mirrorExists ||
-                mirrorSize != sourceSize ||
-                sourceModified == 0L ||
-                sourceModified > mirrorModified
+        ): Boolean = when {
+            !mirrorExists -> true
+            // The provider did not report a time. Unknown must not freeze the folder:
+            // nothing in the app can clear a mirror, so copying is the behaviour that
+            // heals itself.
+            sourceModified == 0L -> true
+            sourceModified > mirrorModified -> true
+            // A newer local copy wins, whatever its size. Checking size before this
+            // was the defect: almost every edit changes a file's length, so almost
+            // every unsaved edit looked like "not a copy of the source" and was
+            // overwritten — the exact case this guard exists for.
+            mirrorModified > sourceModified -> false
+            // Same timestamp, different content. Writers that preserve mtime — unzip,
+            // cp -p, rsync -t, git checkout — land here.
+            else -> mirrorSize != sourceSize
+        }
 
         /**
          * Directories to skip during sync — auto-generated and too large.

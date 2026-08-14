@@ -197,16 +197,34 @@ class SafSyncEngineTest {
         }
 
         @Test
-        fun `re-copies a truncated file even though the mirror looks newer`() {
-            // A copy that failed part-way leaves a short file carrying a fresh
-            // timestamp. Timestamps alone would freeze it forever, and the
-            // write-back would then push the truncation onto the device.
-            assertTrue(
+        fun `keeps a newer local file even when its length differs`() {
+            // This pairing is the common one: almost every edit changes a file's
+            // length. Checking size before the timestamps meant almost every unsaved
+            // edit was read as "not a copy of the source" and overwritten — the exact
+            // case the guard exists for.
+            //
+            // A copy cut short used to produce the same pairing, which is why size
+            // came first. It cannot any more: copies are written beside the target and
+            // moved into place only once complete, so a failure leaves no file here.
+            assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 700_000,
                     sourceModified = 1_700_000_000_000, sourceSize = 2_000_000
                 ),
-                "A size mismatch means the mirror is not a copy of the source, whatever the clocks say"
+                "A newer local edit must survive regardless of how its length changed"
+            )
+        }
+
+        @Test
+        fun `copies when the timestamps match but the contents differ in length`() {
+            // Writers that preserve mtime — unzip, cp -p, rsync -t, git checkout —
+            // change content without moving the clock. Size is the tiebreaker there.
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
+                    sourceModified = 1_700_000_000_000, sourceSize = 8192
+                ),
+                "Equal timestamps with different lengths means the device copy changed"
             )
         }
 
