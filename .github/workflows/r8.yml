@@ -66,10 +66,17 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # The shrinker needs compiled classes and processed resources. It does not
-      # need the 874 MB asset tree: measured, the task graph is 32 tasks and
-      # contains no mergeReleaseAssets, so checkPatchFingerprints is never
-      # reached either. Same stubs lint.yml uses, for the same reason.
+      # The shrinker needs compiled classes and processed resources, not the
+      # 874 MB asset tree. Measured with --dry-run, which computes the graph
+      # without touching disk: 32 tasks, no mergeReleaseAssets, and therefore
+      # never checkPatchFingerprints, which is wired to merge*Assets alone
+      # (app/build.gradle.kts, tasks.matching around checkPatchFingerprints).
+      #
+      # These stubs are carried over from lint.yml unchanged. Nothing in the
+      # graph asks for them; what has not been measured is whether Gradle's
+      # CONFIGURATION phase needs the directories to exist, which is what
+      # lint.yml's own comment claims. Six lines is a cheaper answer than
+      # finding out on a runner.
       - name: Create minimal asset stubs
         run: |
           mkdir -p android/app/src/main/jniLibs/arm64-v8a

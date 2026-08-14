@@ -20,9 +20,9 @@ set -euo pipefail
 #   VSCODE_OSS_URL        a direct URL, for a private mirror or a local test
 #   gh release download   the server-<version> release in this repository
 #
-# VSCODE_OSS_SHA256 checks the VSCODE_OSS_URL tarball, which has no release to be
-# compared against. Without it that path reports its digest as UNCHECKED rather
-# than saying nothing.
+# VSCODE_OSS_SHA256 checks the tarball against a digest you name, whatever source
+# it came from. It exists for the VSCODE_OSS_URL path, which has no release to be
+# compared against and otherwise reports its digest as UNCHECKED.
 #
 # Everything unpacked is verified before it is usable, because the failures that
 # matter here are quiet: an x86-64 ripgrep installs fine and then returns no
@@ -145,26 +145,32 @@ fi
 
 echo "  size    : $(du -h "$TARBALL" | cut -f1)"
 
-# The VSCODE_OSS_URL path has no release to check against, so it took whatever
-# it was given -- including a cached file left by an earlier, different URL.
-# Naming a digest is the caller's choice; saying nothing about it is not.
-if [ -n "${VSCODE_OSS_URL:-}" ]; then
-    if [ -n "${VSCODE_OSS_SHA256:-}" ]; then
-        actual="$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
-        if [ "$actual" != "${VSCODE_OSS_SHA256#sha256:}" ]; then
-            cat >&2 <<EOF
+# A digest the caller names is checked whatever the tarball came from. The
+# VSCODE_OSS_URL path is the reason it exists -- that path has no release to
+# compare against, so it took whatever it was given, including a cached file
+# left by an earlier and different URL. But honouring the variable only on that
+# path would mean setting it anywhere else did nothing and said nothing, which
+# is the same skipped check this script was just fixed for.
+#
+# A leading "sha256:" is accepted because that is the form `gh release view`
+# prints, and the message above tells people to copy one from there.
+if [ -n "${VSCODE_OSS_SHA256:-}" ]; then
+    actual="$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
+    if [ "$actual" != "${VSCODE_OSS_SHA256#sha256:}" ]; then
+        cat >&2 <<EOF
 
-  The tarball from VSCODE_OSS_URL does not match VSCODE_OSS_SHA256.
+  The tarball does not match VSCODE_OSS_SHA256.
 
+      file     $TARBALL
       got      $actual
       expected ${VSCODE_OSS_SHA256#sha256:}
 EOF
-            exit 1
-        fi
-        echo "  digest  : matches VSCODE_OSS_SHA256"
-    else
-        echo "  digest  : UNCHECKED — set VSCODE_OSS_SHA256 to check this tarball"
+        exit 1
     fi
+    echo "  digest  : matches VSCODE_OSS_SHA256"
+elif [ -n "${VSCODE_OSS_URL:-}" ]; then
+    echo "  digest  : UNCHECKED — VSCODE_OSS_URL has no release to compare against;"
+    echo "            set VSCODE_OSS_SHA256 to check this tarball"
 fi
 
 echo
