@@ -15,8 +15,8 @@
        (An XML comment cannot contain two hyphens in a row, which is why the
        flag is described here rather than written out.) -->
   <text x="30" y="60" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
-  <text x="50" y="60" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">node -e 'console.log(1+1)'</text>
-  <text x="30" y="76" font-family="monospace" font-size="10" fill="#569cd6">2</text>
+  <text x="50" y="60" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">node -e 'console.log("hi")'</text>
+  <text x="30" y="76" font-family="monospace" font-size="10" fill="#569cd6">hi</text>
 
   <text x="30" y="96" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
   <text x="50" y="96" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">python3 -c 'print("hi")'</text>

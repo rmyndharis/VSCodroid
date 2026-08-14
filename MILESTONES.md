@@ -252,7 +252,7 @@ M6 (Release)   → Play Store release
    - [x] 6 marketplace extensions bundled offline in `assets/extensions/`:
      - Material Icon Theme, ESLint, Prettier, Python, GitLens, Tailwind CSS
    - [x] 3 custom VSCodroid extensions:
-     - `vscodroid.vscodroid-welcome-1.1.0` — welcome tab with quick actions
+     - `vscodroid.vscodroid-welcome-1.2.0` — welcome tab with quick actions
      - `vscodroid.vscodroid-saf-bridge-1.0.0` — SAF storage integration
      - `vscodroid.vscodroid-process-monitor-1.0.0` — phantom process monitoring
    - [x] `extensions.json` manifest auto-generated on first run
