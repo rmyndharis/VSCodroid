@@ -684,6 +684,10 @@ class MainActivity : AppCompatActivity() {
                     '  .statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
                     '  .context-view .action-label { padding: 6px 12px !important; }',
+                    // Unprefixed, so it is wider than its name: the workbench also uses
+                    // .slider for the colour picker, not only the scrollbar. Harmless
+                    // there because that strip is already far wider than 12px, but
+                    // narrow it and this rule starts deciding its width.
                     '  .slider { min-width: 12px !important; }',
                     '  .quick-input-list .monaco-list-row { min-height: 36px !important; }',
                     '}'
