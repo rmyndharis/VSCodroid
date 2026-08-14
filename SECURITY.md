@@ -16,7 +16,7 @@ We take security seriously. If you discover a security vulnerability in VSCodroi
 
 Instead, please use one of these channels:
 
-📧 **Email**: security@vscodroid.dev
+📧 **Email**: yudhi@rmyndharis.com
 🔒 **GitHub Security Advisory**: [Report a vulnerability](https://github.com/rmyndharis/VSCodroid/security/advisories/new) (preferred for detailed reports)
 
 ### What to Include
