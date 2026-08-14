@@ -309,6 +309,17 @@ Confirm it rather than assuming: delete the line under test, run the suite, and
 check that something red points at the deletion. A test that stays green has not
 been proven wrong, only proven silent.
 
+One case does not yield to a better fixture. When two situations are
+indistinguishable in the data the code can see, no assertion separates them: a
+copy interrupted partway through and an unsaved local edit both present as
+"the mirror is newer and a different length", and nothing else is recorded. The
+answer there was to remove one of the states rather than to test harder --
+a copy now lands beside its target and is moved into place once it completes, so
+an interrupted one leaves nothing behind at all. With that state impossible, the
+rule could go back to preferring the newer file and lose nothing. If a fixture
+cannot be written that tells two cases apart, that is worth reading as a
+statement about the code rather than about the test.
+
 ## Building
 
 ### Debug Build
