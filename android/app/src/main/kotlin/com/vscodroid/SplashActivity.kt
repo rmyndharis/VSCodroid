@@ -30,9 +30,6 @@ class SplashActivity : AppCompatActivity() {
     private var toolchainManager: ToolchainManager? = null
     private var downloadQueue = mutableListOf<String>()
     private var currentDownloadIndex = -1
-
-    /** Packs that have already moved the queue on. See [advancePast]. */
-    private val settledPacks = mutableSetOf<String>()
     private var cancelled = false
 
     // Progress UI refs (only valid after setContentView to progress layout)
@@ -223,7 +220,6 @@ class SplashActivity : AppCompatActivity() {
 
         downloadQueue = packNames.toMutableList()
         currentDownloadIndex = -1
-        settledPacks.clear()
         cancelled = false
         progressRows.clear()
 
@@ -317,6 +313,25 @@ class SplashActivity : AppCompatActivity() {
 
     private fun handleDownloadState(packName: String, status: Int, percent: Int) {
         if (cancelled) return
+
+        // Only the download the queue is waiting for gets to speak.
+        //
+        // The listener is registered for the app rather than for one fetch
+        // (ToolchainManager.kt:81), and every queued pack gets a row up front, so
+        // a state naming some other pack reaches here and used to be acted on. It
+        // could repaint a finished pack's row red, and worse, move the index --
+        // stepping over whichever pack was genuinely downloading and leaving it
+        // uninstalled with its row still reading "installing".
+        //
+        // downloadNext() increments the index before calling install(), so the
+        // pack being fetched is always the one at the index by the time any state
+        // for it arrives. Past the end of the queue nothing matches, which is also
+        // what stops a late arrival reaching launchMain() a second time.
+        if (!isCurrentDownload(packName, downloadQueue, currentDownloadIndex)) {
+            Logger.d(tag, "Ignoring $packName at status $status; not the current download")
+            return
+        }
+
         val row = progressRows[packName] ?: return
 
         when (status) {
@@ -367,30 +382,11 @@ class SplashActivity : AppCompatActivity() {
         // launchMain(), and a relaunch skips setup entirely because
         // markSetupComplete() has already run by the time this screen appears.
         if (isTerminalPackStatus(status)) {
-            advancePast(packName)
+            downloadNext()
         }
     }
 
-    /**
-     * Moves the queue past [packName], at most once.
-     *
-     * A pack can reach a terminal state more than once -- Play reporting CANCELED
-     * and then NOT_INSTALLED for the same cancellation, or a late event for a pack
-     * the queue has already left behind. Without this, the second one would step
-     * over whichever pack was actually downloading and leave it uninstalled with
-     * its row still reading "installing".
-     *
-     * Nothing on the ordinary path relies on this: each pack reaches a terminal
-     * state once and advances once. It is here for the repeats, which is why the
-     * repeat logs at debug rather than warning.
-     */
-    private fun advancePast(packName: String) {
-        if (!settledPacks.add(packName)) {
-            Logger.d(tag, "Ignoring repeat terminal state for $packName")
-            return
-        }
-        downloadNext()
-    }
+
 
     // -- Navigation --
 
@@ -409,10 +405,17 @@ class SplashActivity : AppCompatActivity() {
  * Only five states are still going somewhere: the two transfer states, the two
  * waiting states, and the confirmation prompt. Everything else counts as
  * finished -- including states this build has never heard of -- because the cost
- * of being wrong is not symmetric. A pack wrongly treated as finished costs one
- * toolchain, which the user can install later from inside the app. A pack
- * wrongly waited on costs them the app: first-run setup never reaches the
- * editor, and relaunching returns to the same screen.
+ * of being wrong is not symmetric, though neither side is free.
+ *
+ * A pack wrongly treated as finished costs that toolchain, and costs it for
+ * good: nothing in the UI reaches ToolchainActivity, whose only caller is a
+ * BroadcastChannel command (AndroidBridge.kt:229, MainActivity.kt:907), so
+ * there is no "install it later" for an ordinary user to fall back on.
+ *
+ * A pack wrongly waited on costs that toolchain and every one queued behind it,
+ * because the queue stops rather than skips, and leaves the screen sitting there
+ * until the user finds the Cancel button. Losing one is better than losing the
+ * remainder, which is the only reason this defaults to advancing.
  *
  * File scope so it can be tested without an Activity; this project's unit tests
  * have no Robolectric.
@@ -425,3 +428,17 @@ internal fun isTerminalPackStatus(status: Int): Boolean = when (status) {
     AssetPackStatus.REQUIRES_USER_CONFIRMATION -> false
     else -> true
 }
+
+/**
+ * Whether [packName] is the download the queue is currently waiting for.
+ *
+ * The one question the old code never asked. It deduplicated by pack name, which
+ * stops the same pack advancing twice but does nothing about a different pack
+ * advancing once -- and a different pack is exactly what a listener registered
+ * for the whole app can deliver.
+ *
+ * Returns false once the queue has passed its end, so a late arrival cannot
+ * reach launchMain() a second time.
+ */
+internal fun isCurrentDownload(packName: String, queue: List<String>, index: Int): Boolean =
+    packName == queue.getOrNull(index)
