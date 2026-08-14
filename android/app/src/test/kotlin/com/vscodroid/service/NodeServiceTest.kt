@@ -47,6 +47,47 @@ class RestartBudgetTest {
 }
 
 /**
+ * How often a server that has not answered yet is asked again.
+ *
+ * The loop this feeds never ends while the process is alive — that is the whole
+ * point of it, and a server can answer at any moment before it dies. Which means
+ * the interval is the only brake there is.
+ */
+class LateReadinessPollTest {
+
+    @Test
+    fun `an answer that is still plausible is asked for often`() {
+        assertEquals(LATE_READY_POLL_MS, lateReadinessPollMs(0))
+        assertEquals(LATE_READY_POLL_MS, lateReadinessPollMs(LATE_READY_NOTICE_MS - 1))
+    }
+
+    @Test
+    fun `once even a late answer is unlikely, asking slows down`() {
+        // Kills: a single constant interval. Two seconds forever is a probe
+        // every two seconds for as long as a wedged process lives, and the loop
+        // has no other way to stop costing anything.
+        assertEquals(LATE_READY_SLOW_POLL_MS, lateReadinessPollMs(LATE_READY_NOTICE_MS))
+        assertTrue(
+            LATE_READY_SLOW_POLL_MS > LATE_READY_POLL_MS,
+            "the late interval has to be the slower of the two, or the step is backwards",
+        )
+    }
+
+    @Test
+    fun `no elapsed time produces an interval of zero`() {
+        // The one property the step has to get right. A zero interval turns a
+        // loop with no end condition into a spin on the IO dispatcher; every
+        // other choice here is a tuning question, and this one is not.
+        for (elapsed in listOf(Long.MIN_VALUE, -1L, 0L, 1L, LATE_READY_NOTICE_MS, Long.MAX_VALUE)) {
+            assertTrue(
+                lateReadinessPollMs(elapsed) > 0,
+                "elapsed $elapsed gave ${lateReadinessPollMs(elapsed)}",
+            )
+        }
+    }
+}
+
+/**
  * The pause between restart attempts.
  *
  * Untested while it was one expression inside a coroutine, and it is the kind of

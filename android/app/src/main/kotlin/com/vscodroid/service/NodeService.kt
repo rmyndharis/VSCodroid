@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.vscodroid.R
@@ -337,19 +338,45 @@ class NodeService : Service() {
      * leaves quietly rather than reporting a failure the crash path is about to
      * report properly.
      *
-     * Slower than the start poll on purpose. The first thirty seconds are when an
-     * answer is most likely and someone is watching a placeholder; after that,
-     * asking every two seconds finds a late server promptly and costs one
-     * loopback connection in between.
+     * Separating patience from a verdict is only half of it, though, and the
+     * first version of this stopped there. A process that stays alive and never
+     * answers then produced *no* verdict at all: nothing raised, nothing recorded
+     * for the next activity to read, nothing on the notification, and a user in
+     * front of a placeholder that is indistinguishable from still-loading. That
+     * traded a wrong answer for no answer, and no answer is the harder one to
+     * act on. So the verdict is separated from the *informing* as well: the loop
+     * never gives up, and at [LATE_READY_NOTICE_MS] it says so once.
+     *
+     * That state is not hypothetical in kind. [ProcessManager.isServerHealthy]
+     * accepts only 200 from `/version`, and its own documentation records why it
+     * is that route: `/` began answering 403 once the server required a
+     * connection token, which made every probe against it wrong while the server
+     * was serving perfectly. The same change one endpoint over leaves a process
+     * that is alive, bound and serving while [ProcessManager.probeReadiness]
+     * answers false forever.
+     *
+     * The interval widens rather than the loop ending, which bounds the cost
+     * without bounding the time: two seconds while an answer is still plausible,
+     * a slow heartbeat after that. Waiting is free; asking is not.
      */
     private suspend fun awaitLateReadiness() {
+        val startedAt = SystemClock.elapsedRealtime()
+        var noticed = false
+
         while (processManager.isRunning()) {
-            delay(LATE_READY_POLL_MS)
+            delay(lateReadinessPollMs(SystemClock.elapsedRealtime() - startedAt))
+
             val ready = withContext(Dispatchers.IO) { processManager.probeReadiness() }
             if (ready) {
                 Logger.i(tag, "Server answered after the start poll had given up")
                 announceReady()
                 return
+            }
+
+            if (!noticed && SystemClock.elapsedRealtime() - startedAt >= LATE_READY_NOTICE_MS) {
+                noticed = true
+                Logger.e(tag, "Server still has not answered; saying so while continuing to ask")
+                reportStartupFailure(getString(R.string.error_server_timeout))
             }
         }
         Logger.w(tag, "Server process exited before it ever answered")
@@ -563,6 +590,41 @@ internal const val MAX_BACKOFF_SHIFT = 4
  * next thing that happens to ask.
  */
 internal const val LATE_READY_POLL_MS = 2_000L
+
+/**
+ * How often it is asked once even a late answer has stopped being likely.
+ *
+ * The loop still never ends — a server can answer at any point while its process
+ * lives — but by this stage the cost of asking matters more than the seconds
+ * between an answer and noticing it. Two seconds forever is a probe every two
+ * seconds for as long as a wedged process is alive, on a battery.
+ */
+internal const val LATE_READY_SLOW_POLL_MS = 30_000L
+
+/**
+ * How long the late poll runs before the app says the start is taking too long.
+ *
+ * Ninety seconds here, on top of the thirty the start poll has already spent:
+ * two minutes in total, which is what `scripts/device-test.sh` budgets for this
+ * same event (`TIMEOUT=120`). The app had been disagreeing with its own harness
+ * by a factor of four. If `ProcessManager.waitForReady`'s default timeout moves,
+ * this is the other half of that sum.
+ *
+ * It is a moment to speak, not a moment to stop. The message is raised and
+ * recorded once and the loop carries on, so a server that answers afterwards
+ * still opens the editor.
+ */
+internal const val LATE_READY_NOTICE_MS = 90_000L
+
+/**
+ * How long to wait before the next probe, given how long the late poll has run.
+ *
+ * A step rather than a curve, because the only thing it has to get right is that
+ * the interval never reaches zero — the loop has no other brake, so an interval
+ * of zero is a spin on the IO dispatcher for as long as a wedged process lives.
+ */
+internal fun lateReadinessPollMs(elapsedMs: Long): Long =
+    if (elapsedMs < LATE_READY_NOTICE_MS) LATE_READY_POLL_MS else LATE_READY_SLOW_POLL_MS
 
 /**
  * Whether a server that has already crashed [restartCount] times gets another

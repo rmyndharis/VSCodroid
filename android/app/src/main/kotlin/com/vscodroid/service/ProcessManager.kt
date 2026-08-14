@@ -391,7 +391,11 @@ class ProcessManager(private val context: Context) {
      * Asks the server once, and records the answer if it is yes.
      *
      * Blocking — it is [isServerHealthy] underneath, so it belongs off the main
-     * thread like every other caller of that.
+     * thread like every other caller of that. Blocking also means cancellation
+     * does not reach it: a coroutine cancelled while this is in flight cannot act
+     * on the result, because it resumes by throwing, but the request itself runs
+     * to completion. The ceiling on that is the connect and read timeouts, a
+     * little over two seconds, and it is worth knowing rather than rediscovering.
      *
      * The single place `_isReady` is ever set true, which is the point of it
      * existing rather than being written inline in [waitForReady]. [waitForReady]
