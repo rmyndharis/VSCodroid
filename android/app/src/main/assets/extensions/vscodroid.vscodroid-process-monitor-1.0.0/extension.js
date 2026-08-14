@@ -80,13 +80,9 @@ function updateStatusBar(snapshot) {
 
     // Count by type
     const counts = {};
-    let langserverCount = 0;
-    let terminalCount = 0;
     for (const proc of tree) {
         const label = typeLabel(proc.type);
         counts[label] = (counts[label] || 0) + 1;
-        if (proc.type === 'langserver') langserverCount++;
-        if (proc.type === 'terminal' || proc.type === 'tmux') terminalCount++;
     }
     const parts = Object.entries(counts).map(([k, v]) => `${v} ${k}`);
 
@@ -108,16 +104,27 @@ function updateStatusBar(snapshot) {
 
     statusBarItem.tooltip = `Phantom processes: ${total}\n${parts.join(', ')}${storageInfo}`;
 
-    // Tiered warnings
+    // Tiered warnings.
+    //
+    // The condition, never the measurement. Both of these used to name the
+    // count, the terminals and the language servers, and all three froze: the
+    // status bar above is re-set on every poll, but a notification is composed
+    // once, latched by the flags below, and VS Code gives no way to edit one
+    // that is already open. So the two disagreed on screen -- measured on an
+    // API 35 emulator, the toast read 8 while the bar read 7, and the toast was
+    // simply older. The target of 5 stays because it is a constant, not a
+    // reading.
+    //
+    // Nothing actionable is lost. Both buttons and the details view read
+    // lastSnapshot, which poll() refreshes every interval, so they act on the
+    // current tree however old the sentence above them is -- and
+    // showProcessTree() prints the per-type counts and the recommendations that
+    // used to be crammed in here, freshly, each time it is opened.
     if (total >= 12 && !criticalShownAtThreshold) {
         criticalShownAtThreshold = true;
-        const msg = `Critical: ${total} phantom processes! Android may kill them.`;
-        const suggestions = [];
-        if (terminalCount > 2) suggestions.push(`Close ${terminalCount - 1} of ${terminalCount} terminals`);
-        if (langserverCount > 1) suggestions.push(`${langserverCount} language servers active`);
-
         vscode.window.showErrorMessage(
-            suggestions.length > 0 ? `${msg} ${suggestions.join('. ')}.` : msg,
+            'Too many phantom processes; Android may start killing them. ' +
+                'The live count is in the status bar.',
             'Kill Idle Servers',
             'Show Details'
         ).then(choice => {
@@ -126,13 +133,9 @@ function updateStatusBar(snapshot) {
         });
     } else if (total >= 8 && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
-        const suggestions = [];
-        if (terminalCount > 2) suggestions.push(`${terminalCount} terminals open`);
-        if (langserverCount > 1) suggestions.push(`${langserverCount} language servers`);
-        const hint = suggestions.length > 0 ? ` (${suggestions.join(', ')})` : '';
-
         vscode.window.showWarningMessage(
-            `Running ${total} phantom processes${hint}. Target: ≤5.`,
+            'Phantom processes are above the target of 5. ' +
+                'The live count is in the status bar.',
             'Kill Idle Servers',
             'Show Details'
         ).then(choice => {

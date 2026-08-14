@@ -127,6 +127,7 @@ jobs:
           node scripts/test-process-monitor.js
           node scripts/test-platform-fix.js
           node scripts/test-server-bootstrap.js
+          node scripts/test-process-monitor-extension.js
 
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops

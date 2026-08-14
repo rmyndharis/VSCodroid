@@ -70,10 +70,12 @@ jobs:
         run: bash scripts/device-test.sh --self-check
 
       # The JavaScript that ships inside the APK: the server bootstrap, the
-      # phantom-process monitor, the platform override preloaded into every Node
-      # process, and the loopback DNS proxy. All four need Node and nothing
-      # else -- no assets, no SDK -- so they belong beside the other cheap gates
-      # rather than behind fifteen minutes of downloads in build.yml.
+      # phantom-process monitor and the extension that displays it, the platform
+      # override preloaded into every Node process, and the loopback DNS proxy.
+      # All of them need Node and nothing else -- no assets, no SDK; the
+      # extension is committed rather than downloaded -- so they belong beside
+      # the other cheap gates rather than behind fifteen minutes of downloads in
+      # build.yml.
       #
       # test-dns-proxy.js existed, passed, and was run by nothing. What it
       # covers is the Basic-auth token on the proxy every musl DNS lookup goes
@@ -86,6 +88,7 @@ jobs:
           node scripts/test-process-monitor.js
           node scripts/test-platform-fix.js
           node scripts/test-server-bootstrap.js
+          node scripts/test-process-monitor-extension.js
 
       - name: Run lint
         working-directory: android
