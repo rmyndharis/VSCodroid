@@ -278,6 +278,26 @@ class NodeService : Service() {
      * IO only for the two calls that block. That is what keeps [restartCount] and
      * [launchJob] on a single thread; see [setupProcessCallbacks] for why they
      * need to be.
+     *
+     * **Precondition: the server process must not be alive when this is called.**
+     * Not a style preference — it is what holds up a sentence shown to users.
+     * [ProcessManager.startServer] answers `false` for a process that is already
+     * running, so re-entering here cancels [awaitLateReadiness] through
+     * `launchJob?.cancel()`, clears the notice, takes the `!started` branch and
+     * returns. That leaves a live process with nothing polling it, and
+     * `status_server_slow_start` has already promised the reader that the editor
+     * will open as soon as the server is ready. Nothing would be asking.
+     *
+     * Every route in is closed today, but by bookkeeping that belongs to a
+     * different concern and does not know it is load-bearing here:
+     * [onStartCommand] guards on [isServiceRunning], [handleServerCrash] returns
+     * early and reaches this only with the process dead, and [shutdown] and
+     * [onDestroy] both kill it first. A "restart the server" action added later
+     * that calls this directly would satisfy none of them, break nothing that
+     * compiles or tests, and make that sentence false.
+     *
+     * So: stop the process before calling this, or add the guard here rather
+     * than relying on the caller having read this paragraph.
      */
     private fun launchServer() {
         // A crash during startup restarts the server while the previous attempt is
