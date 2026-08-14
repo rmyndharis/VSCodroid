@@ -84,6 +84,9 @@ flowchart TD
   SCRIPT --> SC1["setup.sh, build-all.sh, download-vscode-server.sh"]
   SCRIPT --> SC2["package-assets.sh, deploy.sh"]
 
+  ROOT --> TEST["test/ (test suites)"]
+  TEST --> TE1["projects/ (fixtures)"]
+  TEST --> TE2["extensions/ (fixtures)"]
 
   ROOT --> GH[".github/workflows/"]
   GH --> G1["build.yml"]
