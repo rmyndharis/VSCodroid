@@ -4,6 +4,7 @@ import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.File
 
 /**
  * Tests for [isTerminalPackStatus] — the predicate that decides whether the
@@ -12,11 +13,11 @@ import org.junit.jupiter.api.Test
  * What these cover, and what they do not. They pin the predicate: which statuses
  * mean a pack is finished. They do NOT pin the wiring -- deleting the
  * `if (isTerminalPackStatus(status)) downloadNext()` call from
- * handleDownloadState leaves all four of them green, measured rather than
- * assumed. That call cannot be reached from a JVM test because it lives in an
- * Activity method and this project has no Robolectric, so the gap is stated here
- * rather than papered over: if you are touching handleDownloadState, these tests
- * will not tell you when you have broken it.
+ * handleDownloadState leaves all four of them green, and the rest of the unit
+ * suite with them, since nothing else calls handleDownloadState. Measured rather
+ * than assumed. That call cannot be reached from a JVM test because it lives in an
+ * Activity method and this project has no Robolectric. [DownloadStateWiringTest],
+ * at the end of this file, is what covers the call itself.
  *
  * The predicate is still worth pinning, because getting it wrong is what stalled
  * the queue: the decision used to live inside two branches of a `when` with no
@@ -83,10 +84,11 @@ class PackStatusTest {
  *
  * These have the same boundary as the tests above, and it is worth stating twice
  * because the first draft of this comment claimed otherwise: deleting the
- * isCurrentDownload guard from handleDownloadState leaves every test here green.
- * Measured, with the results directory cleared first. Nothing in this project
- * can pin a call inside an Activity method -- there is no Robolectric -- so what
- * is pinned is the rule, not that the code still consults it.
+ * isCurrentDownload guard from handleDownloadState leaves every test here green,
+ * and the rest of the unit suite with them. Measured, with the results directory
+ * cleared first. Nothing in this project can *run* a call inside an Activity
+ * method -- there is no Robolectric -- so what these pin is the rule;
+ * [DownloadStateWiringTest] pins that the code still consults it.
  */
 class CurrentDownloadTest {
 
@@ -123,5 +125,83 @@ class CurrentDownloadTest {
     fun `nothing advances the queue before it has started`() {
         // downloadNext() starts at -1 and pre-increments.
         assertFalse(isCurrentDownload("toolchain_go", queue, -1))
+    }
+}
+
+/**
+ * The wiring the two classes above cannot reach.
+ *
+ * Both of them say, correctly, that deleting a guard call from
+ * handleDownloadState leaves their own tests green. That is true of every
+ * predicate extracted out of an Activity: the rule can be pinned, the call to it
+ * cannot, and both failures are silent. Losing the isCurrentDownload call lets a
+ * state naming any other pack step the queue over whichever pack is genuinely
+ * downloading; losing the isTerminalPackStatus call stops the queue advancing at
+ * all and strands first-run setup on the progress screen.
+ *
+ * Robolectric would run the call and costs more than the gap: a JUnit 4 runner in
+ * a module on `useJUnitPlatform()` with no vintage engine, `isIncludeAndroidResources`
+ * this module deliberately leaves off, and an `android-all` download on every fresh
+ * runner -- to reach one call site whose `onCreate` would have to be bypassed
+ * anyway, since it runs FirstRunSetup, ToolchainManager and SafStorageManager
+ * against a real filesDir. A second test engine is also a second way for tests to
+ * be counted, or not counted, without anyone noticing.
+ *
+ * What distinguishes a wired handler from an unwired one is which names its body
+ * compiles, so that is what this reads, following
+ * [com.vscodroid.util.ThreadIdentityTest].
+ */
+class DownloadStateWiringTest {
+
+    private val source = File("src/main/kotlin/com/vscodroid/SplashActivity.kt")
+
+    private fun handleDownloadStateBody(): String {
+        check(source.isFile) {
+            "SplashActivity.kt not found at ${source.absolutePath} — this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val text = source.readText()
+        val declaration = text.indexOf("private fun handleDownloadState(")
+        check(declaration >= 0) {
+            "handleDownloadState is gone from SplashActivity.kt; this guard names it, so " +
+                "renaming it means deciding again where the two calls are pinned"
+        }
+
+        val open = text.indexOf('{', declaration)
+        var depth = 0
+        var i = open
+        while (i < text.length) {
+            if (text[i] == '{') depth++
+            if (text[i] == '}') depth--
+            if (depth == 0) break
+            i++
+        }
+        check(depth == 0) { "no closing brace found for handleDownloadState" }
+        return text.substring(open, i + 1)
+    }
+
+    @Test
+    fun `handleDownloadState still consults both predicates`() {
+        val body = handleDownloadStateBody()
+
+        // The brace matcher is the weak part, so it is bounded rather than trusted:
+        // an extraction that ran to the end of the file would contain both names for
+        // entirely the wrong reason. The method measured 3,758 characters when this
+        // was written; the file is 23,504.
+        check(body.length in 500..8000) {
+            "extracted ${body.length} characters of handleDownloadState, which means the " +
+                "extraction is wrong rather than the code"
+        }
+
+        assertTrue(
+            body.contains("isCurrentDownload("),
+            "handleDownloadState no longer asks whether the pack is the current download, " +
+                "so a state naming any other pack can step the queue over the one downloading",
+        )
+        assertTrue(
+            body.contains("isTerminalPackStatus("),
+            "handleDownloadState no longer asks whether the status is terminal, so the " +
+                "queue stops advancing and first-run setup stalls on the progress screen",
+        )
     }
 }
