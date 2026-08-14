@@ -111,6 +111,39 @@ class KeyMappingTest {
         }
 
         @Test
+        fun `a shifted symbol shares its physical key with the unshifted one`() {
+            // The test above cannot see a wrong code or keyCode -- it asserts they
+            // are non-empty and positive, which every wrong value also is. Only
+            // Tab, Escape, Enter and Space have theirs pinned, so the other 26
+            // entries rest on this.
+            //
+            // These six are one key each on a US layout, which is why KeyInjector
+            // sends the same code and keyCode for both and lets requiresShift pick
+            // the character. Giving '{' the pair belonging to '(' -- Digit9, 57 --
+            // makes the extra key row type '(' when the user presses '{', and every
+            // test in this file stays green.
+            val pairs = listOf(
+                "{" to "[", "}" to "]", ":" to ";", "\"" to "'", "|" to "\\", "~" to "`"
+            )
+            for ((shifted, plain) in pairs) {
+                val s = KeyMapping.getKeyDef(shifted)
+                val p = KeyMapping.getKeyDef(plain)
+                assertNotNull(s, "KeyDef for '$shifted' should exist")
+                assertNotNull(p, "KeyDef for '$plain' should exist")
+                assertEquals(
+                    p!!.code, s!!.code,
+                    "'$shifted' and '$plain' are the same physical key, so code must match"
+                )
+                assertEquals(
+                    p.keyCode, s.keyCode,
+                    "'$shifted' and '$plain' are the same physical key, so keyCode must match"
+                )
+                assertTrue(s.requiresShift, "'$shifted' is the shifted half of the pair")
+                assertFalse(p.requiresShift, "'$plain' is the unshifted half of the pair")
+            }
+        }
+
+        @Test
         fun `Tab has correct keyCode 9`() {
             assertEquals(9, KeyMapping.getKeyDef("Tab")!!.keyCode)
         }

@@ -307,6 +307,39 @@ class SafSyncEngineTest {
         }
 
         @Test
+        fun `a document with no reported time still refreshes the mirror`() {
+            // The test above asserts the constructor assigned its arguments, which
+            // is a property of Kotlin rather than of this file. It also never
+            // touches lastModified, and that default is the one field anything
+            // depends on: shouldOverwriteMirror keys its unknown-time branch on
+            // exactly 0.
+            //
+            // Change the default to -1 and that branch stops firing. The comparison
+            // falls through to mirrorModified > sourceModified, which is true
+            // against any real mirror time, so the copy is skipped -- a provider
+            // that reports no timestamp gets its first copy and never an update
+            // again, silently.
+            val doc = DocumentInfo(
+                uri = mockk<Uri>(),
+                docId = "primary:MyProject/src/main.kt",
+                relativePath = "src/main.kt",
+                isDirectory = false,
+                size = 2048
+            )
+            assertEquals(0L, doc.lastModified, "an unreported provider time is 0")
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true,
+                    mirrorModified = 1_700_000_000_000L,
+                    mirrorSize = 1024,
+                    sourceModified = doc.lastModified,
+                    sourceSize = doc.size
+                ),
+                "a document with no reported time must be copied, not treated as older"
+            )
+        }
+
+        @Test
         fun `SyncJob stores fields correctly`() {
             val docUri = mockk<Uri>()
             val parentUri = mockk<Uri>()

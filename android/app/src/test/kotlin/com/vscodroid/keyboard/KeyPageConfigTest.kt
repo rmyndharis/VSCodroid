@@ -2,6 +2,7 @@ package com.vscodroid.keyboard
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
@@ -74,9 +75,15 @@ class KeyPageConfigTest {
         fun `curly brace button has bracket alternates`() {
             val braces = page.items.filterIsInstance<KeyItem.Button>().find { it.value == "{" }
             assertNotNull(braces, "Page 1 should have curly brace button")
-            assertTrue(braces!!.alternates.isNotEmpty(), "Curly brace should have alternate keys")
-            val altValues = braces.alternates.map { it.value }
-            assertTrue(altValues.contains("["), "Alternates should include '['")
+            // Pinned rather than searched. Asserting only that '[' is somewhere in
+            // the list left the second alternate unguarded: replacing '<' with a
+            // duplicate '[' removes the '<' long-press option and passes both the
+            // isNotEmpty and the contains check.
+            assertEquals(
+                listOf("[" to "[", "<" to "<"),
+                braces!!.alternates.map { it.label to it.value },
+                "Curly brace long-press offers the bracket then the angle bracket"
+            )
         }
     }
 
@@ -135,12 +142,24 @@ class KeyPageConfigTest {
         }
 
         @Test
-        fun `every button has a contentDescription`() {
+        fun `every button has a contentDescription of its own`() {
+            // This asserted the description was non-empty, which it cannot fail to
+            // be: contentDescription defaults to label, and the sibling test above
+            // already forbids an empty label. Every explicit accessibility string
+            // in KeyPageConfig could be deleted and this stayed green.
+            //
+            // What can fail is taking that default. A screen reader then reads the
+            // symbol -- "{}" instead of "Curly braces" -- which is exactly the case
+            // these strings exist for. All 23 buttons name themselves today, so a
+            // description equal to its label means one was dropped.
             for ((pageIndex, page) in KeyPages.defaults.withIndex()) {
                 for (item in page.items) {
                     if (item is KeyItem.Button) {
-                        assertTrue(item.contentDescription.isNotEmpty(),
-                            "Button contentDescription should not be empty (page ${pageIndex + 1}, label: ${item.label})")
+                        assertNotEquals(
+                            item.label, item.contentDescription,
+                            "Button '${item.label}' on page ${pageIndex + 1} fell back to the " +
+                                "default contentDescription; a screen reader would read the symbol"
+                        )
                     }
                 }
             }
