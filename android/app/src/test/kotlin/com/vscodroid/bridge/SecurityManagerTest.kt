@@ -97,11 +97,18 @@ class SecurityManagerTest {
 
         @Test
         fun `rejects token with different case`() {
-            val upper = manager.getSessionToken().uppercase()
-            // Token is generated as lowercase hex, uppercase should fail
-            if (upper != manager.getSessionToken()) {
-                assertFalse(manager.validateToken(upper))
-            }
+            val token = manager.getSessionToken()
+            val upper = token.uppercase()
+
+            // Uppercasing a lowercase-hex token changes it unless all 64 nibbles came
+            // out as digits. The guard that used to stand here skipped the assertion in
+            // that case -- and would have skipped it just as quietly if the generator
+            // stopped producing letters at all, which is a real entropy regression:
+            // narrowing the alphabet to digits leaves `generates 64-character hex token`
+            // green, because digits match [0-9a-f] too. Assert the precondition instead
+            // of hiding it.
+            assertNotEquals(token, upper, "token carries no hex letters, so its alphabet narrowed")
+            assertFalse(manager.validateToken(upper))
         }
     }
 
