@@ -315,22 +315,35 @@ npm install express
 
 ### Dev Server Preview
 
-When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can preview it in your device's browser:
+When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can preview it
+**inside the editor**, in a tab beside your code:
 
 1. Start the dev server in the terminal:
    ```bash
    npm run dev
    # Output: Local: http://localhost:5173/
    ```
-2. Open the Command Palette (**Ctrl+Shift+P**) and run `Terminal: Open Last URL Link`
-3. The page opens in your device's browser
+2. Open the Command Palette (**Ctrl+Shift+P**) and run `Simple Browser: Show`
+3. Enter the URL, for example `http://127.0.0.1:5173/`
+
+The page opens in an editor tab with back, forward and reload buttons, and an icon to
+hand the page to your device's browser if you would rather see it full screen. Edit,
+save, tap reload — without leaving the app.
+
+Any loopback port works, whatever port your dev server picked.
+
+#### Opening in the device's browser instead
+
+If you would rather use the device browser, the terminal route still works:
+
+1. Open the Command Palette and run `Terminal: Open Last URL Link`
+2. The page opens in your device's browser
 
 The terminal underlines the URL, but tapping it does nothing: VS Code only follows a
 terminal link on Ctrl+click, and a touch tap carries no Ctrl. The command above exists
 for exactly this case. `Terminal: Open Detected Link...` lets you pick from every link
 currently on screen instead of just the last one.
 
-Any `http://localhost:PORT` address works, whatever port your dev server picked.
 
 ### npm and npx
 

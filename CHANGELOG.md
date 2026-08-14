@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Java toolchain is now checked the same way, completing the set — every downloadable toolchain is examined before it is packaged
 
 ### Added
+- Previewing a dev server no longer means leaving the editor: `Simple Browser: Show` opens any loopback address in a tab beside your code, with back, forward and reload. It shipped all along and was documented nowhere, so nobody knew to type it
 - **Serve on Network**: a command that answers "what address do I give my friend?" — it lists the ports your dev servers are listening on, shows the address other devices can reach them at, and copies it. Servers listening only on this device are called out as such, with the flag needed to change that
 - You can now preview your own dev server at the device's network address from inside the editor, not only at `localhost` — the same thing a laptop does when you check how a page looks from another machine on the same Wi-Fi
 - **GitHub Copilot Chat now works on device**: the bundled extension's platform packages are aliased under the name Android resolves, its SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic so model selection completes end to end
