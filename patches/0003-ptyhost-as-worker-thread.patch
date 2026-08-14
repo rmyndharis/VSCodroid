@@ -22,8 +22,10 @@ Nothing else is faked, so a new dependency on ChildProcess fails here rather tha
 behaving oddly on a device. Two details are load-bearing: a Worker rejects
 --max-old-space-size in execArgv and wants it as resourceLimits instead, which
 otherwise throws ERR_WORKER_INVALID_EXEC_ARGV before the module loads; and an
-intentional kill is reported as (0, 'SIGTERM') because callers read a non-zero
-code without SIGTERM as a crash.
+intentional kill is reported as (0, <the signal asked for>) because callers read a
+non-zero code without a signal as a crash. kill() takes that signal and honours
+SIGKILL by terminating at once; it used to take none, so a caller escalating past
+the graceful path silently got the graceful path.
 
 ipc.cp.ts picks between them on serverName. Only the Pty Host moves in this
 change; the file watcher keeps forking, and the Extension Host is a separate step
@@ -75,7 +77,7 @@ new file mode 100644
 index 0000000..5ffcd93
 --- /dev/null
 +++ b/src/vs/base/node/workerAsChildProcess.ts
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,170 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -147,12 +149,29 @@ index 0000000..5ffcd93
 +			// for a terminate() we asked for. Callers treat a non-zero code without
 +			// SIGTERM as a crash and log it, so an intentional shutdown is reported
 +			// the way those callers already understand.
-+			this.emit('exit', this._killed ? 0 : code, this._killed ? 'SIGTERM' : null);
++			this.emit('exit', this._killed ? 0 : code, this._killed ? this._killSignal : null);
 +		});
 +	}
 +
 +	private _killed = false;
++	private _killSignal: NodeJS.Signals | number = 'SIGTERM';
 +
++	/**
++	 * The worker's thread id, NOT an OS pid -- a Worker has none, it runs inside
++	 * this process.
++	 *
++	 * Every consumer in this tree uses it as a log tag and nothing else:
++	 * `extensionHostConnection.ts` reads it once into `pid` and interpolates it
++	 * into the launch, stdout, stderr and error lines, and `ipc.cp.ts` never reads
++	 * it at all. A thread id serves that purpose exactly -- it tells two hosts
++	 * apart in one log -- which is why this returns one rather than throwing or
++	 * reporting `process.pid`.
++	 *
++	 * It must not be used for anything else. `process.kill(child.pid, ...)` would
++	 * signal an unrelated low-numbered process, and looking it up in /proc would
++	 * describe one. If you need a real pid here, a Worker is the wrong host and
++	 * the caller has to fork.
++	 */
 +	get pid(): number {
 +		return this._worker.threadId;
 +	}
@@ -185,12 +204,25 @@ index 0000000..5ffcd93
 +		}
 +	}
 +
-+	kill(): void {
++	kill(signal?: NodeJS.Signals | number): void {
 +		if (this._killed) {
 +			return;
 +		}
 +		this._killed = true;
 +		this._connected = false;
++		this._killSignal = signal ?? 'SIGTERM';
++
++		// SIGKILL means stop now, and a caller reaching for it has already decided
++		// the graceful path did not work. Without the parameter this method took no
++		// signal at all, so such a caller silently got the 200ms path below -- the
++		// exact behaviour it was escalating away from, with nothing to say so.
++		// Both callers in this tree pass no signal today (ipc.cp.ts disposeClient,
++		// extensionHostConnection dispose), so this changes nothing until one of
++		// them escalates.
++		if (signal === 'SIGKILL' || signal === 9) {
++			this._worker.terminate();
++			return;
++		}
 +
 +		// Give the module the disconnect it would get from a closing IPC channel,
 +		// so its own shutdown runs, then stop the thread. terminate() alone would
