@@ -134,6 +134,58 @@ class NodeService : Service() {
     /** Returns `true` if the Node.js process is alive. */
     fun isServerRunning(): Boolean = processManager.isRunning()
 
+    /**
+     * Posts the foreground notification again.
+     *
+     * There is exactly one reason to need this, and it is not a refresh of stale
+     * content. `MainActivity.onCreate` asks for `POST_NOTIFICATIONS` and starts
+     * this service on the next line, and the ask is a launcher call that returns
+     * immediately — so `startForeground` below runs while the permission dialog
+     * is still on screen and the answer is still "no". On Android 13+ the system
+     * accepts the foreground promotion and drops the notification: the service
+     * record ends up holding a notification that was never enqueued, which is
+     * measurable as `isForeground=true` with no `NotificationRecord` anywhere.
+     * Granting the permission afterwards posts nothing, because posting already
+     * happened.
+     *
+     * Measured on an API 36 emulator: with the permission granted before launch
+     * the record exists and the card is in the shade; with it granted from the
+     * dialog mid-launch, neither. The only difference between the two runs is
+     * when the answer arrived.
+     *
+     * The consequence was not a missing card. It was that the Stop action lives
+     * on that card, so on a fresh install there was no way to stop the server at
+     * all.
+     *
+     * Posting with the same id is an update rather than a second notification.
+     * Refused unless this service is already in the foreground: promoting from
+     * the background is what Android 12+ throws over, and in the terminal state
+     * the running notification would be a false statement.
+     *
+     * One case is deliberately left uncovered, so that it is not solved twice.
+     * A user who denies the dialog and grants the permission later from Settings
+     * gets no card until the next cold start — the launcher callback that leads
+     * here fires once, for the dialog. That case repairs itself: by the next
+     * start the permission is already granted when `startForeground` runs, which
+     * is the state this whole method exists to compensate for the absence of.
+     * Android broadcasts nothing when a permission changes, so covering it would
+     * mean re-checking on every `onStart` — a permanent cost for something that
+     * is already temporary.
+     */
+    fun refreshNotification() {
+        if (!isServiceRunning) {
+            Logger.i(tag, "Not foreground; nothing to re-post")
+            return
+        }
+        Logger.i(tag, "Posting the foreground notification again")
+        ServiceCompat.startForeground(
+            this,
+            VSCodroidApp.NOTIFICATION_ID,
+            createNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+    }
+
     // -- Internal --
 
     /**
@@ -346,6 +398,23 @@ class NodeService : Service() {
             .setContentIntent(pendingOpen)
             .setOngoing(serverRunning)
             .setSilent(true)
+            // A stated intent, not a fix for anything measured here. Android 12+
+            // is documented to hold a foreground-service notification back for
+            // about ten seconds when its channel sits below IMPORTANCE_DEFAULT,
+            // which this one does at IMPORTANCE_LOW — but the delay did not
+            // reproduce: on an API 36 emulator the NotificationRecord was already
+            // present three seconds after launch both with this call and without
+            // it. Whether the emulator does not apply the deferral, or the
+            // deferral needs conditions that run did not create, is not known.
+            //
+            // Kept because it is the documented way to say "show this now" and
+            // costs nothing, and because a server the user cannot see is also a
+            // server the user cannot stop — the Stop action lives on this card.
+            // Do not write it up as having fixed a delay; nobody has seen one.
+            //
+            // Not in tension with setSilent above: that governs whether it makes
+            // a sound, this governs whether it waits.
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
         if (serverRunning) {
             val stopIntent = Intent(this, NodeService::class.java).apply {

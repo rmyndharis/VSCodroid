@@ -73,6 +73,12 @@ class MainActivity : AppCompatActivity() {
     private var workbenchLoaded = false
 
     /**
+     * Set when notification permission arrives before the service binding does,
+     * and consumed by [setupServiceCallbacks]. See [refreshServiceNotification].
+     */
+    private var notificationRefreshPending = false
+
+    /**
      * The mirror and tree URI the file watcher is currently on, or null when it
      * is not running.
      *
@@ -137,6 +143,11 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         Logger.i(tag, "Notification permission granted=$granted")
+        // The service has already promoted itself by the time this answer
+        // arrives, and it did so while the answer was still "no" — which on
+        // Android 13+ means its notification was dropped rather than shown. See
+        // NodeService.refreshNotification for the measurement.
+        if (granted) refreshServiceNotification()
     }
 
     /**
@@ -645,6 +656,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Asks the service to post its foreground notification again, now that there
+     * is permission to show one.
+     *
+     * Deferred when the binding is not up yet rather than dropped. The permission
+     * answer and `onServiceConnected` are both main-thread callbacks with no
+     * ordering between them — the user can answer the dialog faster than the
+     * service binds — and losing the request to that race would leave exactly the
+     * missing notification this exists to fix, on the runs where the user was
+     * quick.
+     *
+     * Deliberately not solved by delaying [startAndBindService] until the answer
+     * arrives. A dialog the user is free to ignore forever would then be holding
+     * up the server, trading a missing notification for an editor that never
+     * loads.
+     */
+    private fun refreshServiceNotification() {
+        val service = nodeService
+        if (service == null) {
+            notificationRefreshPending = true
+            return
+        }
+        notificationRefreshPending = false
+        service.refreshNotification()
+    }
+
     private fun startAndBindService() {
         val serviceIntent = Intent(this, NodeService::class.java)
         startForegroundService(serviceIntent)
@@ -674,6 +711,10 @@ class MainActivity : AppCompatActivity() {
                 finishAndRemoveTask()
             }
         }
+
+        // The permission answer can beat the binding; if it did, this is the
+        // first moment the request has anywhere to go.
+        if (notificationRefreshPending) refreshServiceNotification()
 
         // If the server is already running (activity recreated, rotation, etc.),
         // the launchServer() coroutine has already completed and won't fire again.
