@@ -54,7 +54,7 @@ flowchart TD
 | Crash-loop DoS on Node.js server                      | **Denial of Service**      | Low    | Medium     | Auto-restart with exponential backoff, max restart count                            |
 | Malicious extension consuming all memory/CPU          | **Denial of Service**      | Medium | Low        | Extension Host resource limits, idle-kill for LS                                    |
 | WebView XSS via malicious file content                | **Elevation of Privilege** | Medium | Low        | VS Code CSP, WebView sandboxing                                                     |
-| Extension/webview script abuses AndroidBridge methods | **Elevation of Privilege** | High   | Medium     | Bridge origin allowlist + per-session capability token + sensitive method gating    |
+| Extension/webview script abuses AndroidBridge methods | **Elevation of Privilege** | High   | Medium     | Per-session capability token on every bridge method, pinned by a reflection test    |
 | Extension escapes sandbox to access system files      | **Elevation of Privilege** | High   | Low        | Android app sandbox, Extension Host isolation (fork in M1-M3, worker_thread in M4)  |
 
 ---
@@ -80,7 +80,7 @@ flowchart TD
 | WebView process isolation            | WebView renderer runs in separate process                                                                                                                                                                                          |
 | AndroidBridge access control         | Every bridge method requires the per-session token and refuses without it; a reflection test fails the build if one is added that does not. There is no origin check -- `@JavascriptInterface` does not carry the caller's origin |
 | Code signing                         | APK/AAB signed with release key                                                                                                                                                                                                    |
-| No dynamic code loading (Play Store) | Core binaries bundled as .so in APK; toolchains as on-demand asset packs via Play Store. No runtime binary download in Play Store version. Sideload version (GitHub releases) includes optional package manager for advanced users |
+| No dynamic code loading (Play Store) | Core binaries bundled as .so in APK; toolchains as on-demand asset packs via Play Store. No runtime binary download in Play Store version. Sideload installs download toolchain ZIPs from GitHub Releases; `vscodroid pkg` is planned, not shipped |
 | Foreground Service notification      | User always sees when server is running                                                                                                                                                                                            |
 
 ### 3.3 Extension Security
@@ -89,7 +89,7 @@ flowchart TD
 | ------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | Extension Host isolation       | Runs via child_process.fork() in M1-M3, migrated to worker_thread in M4 for phantom process optimization |
 | VS Code Extension API sandbox  | Extensions can only access vscode.\* APIs                                                                |
-| AndroidBridge capability model | Sensitive bridge APIs require valid per-session token and trusted origin                                 |
+| AndroidBridge capability model | All bridge APIs require the valid per-session token; no origin component                                 |
 | File system scoping            | Extensions see workspace folder by default                                                               |
 | Open VSX moderation            | Open VSX has publisher verification and abuse reporting                                                  |
 | User consent                   | User explicitly installs each extension                                                                  |
@@ -193,9 +193,7 @@ flowchart TD
 
 ### 6.1 Vulnerability Disclosure
 
-- Security issues: report via email (yudhi@rmyndharis.com) or GitHub Security Advisory (private)
-- Response time: acknowledge within 48 hours, fix within 7 days for critical
-- Disclosure: coordinated disclosure after fix is available
+- Reporting channels, response times and disclosure policy: [`SECURITY.md`](../SECURITY.md) holds the single copy, so a reporter who reads both documents is not given two answers
 
 ### 6.2 Malicious Extension Response
 
@@ -220,5 +218,5 @@ If a malicious extension is reported:
 | Dependency vulnerability scan          | `npm audit`, `safety check` (Python)                               | Weekly        |
 | Binary integrity                       | SHA256 checksums of bundled .so files                              | Every build   |
 | Storage permission scope               | Attempt to read/write outside app directory                        | Every release |
-| AndroidBridge origin/token enforcement | Attempt bridge calls from untrusted frame/origin, verify rejected  | Every release |
+| AndroidBridge token enforcement        | Call bridge methods with a wrong or absent token, verify rejected  | Every release |
 | Backup exclusion verification          | Validate backup payload excludes `~/.ssh`, `.gitconfig`, workspace | Every release |

@@ -186,12 +186,11 @@ VSCodroid/
 │   ├── build-all.sh                  # Run all download/build scripts
 │   ├── deploy.sh                     # Build + install + launch on device
 │   └── device-test.sh                # Run device tests
-├── patches/                       # VS Code patches
-│   ├── code-server/                  # Patches inherited from code-server
-│   └── vscodroid/                    # VSCodroid-specific patches
+├── patches/                       # Unified diffs applied to the VS Code source
+│   ├── NNNN-<description>.patch      # Flat, applied in filename order, before gulp
+│   └── fingerprints.txt              # How each patch is proven to have reached the package
 ├── docs/                          # Project documentation
 ├── test/                          # Test suites and fixtures
-├── CLAUDE.md                      # Architecture and technical decisions reference
 ├── MILESTONES.md                  # Development milestones M0-M6
 ├── NOTICE.md                      # Third-party attribution
 └── README.md                      # Project overview
@@ -255,6 +254,10 @@ checkouts differed.
 | `check-welcome-claims.py` | Refuses a welcome screen that names a bundled tool's version, promises a toolchain as "coming soon", or puts an undeclared number in walkthrough prose or an illustration. Those runtimes come from the Termux index at build time, so a number written into the manifest is right until the next rebuild -- it was wrong for two releases, in the illustrations as well as the text | exit status |
 | `check-bundle-size.py` | Checks the release bundle against Play's per-module size caps before anything is published, rather than at upload | exit status |
 | `check-local-network-permission.py` | Checks local network access survives the `targetSdk` in use | exit status |
+| `test-dns-proxy.js` | Exercises the loopback DNS proxy's Basic-auth contract. Loopback on Android is not isolated per app, so that token is what stands between the proxy and every other app on the device | exit status |
+| `test-process-monitor.js` | Points a scan at a fixture `/proc` and checks the snapshot: that the language servers that ship are recognised, that an unrelated user process carrying a server's name in its path is not, and that the count includes the process the monitor runs inside | exit status |
+| `test-platform-fix.js` | Runs the platform override under a faked `process.platform` and checks it engages for node-gyp and for nothing that merely mentions it in a path or an argument | exit status |
+| `test-server-bootstrap.js` | Boots the server bootstrap against a fixture tree and checks the `product.json` rewrite: overrides applied, a truncated file named rather than thrown, an unwritable directory leaving the existing file intact | exit status |
 
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).
@@ -539,15 +542,20 @@ generated identifiers, broke on every version bump, and printed `SKIP` on a miss
 
 2. **Make the change in readable source** and produce the diff:
    ```bash
-   git -C /path/to/vscode diff > patches/0009-short-description.patch
+   git -C /path/to/vscode diff > patches/NNNN-short-description.patch
    ```
-   Number it after the last existing patch. Order matters — they are applied in filename order.
+   Number it after the last existing patch — run `ls patches/` rather than assuming, since the count
+   moves. Order matters: they are applied in filename order.
 
-3. **Leave a fingerprint if you can.** The build's Verify stage greps the packaged bundles for a
-   string from each patch, because a patch applying cleanly proves nothing about whether the file was
-   in this target's graph. Add a row to the `FINGERPRINTS` block in `build-vscode-oss.sh` naming the
-   bundle it must reach and a string that survives minification — an identifier or a literal, never a
-   comment.
+3. **Leave a fingerprint.** The build's Verify stage greps the packaged bundles for a string from
+   each patch, because a patch applying cleanly proves nothing about whether the file was in this
+   target's graph. Add a row to `patches/fingerprints.txt` naming the bundle it must reach and a
+   string that survives minification — an identifier or a literal, never a comment, which
+   minification strips. Every patch needs a row: a patch with none fails the check rather than
+   passing silently. Where no fingerprint is possible, the row says so and states how the patch is
+   proven instead. `scripts/check-patch-fingerprints.py` runs these expectations, and it runs on
+   three sides — against the tree the build produced, against the tarball the fetcher downloaded,
+   and against `assets/` before Gradle packages it.
 
 4. **Build and test:**
    ```bash
@@ -560,13 +568,6 @@ generated identifiers, broke on every version bump, and printed `SKIP` on a miss
 5. **Explain why in the patch's own commit message.** A diff shows what changed; the reason it is
    needed on Android is what the next person will not be able to reconstruct.
 
-
-### Tips for Patching Minified Code
-
-- Variable names like `a`, `t`, `e` change between versions. Match on structure, not names.
-- Boolean alias patterns (e.g., `Pt=me.platform==="linux"`) are high-impact -- fixing one variable fixes all downstream uses.
-- Use `python3` for regex, not `sed` (`sed -i` behaves differently on macOS vs Linux).
-- Always verify the regex matched by checking the file size or grepping for the replacement string.
 
 ## Code Style
 
@@ -588,7 +589,11 @@ generated identifiers, broke on every version bump, and printed `SKIP` on a miss
 - Must work on macOS bash 3.2 (the default shell on macOS) -- no bash 4+ features.
 - Use `set -euo pipefail` at the top of scripts.
 - Use `bsdtar` for `.deb` extraction (macOS compatibility).
+- Use `python3` for in-place edits, not `sed` (`sed -i` takes different arguments on macOS and Linux).
 - Quote all variable expansions.
+- A pipeline's exit status is its **last** command's, so `cmd | sed || echo` binds the `||` to the
+  pipeline rather than to `cmd`, and a `grep` that matches nothing inside one reports success. Test
+  the result, not the pipeline. This has produced silently-passing checks here more than once.
 
 ### General
 

@@ -257,7 +257,7 @@ VSCodroid is built using the Android SDK and NDK provided by Google.
 
 ## Google Play Asset Delivery
 
-On-demand toolchain packs (Go, Ruby, Java) are delivered via Google Play Asset Delivery, a feature of Google Play.
+On Play Store installs, on-demand toolchain packs (Go, Ruby, Java) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
 
 - **Terms**: https://play.google.com/about/developer-distribution-agreement.html
 
@@ -325,8 +325,8 @@ All other trademarks are the property of their respective owners. The use of the
 For questions about licenses, trademarks, or legal notices:
 
 - **Email**: yudhi@rmyndharis.com
-- **GitHub**: https://github.com/anthropics/vscodroid
+- **GitHub**: https://github.com/rmyndharis/VSCodroid
 
 ---
 
-_This document was last updated on February 13, 2026._
+_This document was last updated on August 14, 2026._

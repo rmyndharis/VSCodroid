@@ -9,8 +9,9 @@
 > with unified diffs in `patches/` applied before the build; app builds fetch the result with
 > `scripts/fetch-vscode-oss.sh`. Anything here about downloading a pre-built server from Microsoft's
 > CDN, or about inline regex patches in `download-vscode-server.sh`, describes a path that was
-> removed on 2026-08-12. Read `CLAUDE.md` for what the code actually does, and verify against the
-> code itself.
+> removed on 2026-08-12. For what the code actually does, read the code — `scripts/build-vscode-oss.sh`,
+> `patches/`, and the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is
+> the prose kept current alongside it.
 
 ---
 

@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: February 13, 2026**
+**Last Updated: August 14, 2026**
 
 ## Summary
 
@@ -33,7 +33,12 @@ If you choose to sign in to GitHub from within the editor (for example, to use G
 
 ### Toolchain Downloads (User-Initiated)
 
-Additional programming language toolchains (Go, Rust, Java, Ruby) can be downloaded on-demand via Google Play Asset Delivery. These downloads are handled by the Google Play Store infrastructure. VSCodroid does not collect any data during this process. Google's privacy policy applies to Play Store interactions: https://policies.google.com/privacy.
+Additional programming language toolchains (Go, Ruby, Java 17) can be downloaded on-demand. There are two delivery paths, and the app chooses between them at runtime by asking Android which package installed it:
+
+- **Installed from the Google Play Store** (the installing package is `com.android.vending`): the toolchain arrives as a Google Play Asset Delivery pack, handled by the Google Play Store infrastructure. Google's privacy policy applies to Play Store interactions: https://policies.google.com/privacy.
+- **Installed any other way** -- a sideloaded APK, a debug build, `adb install` -- or when the installing package cannot be read at all: the app downloads a ZIP over HTTPS from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), following GitHub's redirect to its release-asset host. GitHub's privacy policy applies to that download.
+
+VSCodroid does not collect any data during either process.
 
 ### Package Installation (User-Initiated)
 
@@ -73,9 +78,10 @@ All of this data is removed when you uninstall the app or clear the app's data t
 
 ## Third-Party Services
 
-VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The only third-party service integrated at the system level is:
+VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The only third-party services integrated at the system level are:
 
-- **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs. This is a Google Play Store feature and is governed by Google's privacy policy.
+- **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
+- **GitHub Releases**: Used solely for downloading those same toolchain packs on installs that did not come from the Play Store. Governed by GitHub's privacy policy.
 
 Extensions you install from Open VSX are third-party software. Each extension may have its own privacy practices. We recommend reviewing extension descriptions and privacy information before installing them.
 
@@ -98,14 +104,14 @@ Since VSCodroid does not collect any personal data, there is no personal data to
 ## Open Source
 
 VSCodroid is open source software. You can review the complete source code to verify our privacy practices at:
-https://github.com/anthropics/vscodroid
+https://github.com/rmyndharis/VSCodroid
 
 ## Contact
 
 If you have questions about this privacy policy, please contact us at:
 
 - **Email**: yudhi@rmyndharis.com
-- **GitHub Issues**: https://github.com/anthropics/vscodroid/issues
+- **GitHub Issues**: https://github.com/rmyndharis/VSCodroid/issues
 
 ---
 

@@ -168,7 +168,7 @@ flowchart TD
   LOCAL <--> REH
 ```
 
-> For full architecture details, see [Architecture Documentation](docs/03-ARCHITECTURE.md).
+> For full architecture details, see [Architecture Design Document (historical — the 2026-02-10 design, not the code)](docs/03-ARCHITECTURE.md).
 
 ## 📱 Requirements
 
@@ -267,7 +267,7 @@ Quick links:
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | [Product Requirements](docs/01-PRD.md)                                       | Vision, goals, and product scope                           |
 | [Software Requirements](docs/02-SRS.md)                                      | Detailed functional & non-functional requirements          |
-| [Architecture](docs/03-ARCHITECTURE.md)                                      | System design and component architecture                   |
+| [Architecture (historical)](docs/03-ARCHITECTURE.md)                         | System design and component architecture                   |
 | [Technical Spec](docs/04-TECHNICAL_SPEC.md)                                  | Implementation details and technical decisions             |
 | [API Spec](docs/05-API_SPEC.md)                                              | Internal API and bridge interfaces                         |
 | [Security](docs/06-SECURITY.md)                                              | Security model and threat analysis                         |

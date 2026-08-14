@@ -571,7 +571,7 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 
 1. Check your internet connection -- extension search and download require connectivity.
 2. Search directly on [open-vsx.org](https://open-vsx.org) to verify the extension exists there.
-3. Some extensions may not be compatible with VS Code 1.96.4. Try an older version of the extension if available.
+3. Some extensions require a newer editor than the one you have. Run **About** from the Command Palette (`Ctrl+Shift+P`) to see which version VSCodroid is built on, compare it with the extension's requirement on open-vsx.org, and try an older version of the extension if it asks for more. An extension that needs a newer editor does not report an error -- it installs, never activates, and logs nothing, so this is worth checking whenever a freshly installed extension appears to do nothing.
 
 ### npm Install Fails
 

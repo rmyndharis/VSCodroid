@@ -5,6 +5,14 @@
 **Date**: 2026-02-10
 **Standard Reference**: IEEE 1016 (adapted), C4 Model
 
+> **Historical document — describes the design as of 2026-02-10, not the code.**
+> The ADRs in §4 record decisions at the moment they were taken, and several have since been
+> reversed. The server that ships is vanilla Code - OSS, built from the MIT `microsoft/vscode`
+> source by `scripts/build-vscode-oss.sh` with the unified diffs in `patches/` applied before the
+> build; app builds fetch the result with `scripts/fetch-vscode-oss.sh`. Where this document and
+> the code disagree, the code wins — read those scripts and the sources under
+> `android/app/src/main/kotlin/com/vscodroid/`, and verify against them.
+
 ---
 
 ## 1. Architecture Overview
@@ -141,7 +149,7 @@ flowchart TD
 
 ### ADR-001: Fork code-server, not VS Code directly
 
-**Status**: Accepted
+**Status**: Superseded 2026-08-12 — see **Superseded by** below
 
 **Context**: We need VS Code running as a web server on Android. VS Code itself doesn't include a web-serving layer.
 
@@ -154,6 +162,14 @@ flowchart TD
 - Well-documented patch system
 
 **Trade-off**: Dependency on code-server's patch compatibility with VS Code updates.
+
+**Superseded by**: Building Code - OSS from the MIT source directly. The Context above was wrong on
+its premise — the OSS source already carries the web-serving layer, as the
+`vscode-reh-web-linux-<arch>` build target. `scripts/build-vscode-oss.sh` clones
+`github.com/microsoft/vscode` at the pinned tag, applies the unified diffs in `patches/` with
+`git apply`, and runs `npm run gulp core-ci`, then `compile-copilot-extension-build`, then the
+`vscode-reh-web-linux-<arch>-min-ci` packaging task; `scripts/fetch-vscode-oss.sh` then downloads
+the resulting `server-<version>` release tarball for every app build.
 
 ---
 
@@ -246,7 +262,7 @@ flowchart TD
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux) bundled as .so files in the base APK. Additional toolchains (Go, Rust, Java, C/C++, Ruby) delivered as on-demand asset packs via Play Store — user selects desired languages during first-run Language Picker, Play Store downloads automatically. For sideloading (GitHub Releases APK), all toolchains are bundled directly.
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux) bundled as .so files in the base APK. Additional toolchains (Go, Rust, Java, C/C++, Ruby) delivered as on-demand asset packs via Play Store — user selects desired languages during first-run Language Picker, Play Store downloads automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks — so installed toolchains survive app updates.
 
 ---
 
@@ -302,7 +318,7 @@ flowchart TD
 - No custom CDN infrastructure needed for toolchain hosting
 - All binaries delivered via Play Store, simplifying policy compliance
 - Additional languages can be added later via Settings > Toolchains
-- For sideloading (GitHub Releases), all toolchains bundled directly in APK
+- Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything other than `com.android.vending` sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`
 
 **Trade-off**: Requires internet for toolchain download after initial install. Core functionality (Node.js, Python, Git) works fully offline.
 
@@ -495,7 +511,7 @@ flowchart TD
 | Build system | Gradle (Kotlin DSL) | 8.x |
 | UI framework | Android View + WebView | API 33-36 |
 | Node.js | Node.js LTS | 20.x (pinned at M0 start) |
-| VS Code | Code-OSS (via code-server fork) | 1.96.x (pinned at M0 start) |
+| VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.133.0 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host (child_process.fork initially, worker_thread in M4) | Same as VS Code |
 | Terminal | node-pty + tmux + bash | Latest |
 | Package manager | Custom (Termux repo compatible) | v1.0 |

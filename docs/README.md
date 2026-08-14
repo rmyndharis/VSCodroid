@@ -2,6 +2,11 @@
 
 ## Document Index
 
+### Planning Suite — written 2026-02-10, kept as history
+
+Each of these still carries `**Version**: 1.0-draft` and `**Date**: 2026-02-10` in its own header.
+They record what was planned, not what was built — see [Document Status](#document-status).
+
 | # | Document | Description | Audience |
 |---|----------|-------------|----------|
 | 01 | [Product Requirements (PRD)](./01-PRD.md) | Vision, goals, user personas, feature scope | Everyone |
@@ -15,6 +20,18 @@
 | 09 | [Development Guide](./09-DEVELOPMENT_GUIDE.md) | Setup, conventions, workflow, contribution | Developers |
 | 10 | [Release Plan](./10-RELEASE_PLAN.md) | CI/CD, versioning, Play Store, rollout | DevOps, Project leads |
 | 11 | [Glossary](./11-GLOSSARY.md) | Terms, acronyms, technology definitions | Everyone |
+| 12 | [Implementation Plan](./12-IMPLEMENTATION_PLAN.md) | Week-by-week task breakdown, dependencies, checkpoints | Project leads, Developers |
+
+### Maintained References
+
+Kept current against the shipping app rather than frozen at plan time.
+
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [User Guide](./USER_GUIDE.md) | Using the app: editor, terminal, extensions, SSH, toolchains | Users |
+| [Device Test Checklist](./DEVICE_TEST_CHECKLIST.md) | Manual on-device pass, run after the automated tests | QA |
+| [Legal Notices](./LEGAL_NOTICES.md) | Licenses and attribution for everything redistributed | Everyone |
+| [Privacy Policy](./PRIVACY_POLICY.md) | What the app collects, and what it does not | Everyone |
 
 ## Reading Order
 
@@ -22,7 +39,7 @@
 1. PRD (understand what we're building)
 2. Architecture (understand how it works)
 3. Glossary (if any terms are unfamiliar)
-4. Development Guide (to start contributing)
+4. [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (to start contributing — the Development Guide here is planning-era)
 
 **Technical deep-dive?**
 1. Architecture → Technical Spec → API Spec
@@ -32,24 +49,32 @@
 
 ## Related Files
 
-- [`../CLAUDE.md`](../CLAUDE.md) — Project source of truth (architecture decisions, quick reference)
-- [`../MILESTONES.md`](../MILESTONES.md) — Development milestones (M0–M5)
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — Contribution guidelines
+- [`../README.md`](../README.md) — Project overview: features, requirements, building from source
+- [`../MILESTONES.md`](../MILESTONES.md) — Development milestones (M0–M6)
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — Contribution guidelines, project structure, build scripts
 - [`../CHANGELOG.md`](../CHANGELOG.md) — Change log (Keep a Changelog format)
 - [`../SECURITY.md`](../SECURITY.md) — Security vulnerability reporting policy
 
 ## Document Status
 
-| Document | Status | Last Updated |
-|----------|--------|-------------|
-| PRD | Draft | 2026-02-10 |
-| SRS | Draft | 2026-02-10 |
-| Architecture | Draft | 2026-02-10 |
-| Technical Spec | Draft | 2026-02-10 |
-| API Spec | Draft | 2026-02-10 |
-| Security | Draft | 2026-02-10 |
-| Testing Strategy | Draft | 2026-02-10 |
-| Risk Assessment | Draft | 2026-02-10 |
-| Development Guide | Draft | 2026-02-10 |
-| Release Plan | Draft | 2026-02-10 |
-| Glossary | Draft | 2026-02-10 |
+Status is expressed by which table above a document sits in, not by a per-document row here.
+
+The **planning suite** (01–12) was written before the app existed and is kept for its reasoning, not
+as a description of the build. Several of them now open with a banner naming what has since been
+overtaken; the rest carry no such note, which is not the same as being current. Where one
+contradicts the code, the code is right.
+
+The **maintained references** are the unnumbered documents: the User Guide and Privacy Policy that
+ship to users, the Legal Notices recording what is redistributed, and the device test checklist run
+by hand on a real device.
+
+There is deliberately no "last updated" column. The one that stood here read `2026-02-10` for all
+eleven rows while several of the documents it listed had already changed, because a date copied into
+a table is one edit away from being wrong and nothing makes it fail loudly. Version control already
+holds the answer exactly:
+
+```bash
+git log -1 --format='%cd  %s' --date=short -- docs/04-TECHNICAL_SPEC.md
+```
+
+For what the code does today, read the code.
