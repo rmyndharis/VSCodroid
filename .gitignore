@@ -40,10 +40,12 @@ yarn-error.log*
 /android/app/src/main/assets/vscode-reh/
 /android/app/src/main/assets/python-stdlib/
 /android/app/src/main/assets/extensions/*
-!/android/app/src/main/assets/extensions/vscodroid.vscodroid-process-monitor-*/
-!/android/app/src/main/assets/extensions/vscodroid.vscodroid-saf-bridge-*/
-!/android/app/src/main/assets/extensions/vscodroid.vscodroid-welcome-*/
-!/android/app/src/main/assets/extensions/vscodroid.vscodroid-github-auth-*/
+# This project's own extensions are source and belong in git; everything else in
+# here is downloaded by download-extensions.sh and does not. One pattern rather
+# than a line per extension: the list had to be edited for every extension added,
+# it still named one that no longer exists, and a forgotten line means the new
+# extension is silently absent from the APK with nothing to explain why.
+!/android/app/src/main/assets/extensions/vscodroid.vscodroid-*/
 /android/app/src/main/assets/usr/
 
 # ===== Toolchain Asset Packs (populated by scripts/download-*.sh) =====

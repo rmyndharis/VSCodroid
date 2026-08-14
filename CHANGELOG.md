@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Java toolchain is now checked the same way, completing the set — every downloadable toolchain is examined before it is packaged
 
 ### Added
+- **Serve on Network**: a command that answers "what address do I give my friend?" — it lists the ports your dev servers are listening on, shows the address other devices can reach them at, and copies it. Servers listening only on this device are called out as such, with the flag needed to change that
 - You can now preview your own dev server at the device's network address from inside the editor, not only at `localhost` — the same thing a laptop does when you check how a page looks from another machine on the same Wi-Fi
 - **GitHub Copilot Chat now works on device**: the bundled extension's platform packages are aliased under the name Android resolves, its SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic so model selection completes end to end
 - **Claude Code extension support**: the marketplace serves its musl build, the CLI starts through the bundled musl loader, and a loopback DNS proxy gives musl binaries working name resolution

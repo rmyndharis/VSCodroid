@@ -1,0 +1,23 @@
+{
+  "name": "vscodroid-serve-network",
+  "displayName": "VSCodroid Serve on Network",
+  "description": "Shows the address other devices can use to reach a dev server running on this device",
+  "version": "1.0.0",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodroid.serveOnNetwork",
+        "title": "VSCodroid: Serve on Network"
+      }
+    ]
+  }
+}
