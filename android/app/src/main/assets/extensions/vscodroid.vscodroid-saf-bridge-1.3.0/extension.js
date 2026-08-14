@@ -13,6 +13,12 @@
  * Commands:
  * - vscodroid.openFolderFromDevice : Opens SAF folder picker
  * - vscodroid.openRecentFolder     : Shows Quick Pick of recently opened folders
+ * - vscodroid.openInBrowser        : Opens a URL in the device browser
+ * - vscodroid.generateSshKey       : Creates ~/.ssh/id_ed25519
+ * - vscodroid.copySshPublicKey     : Copies the public key to the clipboard
+ * - vscodroid.showStorageUsage     : Per-component storage breakdown
+ * - vscodroid.clearCaches          : Deletes cached data, reports bytes freed
+ * - vscodroid.about                : Opens the Android About dialog
  */
 
 const vscode = require('vscode');
@@ -213,6 +219,73 @@ function activate(context) {
         }
     );
 
+    // -- Storage --
+
+    const storageUsageCmd = vscode.commands.registerCommand(
+        'vscodroid.showStorageUsage',
+        async () => {
+            try {
+                const json = /** @type {string} */ (
+                    await sendBridgeCommand('getStorageBreakdown')
+                );
+                const b = JSON.parse(json || '{}');
+
+                // Total first, then the parts largest-first: on a device that is out of
+                // space the question is which one to act on, and an alphabetical or
+                // declaration-ordered list makes that a reading exercise.
+                const parts = Object.keys(b)
+                    .filter((k) => k !== 'total')
+                    .map((k) => ({ key: k, bytes: Number(b[k]) || 0 }))
+                    .sort((x, y) => y.bytes - x.bytes);
+
+                /** @type {vscode.QuickPickItem[]} */
+                const items = [
+                    {
+                        label: `$(database) Total: ${formatBytes(Number(b.total) || 0)}`,
+                        description: 'app storage in use'
+                    },
+                    ...parts.map((p) => ({
+                        label: `$(circle-filled) ${STORAGE_LABELS[p.key] || p.key}`,
+                        description: formatBytes(p.bytes)
+                    }))
+                ];
+
+                const picked = await vscode.window.showQuickPick(items, {
+                    placeHolder: 'Storage in use — select to free up cached data'
+                });
+                // Any selection means "now do something about it"; there is nothing to
+                // drill into, and offering a dead-end list on a full device is the
+                // problem this command exists to solve.
+                if (picked) {
+                    vscode.commands.executeCommand('vscodroid.clearCaches');
+                }
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(
+                    `Could not read storage usage: ${err.message}`
+                );
+            }
+        }
+    );
+
+    const clearCachesCmd = vscode.commands.registerCommand(
+        'vscodroid.clearCaches',
+        async () => {
+            try {
+                const freed = Number(await sendBridgeCommand('clearCaches')) || 0;
+                // Say the number. A command that claims to free space without saying how
+                // much is indistinguishable from one that did nothing, and "already
+                // clear" is a useful answer rather than a failure.
+                vscode.window.showInformationMessage(
+                    freed > 0
+                        ? `Freed ${formatBytes(freed)} of cached data.`
+                        : 'Nothing to clear — no cached data was using space.'
+                );
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Could not clear caches: ${err.message}`);
+            }
+        }
+    );
+
     // -- About --
 
     const aboutCmd = vscode.commands.registerCommand('vscodroid.about', async () => {
@@ -229,6 +302,8 @@ function activate(context) {
         openInBrowserCmd,
         generateSshKeyCmd,
         copySshPublicKeyCmd,
+        storageUsageCmd,
+        clearCachesCmd,
         aboutCmd
     );
 }
@@ -241,6 +316,40 @@ function deactivate() {
 }
 
 // -- Helpers --
+
+/**
+ * Human names for the keys StorageManager.getStorageBreakdown returns. A key with no
+ * entry falls back to the raw key rather than being hidden, so a new component added on
+ * the Kotlin side still shows up here instead of silently going missing from the total.
+ * @type {Record<string, string>}
+ */
+const STORAGE_LABELS = {
+    vscode_server: 'Editor server',
+    extensions: 'Extensions',
+    user_data: 'Settings and history',
+    logs: 'Logs',
+    tools: 'Toolchains and tools',
+    saf_mirrors: 'Device folder mirrors',
+    cache: 'Cache'
+};
+
+/**
+ * Formats a byte count for people, not for machines.
+ * @param {number} bytes
+ * @returns {string}
+ */
+function formatBytes(bytes) {
+    if (!bytes || bytes < 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB'];
+    let value = bytes / 1024;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit++;
+    }
+    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
 
 /**
  * Formats a timestamp into a human-readable relative time string.

@@ -1,8 +1,8 @@
 {
   "name": "vscodroid-saf-bridge",
   "displayName": "VSCodroid Android Bridge",
-  "description": "Commands that reach Android: device folders, browser, SSH keys, about",
-  "version": "1.2.0",
+  "description": "Commands that reach Android: device folders, browser, SSH keys, storage, about",
+  "version": "1.3.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -35,6 +35,14 @@
       {
         "command": "vscodroid.copySshPublicKey",
         "title": "VSCodroid: Copy SSH Public Key"
+      },
+      {
+        "command": "vscodroid.showStorageUsage",
+        "title": "VSCodroid: Show Storage Usage"
+      },
+      {
+        "command": "vscodroid.clearCaches",
+        "title": "VSCodroid: Clear Caches"
       },
       {
         "command": "vscodroid.about",

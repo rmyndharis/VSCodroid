@@ -949,13 +949,22 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Warns the user if available storage is critically low (<100 MB).
+     *
+     * The command name is quoted exactly as the palette lists it
+     * (`VSCodroid: Clear Caches`, contributed by the bundled Android bridge
+     * extension), because the reader's next action is to type it. This said
+     * "Clear caches in Settings" until 2026-08-14, and there is no Settings
+     * screen: the manifest declares Splash, Main and Toolchain activities and
+     * nothing else, so the sentence sent a user who was out of space looking
+     * for a place that does not exist.
      */
     private fun checkStorageHealth() {
         if (!StorageManager.isStorageLow(this)) return
         val available = StorageManager.formatSize(StorageManager.getAvailableStorage(this))
         Toast.makeText(
             this,
-            "Storage low ($available available). Clear caches in Settings.",
+            "Storage low ($available available). Run \"VSCodroid: Clear Caches\" " +
+                "from the Command Palette.",
             Toast.LENGTH_LONG
         ).show()
         Logger.w(tag, "Storage low: $available available")
