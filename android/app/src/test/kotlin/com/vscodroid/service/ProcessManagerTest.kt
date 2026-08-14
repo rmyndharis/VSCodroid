@@ -174,6 +174,34 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `stopping a second time touches nothing and reports nothing running`() {
+        // Two callers now stop the same server on one Stop press. NodeService
+        // does it inline when the notification action arrives, because a service
+        // that is started *and* bound is not destroyed by stopSelf() alone, and
+        // then Service.onDestroy does it again once the activity finishes and
+        // releases the binding. The second call has to be harmless as a property
+        // of this class rather than as an accident of ordering, because which
+        // one runs second depends on how quickly the activity goes away.
+        val process = mockk<Process>(relaxed = true) {
+            every { isAlive } returns true
+            every { waitFor(any(), any()) } returns true
+        }
+        manager.serverProcessField = process
+
+        manager.stopServer()
+        assertNull(manager.serverProcessField, "the first stop must release the process")
+
+        manager.stopServer()
+
+        assertNull(manager.serverProcessField, "the second stop must not resurrect anything")
+        assertFalse(manager.isRunning(), "a stopped server must not report itself alive")
+        // Once, from the first call. A destroy issued against an already-reaped
+        // process is where a double stop would start signalling a PID the system
+        // has since handed to something else.
+        verify(exactly = 1) { process.destroy() }
+    }
+
+    @Test
     fun `the derived heap ceiling reaches the command line`() {
         // The wire, not the predicate. HeapCeilingTest pins how the number is
         // computed and says nothing about whether it is used: replacing

@@ -1,16 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Android 11-and-lower form of the rules in `data_extraction_rules.xml`,
+  which is where the reasoning lives.
+
+  No device this app runs on reads this file. `android:fullBackupContent` is
+  consulted up to Android 11 (API 30) and `android:dataExtractionRules` from
+  Android 12 (API 31) onwards, while `minSdk` is 33 — so every supported device
+  takes the other file and ignores this one. It is kept in step rather than left
+  to drift, because a stale copy of a security-relevant rule is worse company
+  than none: the next reader has no way to tell which of the two is live.
+
+  Deleting it, and the `android:fullBackupContent` attribute that points here,
+  looks like the honest end state and is not. Both are deliberately kept.
+
+  What they are is a safety net for a change nobody would connect to backups:
+  lowering `minSdk` to 30 or below, which is an ordinary thing to do to reach
+  more devices. On those API levels `android:dataExtractionRules` is ignored, and
+  an app with no `android:fullBackupContent` gets *unrestricted* full backup —
+  the passphrase-less SSH key and the server's connection token included, off the
+  device and into the cloud. Nothing would fail, nothing would be logged, and the
+  cause would be a manifest edit from months earlier.
+
+  So this file is not dead weight so much as a floor. Keep it identical to the
+  `<cloud-backup>` section of `data_extraction_rules.xml`; the two disagreeing is
+  the only way this arrangement can quietly go wrong.
+-->
 <full-backup-content>
-    <!-- Include user settings -->
-    <include domain="file" path="home/.vscodroid/User" />
-
-    <!-- Exclude sensitive data -->
-    <exclude domain="file" path="home/.ssh" />
-    <exclude domain="file" path="home/.gitconfig" />
-    <exclude domain="file" path="home/.vscodroid/data/logs" />
-
-    <!-- Exclude large/regenerable data -->
-    <exclude domain="file" path="server" />
-    <exclude domain="file" path="usr" />
-    <exclude domain="external" path="." />
-    <exclude domain="database" path="." />
+    <include domain="file" path="home/.vscodroid/data/Machine" />
 </full-backup-content>

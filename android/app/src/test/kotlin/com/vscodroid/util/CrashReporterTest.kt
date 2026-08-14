@@ -3,7 +3,9 @@ package com.vscodroid.util
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockkObject
+import io.mockk.unmockkAll
 import io.mockk.Runs
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -35,6 +37,16 @@ class CrashReporterTest {
         every { Logger.w(any(), any()) } just Runs
         every { Logger.w(any(), any(), any()) } just Runs
     }
+
+    /**
+     * Without this, [Logger] stayed mocked for the rest of the JVM. Every class
+     * that calls `mockkObject(Logger)` afterwards re-mocks an object this one
+     * never released, and whichever of them runs first decides what the others
+     * see — so a failure lands in a class that did nothing wrong, and reordering
+     * the suite moves it somewhere else.
+     */
+    @AfterEach
+    fun tearDown() = unmockkAll()
 
     private fun initCrashDir(): File {
         val crashDir = File(tempDir, "crash-logs")
@@ -195,5 +207,64 @@ class CrashReporterTest {
             assertTrue(File(crashDir, "crash_06.txt").exists(), "6th log should be kept")
             assertTrue(File(crashDir, "crash_15.txt").exists(), "Newest log should be kept")
         }
+    }
+}
+
+/**
+ * The line the crash log opens with, and the API level it is allowed to need.
+ *
+ * `minSdk` is 33 and `Thread.threadId()` first appears in the android-36 stub —
+ * `javap` on `java/lang/Thread.class` from `platforms/android-33`, `-34` and
+ * `-35` shows `getId()` and nothing else. Nothing backports it here:
+ * `coreLibraryDesugaring` is not enabled, and `abortOnError = false` means lint
+ * cannot stop a build over it either.
+ *
+ * The consequence was not a visible crash. The call sat above `file.writeText`
+ * inside `catch (_: Throwable)`, so on 33, 34 and 35 the `NoSuchMethodError` was
+ * swallowed and no crash log was ever written: `hasPendingCrash()` stayed false,
+ * the dialog in `MainActivity.checkPreviousCrash` never appeared, and the crash
+ * section of a bug report was empty on every device that had one to report.
+ */
+class ThreadIdentityTest {
+
+    private val source = File("src/main/kotlin/com/vscodroid/util/CrashReporter.kt")
+
+    @Test
+    fun `the crashing thread is named and numbered`() {
+        val thread = Thread("worker-7")
+
+        val line = threadIdentity(thread)
+
+        assertTrue(line.contains("worker-7"), "the thread name has to survive: $line")
+        assertTrue(
+            line.contains("id=${thread.id}"),
+            "the identity has to be in there to correlate with logcat: $line",
+        )
+    }
+
+    @Test
+    fun `the identity is not read through an API newer than minSdk`() {
+        // A behavioural test cannot catch this one. Every JVM these tests run on
+        // is Java 19 or later, where Thread.threadId() exists and answers
+        // correctly, so restoring the call leaves the assertion above green and
+        // the app broken on three of the four supported API levels. What
+        // distinguishes them is which method name is compiled, so that is what
+        // this reads.
+        check(source.isFile) {
+            "CrashReporter.kt not found at ${source.absolutePath} — this test " +
+                "would otherwise pass by looking at nothing"
+        }
+
+        val offenders = source.readLines()
+            .withIndex()
+            .filter { (_, line) -> Regex("""\bthreadId\s*\(""").containsMatchIn(line) }
+            .filterNot { (_, line) -> line.trimStart().startsWith("*") }
+            .map { (i, line) -> "CrashReporter.kt:${i + 1}: ${line.trim()}" }
+
+        assertEquals(
+            emptyList<String>(), offenders,
+            "Thread.threadId() is API 36 and minSdk is 33, with no desugaring to " +
+                "bridge the gap. Use Thread.getId(), which has been there since API 1.",
+        )
     }
 }

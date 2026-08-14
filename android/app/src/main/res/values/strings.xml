@@ -6,6 +6,12 @@
     <string name="notification_title">VSCodroid is running</string>
     <string name="notification_text">Local development server active</string>
     <string name="action_stop">Stop Server</string>
+
+    <!-- Shown once the automatic restart budget is spent. Replaces the two
+         strings above in the same notification, which then carries no Stop
+         action because there is nothing left to stop. -->
+    <string name="notification_title_stopped">VSCodroid server stopped</string>
+    <string name="notification_text_stopped">Server crashed repeatedly. Please restart the app.</string>
     <string name="extracting_title">Setting up VSCodroid</string>
     <string name="extracting_message">Extracting core files\u2026</string>
     <string name="error_server_start">Failed to start development server</string>

@@ -1,29 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  What survives a cloud backup or a move to a new phone.
+
+  Written as an allowlist with no exclusions, and the absence of <exclude> is the
+  design rather than an omission. Under <include> semantics anything not named is
+  already out, so the seven exclusions this file used to carry named paths that
+  were never in scope to begin with — which is what lint reported, once per line.
+
+  Fail-closed matters more here than the tidiness. The app's private storage holds
+  an SSH key generated without a passphrase (`Environment.getSshDir`) and the
+  server's connection token (`Environment.getConnectionTokenPath`), and the token
+  sits inside `data/`, one directory away from the settings below. A denylist
+  protects exactly the secrets someone remembered to list; naming only what may
+  leave keeps the next credential file out by default, without anyone having to
+  notice it was added.
+
+  Everything omitted, and why:
+
+  - `home/.ssh`, `home/.vscodroid/data/token` — credentials. The SSH key has no
+    passphrase because that is the right trade for a phone keyboard while the key
+    stays inside the app sandbox; copying it to a cloud is what breaks that trade.
+  - `server`, `usr`, the toolchains — hundreds of megabytes, and first-run setup
+    extracts them again from the APK anyway.
+  - `external` — the projects directory. A source tree with `node_modules` in it
+    would exceed any backup quota on its own, and this is the one thing users
+    already keep in git.
+  - `saf-mirrors` — local copies of folders the user picked through SAF. The
+    originals are the documents; these are rebuilt on reopening.
+  - `sharedpref` — load-bearing, and the least obvious entry on this list.
+    `FirstRunSetup.isFirstRun()` answers from `setup_version` in those
+    preferences. Restore them onto a device whose `filesDir` is empty and the app
+    concludes setup has already run, skips extraction entirely, and starts a
+    server with no server to start. `PortFinder` keeps the port there too, which
+    the workbench's IndexedDB is bound to and which means nothing on a new
+    device. Leaving the domain out is what keeps a restored install honest.
+
+  What is included is `data/Machine`, where the workbench reads its settings from
+  on this side — see `Environment.getMachineSettingsPath`, which explains why it
+  is that path and not the `User/` one it looks like it should be. The directory
+  rather than the file, so machine-scoped state added later travels with it.
+  Restoring it is worth doing because `FirstRunSetup.createDefaultSettings()`
+  writes only when the file is absent, so a restored copy is kept rather than
+  overwritten on the new device's first run.
+
+  Both sections are identical on purpose. A device-to-device transfer never
+  leaves the user's hands and could justify carrying more than a cloud backup
+  does, but the set is small enough that the distinction would buy nothing, and
+  two rules that differ are two rules to reason about every time one changes.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- Include user settings -->
-        <include domain="file" path="home/.vscodroid/User" />
-
-        <!-- Exclude sensitive data -->
-        <exclude domain="file" path="home/.ssh" />
-        <exclude domain="file" path="home/.gitconfig" />
-        <exclude domain="file" path="home/.vscodroid/data/logs" />
-
-        <!-- Exclude large/regenerable data -->
-        <exclude domain="file" path="server" />
-        <exclude domain="file" path="usr" />
-        <exclude domain="external" path="." />
-        <exclude domain="database" path="." />
+        <include domain="file" path="home/.vscodroid/data/Machine" />
     </cloud-backup>
     <device-transfer>
-        <!-- Keep transfer behavior aligned with cloud backup for consistency -->
-        <include domain="file" path="home/.vscodroid/User" />
-        <exclude domain="file" path="home/.ssh" />
-        <exclude domain="file" path="home/.gitconfig" />
-        <exclude domain="file" path="home/.vscodroid/data/logs" />
-        <exclude domain="file" path="server" />
-        <exclude domain="file" path="usr" />
-        <exclude domain="external" path="." />
-        <exclude domain="database" path="." />
+        <include domain="file" path="home/.vscodroid/data/Machine" />
     </device-transfer>
 </data-extraction-rules>

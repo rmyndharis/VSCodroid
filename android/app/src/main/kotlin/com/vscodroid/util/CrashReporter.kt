@@ -135,7 +135,7 @@ object CrashReporter {
 
             val sw = StringWriter()
             sw.appendLine("Crash at ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date())}")
-            sw.appendLine("Thread: ${thread.name} (id=${thread.threadId()})")
+            sw.appendLine(threadIdentity(thread))
             sw.appendLine("Device: ${android.os.Build.MODEL} (API ${android.os.Build.VERSION.SDK_INT})")
             sw.appendLine()
             throwable.printStackTrace(PrintWriter(sw))
@@ -156,3 +156,23 @@ object CrashReporter {
         } catch (_: Exception) {}
     }
 }
+
+/**
+ * The crashing thread, named and numbered, using the accessor every supported
+ * API level has.
+ *
+ * `Thread.threadId()` is API 36 and `minSdk` is 33, and nothing backports it
+ * here — `coreLibraryDesugaring` is off, and `abortOnError = false` means lint
+ * cannot stop a build over it either. On 33, 34 and 35 the call therefore raises
+ * `NoSuchMethodError`, and it sat above `file.writeText` inside a
+ * `catch (_: Throwable)`: the write never happened, `hasPendingCrash()` stayed
+ * false, the dialog in `MainActivity.checkPreviousCrash` never appeared, and the
+ * crash section of `generateBugReport` was permanently empty. A crash reporter
+ * that reports nothing is worse than none, because the empty report reads as
+ * "no crashes".
+ *
+ * `Thread.getId()` has been there since API 1 and is not deprecated in the
+ * android-36 stub, so this needs no suppression and no desugaring.
+ */
+internal fun threadIdentity(thread: Thread): String =
+    "Thread: ${thread.name} (id=${thread.id})"

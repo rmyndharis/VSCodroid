@@ -78,23 +78,22 @@ class ProcessManager(private val context: Context) {
 
     // -- Callbacks --
 
-    /** Invoked on the caller's coroutine when the server responds to a health check. */
-    var onServerReady: (() -> Unit)? = null
-
-    /** Invoked on the watchdog thread when the server process exits unexpectedly. */
-    var onServerCrashed: ((exitCode: Int) -> Unit)? = null
-
     /**
-     * Declared for symmetry with [onServerCrashed], and invoked by nothing.
+     * Invoked on the watchdog thread when the server process exits unexpectedly.
      *
-     * Its sibling is assigned in `NodeService.setupServiceCallbacks()` and fires from the
-     * watchdog; this one has no assignment and no call site anywhere in the tree. The
-     * previous wording said it was "invoked on the watchdog thread before an automatic
-     * restart attempt", which reads as a documented contract a caller could rely on.
-     * Whether to wire it up or drop it is a question about behaviour, not about this
-     * comment.
+     * The thread matters to the receiver: `NodeService.setupProcessCallbacks()`
+     * does nothing here but hand the exit code to its own scope, because the
+     * state it needs to touch belongs to that scope's thread.
+     *
+     * This is the only callback of the pair that ever existed. A sibling named
+     * `onServerRestarting` sat beside it with no assignment and no call site, and
+     * `onServerReady` sat here too — a name [waitForReady]'s return value already
+     * carried, and one shared with a live callback on `NodeService` that
+     * `MainActivity` does assign. Two identically named callbacks in adjacent
+     * layers, one of them dead, is a trap for whoever wires up the next one; both
+     * are gone rather than documented as dead.
      */
-    var onServerRestarting: (() -> Unit)? = null
+    var onServerCrashed: ((exitCode: Int) -> Unit)? = null
 
     /** Invoked on the output-reader thread for every line of server stdout/stderr. */
     var onServerOutput: ((line: String) -> Unit)? = null
@@ -185,8 +184,10 @@ class ProcessManager(private val context: Context) {
     /**
      * Suspends until the server responds to a health check or the timeout elapses.
      *
-     * Polls [isServerHealthy] at [pollIntervalMs] intervals. On success, invokes
-     * [onServerReady] and returns `true`. On timeout, returns `false`.
+     * Polls [isServerHealthy] at [pollIntervalMs] intervals and answers with the
+     * outcome. The answer is the whole contract: there is no readiness callback
+     * here, because a suspending function that returns the result already told
+     * the caller, and the one that used to sit here was assigned by nobody.
      *
      * @param timeoutMs  Maximum time to wait for the server to become ready.
      * @param pollIntervalMs  Interval between health check attempts.
@@ -197,7 +198,6 @@ class ProcessManager(private val context: Context) {
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             if (isServerHealthy()) {
                 Logger.i(tag, "Server ready after ${System.currentTimeMillis() - startTime}ms")
-                onServerReady?.invoke()
                 return true
             }
             delay(pollIntervalMs)

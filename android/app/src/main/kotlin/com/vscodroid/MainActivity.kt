@@ -15,7 +15,10 @@ import android.os.Bundle
 import android.net.Uri
 import android.os.IBinder
 import android.os.SystemClock
+import android.view.View
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import java.io.File
 import androidx.activity.OnBackPressedCallback
@@ -26,6 +29,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.vscodroid.util.Environment
 import com.vscodroid.bridge.AndroidBridge
@@ -40,6 +45,8 @@ import com.vscodroid.util.Logger
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.publishedResourceRoots
+import com.vscodroid.webview.sensitiveLocations
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,6 +62,73 @@ class MainActivity : AppCompatActivity() {
     private var serverPort = 0
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
+
+    /**
+     * Whether a workbench page is loaded and able to receive an auth callback.
+     *
+     * Reset by [recreateWebView], because the replacement is a new page: the ids
+     * the workbench is waiting on live in memory and do not survive it. See
+     * [receiveCallbackIntent].
+     */
+    private var workbenchLoaded = false
+
+    /**
+     * The mirror and tree URI the file watcher is currently on, or null when it
+     * is not running.
+     *
+     * A pair because [SafStorageManager.startFileWatcher] needs both and one is
+     * useless without the other. Kept so that a failed folder switch can put the
+     * previous folder's watcher back — see [restoreWatcherAfterFailure].
+     */
+    private var watchedSafFolder: Pair<File, Uri>? = null
+
+    /**
+     * The directories this app publishes into the WebView, resolved once.
+     *
+     * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
+     * external storage and canonicalises four paths, so it is disk I/O and a
+     * debug build with StrictMode on will say so. It is also the allowlist that
+     * `shouldInterceptRequest` compares every resource request against, and
+     * [initBridge] installs the client immediately before [navigateToFolder]
+     * starts the page loading — so resolved on another thread, the first requests
+     * would arrive while the list was still empty, and an empty allowlist refuses
+     * every extension resource without a sound. A markdown preview that renders
+     * blank is a far worse trade than a few milliseconds spent after a server
+     * start that already took seconds.
+     *
+     * Lazy so the cost is paid once per Activity rather than once per WebView:
+     * [recreateWebView] clears `bridgeInitialized`, so a plain call would re-stat
+     * all four on every renderer crash — the moment the app can least afford it.
+     */
+    private val resourceRoots: List<String> by lazy { publishedResourceRoots(this) }
+
+    /** Directories the interceptor must refuse to serve, resolved once, as above. */
+    private val sensitivePaths: List<String> by lazy { sensitiveLocations(this) }
+
+    /**
+     * The folder the workbench currently has open, derived once per navigation.
+     *
+     * Volatile because the two ends are on different threads and neither can
+     * move: it is written from `onPageFinished` and from [navigateToFolder],
+     * both on the UI thread, and read by the resource interceptor, which is not
+     * on the UI thread — `shouldInterceptRequest` performs synchronous HTTP, so
+     * it cannot be.
+     *
+     * A folder rather than the URL it came from, and that is the point of the
+     * field existing at all. [folderFromUrl] stats the path; a supplier that
+     * called it would stat once per resource request, and the workbench issues
+     * hundreds during a cold load. Deriving on navigation pays for the
+     * `isDirectory` guard once per folder switch and keeps it.
+     *
+     * Only ever overwritten with a folder, never with the absence of one.
+     * [folderFromUrl] answers null for every URL that is not a workbench URL —
+     * the `data:` placeholder in [setupWebView], an error page — so assigning its
+     * result directly would drop a perfectly good folder on any of them. What
+     * that looks like from the outside is workspace resources 404ing now and
+     * then, which is about as expensive as a symptom gets.
+     */
+    @Volatile
+    private var openWorkspaceFolder: String? = null
 
     private lateinit var securityManager: SecurityManager
     private lateinit var safManager: SafStorageManager
@@ -100,17 +174,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Apply system bar insets as padding directly on the WebView so VS Code's
-        // title bar (breadcrumbs, back/forward, search) renders below the status bar.
-        // CSS env(safe-area-inset-*) may not report correct values after enableEdgeToEdge(),
-        // so we handle it at the native level.
-        val wv = findViewById<android.view.View>(R.id.webView)
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(wv) { v, insets ->
-            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
-        }
-
         safManager = SafStorageManager(this)
 
         setupWebView()
@@ -120,19 +183,65 @@ class MainActivity : AppCompatActivity() {
         startAndBindService()
         checkPreviousCrash()
         checkStorageHealth()
-
+        // Reading it here, and not only in onNewIntent, is what makes a sign-in
+        // survive the app being killed while the browser had the screen. See
+        // receiveCallbackIntent.
+        receiveCallbackIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // The only intent that reaches here with a URI is the OAuth callback relay,
-        // which is the one VIEW filter the manifest still carries. Anything else is
-        // the launcher bringing this singleTask activity to the front, and there is
-        // nothing to do for it.
-        val uri = intent.data
-        if (uri?.scheme == "vscodroid" && uri.host == "callback") {
+        receiveCallbackIntent(intent)
+    }
+
+    /**
+     * Takes the OAuth callback relay out of an intent, if that is what it is.
+     *
+     * The only intent that carries a URI here is the callback relay, which is the
+     * one VIEW filter the manifest still declares. Anything else is the launcher
+     * bringing this singleTask activity to the front, and there is nothing to do
+     * for it.
+     *
+     * Both entry points feed this, and only one of them used to exist. The
+     * callback opens in the browser while the workbench runs in this WebView, and
+     * Android is free to kill an app whose screen the browser has taken — a phone
+     * under memory pressure signing into an extension is a routine way to get
+     * there. The returning `vscodroid://callback` then builds a *new*
+     * `MainActivity`, whose `onCreate` never looked at `intent.data`;
+     * `SplashActivity.launchMain()` even forwards the data along, and it was
+     * dropped on arrival.
+     *
+     * Reading it is where the recovery stops, though, and the reason is in the
+     * workbench rather than here. `out/vs/code/browser/workbench/workbench.js`
+     * keeps the ids it is waiting for in a plain in-memory Set —
+     * `pendingCallbacks = new Set`, added to when a request is created, and never
+     * written to storage — and `checkCallbacks()` iterates *that*, reading
+     * `localStorage` only for ids already in it. So a relayed value is consumable
+     * by exactly the page instance that began the sign-in. Once that page is
+     * gone, which is the whole premise of arriving through `onCreate`, injecting
+     * would write a key nothing ever reads and fire an event nothing is
+     * listening for — and leave the value behind permanently, since the cleanup
+     * is also keyed on the pending set.
+     *
+     * So this says so instead. A user who came back from the browser expecting
+     * to be signed in is owed the reason, and "sign in again" is an instruction
+     * they can act on; silently relaying into a page that drops it is the
+     * failure that was already there, wearing a fix.
+     */
+    private fun receiveCallbackIntent(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (!isExtensionCallback(uri.scheme, uri.host)) return
+        if (workbenchLoaded) {
             handleExtensionCallback(uri)
+            return
         }
+        Logger.w(tag, "Extension callback arrived with no workbench page left to receive it")
+        Toast.makeText(
+            this,
+            "Sign-in could not be completed because the editor restarted. " +
+                "Please sign in again.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     override fun onDestroy() {
@@ -212,8 +321,29 @@ class MainActivity : AppCompatActivity() {
             .create()
         dialog.show()
 
+        val previouslyWatched = watchedSafFolder
+
         lifecycleScope.launch {
             try {
+                // Before the sync, and this call was moved rather than added:
+                // there used to be one after it, which `startWatching` has since
+                // made redundant by stopping the previous watcher itself. Reading
+                // that redundancy as the whole problem is the trap, because the
+                // stop that was missing is this one.
+                //
+                // Reopening a folder that is already open — which
+                // openRecentSafFolder routes through here — ran the initial sync
+                // under that folder's live watcher. `copyDocumentToLocal` lands
+                // each file by writing a `.partial` beside it and calling
+                // `renameTo`, the observer reads `MOVED_TO` as CREATE, and every
+                // file just pulled down was immediately queued to be pushed back.
+                //
+                // What happens to it if the sync fails depends on which folder
+                // failed, and restoreWatcherAfterFailure is where that is
+                // decided.
+                safManager.stopFileWatcher()
+                watchedSafFolder = null
+
                 val mirrorDir = withContext(Dispatchers.IO) {
                     safManager.syncToLocal(uri) { done, total ->
                         runOnUiThread {
@@ -224,9 +354,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // Stop any existing file watcher before starting a new one
-                safManager.stopFileWatcher()
                 safManager.startFileWatcher(mirrorDir, uri)
+                watchedSafFolder = mirrorDir to uri
 
                 // Write active folder so new terminals cd to the right place
                 writeActiveFolder(mirrorDir.absolutePath)
@@ -239,22 +368,69 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: SecurityException) {
                 dialog.dismiss()
-                Toast.makeText(
-                    this@MainActivity,
-                    "Permission denied. Please select the folder again.",
-                    Toast.LENGTH_LONG
-                ).show()
                 Logger.e(tag, "SAF permission revoked during sync", e)
+                reportSyncFailure(
+                    "Permission denied.", restoreWatcherAfterFailure(previouslyWatched, uri)
+                )
             } catch (e: Exception) {
                 dialog.dismiss()
-                Toast.makeText(
-                    this@MainActivity,
-                    "Failed to open folder: ${e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
                 Logger.e(tag, "SAF sync failed", e)
+                reportSyncFailure(
+                    "Failed to open folder: ${e.message}.",
+                    restoreWatcherAfterFailure(previouslyWatched, uri)
+                )
             }
         }
+    }
+
+    /**
+     * Puts the previous folder's watcher back after a failed sync, when doing so
+     * is safe.
+     *
+     * Safe exactly when the folder that failed is not the folder that was being
+     * watched, and that distinction is the whole function. Stopping the watcher
+     * before the sync is what keeps the engine from observing its own writes,
+     * but leaving it stopped is only justified for the folder the sync was
+     * writing into: that mirror is part-written, and a watcher over a
+     * part-written mirror would push that half onto the user's own documents —
+     * damage to their only copy.
+     *
+     * A different folder's mirror was not touched at all. Leaving *its* watcher
+     * dead buys nothing and costs the user the write-back for the folder still
+     * on screen, which they go on editing in the belief it is being saved. That
+     * is the failure this whole reorder exists to avoid, arriving from the other
+     * direction.
+     *
+     * @return whether write-back is running for the folder the user is looking at.
+     */
+    private fun restoreWatcherAfterFailure(previous: Pair<File, Uri>?, failed: Uri): Boolean {
+        val (mirrorDir, uri) = previous ?: return false
+        if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString())) return false
+        safManager.startFileWatcher(mirrorDir, uri)
+        watchedSafFolder = previous
+        Logger.i(tag, "Restored the previous folder's watcher after a failed switch")
+        return true
+    }
+
+    /**
+     * Says that a folder did not open, and what that costs the user.
+     *
+     * The consequence is spelled out rather than left to be discovered. An
+     * editor that has quietly stopped writing changes back is exactly the
+     * failure that costs somebody an afternoon of work they believed was saved,
+     * and a bare "failed to open" gives them no reason to suspect it.
+     *
+     * It is also stated only when it is true. Telling a user their work is not
+     * saving when it is has its own cost, and after a failed switch away from a
+     * healthy folder that folder is still being watched.
+     */
+    private fun reportSyncFailure(reason: String, writeBackStillRunning: Boolean) {
+        val consequence = if (writeBackStillRunning) {
+            " The folder already open is unaffected."
+        } else {
+            " Changes will not sync to this folder until you open it again."
+        }
+        Toast.makeText(this, reason + consequence, Toast.LENGTH_LONG).show()
     }
 
     /**
@@ -327,44 +503,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Evaluates a JS health check in the WebView that detects:
-     * 1. VS Code reconnection dialog (WebSocket IPC channel broken)
-     * 2. IndexedDB "closed" state (database connection lost during freeze)
+     * Probes the WebView for an IndexedDB connection that did not survive being
+     * frozen, and reloads the page from JS if it finds one.
      *
-     * If either issue is detected, triggers window.location.reload() from JS
-     * to re-establish all connections cleanly.
+     * One signal, not two, and the missing one is the point. This also matched
+     * the words "reconnect" and "lost" in the text of any `.monaco-dialog-box`,
+     * which reads as a check on VS Code's reconnection dialog and is really a
+     * check on the display language: install a language pack and the substrings
+     * are translated, the match never fires, and the probe reports a healthy
+     * connection for a broken one — silently, and only for the users who are not
+     * reading English.
+     *
+     * It was not narrowed in favour of something better, because there is nothing
+     * better to reach for. The shipped workbench carries no class that marks a
+     * dialog as the reconnection one — `.monaco-dialog-box` and
+     * `.monaco-dialog-modal-block` are the only dialog classes in
+     * `workbench.web.main.internal.css`, and both belong to every modal it can
+     * raise. Matching any dialog instead would reload the page over an unanswered
+     * "save your changes?", which trades a missed detection for lost work.
+     * Wrapping the page's `WebSocket` would be a real signal, but injection here
+     * happens at `onPageFinished`, long after the workbench has opened its own.
+     *
+     * What that leaves uncovered is a reconnection dialog raised between one and
+     * five minutes of background. Above five minutes [handleResumeFromBackground]
+     * reloads unconditionally and the question does not arise; below it, the
+     * dialog carries its own control and the user can act on it. IndexedDB is
+     * the failure with no visible affordance, which is why it is the one worth
+     * probing for.
      */
     private fun checkConnectionHealth(bgMs: Long) {
         val wv = webView ?: return
-        wv.evaluateJavascript(
-            """
-            (function() {
-                var i, text;
-                var dialogs = document.querySelectorAll('.monaco-dialog-box');
-                for (i = 0; i < dialogs.length; i++) {
-                    text = (dialogs[i].textContent || '').toLowerCase();
-                    if (text.indexOf('reconnect') >= 0 || text.indexOf('lost') >= 0) {
-                        console.warn('[VSCodroid] Connection lost, reloading');
-                        window.location.reload();
-                        return 'reload:connection-lost';
-                    }
-                }
-                try {
-                    var req = indexedDB.open('vscode-web-db');
-                    req.onerror = function() {
-                        console.warn('[VSCodroid] IndexedDB broken, reloading');
-                        window.location.reload();
-                    };
-                    req.onsuccess = function() { req.result.close(); };
-                } catch(e) {
-                    console.warn('[VSCodroid] IndexedDB exception, reloading');
-                    window.location.reload();
-                    return 'reload:idb-exception';
-                }
-                return 'ok';
-            })()
-            """.trimIndent()
-        ) { result ->
+        wv.evaluateJavascript(connectionHealthProbe()) { result ->
             Logger.i(tag, "Health check after ${bgMs / 1000}s: ${result?.trim('"')}")
         }
     }
@@ -373,6 +542,8 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
+            applyWindowInsetsPadding(wv)
+            wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
             // viewport-fit=cover enables rendering into display cutout area
             wv.loadData(
@@ -384,6 +555,62 @@ class MainActivity : AppCompatActivity() {
                 "text/html", "utf-8"
             )
         }
+    }
+
+    /**
+     * The client that survives a renderer crash before the real one is installed.
+     *
+     * `onRenderProcessGone` has a platform contract with teeth: returning false
+     * — which the default `WebViewClient` does, and which is also what a WebView
+     * with *no* client does — tells the framework the app cannot carry on, and it
+     * ends the application process. [VSCodroidWebViewClient] returns true and
+     * rebuilds the view, but it is installed by [initBridge], which runs from
+     * [loadVSCode] only once the server reports ready. That leaves the whole cold
+     * start — up to the thirty seconds `waitForReady` will wait — with the
+     * placeholder on screen and nothing to catch a renderer that dies under
+     * exactly the memory pressure a Node.js server starting up creates.
+     *
+     * Deliberately not the real client. That one needs the port, and it fires
+     * `onPageLoaded` on every page — including this placeholder, whose load would
+     * reach [injectBridgeToken] before `securityManager` has been constructed.
+     * A renderer crash is the only thing worth handling before the workbench
+     * exists; the placeholder is a `data:` URL and issues no requests to
+     * intercept.
+     */
+    private fun bootstrapClient() = object : WebViewClient() {
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            Logger.e(tag, "Render process gone before the workbench loaded: " +
+                "didCrash=${detail.didCrash()}")
+            recreateWebView()
+            return true
+        }
+    }
+
+    /**
+     * Pads a view by the system bars, so VS Code's title bar (breadcrumbs,
+     * back/forward, search) renders below the status bar.
+     *
+     * CSS `env(safe-area-inset-*)` may not report correct values after
+     * `enableEdgeToEdge()`, so this is handled natively.
+     *
+     * It lives here rather than in `onCreate` because [recreateWebView] replaces
+     * the view. Registered once against the original, the listener died with it,
+     * and every WebView built after a renderer crash drew its title bar under the
+     * status bar — the exact symptom this exists to prevent, returning at the
+     * moment the user has already lost their editor once.
+     *
+     * The explicit request is what makes it take effect on the replacement:
+     * insets are dispatched on attach, and after a recreation this runs on a view
+     * that is already attached, so without asking for a fresh pass the padding
+     * would wait for the next rotation or keyboard.
+     */
+    private fun applyWindowInsetsPadding(view: View) {
+        ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(view)
     }
 
     private fun setupExtraKeyRow() {
@@ -434,6 +661,17 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 Logger.e(tag, "Server error: $message")
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+        }
+        // Stopping the server from the notification leaves this activity showing
+        // an editor whose backend is gone, and — because the binding it holds is
+        // what keeps a started service alive — leaves the service unable to
+        // finish stopping until the activity goes. Closing is both the honest
+        // response and the thing that completes the stop.
+        nodeService?.onServerStopped = {
+            runOnUiThread {
+                Logger.i(tag, "Server stopped from the notification; closing the editor")
+                finishAndRemoveTask()
             }
         }
 
@@ -515,15 +753,31 @@ class MainActivity : AppCompatActivity() {
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
+        // One set of rules, read once, handed to both entry points. The service
+        // worker is the second route a resource request takes into the
+        // interceptor, so lists installed on only one side leave the other
+        // answering by different rules — and neither side would say a word about
+        // the difference.
+        val roots = resourceRoots
+        val sensitive = sensitivePaths
+
         // Register ServiceWorkerClient BEFORE loading VS Code — service worker
         // script fetches bypass WebViewClient.shouldInterceptRequest entirely.
-        VSCodroidWebViewClient.setupServiceWorkerInterception(port) { nodeService?.getConnectionToken() }
+        VSCodroidWebViewClient.setupServiceWorkerInterception(
+            port, roots, sensitive, { openWorkspaceFolder }
+        ) { nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
             allowedPort = port,
+            resourceRoots = roots,
+            sensitiveLocations = sensitive,
+            openFolder = { openWorkspaceFolder },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
-            onPageLoaded = { injectBridgeToken() }
+            onPageLoaded = { url ->
+                folderFromUrl(url)?.let { openWorkspaceFolder = it }
+                injectBridgeToken()
+            },
         )
         wv.webChromeClient = VSCodroidWebChromeClient()
 
@@ -537,6 +791,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun navigateToFolder(port: Int, folderPath: String) {
         val wv = webView ?: return
+        // Seeded here and not only from the page-loaded callback. This method is
+        // the one that knows the folder before the page exists, and between
+        // loadUrl below and onPageFinished the workbench is already fetching
+        // resources — against a supplier that would still be answering null, so
+        // everything inside the workspace would 404 for the length of the load.
+        openWorkspaceFolder = folderPath
         // The token rides in the query once. The server consumes it on `/`, turns
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself — the cookie for pages, the
@@ -600,6 +860,12 @@ class MainActivity : AppCompatActivity() {
         // extension, which registers them through the extension API and reaches Android
         // over the relay below. They cannot be injected from here: the workbench is an
         // ES module and the AMD loader those injections needed does not exist.
+
+        // Last, because everything above is what makes the page able to receive
+        // an auth callback at all. From here a callback arriving through
+        // onNewIntent goes straight into this page, which is the only page that
+        // can consume one.
+        workbenchLoaded = true
     }
 
     /**
@@ -895,6 +1161,9 @@ class MainActivity : AppCompatActivity() {
 
         // Reset bridge so initBridge() re-registers on the new WebView
         bridgeInitialized = false
+        // The replacement has loaded nothing yet, so a callback arriving now has
+        // to be held again rather than injected into a page that is not there.
+        workbenchLoaded = false
 
         setupWebView()
         if (serverPort > 0) {
@@ -1083,3 +1352,72 @@ internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
         Logger.d("MainActivity", "Failed to write memory pressure: ${e.message}")
     }
 }
+
+/**
+ * Whether an incoming URI is the extension auth callback relay.
+ *
+ * Both halves are load-bearing, and the manifest is why. The VIEW filter that
+ * delivers this is exported and BROWSABLE, so any installed app and any web page
+ * the user taps can fire it, and what rides in the `data` parameter is written
+ * into the workbench's `localStorage`. Relaxed to either half on its own —
+ * `vscodroid://` with any host, or any scheme pointed at `callback` — the relay
+ * starts accepting shapes the flow it exists for never sends.
+ *
+ * Taking the two parts rather than the Uri is what makes this reachable: `Uri`
+ * is abstract with a private constructor, so neither building one nor mocking
+ * one works in a plain JVM test, and the decision here is about two strings.
+ */
+internal fun isExtensionCallback(scheme: String?, host: String?): Boolean =
+    scheme == "vscodroid" && host == "callback"
+
+/**
+ * Whether a folder switch that failed should leave the previous folder watched.
+ *
+ * The watcher is stopped before every sync, so something has to decide what a
+ * failure leaves behind, and the two cases pull opposite ways. When the sync was
+ * writing into the folder that was being watched — reopening the folder already
+ * open — that mirror is now part-written, and a watcher over it would push the
+ * half onto the user's own documents. When it was writing into a different one,
+ * the watched folder was never touched, it is still the folder on screen, and
+ * leaving it unwatched means the user keeps editing it with write-back silently
+ * off.
+ *
+ * Comparing the tree URIs as text because that is what a JVM test can supply:
+ * `android.net.Uri` is abstract with a private constructor, so it can be neither
+ * built nor mocked outside a device.
+ */
+internal fun shouldRestorePreviousWatcher(previousUri: String?, failedUri: String): Boolean =
+    previousUri != null && previousUri != failedUri
+
+/**
+ * The script the resume health check evaluates in the page.
+ *
+ * Lifted out of `MainActivity.checkConnectionHealth` so that what it probes can
+ * be asserted without an Activity. That matters more than it looks: the previous
+ * version of this script also searched every `.monaco-dialog-box` for the words
+ * "reconnect" and "lost", which reads as a check on VS Code's reconnection
+ * dialog and is really a check on the display language. Under a language pack
+ * the substrings are translated, the match never fires, and a broken connection
+ * is reported healthy — with no error, and only for the users not reading
+ * English.
+ *
+ * What is left asks IndexedDB, which answers the same in every locale.
+ */
+internal fun connectionHealthProbe(): String =
+    """
+    (function() {
+        try {
+            var req = indexedDB.open('vscode-web-db');
+            req.onerror = function() {
+                console.warn('[VSCodroid] IndexedDB broken, reloading');
+                window.location.reload();
+            };
+            req.onsuccess = function() { req.result.close(); };
+        } catch(e) {
+            console.warn('[VSCodroid] IndexedDB exception, reloading');
+            window.location.reload();
+            return 'reload:idb-exception';
+        }
+        return 'ok';
+    })()
+    """.trimIndent()
