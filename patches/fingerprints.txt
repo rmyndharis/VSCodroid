@@ -16,9 +16,26 @@
 #
 # Choosing a pattern: match something the patch introduces that minification
 # cannot rewrite -- a string literal, an HTML attribute, a comparison against a
-# literal. Never a variable name; those are mangled. Verify the pattern appears
-# zero times in an unpatched bundle before trusting it, because a pattern that
-# already matched proves nothing at all.
+# literal. Never a variable name; those are mangled.
+#
+# Two things the checker now does with these rows, so that neither depends on
+# someone remembering:
+#
+#   * It matches tolerantly. A pattern is written the way one esbuild version
+#     happened to emit it -- `case"android"`, `==="/callback"` -- and the next
+#     version choosing single quotes or a space would have failed rows describing
+#     a tree that is still correct. Quote style and whitespace no longer matter.
+#
+#   * It requires the pattern to appear in what the patch itself ADDS. The rule
+#     here used to read "verify the pattern appears zero times in an unpatched
+#     bundle", which is the right rule and was advice to a human, because doing it
+#     needs a second full build -- thirty minutes on an arm64 runner. Checking
+#     provenance instead is the half that runs offline: a pattern the patch does
+#     not introduce cannot be evidence the patch arrived.
+#
+# That second check is necessary, not sufficient. It catches a pattern lifted from
+# surrounding code; it cannot prove the same text appears nowhere else in the
+# tree. Proving that still wants an unpatched build, and nothing here does it.
 
 0001 platform|out/server-main.js|platform==="android"
 0002 userDataPath|out/vs/platform/terminal/node/ptyHostMain.js|case"android"

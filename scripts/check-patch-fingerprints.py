@@ -43,6 +43,63 @@ DEFAULT_PATCHES = ROOT / "patches"
 # 0001-platform-treat-android-as-linux.patch -> 0001
 PATCH_ID = re.compile(r"^(\d{4})-.*\.patch$")
 
+# Where a minifier is free to add or drop whitespace. A pattern is written the way
+# one esbuild version happened to emit it -- `case"android"`, `==="/callback"` --
+# and the next version choosing `case "android"` or single quotes would fail rows
+# that describe a tree which is still correct. Matching tolerantly costs nothing:
+# these patterns are anchored on string literals and comparisons, and no bundle
+# contains a near-miss that only differs by a space.
+PUNCTUATION = set("=(){}[],:;<>!+-*/&|?.")
+QUOTES = "\"'"
+
+
+def tolerant(pattern):
+    """`pattern`, as a regex that survives a change of quote style or spacing."""
+    out = []
+    for i, ch in enumerate(pattern):
+        if ch in QUOTES:
+            out.append("[\"']")
+        elif ch == " ":
+            # Zero-or-more, not one-or-more. A space in a pattern is where the
+            # minifier is MOST likely to differ -- `case "android"` in source
+            # becomes `case"android"` in the bundle -- so demanding one here fails
+            # exactly the rows this tolerance exists for.
+            out.append(r"\s*")
+            continue
+        else:
+            out.append(re.escape(ch))
+        nxt = pattern[i + 1] if i + 1 < len(pattern) else ""
+        if ch in PUNCTUATION or ch in QUOTES or nxt in PUNCTUATION or nxt in QUOTES:
+            out.append(r"\s*")
+    return re.compile("".join(out))
+
+
+def squashed(text):
+    """Whitespace gone and quotes unified, for comparing source against a bundle."""
+    return re.sub(r"\s+", "", text).replace("'", '"')
+
+
+def introduced_by(pattern, patch_path):
+    """Whether the patch's own added lines are where this pattern comes from.
+
+    The table's instruction has always been to verify a pattern appears zero times
+    in an UNPATCHED bundle, because one that already matched proves nothing. That
+    check needs a second full build -- thirty minutes on an arm64 runner -- so it
+    has only ever been advice to a human.
+
+    This is the half that can run offline: a pattern whose text the patch does not
+    introduce cannot be evidence that the patch arrived. It is necessary, not
+    sufficient -- the same text could coincidentally exist elsewhere in the tree --
+    so it catches the mistake actually made (picking a pattern from surrounding
+    code) rather than proving the pattern unique.
+    """
+    added = "".join(
+        line[1:]
+        for line in patch_path.read_text(errors="ignore").splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    return squashed(pattern) in squashed(added)
+
 failed = False
 
 
@@ -103,11 +160,16 @@ def main(tree, patches_dir):
             # written for the patch to get here at all.
             print(f"  ok      {ident} {label} has no fingerprint -- {pattern}")
             continue
+        check(introduced_by(pattern, patches_dir / name),
+              f"{ident} {label} fingerprints its own patch",
+              f"{pattern!r} is not in what {name} adds, so matching it proves "
+              f"nothing about whether the patch arrived")
+
         target = tree / bundle
         if not target.is_file():
             check(False, f"{ident} {label}: {bundle} is not in the tree")
         else:
-            check(pattern in target.read_text(errors="ignore"),
+            check(tolerant(pattern).search(target.read_text(errors="ignore")) is not None,
                   f"{ident} {label} reached {pathlib.Path(bundle).name}",
                   f"{bundle} does not contain {pattern!r}")
 
