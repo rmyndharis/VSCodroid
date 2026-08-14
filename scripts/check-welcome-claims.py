@@ -58,6 +58,24 @@ FORBIDDEN = [
 ]
 
 
+# The prose is checked the other way round. The rules above name shapes known to
+# be bad, and a denylist has a tail: `git version 2.53.0` slipped the first
+# version of the tool name rule, because "git" is followed by a word and the
+# number carries no prefix. It was caught by running the tool against the text
+# that shipped, which only works for shapes that already exist somewhere.
+#
+# In the walkthrough's own prose a digit is almost never legitimate -- claims
+# live there, code samples do not -- so anything numeric has to be declared. A
+# denylist fails silently on a shape nobody anticipated; this fails loudly on
+# legitimate new text, and that failure is one line a reviewer can judge at a
+# glance. The illustrations keep the denylist: their text is mock terminal
+# output, where digits are the point.
+PROSE_ALLOWED = (
+    "Java 17",   # a pinned toolchain, not a version resolved at build time
+    "python3",   # the command's name
+)
+
+
 def welcome_dir():
     """The bundled welcome extension, whatever version it is at."""
     found = sorted(EXTENSIONS.glob("vscodroid.vscodroid-welcome-*"))
@@ -70,18 +88,28 @@ def texts(directory):
     The pictures are read as plain text rather than parsed: the claims sat in
     <text> elements, and any XML shape that renders words is worth checking.
     """
-    manifest = directory / "package.json"
-    if manifest.is_file():
-        data = json.loads(manifest.read_text())
-        for walkthrough in data.get("contributes", {}).get("walkthroughs", []):
-            for step in walkthrough.get("steps", []):
-                yield f"{manifest.name} step '{step.get('id', '?')}'", step.get("title", "")
-                yield f"{manifest.name} step '{step.get('id', '?')}'", step.get("description", "")
+    for where, text in prose(directory):
+        yield where, text
 
     for svg in sorted(directory.glob("media/*.svg")):
         # Comments explain why a claim was removed and would match the rules
         # they document, which would make this script fail on its own reasoning.
         yield svg.name, re.sub(r"<!--.*?-->", "", svg.read_text(), flags=re.S)
+
+
+def prose(directory):
+    """Every line of walkthrough title and description text."""
+    manifest = directory / "package.json"
+    if not manifest.is_file():
+        return
+    data = json.loads(manifest.read_text())
+    for walkthrough in data.get("contributes", {}).get("walkthroughs", []):
+        for step in walkthrough.get("steps", []):
+            where = f"{manifest.name} step '{step.get('id', '?')}'"
+            for field in ("title", "description"):
+                for line in step.get(field, "").split("\n"):
+                    if line.strip():
+                        yield where, line.strip()
 
 
 def main():
@@ -104,6 +132,17 @@ def main():
         except ElementTree.ParseError as e:
             print(f"  FAIL    {svg.name}: not well-formed XML ({e})")
             print("            the picture will not render; the step opens with a blank space")
+            failed = True
+
+    for where, line in prose(directory):
+        stripped = line
+        for allowed in PROSE_ALLOWED:
+            stripped = stripped.replace(allowed, "")
+        if any(c.isdigit() for c in stripped):
+            print(f"  FAIL    {where}: {line[:90]!r}")
+            print("            a number in walkthrough prose has to be declared in "
+                  "PROSE_ALLOWED; if it names a bundled tool's version it should not be "
+                  "there at all")
             failed = True
 
     for where, text in texts(directory):
