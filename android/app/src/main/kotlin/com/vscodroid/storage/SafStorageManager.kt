@@ -9,6 +9,7 @@ import com.vscodroid.util.Logger
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import kotlin.concurrent.thread
 
 /**
  * Manages Storage Access Framework (SAF) interactions for VSCodroid.
@@ -80,7 +81,14 @@ class SafStorageManager(private val context: Context) {
 
     /**
      * Returns the list of recently opened SAF folders with persisted permissions.
-     * Folders whose permissions have been externally revoked are automatically pruned.
+     * Folders whose permissions have been externally revoked are pruned from the list.
+     *
+     * Pruning the list is all this does. Deleting the mirror of a pruned folder used to
+     * happen here too, which put a recursive delete of the user's files inside a method
+     * the workbench calls whenever it wants the recent list — and made a permission that
+     * read as absent for a moment enough to take the mirror of the folder currently open
+     * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
+     * and in [revokePermission] now.
      */
     fun getPersistedFolders(): List<SafFolderInfo> {
         val json = prefs.getString(KEY_RECENT_FOLDERS, "[]") ?: "[]"
@@ -95,7 +103,6 @@ class SafStorageManager(private val context: Context) {
             // Prune folders whose permissions have been revoked externally
             if (!hasPersistedPermission(uri)) {
                 toRemove.add(i)
-                cleanupMirror(uri)
                 continue
             }
 
@@ -116,6 +123,65 @@ class SafStorageManager(private val context: Context) {
         }
 
         return result.sortedByDescending { it.lastOpened }
+    }
+
+    /**
+     * Deletes the mirrors of folders no longer backed by a live permission.
+     *
+     * The reclamation half of what [getPersistedFolders] used to do in one pass. It
+     * works off the mirrors directory rather than the recent list so that it carries no
+     * ordering requirement against the read — a list already pruned no longer names the
+     * folders whose mirrors are stale, and an orphan left by a cleared list or a crashed
+     * sync is not in the list at all.
+     *
+     * Deletes the sync record beside each mirror too: both are named after the same
+     * hash, the record with a suffix.
+     *
+     * Must not be called while a folder is open. Nothing here can tell which mirror the
+     * editor is holding.
+     *
+     * Returns immediately. The scan itself is a handful of stats, but what it can find
+     * is a mirror of a whole project, and deleting one of those is a recursive delete of
+     * thousands of files. Its caller is the launch-time repair block in
+     * [com.vscodroid.SplashActivity], which runs on the main thread before anything is
+     * drawn — the same reason `repairInstalledToolchains` hands its walk off there.
+     */
+    fun reclaimRevokedMirrors() {
+        thread(name = "saf-reclaim", isDaemon = true) {
+            try {
+                reclaimRevokedMirrorsSync()
+            } catch (e: Exception) {
+                // Nothing depends on this having run: the next launch tries again, and
+                // until then the cost is disk that is already spent.
+                Logger.w(tag, "Mirror reclamation pass failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * The body of [reclaimRevokedMirrors], on the caller's thread.
+     *
+     * A folder granted between the permission snapshot and the delete would be seen as
+     * revoked. Reachable only if a picker completes during this pass, and the pass runs
+     * on the splash screen before the picker can be opened at all.
+     *
+     * @return how many entries were removed.
+     */
+    internal fun reclaimRevokedMirrorsSync(): Int {
+        val live = context.contentResolver.persistedUriPermissions
+            .map { getMirrorDir(it.uri).name }
+            .toSet()
+        val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
+        var removed = 0
+
+        root.listFiles()?.forEach { entry ->
+            if (entry.name.substringBefore('.') in live) return@forEach
+            if (entry.deleteRecursively()) removed++
+        }
+        if (removed > 0) {
+            Logger.i(tag, "Reclaimed $removed mirror entr(ies) without a live permission")
+        }
+        return removed
     }
 
     // -- Sync Coordination --
@@ -253,6 +319,9 @@ class SafStorageManager(private val context: Context) {
                 Logger.w(tag, "Failed to clean up mirror: ${e.message}")
             }
         }
+        // The sync engine keeps its record of the folder beside the mirror rather than
+        // inside it, so removing the mirror alone leaves the record orphaned.
+        File(mirrorDir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
     }
 
     companion object {

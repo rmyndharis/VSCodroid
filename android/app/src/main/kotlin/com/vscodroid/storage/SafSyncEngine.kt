@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.concurrent.thread
 
@@ -20,9 +21,11 @@ import kotlin.concurrent.thread
  * all files to a local mirror directory, preserving the folder structure.
  *
  * ## Write-back (local → SAF)
- * Uses [FileObserver] to watch the mirror directory for changes. When a file
- * is modified, created, or deleted locally (by VS Code), the change is synced
- * back to the original SAF location via [ContentResolver].
+ * Watches the mirror with one [FileObserver] per directory. When a file is modified,
+ * created, or deleted locally (by VS Code), the change is synced back to the original
+ * SAF location via [ContentResolver]. One observer over the root is not enough: inotify
+ * watches a directory rather than a tree, so a saved file one level down would update
+ * the mirror and never reach the device.
  *
  * ## Conflict Resolution
  * Local changes win when both sides changed: the mirror is replaced only when the
@@ -30,21 +33,37 @@ import kotlin.concurrent.thread
  * External changes are picked up the next time the folder is opened, which is
  * the only refresh that exists — there is no "Refresh from device" action, and
  * nothing calls [com.vscodroid.util.StorageManager.clearSafMirrors] either, so a
- * mirror cannot be cleared from inside the app.
+ * mirror cannot be cleared from inside the app. Reopening also removes mirror files
+ * for documents deleted on the device, under the conditions [reconcileDeletions]
+ * spells out.
  */
 class SafSyncEngine(private val context: Context) {
 
     private val tag = "SafSyncEngine"
     private val writeBackQueue = ConcurrentLinkedQueue<SyncJob>()
-    private var fileObserver: RecursiveFileObserver? = null
     private var writeBackThread: Thread? = null
     @Volatile private var isWatching = false
 
     /**
-     * Cache: relativePath → document ID. Built during [initialSync] and used for
-     * O(1) write-back lookups instead of walking the tree for each event (Q1 fix).
+     * One observer per watched directory, keyed by that directory.
+     *
+     * Holding them here is not only bookkeeping: [FileObserver]'s shared ObserverThread
+     * refers to each observer through a [java.lang.ref.WeakReference], so one that
+     * nothing else references stops delivering events as soon as it is collected.
      */
-    private val docIdCache = mutableMapOf<String, String>()
+    private val watchers = mutableMapOf<File, DirectoryObserver>()
+    private val watchersLock = Any()
+
+    /**
+     * Cache: relativePath → document ID. Built during [initialSync] and used for
+     * O(1) write-back lookups instead of walking the tree for each event.
+     *
+     * Four threads reach it: [initialSync] on Dispatchers.IO, [resolveDocumentUri] from
+     * an observer thread, [createInSaf] from the write-back thread, and [stopWatching]
+     * from whichever thread closes the folder. A plain map rehashing under a concurrent
+     * read loses entries or spins, so the map itself carries the synchronization.
+     */
+    private val docIdCache = ConcurrentHashMap<String, String>()
 
     // -- Initial Sync --
 
@@ -70,12 +89,15 @@ class SafSyncEngine(private val context: Context) {
         val documents = mutableListOf<DocumentInfo>()
         val rootDocId = DocumentsContract.getTreeDocumentId(safUri)
         docIdCache[""] = rootDocId  // root entry
-        walkTree(safUri, rootDocId, "", documents)
+        val enumerationComplete = walkTree(safUri, rootDocId, "", documents)
 
         val totalFiles = documents.count { !it.isDirectory }
         var filesDone = 0
         var skippedLarge = 0
-        var keptLocal = 0
+        // Paths where this sync concluded the mirror copy is not a copy of the device's.
+        // What [reconcileDeletions] does with that is the difference between keeping and
+        // losing an edit that never reached the device.
+        val keptLocal = mutableSetOf<String>()
 
         Logger.i(tag, "Enumerated ${documents.size} items ($totalFiles files)")
 
@@ -99,7 +121,7 @@ class SafSyncEngine(private val context: Context) {
                         doc.lastModified, doc.size
                     )
                 ) {
-                    keptLocal++
+                    keptLocal.add(doc.relativePath)
                     Logger.d(tag, "Kept newer local copy: ${doc.relativePath}")
                     filesDone++
                     onProgress(filesDone, totalFiles)
@@ -112,12 +134,130 @@ class SafSyncEngine(private val context: Context) {
             }
         }
 
+        // Phase 3: drop what the device no longer has
+        val removed = reconcileDeletions(mirrorDir, documents, enumerationComplete, keptLocal)
+
         val elapsed = System.currentTimeMillis() - startTime
         Logger.i(
             tag,
-            "Initial sync complete: $filesDone files ($skippedLarge too large, $keptLocal kept as newer) in ${elapsed}ms"
+            "Initial sync complete: $filesDone files ($skippedLarge too large, " +
+                "${keptLocal.size} kept as newer, $removed removed) in ${elapsed}ms"
         )
     }
+
+    /**
+     * Removes mirror files for documents that have since been deleted on the device.
+     *
+     * Reopening a folder used to only create and overwrite, so anything deleted on the
+     * device came straight back from the stale mirror — and because a MODIFY on a file
+     * the tree no longer knows falls through to a create, editing it pushed it back
+     * onto the device too.
+     *
+     * The two ways of being wrong here do not cost the same. A file left behind is
+     * untidy; deleting work that exists only in the mirror cannot be undone. So this
+     * removes only what a *complete* enumeration proves is gone, and only files it can
+     * show it put there itself:
+     *
+     * - A partial enumeration proves nothing. [walkTree] logs and carries on when a
+     *   provider query fails, so a folder that answered for two directories out of
+     *   twenty would otherwise read as "eighteen directories were deleted". One failure
+     *   anywhere disables the pass and leaves the last complete record untouched.
+     * - Neither does an enumeration that succeeded and returned nothing. A folder the
+     *   user emptied and a provider answering for a volume that is no longer mounted
+     *   look identical from here, and only one of them costs the whole mirror. The
+     *   price of declining is a folder emptied on the device keeping its mirror copies
+     *   until they are deleted in the editor, which propagates the other way.
+     * - Only paths a previous complete sync recorded are candidates. A file created in
+     *   the editor whose write-back has not landed was never recorded, so it can never
+     *   be a candidate — that is the case that would otherwise destroy work.
+     * - A path in [keptLocal] is left out of the new record, so it stops being a
+     *   candidate from here on. Those are the paths where [shouldOverwriteMirror] just
+     *   said the mirror copy is *not* a copy of the device's, which is the engine
+     *   stating it did not write that file. Recording it anyway is a slower version of
+     *   the same data loss: the record's timestamp moves past the local edit, so the
+     *   rule below stops protecting it, and the next removal on the device takes the
+     *   only copy. One ordinary reopen between the edit and the removal is all it takes,
+     *   and reopening is how a person gets back into a folder.
+     * - A candidate modified since the record was written is kept. That covers the same
+     *   loss for the shorter sequence, where no sync has run since the edit.
+     * - A candidate that does not resolve inside the mirror is left alone. The record is
+     *   built from provider-supplied display names, and a delete is the wrong operation
+     *   to point at a path that walked out of the directory it belongs to.
+     * - Directories are left alone. Removing one means a recursive delete, the
+     *   operation with the worst outcome if any of the reasoning above is wrong. An
+     *   empty directory left behind is noise.
+     *
+     * @return how many files were removed.
+     */
+    private fun reconcileDeletions(
+        mirrorDir: File,
+        documents: List<DocumentInfo>,
+        enumerationComplete: Boolean,
+        keptLocal: Set<String>
+    ): Int {
+        if (!enumerationComplete || documents.isEmpty()) {
+            Logger.w(
+                tag,
+                "Enumeration proved nothing — leaving the mirror of ${mirrorDir.name} as it is"
+            )
+            return 0
+        }
+
+        val record = File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
+        val present = documents.filterNot { it.isDirectory }.map { it.relativePath }.toSet()
+        val recordedAt = if (record.isFile) record.lastModified() else 0L
+        var removed = 0
+
+        // Resolved rather than checked lexically: a mirror is routinely a checked-out
+        // repository, so a link inside one is attacker-supplied in the ordinary case and
+        // `..` handling alone would follow it out.
+        val confine = try {
+            mirrorDir.canonicalPath + File.separator
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not resolve the mirror's own path; removing nothing: ${e.message}")
+            return 0
+        }
+
+        for (path in readSyncedRecord(record)) {
+            if (path.isEmpty() || path in present) continue
+            val stale = File(mirrorDir, path)
+            if (!stale.isFile) continue
+            val resolved = try {
+                stale.canonicalPath
+            } catch (e: Exception) {
+                continue
+            }
+            if (!resolved.startsWith(confine)) {
+                Logger.w(tag, "Recorded path resolves outside the mirror, not touching it: $path")
+                continue
+            }
+            if (stale.lastModified() > recordedAt) {
+                Logger.d(tag, "Kept a locally changed file the device no longer has: $path")
+                continue
+            }
+            if (stale.delete()) removed++
+        }
+
+        try {
+            record.writeText((present - keptLocal).joinToString("\n"))
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not record the synced set: ${e.message}")
+        }
+        return removed
+    }
+
+    /** The paths the last complete sync recorded, or none when there is no usable record. */
+    private fun readSyncedRecord(record: File): List<String> =
+        if (!record.isFile) {
+            emptyList()
+        } else {
+            try {
+                record.readLines()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not read the synced record: ${e.message}")
+                emptyList()
+            }
+        }
 
     // -- File Watching (Write-back) --
 
@@ -129,13 +269,28 @@ class SafSyncEngine(private val context: Context) {
         stopWatching()
 
         isWatching = true
-        fileObserver = RecursiveFileObserver(mirrorDir, safUri).also {
-            it.startWatching()
-        }
+        watchTree(mirrorDir, mirrorDir, safUri)
 
         // Background thread to process write-back queue
         writeBackThread = thread(name = "saf-writeback", isDaemon = true) {
-            while (isWatching) {
+            runWriteBackLoop { isWatching }
+        }
+
+        val watched = synchronized(watchersLock) { watchers.size }
+        Logger.i(tag, "File watcher started for ${mirrorDir.absolutePath} ($watched directories)")
+    }
+
+    /**
+     * Processes queued write-backs until [isRunning] goes false or the thread is
+     * interrupted, then sends out whatever is still queued.
+     *
+     * Takes its termination condition as a parameter so a test can drive the loop
+     * without a live watcher; the caller passes the watcher's own flag.
+     */
+    internal fun runWriteBackLoop(isRunning: () -> Boolean) {
+        var interrupted = false
+        try {
+            while (isRunning()) {
                 val job = writeBackQueue.poll()
                 if (job != null) {
                     processWriteBack(job)
@@ -143,15 +298,26 @@ class SafSyncEngine(private val context: Context) {
                     Thread.sleep(WRITEBACK_POLL_MS)
                 }
             }
-            // Drain remaining items before exiting so pending writes aren't lost
-            var remaining = writeBackQueue.poll()
-            while (remaining != null) {
-                processWriteBack(remaining)
-                remaining = writeBackQueue.poll()
-            }
+        } catch (_: InterruptedException) {
+            // stopWatching() interrupts to wake this thread out of the sleep it spends
+            // nearly all of its idle time in, so this is the ordinary way the loop ends,
+            // not a fault. Letting it escape reaches the thread's uncaught handler, and
+            // Android's default handler ends the process — closing a folder, which
+            // happens on every folder switch and on destroy, would close the app.
+            interrupted = true
         }
+        // Whichever way the loop ended, the queue can still hold writes the user is
+        // expecting on the device, and they have to go out with the interrupt status
+        // clear: the stream copies below throw InterruptedIOException on a thread still
+        // carrying the flag, losing exactly what this drain exists to save.
+        if (Thread.interrupted()) interrupted = true
 
-        Logger.i(tag, "File watcher started for: ${mirrorDir.absolutePath}")
+        var remaining = writeBackQueue.poll()
+        while (remaining != null) {
+            processWriteBack(remaining)
+            remaining = writeBackQueue.poll()
+        }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     /**
@@ -159,29 +325,107 @@ class SafSyncEngine(private val context: Context) {
      */
     fun stopWatching() {
         isWatching = false
-        fileObserver?.stopWatching()
-        fileObserver = null
-        // Wake thread from sleep, then wait for it to drain remaining writes
-        writeBackThread?.interrupt()
-        try { writeBackThread?.join(2000) } catch (_: InterruptedException) {}
+        synchronized(watchersLock) {
+            watchers.values.forEach { it.stopWatching() }
+            watchers.clear()
+        }
+        // Wake the thread out of its sleep, then wait for it to drain remaining writes.
+        // An idle queue drains in microseconds, so this costs only what there is to lose.
+        val worker = writeBackThread
         writeBackThread = null
-        writeBackQueue.clear()
-        docIdCache.clear()
+        worker?.interrupt()
+        try { worker?.join(DRAIN_GRACE_MS) } catch (_: InterruptedException) {}
+
+        if (worker != null && worker.isAlive) {
+            // Still draining. Emptying the queue from here would throw away exactly the
+            // writes the drain exists to save, and would do it in the case where there
+            // are the most of them — a burst of saves, or one slow provider. The thread
+            // owns the queue until it finishes; jobs carry the URIs they belong to, so a
+            // later lifecycle sharing the queue cannot misdirect them.
+            Logger.w(tag, "Write-back still draining after ${DRAIN_GRACE_MS}ms; leaving it to finish")
+        } else {
+            writeBackQueue.clear()
+        }
+        // docIdCache is deliberately not cleared here. A drain that outlived the wait
+        // still needs the mappings of the folder it is finishing, and [initialSync]
+        // clears the cache itself before anything reads it for the next one.
         Logger.i(tag, "File watcher stopped")
+    }
+
+    // -- Internal: Watch Registration --
+
+    /**
+     * Puts an observer on each of [watchableDirectories] for [dir], one per directory,
+     * because a watch descriptor covers a directory and not a tree.
+     */
+    private fun watchTree(dir: File, rootDir: File, safTreeUri: Uri) {
+        // The walk calls listFiles() once per directory, so it stays outside the lock:
+        // holding a monitor across a tree's worth of filesystem calls would block the
+        // observer thread's own registrations behind them. Its result is a bound on how
+        // much work follows, not a reservation — the cap is enforced again below, where
+        // it can be exact.
+        val room = synchronized(watchersLock) { MAX_WATCHED_DIRECTORIES - watchers.size }
+        val targets = watchableDirectories(dir, room)
+        val started = mutableListOf<DirectoryObserver>()
+        var atLimit = false
+
+        synchronized(watchersLock) {
+            for (target in targets) {
+                if (watchers.size >= MAX_WATCHED_DIRECTORIES) {
+                    atLimit = true
+                    break
+                }
+                if (watchers.containsKey(target)) continue
+                val observer = DirectoryObserver(target, rootDir, safTreeUri)
+                watchers[target] = observer
+                started += observer
+            }
+        }
+
+        if (atLimit || targets.size >= room) {
+            Logger.w(
+                tag,
+                "Watch limit of $MAX_WATCHED_DIRECTORIES reached; directories below " +
+                    "${dir.name} are unwatched"
+            )
+        }
+        // Registering the watch reaches the kernel, and nothing here needs the lock
+        // held while it does.
+        started.forEach { it.startWatching() }
+    }
+
+    /** Releases the observer for [dir] and for anything below it. A no-op if unwatched. */
+    private fun unwatchTree(dir: File) {
+        synchronized(watchersLock) {
+            // Every deleted file reaches here, and only a deleted directory can be
+            // holding watches. Without this the scan below would run once per entry of
+            // a `git clean`, across the whole map, on the observer thread.
+            if (!watchers.containsKey(dir)) return
+
+            val prefix = dir.path + File.separator
+            watchers.keys
+                .filter { it == dir || it.path.startsWith(prefix) }
+                .forEach { watchers.remove(it)?.stopWatching() }
+        }
     }
 
     // -- Internal: Tree Walking --
 
     /**
      * Recursively walks a SAF document tree, collecting [DocumentInfo] entries.
+     *
+     * @return whether every directory under [parentDocId] could be enumerated. A false
+     *   here is what stops [reconcileDeletions] from reading a provider that stopped
+     *   answering as a device folder that was emptied.
      */
     private fun walkTree(
         treeUri: Uri,
         parentDocId: String,
         parentRelPath: String,
         result: MutableList<DocumentInfo>
-    ) {
+    ): Boolean {
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        var complete = true
 
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -220,14 +464,16 @@ class SafSyncEngine(private val context: Context) {
 
                     result.add(DocumentInfo(docUri, docId, relativePath, isDir, size, lastModified))
 
-                    if (isDir) {
-                        walkTree(treeUri, docId, relativePath, result)
+                    if (isDir && !walkTree(treeUri, docId, relativePath, result)) {
+                        complete = false
                     }
                 }
-            }
+            } ?: return false  // the provider refused to answer at all
         } catch (e: Exception) {
             Logger.w(tag, "Failed to enumerate children of $parentDocId: ${e.message}")
+            return false
         }
+        return complete
     }
 
     /**
@@ -285,34 +531,89 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Creates a new document in the SAF tree corresponding to a locally created file.
+     * Puts a locally created file into the SAF tree, writing into the document that
+     * already carries that name rather than adding a second one.
+     *
+     * [DocumentsContract.createDocument] does not merge: handed a name the folder
+     * already has, a provider invents "notes (1).txt" and the user's file quietly
+     * forks. Two ordinary things arrive here as a create — the rename
+     * [copyDocumentToLocal] performs to move a finished copy into place, and any local
+     * rename over an existing name, which is what `mv` and a git checkout do. Resolving
+     * first is also what makes the MODIFY-on-unknown fallback in [processWriteBack]
+     * safe to keep.
      */
     private fun createInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri) {
         try {
-            val mimeType = if (localFile.isDirectory) {
-                DocumentsContract.Document.MIME_TYPE_DIR
+            val parentDocId = DocumentsContract.getDocumentId(parentSafUri)
+            val existingDocId = findChildDocId(treeUri, parentDocId, localFile.name)
+
+            val docUri = if (existingDocId != null) {
+                DocumentsContract.buildDocumentUriUsingTree(treeUri, existingDocId)
             } else {
-                guessMimeType(localFile.name)
+                val mimeType = if (localFile.isDirectory) {
+                    DocumentsContract.Document.MIME_TYPE_DIR
+                } else {
+                    guessMimeType(localFile.name)
+                }
+                DocumentsContract.createDocument(
+                    context.contentResolver, parentSafUri, mimeType, localFile.name
+                )
+            } ?: return
+
+            if (localFile.isFile) {
+                writeLocalToSaf(localFile, docUri)
             }
-            val newDocUri = DocumentsContract.createDocument(
-                context.contentResolver, parentSafUri, mimeType, localFile.name
-            )
-            if (newDocUri != null && localFile.isFile) {
-                writeLocalToSaf(localFile, newDocUri)
-            }
-            // Cache the new document ID for future write-back lookups
-            if (newDocUri != null) {
-                val newDocId = DocumentsContract.getDocumentId(newDocUri)
-                val parentDocId = DocumentsContract.getDocumentId(parentSafUri)
-                val parentRelPath = docIdCache.entries
-                    .firstOrNull { it.value == parentDocId }?.key ?: ""
+            // Cache the document ID for future write-back lookups, but only when the
+            // parent is one this cache knows. A miss is not "the parent is the root" --
+            // initialSync puts the root in under the empty key, so the root is found.
+            // It means the cache belongs to a different folder than this job does, which
+            // is what a drain outliving its own lifecycle looks like. Writing the entry
+            // anyway would file a document from the old folder under a plausible name in
+            // the new one, and the next write-back for that name would land in the wrong
+            // folder entirely.
+            val parentRelPath = docIdCache.entries.firstOrNull { it.value == parentDocId }?.key
+            if (parentRelPath != null) {
                 val relPath = if (parentRelPath.isEmpty()) localFile.name
                     else "$parentRelPath/${localFile.name}"
-                docIdCache[relPath] = newDocId
+                docIdCache[relPath] = DocumentsContract.getDocumentId(docUri)
             }
         } catch (e: Exception) {
             Logger.w(tag, "Failed to create ${localFile.name} in SAF: ${e.message}")
         }
+    }
+
+    /**
+     * Looks up a direct child of [parentDocId] by display name, from the provider.
+     *
+     * Deliberately not through [docIdCache]: both callers use the answer to choose
+     * between writing into a document and making a new one, and the cache can still
+     * name a document deleted since it was filled.
+     */
+    private fun findChildDocId(treeUri: Uri, parentDocId: String, name: String): String? {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        try {
+            context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                ),
+                null, null, null
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID
+                )
+                val nameIndex = cursor.getColumnIndexOrThrow(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                )
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameIndex) == name) return cursor.getString(idIndex)
+                }
+            }
+        } catch (e: Exception) {
+            Logger.d(tag, "Lookup of $name under $parentDocId failed: ${e.message}")
+        }
+        return null
     }
 
     /**
@@ -366,25 +667,24 @@ class SafSyncEngine(private val context: Context) {
     // -- FileObserver --
 
     /**
-     * Recursive file observer that watches all subdirectories and enqueues
-     * write-back jobs when files are modified, created, or deleted.
+     * Watches one directory and enqueues write-back jobs for what changes inside it.
      *
-     * Note: On API 29+, FileObserver supports watching entire directory trees
-     * via the File constructor variant.
+     * [path] arrives as inotify's own `name` field — the bare entry name within the
+     * watched directory, not a path relative to the mirror root — so [dir] is what it
+     * has to be resolved against. Covering the tree is [watchTree]'s job: one observer
+     * per directory, because a watch descriptor covers a directory and not a tree.
      */
-    private inner class RecursiveFileObserver(
+    private inner class DirectoryObserver(
+        private val dir: File,
         private val rootDir: File,
         private val safTreeUri: Uri
-    ) : FileObserver(rootDir, MODIFY or CREATE or DELETE or MOVED_FROM or MOVED_TO) {
+    ) : FileObserver(dir, MODIFY or CREATE or DELETE or MOVED_FROM or MOVED_TO) {
 
         override fun onEvent(event: Int, path: String?) {
             if (path == null || !isWatching) return
 
-            val localFile = File(rootDir, path)
+            val localFile = File(dir, path)
             val relativePath = localFile.relativeTo(rootDir).path
-
-            // Skip hidden files and temp files
-            if (relativePath.startsWith(".") || path.endsWith("~") || path.endsWith(".tmp")) return
 
             val type = when (event and ALL_EVENTS) {
                 MODIFY -> SyncType.MODIFY
@@ -392,6 +692,24 @@ class SafSyncEngine(private val context: Context) {
                 DELETE, MOVED_FROM -> SyncType.DELETE
                 else -> return
             }
+
+            // inotify reports this alongside the event type when the entry is a
+            // directory, and for a delete it is the only way to know: there is nothing
+            // left to stat by then.
+            val isDirectory = (event and IN_ISDIR) != 0 || localFile.isDirectory
+
+            // A directory arriving or leaving changes what has to be watched. Unwatching
+            // is unconditional because it is a no-op for anything never watched.
+            when (type) {
+                SyncType.CREATE ->
+                    if (isDirectory && !shouldSkip(localFile.name, isDir = true)) {
+                        watchTree(localFile, rootDir, safTreeUri)
+                    }
+                SyncType.DELETE -> unwatchTree(localFile)
+                else -> Unit
+            }
+
+            if (!shouldWriteBack(relativePath, isDirectory)) return
 
             // Resolve the SAF URI for this file via its relative path
             val safDocUri = resolveDocumentUri(safTreeUri, relativePath)
@@ -431,41 +749,9 @@ class SafSyncEngine(private val context: Context) {
         }
 
         // Slow path: walk the tree segment by segment (for newly created files)
-        val segments = relativePath.split("/")
         var currentDocId = DocumentsContract.getTreeDocumentId(treeUri)
-
-        for (segment in segments) {
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, currentDocId)
-            var found = false
-
-            try {
-                context.contentResolver.query(
-                    childrenUri,
-                    arrayOf(
-                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
-                    ),
-                    null, null, null
-                )?.use { cursor ->
-                    val idIndex = cursor.getColumnIndexOrThrow(
-                        DocumentsContract.Document.COLUMN_DOCUMENT_ID
-                    )
-                    val nameIndex = cursor.getColumnIndexOrThrow(
-                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
-                    )
-                    while (cursor.moveToNext()) {
-                        if (cursor.getString(nameIndex) == segment) {
-                            currentDocId = cursor.getString(idIndex)
-                            found = true
-                            break
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                return null
-            }
-
-            if (!found) return null
+        for (segment in relativePath.split("/")) {
+            currentDocId = findChildDocId(treeUri, currentDocId, segment) ?: return null
         }
 
         // Cache for next time
@@ -480,8 +766,44 @@ class SafSyncEngine(private val context: Context) {
         private const val COPY_BUFFER_SIZE = 8192
         private const val WRITEBACK_POLL_MS = 200L
 
+        /** How long [stopWatching] waits for queued writes to reach the device. */
+        private const val DRAIN_GRACE_MS = 2000L
+
         /** Suffix for a copy still being written; moved into place when complete. */
         private const val PARTIAL_SUFFIX = ".vscodroid-partial"
+
+        /**
+         * Suffix of the sibling file recording what the last complete sync found.
+         *
+         * A sibling and not a child: the mirror directory is the folder VS Code opens,
+         * and a bookkeeping file inside it would show up in the explorer and in search.
+         * Being a sibling is also why whatever removes a mirror has to remove this too,
+         * which is what [SafStorageManager] uses it for.
+         */
+        internal const val SYNCED_RECORD_SUFFIX = ".synced"
+
+        /**
+         * inotify's flag for "the entry this event is about is a directory".
+         *
+         * [FileObserver] does not expose it, but it passes the kernel's mask through
+         * untouched — which is also why the existing `event and ALL_EVENTS` is needed
+         * to read the event type at all.
+         */
+        private const val IN_ISDIR = 0x40000000
+
+        /**
+         * Ceiling on watched directories.
+         *
+         * Each watch is a kernel inotify descriptor drawn from a per-uid budget
+         * (`fs.inotify.max_user_watches`, commonly 8192), and this process is not the
+         * only claimant — the file watcher the VS Code server runs draws on the same
+         * pool. [SKIP_DIRECTORIES] already excludes what generates most of the count,
+         * so a real project tree lands in the low hundreds; this is the backstop for
+         * the folder that does not. Past it, deeper directories go unwatched and their
+         * changes stay in the mirror, which is the behaviour the whole engine had
+         * before and is better than starving the editor's own watcher.
+         */
+        private const val MAX_WATCHED_DIRECTORIES = 2048
 
         /** Q2: Max file size to sync (50 MB). Larger files are skipped. */
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
@@ -550,6 +872,71 @@ class SafSyncEngine(private val context: Context) {
         internal fun shouldSkip(name: String, isDir: Boolean): Boolean {
             if (!isDir) return false
             return name in SKIP_DIRECTORIES
+        }
+
+        /**
+         * The directories a watch has to cover for [root]: [root] itself and everything
+         * below it that the walk would have mirrored.
+         *
+         * The exclusions are [SKIP_DIRECTORIES], the set [walkTree] already obeys —
+         * nothing inside them is mirrored in, so a watch there would spend a kernel
+         * descriptor on changes with nowhere to go. That is also what keeps the count
+         * survivable: one `node_modules` runs to thousands of directories on its own.
+         *
+         * Breadth-first, and capped at [limit]. The order matters only once the cap
+         * bites, and then it decides which directories go unwatched: breadth-first
+         * spends the budget on the shallow ones, which is where a person edits, rather
+         * than on wherever a depth-first descent happened to reach first.
+         */
+        internal fun watchableDirectories(root: File, limit: Int): List<File> {
+            if (limit <= 0 || !root.isDirectory) return emptyList()
+
+            val found = mutableListOf<File>()
+            val pending = ArrayDeque<File>()
+            pending.addLast(root)
+
+            while (pending.isNotEmpty() && found.size < limit) {
+                val dir = pending.removeFirst()
+                found.add(dir)
+                dir.listFiles()?.forEach { child ->
+                    if (child.isDirectory && !shouldSkip(child.name, isDir = true)) {
+                        pending.addLast(child)
+                    }
+                }
+            }
+            return found
+        }
+
+        /** Scratch files the machine makes for itself and is about to rename or drop. */
+        private fun isMachineTemporary(name: String): Boolean =
+            name.endsWith(PARTIAL_SUFFIX) || name.endsWith("~") || name.endsWith(".tmp")
+
+        /**
+         * Whether a change at [relativePath] should be pushed back to the device.
+         *
+         * This is [shouldSkip] applied to a path rather than to a single entry, so that
+         * what the walk declines to mirror in is what this declines to write back out.
+         *
+         * The rule it replaces tested `relativePath.startsWith(".")`, which had no
+         * counterpart on the way in: [SKIP_DIRECTORIES] deliberately does not list
+         * `.vscode`, so workspace settings, `.gitignore` and `.editorconfig` were copied
+         * into the mirror and then never allowed back onto the device — edited in the
+         * editor, saved, and silently lost on the device side.
+         *
+         * The temporary suffixes are the one asymmetry that stays, and it is the
+         * intended one: [PARTIAL_SUFFIX] files are this engine's own half-written
+         * copies, and `~`/`.tmp` belong to a writer that is about to rename them away.
+         * Uploading them would push a file that is about to stop existing.
+         */
+        internal fun shouldWriteBack(relativePath: String, isDirectory: Boolean): Boolean {
+            if (relativePath.isEmpty()) return false
+            val segments = relativePath.split('/')
+            val name = segments.last()
+            if (isMachineTemporary(name)) return false
+            // Every segment but the last is a directory by construction; the last one is
+            // only a directory when the caller says so.
+            if (segments.dropLast(1).any { shouldSkip(it, isDir = true) }) return false
+            return !shouldSkip(name, isDirectory)
         }
 
         /** Testable: heuristic MIME type detection from filename extension. */

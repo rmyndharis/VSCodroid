@@ -21,6 +21,7 @@ import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
+import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,6 +80,13 @@ class SplashActivity : AppCompatActivity() {
             // I/O thread, because the trees involved have thousands of files
             // and this block is on the main thread.
             ToolchainManager(this).repairInstalledToolchains()
+            // A folder whose permission the user withdrew in system settings never
+            // comes back through the app, so its mirror is disk nothing can reach.
+            // Here because it is the one point that is guaranteed to have no folder
+            // open: this activity always precedes MainActivity, and nothing can tell
+            // a mirror the editor is holding from one it is not. It returns
+            // immediately, for the reason the line above does.
+            SafStorageManager(this).reclaimRevokedMirrors()
         } catch (e: Exception) {
             Logger.e(tag, "Launch-time setup refresh failed", e)
         }
