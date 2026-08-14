@@ -22,7 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Foreground Service that owns the Node.js code-server process.
+ * Foreground Service that owns the Node.js server process.
  *
  * Responsibilities:
  * - Promoting itself to a foreground service with a persistent notification

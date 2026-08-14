@@ -18,8 +18,8 @@ import kotlin.concurrent.thread
  * Manages the Node.js server process lifecycle.
  *
  * Responsibilities:
- * - Starting and stopping the Node.js code-server process
- * - Health-checking the server via /healthz endpoint
+ * - Starting and stopping the Node.js server process
+ * - Health-checking the server -- see [isServerHealthy] for which endpoint and why
  * - Monitoring process liveness via a watchdog thread
  * - Streaming stdout/stderr output for diagnostics
  *
@@ -92,7 +92,7 @@ class ProcessManager(private val context: Context) {
     // -- Lifecycle --
 
     /**
-     * Starts the Node.js code-server process.
+     * Starts the Node.js server process.
      *
      * Resolves the port on the first call and keeps it for the lifetime of this
      * instance, builds the command line from [Environment] paths, spawns the
