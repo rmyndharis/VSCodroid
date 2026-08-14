@@ -84,7 +84,16 @@ class ProcessManager(private val context: Context) {
     /** Invoked on the watchdog thread when the server process exits unexpectedly. */
     var onServerCrashed: ((exitCode: Int) -> Unit)? = null
 
-    /** Invoked on the watchdog thread before an automatic restart attempt. */
+    /**
+     * Declared for symmetry with [onServerCrashed], and invoked by nothing.
+     *
+     * Its sibling is assigned in `NodeService.setupServiceCallbacks()` and fires from the
+     * watchdog; this one has no assignment and no call site anywhere in the tree. The
+     * previous wording said it was "invoked on the watchdog thread before an automatic
+     * restart attempt", which reads as a documented contract a caller could rely on.
+     * Whether to wire it up or drop it is a question about behaviour, not about this
+     * comment.
+     */
     var onServerRestarting: (() -> Unit)? = null
 
     /** Invoked on the output-reader thread for every line of server stdout/stderr. */
