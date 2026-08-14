@@ -304,17 +304,19 @@ class MainActivity : AppCompatActivity() {
         when {
             bgMs > FORCE_RELOAD_THRESHOLD_MS -> {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
-                // Rebuilt rather than reload()ed, because this is the one reload
-                // that can outlive its own authentication: the cookie carrying the
-                // connection token is set for a week, and this branch exists
-                // precisely for a WebView that has been idle a long time. Going
-                // through loadVSCode() re-sends the token in the query, which the
-                // server turns into a fresh cookie. The JS-triggered reloads below
-                // stay as they are -- they run on a page that is demonstrably still
-                // authenticated, and reaching them would mean putting the token
-                // where page scripts can read it. loadVSCode() keeps the folder
-                // on screen by itself and initBridge() is already idempotent.
-                loadVSCode(serverPort)
+                // reload(), not a rebuilt URL. The WebView URL is the only
+                // truthful record of what is open, and rebuilding reads only
+                // `folder` back out of it — so a multi-root workspace
+                // (`?workspace=<file>`) or a closed folder (`?ew=true`), both of
+                // which the workbench navigates to on its own, would come back as
+                // the default projects directory instead.
+                //
+                // Authentication is not a reason to rebuild here: the cookie the
+                // connection token rides in lasts a week and this branch fires at
+                // five minutes. A process idle long enough for it to expire will
+                // have been killed by Android first, and a cold start mints a
+                // fresh token anyway.
+                webView?.reload()
             }
             bgMs > HEALTH_CHECK_THRESHOLD_MS -> {
                 checkConnectionHealth(bgMs)

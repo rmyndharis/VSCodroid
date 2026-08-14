@@ -42,7 +42,7 @@ flowchart TD
 |-----------|-----------|
 | **Minimal modification to VS Code** | Less maintenance burden, easier to rebase on upstream updates |
 | **Process isolation** | WebView renderer and Node.js are separate processes; one crashing doesn't kill the other |
-| **Localhost-only communication** | No network exposure, no authentication needed, simplifies security |
+| **Localhost-only communication** | No network exposure; the server still requires a connection token, because loopback is not isolated per app on Android |
 | **Native shell for Android integration** | Kotlin handles platform-specific concerns (keyboard, clipboard, lifecycle) |
 | **Lazy resource loading** | Language servers, extensions, toolchains loaded on-demand to minimize resource usage |
 | **Graceful degradation** | App remains functional even if some components fail (e.g., extension marketplace offline) |
