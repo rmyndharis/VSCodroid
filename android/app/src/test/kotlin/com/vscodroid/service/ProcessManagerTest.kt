@@ -310,6 +310,42 @@ class ProcessManagerTest {
         )
     }
 
+    @Test
+    fun `the watchdog names the signal that killed the server`() {
+        // SignalNameTest pins the translation and nothing checked that the
+        // watchdog performs it. Replacing the call with the bare number leaves
+        // every one of those green: they call signalName directly, and the log
+        // line is the only place the result was ever used.
+        //
+        // What is lost is only the diagnostic -- onServerCrashed still fires, so
+        // the restart still happens -- which is why it could rot unnoticed. The
+        // log is what someone reads to understand why the server died, and
+        // "signal 11" makes them look it up while "SIGSEGV" tells them.
+        //
+        // 139, not 137: the branch above this one claims 137 for the
+        // out-of-memory message, so a fixture using it never reaches the code
+        // under test at all. 139 is 128 + SIGSEGV, and "SIGSEGV" is a string the
+        // broken path cannot produce.
+        manager.serverProcessField = mockk<Process>(relaxed = true) {
+            every { waitFor() } returns 139
+            every { isAlive } returns false
+        }
+
+        val named = CountDownLatch(1)
+        every { Logger.w(any(), match<String> { it.contains("SIGSEGV") }, any()) } answers {
+            named.countDown()
+        }
+
+        ProcessManager::class.java.getDeclaredMethod("startWatchdog")
+            .apply { isAccessible = true }
+            .invoke(manager)
+
+        assertTrue(
+            named.await(5, TimeUnit.SECONDS),
+            "the watchdog must name the signal, not print its number"
+        )
+    }
+
     // -- Connection token --
 
     @Test
