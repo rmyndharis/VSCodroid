@@ -140,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A server killed while it was rewriting its own configuration no longer leaves the app unable to start. The file was rewritten by truncating and refilling it, and an interruption there left something that failed to parse on every subsequent start, with nothing inside an installed version able to repair it
 - Language server processes are identified correctly again. Three of the bundled ones were never recognised at all, and the check meant to guard that list reported them fine throughout because it compared against a different form of the name. The same matching could also mistake one of your own scripts for a language server and shut it down under memory pressure, if its path merely contained a name like `eslint`
 - The process count shown in the status bar includes the server's own bootstrap process, which the system counts against the same limit. Every warning threshold had been firing one process late
+- A folder synced from a device now copies only into its own mirror directory. The path for each copy was built from the name the document provider reported, and a name that was not a single path segment could place the file outside the mirror. Names that come from the platform's own provider are derived from real filenames and were never affected; the check matters for providers that relay names from elsewhere
 
 ## [1.0.0] - 2026-04-21
 
