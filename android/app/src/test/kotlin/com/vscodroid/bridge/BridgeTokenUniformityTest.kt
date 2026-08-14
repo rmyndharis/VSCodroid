@@ -14,7 +14,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.unmockkAll
 import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -103,6 +105,25 @@ class BridgeTokenUniformityTest {
             onBackPressed = { false },
             onMinimize = { },
         )
+    }
+
+    /**
+     * mockkObject replaces a singleton process-wide, and Gradle runs the whole suite in one
+     * JVM (no forkEvery, no maxParallelForks), so a mock left standing here is still standing
+     * when a later class runs. CrashReporter is stubbed above to return null and to do
+     * nothing, which is exactly what CrashReporterTest asserts against real behaviour.
+     *
+     * Without this, `--tests "*BridgeTokenUniformityTest*" --tests "*CrashReporterTest*"`
+     * fails three tests. The full suite passed only because some class scheduled in between
+     * calls unmockkAll() for its own reasons -- a dependency on another test's cleanup that
+     * nothing states and nothing enforces.
+     *
+     * unmockkAll() rather than naming the two objects: it is what the other five classes in
+     * this suite use, and it keeps covering this class if a mockkStatic is added later.
+     */
+    @AfterEach
+    fun tearDown() {
+        unmockkAll()
     }
 
     /** A value of the right type for each parameter; the call only has to reach the check. */
