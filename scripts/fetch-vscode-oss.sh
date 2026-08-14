@@ -20,6 +20,10 @@ set -euo pipefail
 #   VSCODE_OSS_URL        a direct URL, for a private mirror or a local test
 #   gh release download   the server-<version> release in this repository
 #
+# VSCODE_OSS_SHA256 checks the VSCODE_OSS_URL tarball, which has no release to be
+# compared against. Without it that path reports its digest as UNCHECKED rather
+# than saying nothing.
+#
 # Everything unpacked is verified before it is usable, because the failures that
 # matter here are quiet: an x86-64 ripgrep installs fine and then returns no
 # search results, and a tree from before a branding change ships Microsoft's
@@ -48,13 +52,62 @@ mkdir -p "$ROOT_DIR/server"
 # the release carries NOW. The server tarball is rebuilt in place when a patch
 # changes, without the version moving, and CI's restore-keys will happily hand
 # back the pre-rebuild bytes — which is exactly how a stale 190M tarball met the
-# verify gate that its own commit had introduced, and lost. VSCODE_OSS_URL has
-# no digest to compare against, so that path trusts its cache as before.
+# verify gate that its own commit had introduced, and lost. The VSCODE_OSS_URL
+# path has no release to compare against; it is checked further down, against a
+# digest the caller names.
 if [ -f "$TARBALL" ] && [ -z "${VSCODE_OSS_URL:-}" ]; then
-    expected="$(gh release view "server-$VSCODE_VERSION" --repo "$REPO" \
-        --json assets \
-        -q ".assets[] | select(.name==\"$TARBALL_NAME\") | .digest" 2>/dev/null || true)"
-    if [ -n "$expected" ] && [ "$expected" != "null" ]; then
+    # `|| true` collapsed three outcomes into one empty string: gh not
+    # installed, gh unable to answer, and the release genuinely carrying no such
+    # asset. All three then skipped the comparison in silence and the next line
+    # printed "cached", which is how an unchecked tarball became a verified one.
+    # Status and value are read separately now.
+    gh_err="$(mktemp)"
+    if expected="$(gh release view "server-$VSCODE_VERSION" --repo "$REPO" \
+            --json assets \
+            -q ".assets[] | select(.name==\"$TARBALL_NAME\") | .digest" 2>"$gh_err")"; then
+        gh_ok=1
+    else
+        gh_ok=0
+    fi
+    gh_message="$(cat "$gh_err")"
+    rm -f "$gh_err"
+
+    if [ "$gh_ok" -eq 0 ]; then
+        cat >&2 <<EOF
+
+  Cannot check the cached server tarball against the release:
+
+      $TARBALL
+
+  gh could not report what server-$VSCODE_VERSION carries:
+
+$gh_message
+
+  That is not proof the cache is wrong. gh may be absent, unauthenticated or
+  rate-limited, or the release may not be published yet. It is proof that
+  nothing here can tell -- and an unchecked cache is how a tarball from before
+  a rebuild reaches an APK. The two gates further down read the shape of the
+  tree and the patch fingerprints, not the rest of the bytes.
+
+  Pick one:
+
+      gh auth login
+          then run this again
+
+      rm -f "$TARBALL"
+          drop the cache and refetch it from the release
+
+      VSCODE_OSS_SHA256=<digest> VSCODE_OSS_URL=file://$TARBALL $0
+          deliberately offline, checked against a digest you name
+EOF
+        exit 1
+    fi
+
+    if [ -z "$expected" ] || [ "$expected" = "null" ]; then
+        echo "  unpublished: server-$VSCODE_VERSION carries no $TARBALL_NAME," >&2
+        echo "               so this cached file matches nothing published — discarding" >&2
+        rm -f "$TARBALL"
+    else
         actual="sha256:$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
         if [ "$actual" != "$expected" ]; then
             echo "  stale   : cached tarball digest $actual"
@@ -91,6 +144,28 @@ EOF
 fi
 
 echo "  size    : $(du -h "$TARBALL" | cut -f1)"
+
+# The VSCODE_OSS_URL path has no release to check against, so it took whatever
+# it was given -- including a cached file left by an earlier, different URL.
+# Naming a digest is the caller's choice; saying nothing about it is not.
+if [ -n "${VSCODE_OSS_URL:-}" ]; then
+    if [ -n "${VSCODE_OSS_SHA256:-}" ]; then
+        actual="$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
+        if [ "$actual" != "${VSCODE_OSS_SHA256#sha256:}" ]; then
+            cat >&2 <<EOF
+
+  The tarball from VSCODE_OSS_URL does not match VSCODE_OSS_SHA256.
+
+      got      $actual
+      expected ${VSCODE_OSS_SHA256#sha256:}
+EOF
+            exit 1
+        fi
+        echo "  digest  : matches VSCODE_OSS_SHA256"
+    else
+        echo "  digest  : UNCHECKED — set VSCODE_OSS_SHA256 to check this tarball"
+    fi
+fi
 
 echo
 echo "=== Extract ==="
