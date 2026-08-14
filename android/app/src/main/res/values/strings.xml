@@ -25,7 +25,7 @@
          indistinguishable from a dead one to everyone downstream.
 
          It also has to survive being read later. The next activity to bind
-         reads it through NodeService.lastStartupFailure() with no idea how long
+         reads it through NodeService.lastStartupNotice() with no idea how long
          ago it was recorded, so it says nothing about elapsed time. -->
     <string name="status_server_slow_start">The development server is taking longer than usual to start. The editor will open as soon as it is ready.</string>
     <string name="error_webview_crash">Display crashed. Reloading\u2026</string>
