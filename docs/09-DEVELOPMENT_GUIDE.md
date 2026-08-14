@@ -12,6 +12,11 @@
 > removed on 2026-08-12. For what the code actually does, read the code — `scripts/build-vscode-oss.sh`,
 > `patches/`, and the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is
 > the prose kept current alongside it.
+>
+> Note also that `toolchains/` no longer holds any checked-in build scripts and `test/` no
+> longer exists: both were removed on 2026-08-14. Bundled binaries come from Termux via
+> `scripts/download-*.sh`, and the test suites live in `android/app/src/test/` and
+> `android/app/src/androidTest/`.
 
 ---
 

@@ -1,20 +1,32 @@
 name: Shrinker
 
-# R8 runs on the release build type only -- app/build.gradle.kts sets
-# isMinifyEnabled in `release` and nowhere else -- and assembleRelease/bundleRelease
-# are reached from release.yml alone, on a v* tag. So every way R8 can fail, a
-# dependency arriving without its consumer rules, an AGP bump tightening full mode,
-# a -dontwarn that stops covering what it covered, first appeared with the tag
-# already pushed and the keystore already decoded.
+# Three gates exist on the release build type and nowhere else: R8, the resource
+# shrinker (both enabled in app/build.gradle.kts buildTypes.release) and
+# lintVital. assembleRelease and bundleRelease are reached from release.yml alone,
+# on a v* tag, so every way any of them can fail -- a dependency arriving without
+# its consumer rules, an AGP bump tightening full mode, a -dontwarn that stops
+# covering what it covered -- first appeared with the tag already pushed and the
+# keystore already decoded.
 #
 # Deliberately not a step in lint.yml: that would pay for a release compile on
-# every pull request, and most pull requests cannot affect the shrinker. This runs
-# weekly, on demand, and on the four files that decide what R8 does.
+# every pull request, and most pull requests cannot affect these.
 #
-# What it catches is R8 FAILING, not R8 being WRONG. A reflectively-reached member
-# that no keep rule covers is removed silently, and this job is green for it; only
-# running a minified build on a device finds that, and no CI here can -- see
-# android/app/src/androidTest/README.md.
+# ⚠️ Do NOT add this job to branch protection. A pull_request trigger with a
+# paths filter creates no check run at all on a PR that matches none of them --
+# not a skipped one -- so a required check would sit at "Expected — waiting for
+# status to be reported" forever and block every unrelated PR.
+#
+# The paths list names what CONFIGURES the shrinkers, not the code they run over.
+# A pull request that only adds Kotlin does not trigger this; the weekly cron is
+# what covers that case, so a source change can be up to a week from its first
+# minified build. Widening to android/app/src/main/** would fix that and would
+# also run this on nearly every pull request, which is the cost the split exists
+# to avoid.
+#
+# What it catches is these gates FAILING, not their being WRONG. A reflectively
+# reached member that no keep rule covers is removed silently, and this job is
+# green for it; only running a minified build on a device finds that, and no CI
+# here can -- see android/app/src/androidTest/README.md.
 
 on:
   schedule:
@@ -33,8 +45,12 @@ on:
       - ".github/workflows/r8.yml"
 
 concurrency:
-  group: r8-${{ github.ref }}
-  cancel-in-progress: true
+  group: r8-${{ github.event_name }}-${{ github.ref }}
+  # Superseding a pull request's own earlier push is the only cancellation that
+  # makes sense here. Without the event in the group, a manual run on main would
+  # cancel the weekly one mid-build and that week would record a cancellation
+  # instead of a verdict.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Reading the checkout and writing an artifact is all this needs. build.yml and
 # lint.yml inherit the repository default instead; release.yml and pages.yml
@@ -86,13 +102,22 @@ jobs:
           printf '\x7fELF' > android/app/src/main/jniLibs/arm64-v8a/libnode.so
           dd if=/dev/zero bs=1 count=60 >> android/app/src/main/jniLibs/arm64-v8a/libnode.so 2>/dev/null
 
-      # minifyReleaseWithR8 rather than assembleRelease: assembleRelease also
-      # pulls validateSigningRelease, which needs the keystore release.yml decodes
-      # from a secret, and then packages the assets stubbed out above. Neither has
-      # anything to do with whether the shrinker succeeds.
-      - name: Run the shrinker the release build runs
+      # Not assembleRelease: that pulls validateSigningRelease, which needs the
+      # keystore release.yml decodes from a secret, and then packages the assets
+      # stubbed out above. Neither has anything to do with whether these succeed.
+      #
+      # optimizeReleaseResources rather than minifyReleaseWithR8, measured:
+      # minifyReleaseWithR8 is inside its graph, so naming it covers R8 as well as
+      # the resource shrinking that isShrinkResources turns on -- a second
+      # release-only gate that minifyReleaseWithR8 alone would have left running
+      # for the first time at tag time. lintVital is the third; it is a separate
+      # entry point and needs neither the keystore nor the assets either.
+      #
+      # 34 and 28 tasks respectively, neither containing mergeReleaseAssets,
+      # checkPatchFingerprints or validateSigningRelease.
+      - name: Run the release-only gates
         working-directory: android
-        run: ./gradlew :app:minifyReleaseWithR8
+        run: ./gradlew :app:optimizeReleaseResources :app:lintVitalRelease
 
       # R8's own record of what it kept and removed. Worth having on the failing
       # run, since the mapping is what turns a release-build stack trace back into

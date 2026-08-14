@@ -31,6 +31,20 @@ class StaticMockCleanupTest {
      */
     private val teardown = Regex("""\bunmockk\w*\s*\(""")
 
+    /**
+     * Comments in this suite quote these calls. BridgeTokenUniformityTest's own KDoc
+     * writes `unmockkAll()`, parentheses included, while explaining why it needs one --
+     * so matching raw text let exactly that class, the one whose incident this guard
+     * records, satisfy the check with prose once its real teardown was deleted.
+     *
+     * String literals are not stripped, so a `//` inside one takes the rest of its line.
+     * That can only hide a mock call sharing a line with a URL literal, which no file
+     * here does, and it fails towards missing an offender rather than inventing one.
+     */
+    private fun code(text: String) = text
+        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
+        .replace(Regex("""//[^\n]*"""), " ")
+
     @Test
     fun `every class that mocks process-wide also tears it down`() {
         // Resolved by probing rather than assumed: the working directory of the test JVM is
@@ -52,7 +66,7 @@ class StaticMockCleanupTest {
 
         val offenders = sources
             .filter { file ->
-                val text = file.readText()
+                val text = code(file.readText())
                 processWideMock.containsMatchIn(text) && !teardown.containsMatchIn(text)
             }
             .map { it.name }

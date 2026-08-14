@@ -12,6 +12,11 @@
 > removed on 2026-08-12. For what the code actually does, read the code — `scripts/build-vscode-oss.sh`,
 > `patches/`, and the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is
 > the prose kept current alongside it.
+>
+> Note also that the `docker build ... toolchains/` step below cannot run: that directory's
+> Dockerfile and build scripts were removed on 2026-08-14, and `toolchains/` is now only a
+> gitignored download work dir. Bundled binaries come from Termux packages instead, via
+> `scripts/download-*.sh`.
 
 ---
 

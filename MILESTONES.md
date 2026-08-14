@@ -98,7 +98,7 @@ M6 (Release)   → Play Store release
    - [x] File explorer works via VS Code
 
 4. **Cross-compile node-pty for ARM64 Android**
-   - [x] Setup node-gyp cross-compilation with NDK (`scripts/build-node-pty.sh`)
+   - [x] Setup node-gyp cross-compilation with NDK (`scripts/build-native-addons.sh`)
    - [x] Build `pty.node` for arm64 Android (ELF 64-bit LSB shared object, ARM aarch64)
    - [x] Bundled inside `vscode-reh/node_modules/node-pty/build/Release/pty.node`
    - [x] Verify PTY creation works on Android

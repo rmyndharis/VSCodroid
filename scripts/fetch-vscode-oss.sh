@@ -18,6 +18,7 @@ set -euo pipefail
 #
 # Sources, in the order tried:
 #   VSCODE_OSS_URL        a direct URL, for a private mirror or a local test
+#   server/<name>.tar.gz  an existing cache, checked against the release digest
 #   gh release download   the server-<version> release in this repository
 #
 # VSCODE_OSS_SHA256 checks the tarball against a digest you name, whatever source
@@ -98,15 +99,32 @@ $gh_message
           drop the cache and refetch it from the release
 
       VSCODE_OSS_SHA256=<digest> VSCODE_OSS_URL=file://$TARBALL $0
-          deliberately offline, checked against a digest you name
+          deliberately offline. This pins the file to bytes you have already
+          decided to trust; it does not check them against the release, which
+          is the thing that cannot be reached right now.
 EOF
         exit 1
     fi
 
     if [ -z "$expected" ] || [ "$expected" = "null" ]; then
-        echo "  unpublished: server-$VSCODE_VERSION carries no $TARBALL_NAME," >&2
-        echo "               so this cached file matches nothing published — discarding" >&2
-        rm -f "$TARBALL"
+        # Deliberately not deleting the file. The download below cannot succeed
+        # either -- the release carries no such asset -- so removing the cache
+        # buys nothing and can destroy the only copy someone has, which is a
+        # real state: a release whose 200 MB upload timed out exists with no
+        # assets on it.
+        cat >&2 <<EOF
+
+  The server-$VSCODE_VERSION release carries no $TARBALL_NAME, so there is
+  nothing to check this against:
+
+      $TARBALL
+
+  The release exists but its asset does not. Publish it -- run the "Build
+  Code - OSS server" workflow -- or, if you trust this file, name its digest:
+
+      VSCODE_OSS_SHA256=<digest> VSCODE_OSS_URL=file://$TARBALL $0
+EOF
+        exit 1
     else
         actual="sha256:$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
         if [ "$actual" != "$expected" ]; then
@@ -117,11 +135,25 @@ EOF
     fi
 fi
 
-if [ -f "$TARBALL" ]; then
-    echo "  cached  : $(du -h "$TARBALL" | cut -f1)"
-elif [ -n "${VSCODE_OSS_URL:-}" ]; then
+# A named URL wins over the cache. It used to lose -- the cached-file test came
+# first, so a caller who named a URL silently got the cache instead. That is
+# exactly the situation the build prints the URL remedy for: the
+# checkPatchFingerprints failure in app/build.gradle.kts tells you to run
+# VSCODE_OSS_URL=file:///path/to/the.tar.gz, and it only ever fires when a stale
+# server/*.tar.gz is present -- which is the one condition under which the
+# instruction did nothing at all.
+#
+# Downloaded through a temp file because the remedy this script itself prints is
+# VSCODE_OSS_URL=file://$TARBALL, and curl reading and writing one path truncates
+# it to zero bytes before it has read a thing.
+if [ -n "${VSCODE_OSS_URL:-}" ]; then
     echo "  source  : VSCODE_OSS_URL"
-    curl -L --fail --show-error -o "$TARBALL" "$VSCODE_OSS_URL"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    curl -L --fail --show-error -o "$tmp/$TARBALL_NAME" "$VSCODE_OSS_URL"
+    mv "$tmp/$TARBALL_NAME" "$TARBALL"
+elif [ -f "$TARBALL" ]; then
+    echo "  cached  : $(du -h "$TARBALL" | cut -f1)"
 else
     echo "  source  : $REPO release server-$VSCODE_VERSION"
     # Download to a temporary name so an interrupted transfer cannot be picked up
@@ -155,15 +187,20 @@ echo "  size    : $(du -h "$TARBALL" | cut -f1)"
 # A leading "sha256:" is accepted because that is the form `gh release view`
 # prints, and the message above tells people to copy one from there.
 if [ -n "${VSCODE_OSS_SHA256:-}" ]; then
+    # Lower-cased before the prefix is stripped: ${VAR#sha256:} matches only a
+    # literal lowercase label, and a value copied as SHA256:... would otherwise
+    # survive the strip and be reported as a content mismatch it is not.
+    want="$(printf '%s' "$VSCODE_OSS_SHA256" | tr 'A-Z' 'a-z')"
+    want="${want#sha256:}"
     actual="$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
-    if [ "$actual" != "${VSCODE_OSS_SHA256#sha256:}" ]; then
+    if [ "$actual" != "$want" ]; then
         cat >&2 <<EOF
 
   The tarball does not match VSCODE_OSS_SHA256.
 
       file     $TARBALL
       got      $actual
-      expected ${VSCODE_OSS_SHA256#sha256:}
+      expected $want
 EOF
         exit 1
     fi

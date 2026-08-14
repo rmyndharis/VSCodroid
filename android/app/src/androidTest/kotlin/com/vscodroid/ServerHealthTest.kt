@@ -27,8 +27,12 @@ class ServerHealthTest {
 
     @Before
     fun setUp() {
-        ServerReadyHelper.markSetupComplete(context)
-
+        // Asserted BEFORE markSetupComplete, which is not cosmetic ordering.
+        // markSetupComplete writes setup_version, and FirstRunSetup.isFirstRun()
+        // returns whether that key differs from the current versionName -- so
+        // running it first would make the very launch this message asks for skip
+        // extraction, leaving the operator to repeat a remedy that cannot work.
+        //
         // This used to be an assumption, which meant the class silently did not run
         // on a clean install. Measured, not inferred:
         //
@@ -52,10 +56,16 @@ class ServerHealthTest {
         // unverified, so the fix is still the operator's: launch the app once.
         val serverMainJs = File(context.filesDir, "server/vscode-reh/out/server-main.js")
         assertTrue(
-            "Server assets are not extracted on this install, so nothing here can " +
-                "run. Launch the app once (via SplashActivity) and re-run.",
+            "Server assets are not extracted on this install, so nothing here can run. " +
+                "Launch the app once via SplashActivity and re-run. If a previous run " +
+                "already wrote setup_version, first-run setup will skip itself -- " +
+                "adb shell pm clear the package, then launch it.",
             serverMainJs.exists()
         )
+
+        // Only now: this is the flag SplashActivity would have written before handing
+        // over, and server_survivesActivityRecreation launches MainActivity directly.
+        ServerReadyHelper.markSetupComplete(context)
     }
 
     @Test

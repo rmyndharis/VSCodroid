@@ -36,7 +36,9 @@
 #     what gets bundled;
 #   * after a Node, Python or VS Code version bump;
 #   * after touching MainActivity, SplashActivity, NodeService, ProcessManager or
-#     FirstRunSetup -- --instrumented, which is the only thing that covers them.
+#     FirstRunSetup -- --instrumented, which is the only thing that runs them on
+#     a device. The JVM suite reaches parts of all five; what it never does is
+#     start the app.
 #
 # This suite once demanded Node v20.x for two releases after the runtime moved
 # to 24.18.0. Nothing caught it, because nothing ran it. The versions it checks

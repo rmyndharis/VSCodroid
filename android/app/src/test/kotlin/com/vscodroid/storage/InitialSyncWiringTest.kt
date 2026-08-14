@@ -43,14 +43,20 @@ class InitialSyncWiringTest {
      * gets a fresh directory and therefore a fresh name. Removed here so the runs do not
      * accumulate one small file apiece in the system temp root.
      */
+    /**
+     * One method rather than two: JUnit 5 orders same-class lifecycle methods
+     * deterministically but not by declaration, so a second @AfterEach would leave the
+     * order between them written nowhere. Nothing here depends on it today -- the
+     * delete touches only real java.io -- but the next line added might.
+     *
+     * The unmockk is not optional: mockkStatic replaces the class process-wide, and
+     * this suite runs in one JVM. See BridgeTokenUniformityTest.tearDown.
+     */
     @AfterEach
     fun removeSyncRecord() {
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        unmockkAll()
     }
-
-    /** mockkStatic replaces the class process-wide; see BridgeTokenUniformityTest.tearDown. */
-    @AfterEach
-    fun tearDown() = unmockkAll()
 
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context

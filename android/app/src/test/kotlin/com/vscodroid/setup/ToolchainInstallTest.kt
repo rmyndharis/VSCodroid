@@ -142,6 +142,12 @@ class ToolchainInstallTest {
             listOf(AssetPackStatus.PENDING, AssetPackStatus.FAILED), statuses(),
             "expected PENDING then the pre-flight refusal, got $events",
         )
+        // The event sequence alone does not say WHICH failure this was: downloadViaHttp
+        // reports FAILED from the disk-space branch and from three catch blocks, and a
+        // runner with no network would produce exactly the same two events after three
+        // retries. Deleting the space check would leave the assertion above green while
+        // the test opened sockets. Only this line pins the branch.
+        verify { Logger.e(any(), match { it.startsWith("Not enough disk space") }, any()) }
         verify(exactly = 0) { packManager.fetch(any()) }
     }
 
@@ -192,7 +198,7 @@ class ToolchainInstallTest {
     }
 
     @Test
-    fun `a valid manifest is recorded before COMPLETED is reported`() {
+    fun `a valid manifest is recorded and reported COMPLETED`() {
         // The positive control for the three refusals above: without it they would
         // all still pass if installFromDirectory reported FAILED unconditionally.
         val pack = File(filesDir, "pack-go").apply { mkdirs() }

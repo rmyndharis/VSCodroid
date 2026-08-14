@@ -180,18 +180,36 @@ class DownloadStateWiringTest {
         return text.substring(open, i + 1)
     }
 
+    /**
+     * The names are searched for in code, not in prose. Commenting the guard out --
+     * `// if (!isCurrentDownload(...))` -- leaves the characters in place, so matching
+     * raw text would report a disabled guard as a wired one, which is the failure this
+     * class exists to prevent rather than to demonstrate.
+     *
+     * Applied after the brace walk, not before: stripping first would take a `//` inside
+     * a string literal and the rest of its line with it, and losing a brace that way
+     * would truncate the span and fail a correct file.
+     */
+    private fun code(body: String) = body
+        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
+        .replace(Regex("""//[^\n]*"""), " ")
+
     @Test
     fun `handleDownloadState still consults both predicates`() {
-        val body = handleDownloadStateBody()
+        val raw = handleDownloadStateBody()
 
         // The brace matcher is the weak part, so it is bounded rather than trusted:
         // an extraction that ran to the end of the file would contain both names for
-        // entirely the wrong reason. The method measured 3,758 characters when this
-        // was written; the file is 23,504.
-        check(body.length in 500..8000) {
-            "extracted ${body.length} characters of handleDownloadState, which means the " +
+        // entirely the wrong reason. Measured on the raw span, not the stripped one --
+        // this method is mostly comment, and stripping first would put a correct
+        // extraction under the floor. 3,758 characters when this was written, in a
+        // file of 23,504.
+        check(raw.length in 500..8000) {
+            "extracted ${raw.length} characters of handleDownloadState, which means the " +
                 "extraction is wrong rather than the code"
         }
+
+        val body = code(raw)
 
         assertTrue(
             body.contains("isCurrentDownload("),

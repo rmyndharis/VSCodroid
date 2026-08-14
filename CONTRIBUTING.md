@@ -186,6 +186,8 @@ VSCodroid/
 │   ├── build-all.sh                  # Run all download/build scripts
 │   ├── deploy.sh                     # Build + install + launch on device
 │   └── device-test.sh                # Run device tests
+├── toolchains/                    # Work dir for the download scripts — gitignored,
+│                                  #   cached by CI, safe to delete (costs a re-download)
 ├── patches/                       # Unified diffs applied to the VS Code source
 │   ├── NNNN-<description>.patch      # Flat, applied in filename order, before gulp
 │   └── fingerprints.txt              # How each patch is proven to have reached the package
@@ -262,7 +264,7 @@ checkouts differed.
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).
 - `fetch-vscode-oss.sh` needs the `gh` CLI authenticated, or `VSCODE_OSS_URL` pointing at a tarball. This is now enforced rather than assumed: a cached tarball is checked against the digest its release carries, and when `gh` cannot report that digest the script stops instead of building bytes nothing verified. `VSCODE_OSS_SHA256` gives the `VSCODE_OSS_URL` path a digest to check against, which is the way to work offline against a tarball you already trust.
-- The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools.
+- The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools; its scripts and Termux-derived node patches were removed in `1323df7` and are recoverable from git history if that fallback is ever needed.
 
 ## The on-device test suite
 
@@ -318,8 +320,9 @@ shipped, `--instrumented` runs the app:
   which decide what gets bundled — `device-test.sh`;
 - after a Node, Python or VS Code version bump — `device-test.sh`;
 - after touching `MainActivity`, `SplashActivity`, `NodeService`, `ProcessManager`
-  or `FirstRunSetup` — `--instrumented`, because that is the surface `androidTest/`
-  covers and no JVM test reaches it.
+  or `FirstRunSetup` — `--instrumented`, the only thing that runs them on a
+  device. The JVM suite reaches parts of all five; what it never does is start
+  the app.
 
 The last one is new because it was missing: the instrumented suite had a command
 in the block below and no moment at which anyone owed it a run.

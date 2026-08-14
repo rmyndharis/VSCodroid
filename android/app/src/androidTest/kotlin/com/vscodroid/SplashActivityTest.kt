@@ -11,7 +11,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -91,8 +90,18 @@ class SplashActivityTest {
         //
         // Extraction rewrites server.js. If it is skipped the file is not
         // touched, and that is directly visible.
+        // Asserted, not assumed, for the reason ServerHealthTest records: a skip
+        // reports zero failures and is indistinguishable from a pass. This one runs
+        // first on a clean device -- JUnit 4 orders methods by name hash, and this
+        // name sorts ahead of firstRun_extractionSetsVersion, which is what would
+        // have extracted the assets -- so it was the last silent skip left in this
+        // directory after that class was fixed.
         val serverJs = File(context.filesDir, "server/server.js")
-        assumeTrue("Skipping: assets not extracted yet", serverJs.exists())
+        assertTrue(
+            "Assets are not extracted on this install, so there is no previous launch " +
+                "to skip. Launch the app once via SplashActivity and re-run.",
+            serverJs.exists(),
+        )
         val before = serverJs.lastModified()
 
         val scenario = ActivityScenario.launch(SplashActivity::class.java)

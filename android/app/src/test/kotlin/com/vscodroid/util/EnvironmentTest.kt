@@ -120,6 +120,18 @@ class EnvironmentTest {
             // getBashPath is deliberately absent: it has no production caller.
             assertEquals("libnode.so", Environment.getNodePath(context).substringAfterLast('/'))
             assertEquals("libgit.so", Environment.getGitPath(context).substringAfterLast('/'))
+
+            // The same argument applies to the filesDir-relative getters, and the first
+            // version of this test forgot them: every one of these also returns an
+            // absolute path whatever it names, so the four assertions above them see
+            // nothing when a destination moves. server/server.js in particular is
+            // written by FirstRunSetup.extractAssetFile and read back through here --
+            // two places that have to agree and are edited separately.
+            val under = { p: String -> p.removePrefix("$mockFilesDir/") }
+            assertEquals("server/server.js", under(Environment.getServerScript(context)))
+            assertEquals("server", under(Environment.getServerDir(context)))
+            assertEquals("home", under(Environment.getHomeDir(context)))
+            assertEquals("home/.vscodroid", under(Environment.getUserDataDir(context)))
         }
     }
 }
