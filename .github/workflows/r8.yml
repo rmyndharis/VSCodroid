@@ -1,0 +1,95 @@
+name: Shrinker
+
+# R8 runs on the release build type only -- app/build.gradle.kts sets
+# isMinifyEnabled in `release` and nowhere else -- and assembleRelease/bundleRelease
+# are reached from release.yml alone, on a v* tag. So every way R8 can fail, a
+# dependency arriving without its consumer rules, an AGP bump tightening full mode,
+# a -dontwarn that stops covering what it covered, first appeared with the tag
+# already pushed and the keystore already decoded.
+#
+# Deliberately not a step in lint.yml: that would pay for a release compile on
+# every pull request, and most pull requests cannot affect the shrinker. This runs
+# weekly, on demand, and on the four files that decide what R8 does.
+#
+# What it catches is R8 FAILING, not R8 being WRONG. A reflectively-reached member
+# that no keep rule covers is removed silently, and this job is green for it; only
+# running a minified build on a device finds that, and no CI here can -- see
+# android/app/src/androidTest/README.md.
+
+on:
+  schedule:
+    # Monday 03:00 UTC. Late enough that a dependency published over the weekend
+    # is caught before anyone tags on it.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/app/build.gradle.kts"
+      - "android/build.gradle.kts"
+      - "android/app/proguard-rules.pro"
+      - "android/gradle/libs.versions.toml"
+      - "android/gradle.properties"
+      - ".github/workflows/r8.yml"
+
+concurrency:
+  group: r8-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minify:
+    name: R8
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 36
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The shrinker needs compiled classes and processed resources. It does not
+      # need the 874 MB asset tree: measured, the task graph is 32 tasks and
+      # contains no mergeReleaseAssets, so checkPatchFingerprints is never
+      # reached either. Same stubs lint.yml uses, for the same reason.
+      - name: Create minimal asset stubs
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p android/app/src/main/assets/vscode-reh/out
+          mkdir -p android/app/src/main/assets/usr
+          mkdir -p android/app/src/main/assets/extensions
+          printf '\x7fELF' > android/app/src/main/jniLibs/arm64-v8a/libnode.so
+          dd if=/dev/zero bs=1 count=60 >> android/app/src/main/jniLibs/arm64-v8a/libnode.so 2>/dev/null
+
+      # minifyReleaseWithR8 rather than assembleRelease: assembleRelease also
+      # pulls validateSigningRelease, which needs the keystore release.yml decodes
+      # from a secret, and then packages the assets stubbed out above. Neither has
+      # anything to do with whether the shrinker succeeds.
+      - name: Run the shrinker the release build runs
+        working-directory: android
+        run: ./gradlew :app:minifyReleaseWithR8
+
+      # R8's own record of what it kept and removed. Worth having on the failing
+      # run, since the mapping is what turns a release-build stack trace back into
+      # something readable.
+      - name: Upload R8 output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r8-mapping
+          path: |
+            android/app/build/outputs/mapping/release/
+          retention-days: 14
+          if-no-files-found: ignore
