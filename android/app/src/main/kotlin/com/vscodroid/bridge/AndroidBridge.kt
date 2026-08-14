@@ -41,7 +41,8 @@ class AndroidBridge(
     private val tag = "AndroidBridge"
 
     @JavascriptInterface
-    fun copyToClipboard(text: String): Boolean {
+    fun copyToClipboard(authToken: String, text: String): Boolean {
+        if (!security.validateToken(authToken)) return false
         return clipboard.copyToClipboard(text)
     }
 
@@ -52,7 +53,8 @@ class AndroidBridge(
     }
 
     @JavascriptInterface
-    fun hasClipboardText(): Boolean {
+    fun hasClipboardText(authToken: String): Boolean {
+        if (!security.validateToken(authToken)) return false
         return clipboard.hasClipboardText()
     }
 
@@ -83,12 +85,14 @@ class AndroidBridge(
     }
 
     @JavascriptInterface
-    fun onBackPressed(): Boolean {
+    fun onBackPressed(authToken: String): Boolean {
+        if (!security.validateToken(authToken)) return false
         return onBackPressed.invoke()
     }
 
     @JavascriptInterface
-    fun minimizeApp() {
+    fun minimizeApp(authToken: String) {
+        if (!security.validateToken(authToken)) return
         onMinimize()
     }
 
@@ -110,13 +114,15 @@ class AndroidBridge(
     }
 
     @JavascriptInterface
-    fun getThemeMode(): String {
+    fun getThemeMode(authToken: String): String {
+        if (!security.validateToken(authToken)) return ""
         val nightMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
         return if (nightMode == Configuration.UI_MODE_NIGHT_YES) "dark" else "light"
     }
 
     @JavascriptInterface
-    fun logToNative(level: String, tag: String, message: String) {
+    fun logToNative(authToken: String, level: String, tag: String, message: String) {
+        if (!security.validateToken(authToken)) return
         when (level) {
             "debug" -> Logger.d(tag, message)
             "info" -> Logger.i(tag, message)

@@ -396,7 +396,12 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 webView?.evaluateJavascript(
-                    "(function() { return window.AndroidBridge?.onBackPressed?.() || false; })()"
+                    // The token is injected into the page once the workbench has loaded.
+                    // Before that it is absent, the call returns false, and the fallback
+                    // below sends the app to the background — which is what pressing back
+                    // on a not-yet-loaded editor should do anyway.
+                    "(function() { var t = (window.__vscodroid || {}).authToken;" +
+                        " return t ? (window.AndroidBridge?.onBackPressed?.(t) || false) : false; })()"
                 ) { result ->
                     if (result != "true") {
                         moveTaskToBack(true)
@@ -725,10 +730,10 @@ class MainActivity : AppCompatActivity() {
     /**
      * Injects a BroadcastChannel relay into the WebView main page.
      *
-     * Browser extensions (which run in a Web Worker) cannot access AndroidBridge
-     * directly because addJavascriptInterface only injects into the main page context.
-     * This relay listens on a BroadcastChannel and forwards calls to AndroidBridge,
-     * bridging the gap between the Web Worker and the main page.
+     * Browser extensions run in a Web Worker, which has its own global scope and does
+     * not see objects added to a page with addJavascriptInterface. This relay listens on
+     * a BroadcastChannel in the page and forwards calls to AndroidBridge, which is what
+     * lets an extension reach it at all.
      */
     private fun injectBridgeRelay() {
         webView?.evaluateJavascript(
