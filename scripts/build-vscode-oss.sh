@@ -23,6 +23,7 @@ set -euo pipefail
 #   docker run --rm -v vscodroid-codeoss:/work \
 #       -v vscodroid-npm-cache:/root/.npm \
 #       -e VSCODE_VERSION="$(cat VSCODE_VERSION)" \
+#       -e VSCODE_COMMIT="$(cat VSCODE_COMMIT)" \
 #       -v "$PWD/scripts:/scripts:ro" \
 #       -v "$PWD/branding:/branding" \
 #       -v "$PWD/patches:/patches:ro" \
@@ -43,6 +44,28 @@ set -euo pipefail
 # No default. The pin lives in the repo's VSCODE_VERSION file and is passed in;
 # a second copy here is a second thing to forget when the version moves.
 VSCODE_VERSION="${VSCODE_VERSION:?pass it in from the repo VSCODE_VERSION file}"
+
+# The commit that VSCODE_VERSION's tag pointed at when it was pinned. Passed in
+# the same way and for the same reason as the version: under Docker only
+# /scripts, /patches and /branding are mounted, so the repository root is not
+# readable from in here.
+#
+# A tag is a mutable name. Upstream can move 1.133.0 onto a different commit and
+# the clone below would follow it without a word -- the release digest and
+# check-patch-fingerprints.py both protect the artifact, but nothing protected
+# the link from the source to it, which ran through that name.
+VSCODE_COMMIT="${VSCODE_COMMIT:?pass it in from the repo VSCODE_COMMIT file}"
+case "$VSCODE_COMMIT" in
+    *[!0-9a-f]*|"")
+        echo "VSCODE_COMMIT is not a lowercase hex SHA: $VSCODE_COMMIT" >&2
+        exit 1 ;;
+esac
+# Abbreviated SHAs are ambiguous by construction and get more so as history
+# grows; the full 40 is the only form that stays a single answer.
+[ "${#VSCODE_COMMIT}" -eq 40 ] || {
+    echo "VSCODE_COMMIT must be the full 40-character SHA, got ${#VSCODE_COMMIT}: $VSCODE_COMMIT" >&2
+    exit 1
+}
 ARCH="${ARCH:-arm64}"
 # Resolved here, before any stage runs, because the Source stage cd's into the
 # checkout and BASH_SOURCE is relative when CI invokes the script as
@@ -82,7 +105,44 @@ else
     echo "  already cloned"
 fi
 cd "$SRC"
-echo "  HEAD    : $(git rev-parse --short HEAD)"
+
+# Checked on both paths above rather than only after a clone, and the reuse path
+# is the one that needed it more: a work volume that already holds $SRC skips
+# the clone entirely, so a checkout left behind by a different version would be
+# patched, built, and published under this version's name. Nothing downstream
+# can catch that -- the tarball digest and the patch fingerprints both describe
+# whatever was built, not what it was supposed to be built from.
+HEAD_COMMIT="$(git rev-parse HEAD)"
+if [ "$HEAD_COMMIT" != "$VSCODE_COMMIT" ]; then
+    cat >&2 <<EOF
+
+  ERROR: this source tree is not the pinned commit.
+
+    expected : $VSCODE_COMMIT  (VSCODE_COMMIT)
+    actual   : $HEAD_COMMIT  (tag $VSCODE_VERSION, or whatever this work volume held)
+
+  Three things produce this and they want different answers, so it refuses
+  rather than guessing:
+
+    * The work volume still holds an earlier version's checkout. Cheapest to
+      rule out first:
+          docker volume rm vscodroid-codeoss
+
+    * VSCODE_VERSION was bumped and VSCODE_COMMIT was not. Resolve the tag and
+      write the SHA it prints into VSCODE_COMMIT:
+          git ls-remote https://github.com/microsoft/vscode.git 'refs/tags/$VSCODE_VERSION*'
+      Take the ^{} line if there is one; that is the commit an annotated tag
+      points at, and it is what a clone leaves at HEAD.
+
+    * Upstream moved the tag onto a different commit. Nothing here can tell
+      that apart from the case above, which is the point of pinning: read what
+      changed between the two commits before you accept the new one.
+
+EOF
+    exit 1
+fi
+
+echo "  HEAD    : $(git rev-parse --short HEAD)  (matches VSCODE_COMMIT)"
 echo "  .nvmrc  : $(cat .nvmrc)"
 [ "v$(cat .nvmrc)" = "$(node --version)" ] || echo "  WARNING: node does not match .nvmrc"
 

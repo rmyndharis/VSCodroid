@@ -49,6 +49,38 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building VS Code $version"
 
+          # The commit that tag points at, stored rather than trusted. A tag is
+          # a mutable name; the build script clones by it and would follow it
+          # wherever upstream moved it, with nothing on this side holding an
+          # expectation to compare against.
+          #
+          # When the version comes from the file the commit does too, and the
+          # build refuses anything else. An operator who overrides the version
+          # is trying a tag before bumping to it, and there is no pin for that
+          # yet -- so resolve it here and say so, which also hands them the SHA
+          # to write into VSCODE_COMMIT if they go on to bump.
+          if [ -n "$INPUT_VERSION" ]; then
+            # Peeled first: for an annotated tag refs/tags/X is the tag object
+            # and refs/tags/X^{} is the commit, and it is the commit that a
+            # clone leaves at HEAD. Asking for both in one call would not help,
+            # because ls-remote sorts by refname and the unpeeled ref sorts
+            # first. Two calls, no parsing.
+            commit=$(git ls-remote https://github.com/microsoft/vscode.git "refs/tags/$version^{}" | cut -f1)
+            [ -n "$commit" ] || commit=$(git ls-remote https://github.com/microsoft/vscode.git "refs/tags/$version" | cut -f1)
+            echo "::notice::$version resolves to $commit - record this in VSCODE_COMMIT if you bump to it"
+          else
+            commit=$(cat VSCODE_COMMIT)
+          fi
+
+          # A failed ls-remote leaves this empty, and cut exits 0 either way, so
+          # the emptiness is what gets tested rather than the pipeline's status.
+          case "$commit" in
+            *[!0-9a-f]*|"") echo "refusing commit: '$commit'" >&2; exit 1 ;;
+          esac
+          [ "${#commit}" -eq 40 ] || { echo "refusing commit, not 40 chars: $commit" >&2; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Pinned to commit $commit"
+
           # .nvmrc at the tag is authoritative for the build host. Reading it
           # here rather than hardcoding keeps a version bump from silently
           # building on the wrong Node.
@@ -78,6 +110,7 @@ jobs:
       - name: Build
         env:
           VSCODE_VERSION: ${{ steps.pin.outputs.version }}
+          VSCODE_COMMIT: ${{ steps.pin.outputs.commit }}
           WORK: ${{ runner.temp }}/codeoss
         run: |
           mkdir -p "$WORK"
