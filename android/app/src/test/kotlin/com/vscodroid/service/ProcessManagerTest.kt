@@ -206,7 +206,11 @@ class ProcessManagerTest {
         val printed = CountDownLatch(1)
         manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
 
-        assertTrue(manager.startServer(), "the fixture server must start")
+        // Through the helper, not startServer() directly: the output latch fires
+        // when echo prints, which is before it exits, so waiting on that alone
+        // would leave the watchdog thread running into the next test class and
+        // logging through a Logger mock that unmockkAll() has already torn down.
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
         assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
 
         assertTrue(
