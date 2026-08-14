@@ -59,6 +59,18 @@ class ElfHeaderTest {
     }
 
     @Test
+    fun `rejects ELF preceded by the wrong first byte`() {
+        // The one check nothing else here reaches. Every other rejection above
+        // is already decided by byte 1 not being 'E', so deleting the 0x7F
+        // comparison left the whole suite green -- measured, not assumed. This
+        // is the case that distinguishes a real object from anything whose
+        // second, third and fourth bytes happen to spell ELF.
+        assertFalse(isElfHeader(bytes(0x00, 0x45, 0x4C, 0x46)))
+        assertFalse(isElfHeader(bytes(0x7E, 0x45, 0x4C, 0x46)))
+        assertFalse(isElfHeader(" ELF".toByteArray()))
+    }
+
+    @Test
     fun `reads the same verdict from a real file as from its bytes`(@TempDir dir: File) {
         val binary = File(dir, "compile").apply { writeBytes(elf + ByteArray(64)) }
         val header = binary.inputStream().use { it.readNBytes(4) }

@@ -28,10 +28,16 @@ class ToolchainRegistryTest {
         @Test
         fun `all toolchains have valid fields`() {
             for (tc in ToolchainRegistry.available) {
-                assertNotNull(tc.packName, "packName must not be null")
-                assertNotNull(tc.displayName, "displayName must not be null")
-                assertNotNull(tc.shortLabel, "shortLabel must not be null")
-                assertNotNull(tc.description, "description must not be null")
+                // Not assertNotNull: these four are non-nullable String, so an
+                // assertion that they are not null cannot fail and never could.
+                // It read as validation while checking nothing -- with every
+                // displayName and description set to "" the whole suite stayed
+                // green, measured. Blank is the failure that can actually reach
+                // a user, as an unnamed card in the toolchain picker.
+                assertTrue(tc.packName.isNotBlank(), "packName is blank")
+                assertTrue(tc.displayName.isNotBlank(), "displayName is blank: ${tc.packName}")
+                assertTrue(tc.shortLabel.isNotBlank(), "shortLabel is blank: ${tc.packName}")
+                assertTrue(tc.description.isNotBlank(), "description is blank: ${tc.packName}")
                 assert(tc.estimatedSize > 0) { "estimatedSize must be positive: ${tc.packName}" }
                 assert(tc.packName.startsWith("toolchain_")) { "packName must start with 'toolchain_': ${tc.packName}" }
             }
