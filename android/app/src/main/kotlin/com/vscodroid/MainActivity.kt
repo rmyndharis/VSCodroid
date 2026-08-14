@@ -30,7 +30,6 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.vscodroid.util.Environment
 import com.vscodroid.bridge.AndroidBridge
@@ -559,7 +558,15 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
-            applyWindowInsetsPadding(wv)
+            // Ask for a fresh insets pass on the container, whose listener
+            // (ExtraKeyRow.setupWithRootView) owns all positioning. On the
+            // recreateWebView path the tree is already attached, so without an
+            // explicit request the container padding and key-row visibility
+            // would wait for the next rotation or keyboard. The WebView itself
+            // is never padded: measured on API 35, the renderer ignores the
+            // view's own padding (window.innerHeight stays the full view
+            // height), so padding it documents an intention the pixels ignore.
+            ViewCompat.requestApplyInsets(findViewById(R.id.webViewContainer))
             wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
             // viewport-fit=cover enables rendering into display cutout area
@@ -603,32 +610,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Pads a view by the system bars, so VS Code's title bar (breadcrumbs,
-     * back/forward, search) renders below the status bar.
-     *
-     * CSS `env(safe-area-inset-*)` may not report correct values after
-     * `enableEdgeToEdge()`, so this is handled natively.
-     *
-     * It lives here rather than in `onCreate` because [recreateWebView] replaces
-     * the view. Registered once against the original, the listener died with it,
-     * and every WebView built after a renderer crash drew its title bar under the
-     * status bar — the exact symptom this exists to prevent, returning at the
-     * moment the user has already lost their editor once.
-     *
-     * The explicit request is what makes it take effect on the replacement:
-     * insets are dispatched on attach, and after a recreation this runs on a view
-     * that is already attached, so without asking for a fresh pass the padding
-     * would wait for the next rotation or keyboard.
-     */
-    private fun applyWindowInsetsPadding(view: View) {
-        ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
-        }
-        ViewCompat.requestApplyInsets(view)
-    }
 
     private fun setupExtraKeyRow() {
         extraKeyRow = findViewById(R.id.extraKeyRow)
