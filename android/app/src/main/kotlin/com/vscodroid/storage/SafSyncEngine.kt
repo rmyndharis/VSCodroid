@@ -94,10 +94,19 @@ class SafSyncEngine(private val context: Context) {
         val totalFiles = documents.count { !it.isDirectory }
         var filesDone = 0
         var skippedLarge = 0
-        // Paths where this sync concluded the mirror copy is not a copy of the device's.
-        // What [reconcileDeletions] does with that is the difference between keeping and
-        // losing an edit that never reached the device.
-        val keptLocal = mutableSetOf<String>()
+        var keptLocal = 0
+        /*
+         * What the mirror holds, for the files this sync can vouch for. Filled at the two
+         * points below that know the mirror copy corresponds to the device document — it
+         * was just written, or it was found identical — and nowhere else.
+         *
+         * An allowlist, and that is the whole point. The previous version recorded every
+         * enumerated path and then subtracted the ways that could be wrong, which meant a
+         * way nobody had thought of defaulted to "safe to delete". Four were found that
+         * way, each a separate patch. Here a branch that does not record leaves its path
+         * out, so an unforeseen one defaults to "never a candidate".
+         */
+        val recorded = mutableListOf<String>()
 
         Logger.i(tag, "Enumerated ${documents.size} items ($totalFiles files)")
 
@@ -109,6 +118,12 @@ class SafSyncEngine(private val context: Context) {
                 localPath.mkdirs()
             } else {
                 // Q2: Skip files larger than MAX_FILE_SIZE
+                // Not recorded, because this sync did not fetch the file and so cannot
+                // say what is at that path. Usually there is nothing; but a file that was
+                // under the limit at an earlier sync and has since grown past it leaves a
+                // real, sync-written copy sitting there, and "nothing ever wrote this"
+                // would be the wrong reason for the right behaviour. Not vouching for it
+                // costs a stale copy that lingers, which is the direction to fail in.
                 if (doc.size > MAX_FILE_SIZE) {
                     skippedLarge++
                     Logger.d(tag, "Skipped large file: ${doc.relativePath} (${doc.size / 1_048_576}MB)")
@@ -121,27 +136,37 @@ class SafSyncEngine(private val context: Context) {
                         doc.lastModified, doc.size
                     )
                 ) {
-                    keptLocal.add(doc.relativePath)
-                    Logger.d(tag, "Kept newer local copy: ${doc.relativePath}")
+                    keptLocal++
+                    // Inside this branch the provider reported a time (an unknown one
+                    // copies) and the mirror is not older, so equal means the mirror is
+                    // already this document and can be vouched for, while strictly newer
+                    // means it holds an edit that has not been written back and cannot.
+                    if (localPath.lastModified() == doc.lastModified) {
+                        recordIdentity(recorded, doc.relativePath, localPath)
+                    }
+                    Logger.d(tag, "Kept local copy: ${doc.relativePath}")
                     filesDone++
                     onProgress(filesDone, totalFiles)
                     continue
                 }
                 localPath.parentFile?.mkdirs()
-                copyDocumentToLocal(doc.uri, localPath, doc.lastModified)
+                if (copyDocumentToLocal(doc.uri, localPath, doc.lastModified)) {
+                    recordIdentity(recorded, doc.relativePath, localPath)
+                }
                 filesDone++
                 onProgress(filesDone, totalFiles)
             }
         }
 
         // Phase 3: drop what the device no longer has
-        val removed = reconcileDeletions(mirrorDir, documents, enumerationComplete, keptLocal)
+        val removed = reconcileDeletions(mirrorDir, documents, enumerationComplete, recorded)
 
         val elapsed = System.currentTimeMillis() - startTime
         Logger.i(
             tag,
             "Initial sync complete: $filesDone files ($skippedLarge too large, " +
-                "${keptLocal.size} kept as newer, $removed removed) in ${elapsed}ms"
+                "$keptLocal kept, ${recorded.size} vouched for, $removed removed) " +
+                "in ${elapsed}ms"
         )
     }
 
@@ -167,19 +192,21 @@ class SafSyncEngine(private val context: Context) {
      *   look identical from here, and only one of them costs the whole mirror. The
      *   price of declining is a folder emptied on the device keeping its mirror copies
      *   until they are deleted in the editor, which propagates the other way.
-     * - Only paths a previous complete sync recorded are candidates. A file created in
-     *   the editor whose write-back has not landed was never recorded, so it can never
-     *   be a candidate — that is the case that would otherwise destroy work.
-     * - A path in [keptLocal] is left out of the new record, so it stops being a
-     *   candidate from here on. Those are the paths where [shouldOverwriteMirror] just
-     *   said the mirror copy is *not* a copy of the device's, which is the engine
-     *   stating it did not write that file. Recording it anyway is a slower version of
-     *   the same data loss: the record's timestamp moves past the local edit, so the
-     *   rule below stops protecting it, and the next removal on the device takes the
-     *   only copy. One ordinary reopen between the edit and the removal is all it takes,
-     *   and reopening is how a person gets back into a folder.
-     * - A candidate modified since the record was written is kept. That covers the same
-     *   loss for the shorter sequence, where no sync has run since the edit.
+     * - **A candidate must still be the file that was recorded**, matched on modification
+     *   time *and* length, not merely on its path. This is the rule the others used to
+     *   stand in for, and getting here took four separate defects to notice. Each was a
+     *   different way for a path to be recorded while the mirror held something else — a
+     *   local edit, a file too large to have ever been copied, a copy that failed — and
+     *   each was patched on its own. They were one gap: the record named *paths*, while
+     *   the argument for deleting needs *identity*. Matching identity is what makes a
+     *   fifth way, which nobody has found yet, stop mattering: a path recorded in error
+     *   will not have a file that matches what was recorded for it.
+     * - A line that cannot be parsed that way is never a candidate, and neither is any
+     *   line of a record that does not open with [RECORD_HEADER]. Records written by an
+     *   earlier build are one path per line and carry no identity at all, so they are
+     *   unverifiable by construction — and unverifiable has to mean "keep". The header is
+     *   what extends that to a format this build has never seen: field count is not a
+     *   version, and the operation on the other side of the guess is a delete.
      * - A candidate that does not resolve inside the mirror is left alone. The record is
      *   built from provider-supplied display names, and a delete is the wrong operation
      *   to point at a path that walked out of the directory it belongs to.
@@ -187,13 +214,22 @@ class SafSyncEngine(private val context: Context) {
      *   operation with the worst outcome if any of the reasoning above is wrong. An
      *   empty directory left behind is noise.
      *
+     * **Where all of this stops being true.** Every line of it assumes the provider
+     * reports `COLUMN_LAST_MODIFIED`. When it does not, [shouldOverwriteMirror]'s
+     * unknown-time branch returns true on *every* comparison, so an edit that has not been
+     * written back is overwritten on the next reopen — before deletion is considered at
+     * all. Nothing recorded here can protect what the copy already replaced, and no
+     * identity check reaches a file that is gone. The account above of four defects
+     * turning out to be one gap holds for providers that report a time, and only those.
+     * MTP, some USB-OTG bridges and some network providers do not.
+     *
      * @return how many files were removed.
      */
     private fun reconcileDeletions(
         mirrorDir: File,
         documents: List<DocumentInfo>,
         enumerationComplete: Boolean,
-        keptLocal: Set<String>
+        recorded: List<String>
     ): Int {
         if (!enumerationComplete || documents.isEmpty()) {
             Logger.w(
@@ -205,7 +241,6 @@ class SafSyncEngine(private val context: Context) {
 
         val record = File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
         val present = documents.filterNot { it.isDirectory }.map { it.relativePath }.toSet()
-        val recordedAt = if (record.isFile) record.lastModified() else 0L
         var removed = 0
 
         // Resolved rather than checked lexically: a mirror is routinely a checked-out
@@ -218,7 +253,23 @@ class SafSyncEngine(private val context: Context) {
             return 0
         }
 
-        for (path in readSyncedRecord(record)) {
+        val lines = readSyncedRecord(record)
+        val entries = if (lines.firstOrNull() == RECORD_HEADER) {
+            lines.drop(1)
+        } else {
+            if (lines.isNotEmpty()) {
+                Logger.i(tag, "Record of ${mirrorDir.name} is not this format; removing nothing")
+            }
+            emptyList()
+        }
+
+        for (line in entries) {
+            val parts = line.split('\t')
+            if (parts.size != 3) continue  // an older build's record, or a damaged line
+            val path = parts[0]
+            val wasModified = parts[1].toLongOrNull() ?: continue
+            val wasSize = parts[2].toLongOrNull() ?: continue
+
             if (path.isEmpty() || path in present) continue
             val stale = File(mirrorDir, path)
             if (!stale.isFile) continue
@@ -231,22 +282,52 @@ class SafSyncEngine(private val context: Context) {
                 Logger.w(tag, "Recorded path resolves outside the mirror, not touching it: $path")
                 continue
             }
-            if (stale.lastModified() > recordedAt) {
-                Logger.d(tag, "Kept a locally changed file the device no longer has: $path")
+            if (stale.lastModified() != wasModified || stale.length() != wasSize) {
+                Logger.d(tag, "Kept a file that is no longer the copy recorded for it: $path")
                 continue
             }
             if (stale.delete()) removed++
         }
 
         try {
-            record.writeText((present - keptLocal).joinToString("\n"))
+            record.writeText((listOf(RECORD_HEADER) + recorded).joinToString("\n"))
         } catch (e: Exception) {
             Logger.w(tag, "Could not record the synced set: ${e.message}")
         }
         return removed
     }
 
-    /** The paths the last complete sync recorded, or none when there is no usable record. */
+    /**
+     * Appends [path]'s identity as it stands on disk, or nothing when there is no file
+     * there.
+     *
+     * Read back rather than predicted, so that a timestamp the filesystem truncated or a
+     * length the provider misreported cannot put the record out of step with the disk.
+     *
+     * ⚠️ Reading back is only sound because the caller has established the file is this
+     * sync's. It cannot tell on its own: [copyDocumentToLocal] writes beside the
+     * destination and renames, deliberately leaving the destination untouched when it
+     * fails — so after a failed copy this reads whatever was already there, which can be
+     * an edit of the user's that no sync ever wrote. Recording that identity is what
+     * would make the user's only copy match, and match is what licenses the delete. Call
+     * this only where the write is known to have landed.
+     */
+    private fun recordIdentity(into: MutableList<String>, path: String, file: File) {
+        if (!file.isFile) return
+        // A tab or a line break in a provider's display name would split into a line that
+        // parses as a different file. Such a path simply never becomes a candidate. `\r`
+        // counts: readLines ends a line on it as readily as on `\n`, and both are legal
+        // in a filename.
+        if (path.any { it == '\t' || it == '\n' || it == '\r' }) return
+        into.add("$path\t${file.lastModified()}\t${file.length()}")
+    }
+
+    /**
+     * The lines of the last complete sync's record, or none when there is no usable one.
+     *
+     * Each is `path`, `modification time` and `length` separated by tabs. Parsing is the
+     * caller's, because a line it cannot read has to be dropped rather than repaired.
+     */
     private fun readSyncedRecord(record: File): List<String> =
         if (!record.isFile) {
             emptyList()
@@ -453,6 +534,13 @@ class SafSyncEngine(private val context: Context) {
                         if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else 0L
                     val isDir = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
+                    // Before the name is composed into a path, not after: see
+                    // [isSafeSegment].
+                    if (!isSafeSegment(name)) {
+                        Logger.w(tag, "Skipped a document whose display name is not a path segment")
+                        continue
+                    }
+
                     val relativePath = if (parentRelPath.isEmpty()) name else "$parentRelPath/$name"
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
 
@@ -486,8 +574,13 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Copies a single SAF document to a local file.
+     *
+     * @return whether [dest] now holds this document. False means [dest] was left exactly
+     *   as it was — which, because of the partial-and-rename below, can mean it still
+     *   holds an edit of the user's that no sync wrote. Callers that record what the
+     *   mirror holds have to know the difference.
      */
-    private fun copyDocumentToLocal(docUri: Uri, dest: File, sourceModified: Long) {
+    private fun copyDocumentToLocal(docUri: Uri, dest: File, sourceModified: Long): Boolean {
         // Written beside the destination and moved into place only once the stream
         // finished. Writing straight to dest would truncate it first, so a copy cut
         // short — by an exception, or by the process being killed mid-stream — would
@@ -495,7 +588,12 @@ class SafSyncEngine(private val context: Context) {
         // from an unsaved local edit, and the sync decision has to tell them apart.
         val partial = File(dest.parentFile, "${dest.name}$PARTIAL_SUFFIX")
         try {
-            context.contentResolver.openInputStream(docUri)?.use { input ->
+            val source = context.contentResolver.openInputStream(docUri)
+            if (source == null) {
+                Logger.w(tag, "No stream for ${docUri.lastPathSegment}")
+                return false
+            }
+            source.use { input ->
                 FileOutputStream(partial).use { output ->
                     input.copyTo(output, COPY_BUFFER_SIZE)
                 }
@@ -506,10 +604,13 @@ class SafSyncEngine(private val context: Context) {
             if (!partial.renameTo(dest)) {
                 partial.delete()
                 Logger.w(tag, "Could not move ${partial.name} into place")
+                return false
             }
+            return true
         } catch (e: Exception) {
             partial.delete()
             Logger.w(tag, "Failed to copy ${docUri.lastPathSegment} → ${dest.name}: ${e.message}")
+            return false
         }
     }
 
@@ -783,6 +884,17 @@ class SafSyncEngine(private val context: Context) {
         internal const val SYNCED_RECORD_SUFFIX = ".synced"
 
         /**
+         * First line of the record, and the only thing that says which format follows.
+         *
+         * Field count is not a version. A later format that also has three fields with
+         * different meanings would be read as this one and acted on — and acting means
+         * deleting. A record whose first line is not exactly this is ignored, which is
+         * how a record from the build before headers is already treated, and in the same
+         * direction: unverifiable means keep.
+         */
+        internal const val RECORD_HEADER = "#vscodroid-saf-sync 2"
+
+        /**
          * inotify's flag for "the entry this event is about is a directory".
          *
          * [FileObserver] does not expose it, but it passes the kernel's mask through
@@ -828,6 +940,12 @@ class SafSyncEngine(private val context: Context) {
          *   way out short of clearing app data. Copying is what the old code did, and
          *   it is the behaviour that heals itself.
          *
+         *   ⚠️ Know what it costs before relying on the protections built on top of this.
+         *   On such a provider this branch fires every time, so every reopen replaces a
+         *   local edit that has not been written back — and [reconcileDeletions]'s record
+         *   cannot help, because the file it would have vouched for is already gone. The
+         *   folder heals; the edit does not.
+         *
          * The comparison is only sound because [copyDocumentToLocal] stamps the mirror
          * with the source's own timestamp, so both sides come from the same clock.
          */
@@ -867,6 +985,29 @@ class SafSyncEngine(private val context: Context) {
             "venv",
             ".env"
         )
+
+        /**
+         * Whether a provider's display name can stand as one path segment, as it is.
+         *
+         * `COLUMN_DISPLAY_NAME` is whatever text the provider returned; nothing promises
+         * it is a single name. [walkTree] composes it into a relative path and the copy
+         * turns that into a real one with [File], creating directories along the way, so
+         * a value carrying a separator or a parent reference would land outside the
+         * mirror — somewhere the engine has no business writing and no record of having
+         * written.
+         *
+         * Worth knowing when judging the cost: a platform provider derives the name from
+         * a real filename and cannot return such a value, so this never fires for the
+         * common case. Providers that relay names from elsewhere — cloud, WebDAV, SMB —
+         * have no such guarantee.
+         *
+         * [reconcileDeletions] already declines to act on a path that resolves out of the
+         * mirror. This is the same check one step earlier, where the path is composed
+         * rather than consumed; having it on only one side was the oversight.
+         */
+        internal fun isSafeSegment(name: String?): Boolean =
+            !name.isNullOrEmpty() && name != "." && name != ".." &&
+                name.none { it == '/' || it == '\\' }
 
         /** Testable: checks if a directory should be skipped during sync. */
         internal fun shouldSkip(name: String, isDir: Boolean): Boolean {

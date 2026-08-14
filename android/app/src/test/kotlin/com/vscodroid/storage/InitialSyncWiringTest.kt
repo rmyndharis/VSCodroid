@@ -9,6 +9,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -34,6 +35,17 @@ class InitialSyncWiringTest {
 
     @TempDir
     lateinit var mirror: File
+
+    /**
+     * The sync now records what it copied, in a file beside the mirror rather than inside
+     * it — so it lands outside the directory `@TempDir` cleans up, and each test method
+     * gets a fresh directory and therefore a fresh name. Removed here so the runs do not
+     * accumulate one small file apiece in the system temp root.
+     */
+    @AfterEach
+    fun removeSyncRecord() {
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+    }
 
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context

@@ -137,14 +137,20 @@ class SafStorageManager(private val context: Context) {
      * Deletes the sync record beside each mirror too: both are named after the same
      * hash, the record with a suffix.
      *
-     * Must not be called while a folder is open. Nothing here can tell which mirror the
-     * editor is holding.
+     * Call it where no folder is open. Nothing here can tell which mirror the editor is
+     * holding, so the call site is what keeps it away from one — see
+     * [com.vscodroid.SplashActivity], which always precedes `MainActivity`.
      *
      * Returns immediately. The scan itself is a handful of stats, but what it can find
      * is a mirror of a whole project, and deleting one of those is a recursive delete of
      * thousands of files. Its caller is the launch-time repair block in
      * [com.vscodroid.SplashActivity], which runs on the main thread before anything is
      * drawn — the same reason `repairInstalledToolchains` hands its walk off there.
+     *
+     * Note what that does *not* buy: the thread outlives the activity that started it,
+     * so "no folder is open when it starts" is not "no folder can be opened before it
+     * ends". [reclaimRevokedMirrorsSync] is what has to survive that, and how it does is
+     * documented there.
      */
     fun reclaimRevokedMirrors() {
         thread(name = "saf-reclaim", isDaemon = true) {
@@ -161,9 +167,24 @@ class SafStorageManager(private val context: Context) {
     /**
      * The body of [reclaimRevokedMirrors], on the caller's thread.
      *
-     * A folder granted between the permission snapshot and the delete would be seen as
-     * revoked. Reachable only if a picker completes during this pass, and the pass runs
-     * on the splash screen before the picker can be opened at all.
+     * Two things this has to be careful about, and neither is the scan itself.
+     *
+     * **It only ever removes what this app creates.** `saf-mirrors` is not private
+     * scratch space: [com.vscodroid.setup.FirstRunSetup] exports it into every terminal
+     * as `SAF_MIRRORS_DIR`, and the WebView publishes it as a resource root, so a person
+     * can put a file there and some will. Only names of the shape [getMirrorDir]
+     * produces, and the sync record beside them, are candidates.
+     *
+     * **A candidate is set aside before it is deleted.** The obvious version — delete in
+     * place — rests on nothing else touching that directory meanwhile, and that does not
+     * hold: this runs on a detached thread, so it outlives the splash screen that starts
+     * it, and its duration is proportional to the mirror it is deleting. The user can
+     * reach `MainActivity`, re-grant the same folder and re-sync it into the directory
+     * the walk is still inside; the walk's remaining deletes then land on the new copy,
+     * under a running watcher, and go out to the device as deletions of the user's real
+     * documents. Renaming is atomic and instant, so a folder granted a moment later gets
+     * a fresh directory this pass cannot reach. A rename that survives a killed process
+     * is reclaimed by the next pass.
      *
      * @return how many entries were removed.
      */
@@ -175,8 +196,28 @@ class SafStorageManager(private val context: Context) {
         var removed = 0
 
         root.listFiles()?.forEach { entry ->
-            if (entry.name.substringBefore('.') in live) return@forEach
-            if (entry.deleteRecursively()) removed++
+            val name = entry.name
+            // The prefix alone is not enough to claim an entry: a person can name a
+            // directory anything, and this one is only ours when what follows the prefix
+            // is a name we would have set aside.
+            val alreadySetAside = name.startsWith(DISCARD_PREFIX) &&
+                MIRROR_ENTRY.matches(name.removePrefix(DISCARD_PREFIX))
+            val reclaimable = alreadySetAside ||
+                (MIRROR_ENTRY.matches(name) && name.substringBefore('.') !in live)
+            if (!reclaimable) return@forEach
+
+            val discarded: File
+            if (alreadySetAside) {
+                discarded = entry
+            } else {
+                val target = File(root, DISCARD_PREFIX + name)
+                if (!entry.renameTo(target)) {
+                    Logger.w(tag, "Could not set $name aside; leaving it in place")
+                    return@forEach
+                }
+                discarded = target
+            }
+            if (discarded.deleteRecursively()) removed++
         }
         if (removed > 0) {
             Logger.i(tag, "Reclaimed $removed mirror entr(ies) without a live permission")
@@ -328,6 +369,26 @@ class SafStorageManager(private val context: Context) {
         private const val PREFS_NAME = "vscodroid_saf"
         private const val KEY_RECENT_FOLDERS = "recent_folders"
         private const val MAX_RECENT = 10
+
+        /**
+         * An entry in `saf-mirrors` that this app created: a mirror directory, or the
+         * sync record beside it.
+         *
+         * [com.vscodroid.util.Environment.getSafMirrorDir] names a mirror after the first
+         * six bytes of a digest, so twelve hex characters. Pinned by
+         * `SafMirrorReclamationTest`, because the length lives there and the consequence
+         * of the two drifting apart is a reclamation pass that stops recognising its own
+         * mirrors — or starts recognising files it did not write.
+         */
+        internal val MIRROR_ENTRY =
+            Regex("^[0-9a-f]{12}(${Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX)})?$")
+
+        /**
+         * Marks an entry renamed out of the way and awaiting deletion. Reclaimed
+         * unconditionally on a later pass: nothing but this method creates one, and
+         * whatever it named is already unreachable.
+         */
+        internal const val DISCARD_PREFIX = "discarded-"
     }
 }
 

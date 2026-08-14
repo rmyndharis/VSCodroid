@@ -122,6 +122,81 @@ class SafMirrorReclamationTest {
     }
 
     @Test
+    fun `a file a person left beside the mirrors is not touched`() {
+        // saf-mirrors is not private scratch space: first-run setup exports it into every
+        // terminal as SAF_MIRRORS_DIR, and the WebView publishes it as a resource root.
+        // Deleting whatever is not a live mirror there reaches a person's own files, and
+        // it is a widening -- the version this replaced only ever deleted mirrors the
+        // recent list named. The stale mirror is the control: without it, "the file
+        // survived" is also what a pass that did nothing produces.
+        val (staleDir, _) = mirrorFor(revokedUri)
+        val note = File(mirrorsDir, "notes.md").apply { writeText("mine") }
+        val scratch = File(mirrorsDir, "scratch").apply { mkdirs() }
+        File(scratch, "wip.txt").writeText("also mine")
+        every { resolver.persistedUriPermissions } returns emptyList()
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(staleDir.exists(), "the stale mirror should still have gone")
+        assertTrue(note.isFile, "a file this app did not create was deleted")
+        assertTrue(File(scratch, "wip.txt").isFile, "a directory this app did not create was deleted")
+    }
+
+    @Test
+    fun `the entry pattern matches the names getMirrorDir actually produces`() {
+        // The pattern spells out twelve hex characters; the length is decided in
+        // Environment.getSafMirrorDir. Drift in either direction is silent and goes both
+        // ways -- the pass stops recognising its own mirrors, or starts recognising
+        // something it never wrote.
+        val mirrorName = manager.getMirrorDir(revokedUri).name
+
+        assertTrue(
+            SafStorageManager.MIRROR_ENTRY.matches(mirrorName),
+            "the pass no longer recognises a mirror it created: $mirrorName"
+        )
+        assertTrue(
+            SafStorageManager.MIRROR_ENTRY.matches(mirrorName + SafSyncEngine.SYNCED_RECORD_SUFFIX),
+            "the pass no longer recognises the record beside a mirror"
+        )
+    }
+
+    @Test
+    fun `an entry left behind by an interrupted pass is finished off`() {
+        // A candidate is renamed out of the way before it is deleted, so that a folder
+        // re-granted mid-pass gets a fresh directory the walk cannot reach. That leaves a
+        // name behind if the process dies in between. Nothing else creates one, so it is
+        // reclaimed without consulting the permission list at all.
+        val leftover = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + "abc123abc123")
+            .apply { mkdirs() }
+        File(leftover, "stale.txt").writeText("orphan")
+        every { resolver.persistedUriPermissions } returns emptyList()
+
+        assertEquals(1, manager.reclaimRevokedMirrorsSync())
+        assertFalse(leftover.exists(), "a set-aside entry was left to accumulate")
+    }
+
+    @Test
+    fun `the dispatch actually runs the pass`() {
+        // reclaimRevokedMirrors() hands the work to a thread and returns, so "the
+        // dispatch never calls the body" is a mutation every other case here survives.
+        val (staleDir, _) = mirrorFor(revokedUri)
+        every { resolver.persistedUriPermissions } returns emptyList()
+
+        manager.reclaimRevokedMirrors()
+
+        assertTrue(awaitTrue { !staleDir.exists() }, "the background pass never ran")
+    }
+
+    private fun awaitTrue(timeoutMs: Long = 5_000, condition: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return true
+            Thread.sleep(20)
+        }
+        return condition()
+    }
+
+    @Test
     fun `a missing mirrors directory is not an error`() {
         // Reached on any install that has never opened a device folder, which is the
         // common case at the launch-time call site.

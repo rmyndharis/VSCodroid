@@ -131,6 +131,58 @@ class SafWalkTreeSkipTest {
     }
 
     @Test
+    fun `a display name that climbs out of the mirror never becomes a path`() {
+        // COLUMN_DISPLAY_NAME is text a provider chose, not a filename this app made. The
+        // walk composes it into a relative path and the copy turns that into a real one,
+        // creating directories along the way -- so a name that is not a single segment
+        // lets the copy write outside the mirror, into app-private storage.
+        //
+        // reconcileDeletions already refuses to act on a path that resolves out of the
+        // mirror. This is the same refusal one step earlier, where the path is made.
+        //
+        // What refuses this particular value is the separator clause, not the parent
+        // reference: climbing out needs a separator, so no fixture can exercise one
+        // without the other. The bare forms are the test after next. This case is here
+        // for the shape a provider would actually send, and because it is the only one
+        // that shows the guard being consulted from the walk at all.
+        val kept = walk(listOf("../../escaped.txt" to false, "src" to true))
+
+        assertEquals(
+            listOf("src"), kept,
+            "a name that is not a path segment must never reach the copy"
+        )
+    }
+
+    @Test
+    fun `a display name carrying a separator never becomes a path`() {
+        assertEquals(listOf("src"), walk(listOf("a/b.txt" to false, "src" to true)))
+        assertEquals(listOf("src"), walk(listOf("a\\b.txt" to false, "src" to true)))
+    }
+
+    @Test
+    fun `a bare parent or self reference never becomes a path`() {
+        // Read the failure carefully if this ever goes red. The offending row is a
+        // directory, so without the guard it recurses -- and the recursion is handed the
+        // same, already-advanced cursor, which hands it the `src` row. The diff then reads
+        // `[.., ../src]`, not the `[.., src]` a hand-trace predicts. Adding a third row to
+        // either fixture redistributes rows between levels in a way the row list does not
+        // show.
+        assertEquals(listOf("src"), walk(listOf(".." to true, "src" to true)))
+        assertEquals(listOf("src"), walk(listOf("." to true, "src" to true)))
+    }
+
+    @Test
+    fun `an ordinary name with spaces is still mirrored`() {
+        // The rule refuses separators and parent references, not names that merely look
+        // unusual. A filter that also dropped spaces would silently skip most of a
+        // person's documents, and it would do it without one line of anything to read.
+        assertTrue(
+            walk(listOf("My Notes.txt" to false)).contains("My Notes.txt"),
+            "a space is an ordinary character in a filename"
+        )
+    }
+
+    @Test
     fun `a file whose name matches a skipped directory is still kept`() {
         // shouldSkip returns false for anything that is not a directory, and the
         // walk passes isDir through rather than deciding on the name alone. A

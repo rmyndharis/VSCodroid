@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Deletions on the device, on their way into the mirror.
@@ -47,6 +48,28 @@ class SafReconcileDeletionsTest {
 
     /** The record the engine keeps beside the mirror, not inside it. */
     private val record: File get() = File(mirror.path + ".synced")
+
+    /**
+     * The paths the record names. Each line also carries the modification time and length
+     * the mirror copy had when it was recorded, which is what makes a deletion provable;
+     * the tests that care about those assert on the behaviour rather than on the text.
+     */
+    private fun recordedPaths(): List<String> =
+        record.readLines()
+            .filterNot { it == SafSyncEngine.RECORD_HEADER }
+            .map { it.substringBefore('\t') }
+            .sorted()
+
+    /**
+     * Writes a record in this build's format, header included.
+     *
+     * The header is taken from the engine rather than spelled out here: a hand-written
+     * record missing it is ignored wholesale, which would make the tests below pass
+     * without reaching the behaviour they are about.
+     */
+    private fun writeRecord(vararg entries: String) {
+        record.writeText((listOf(SafSyncEngine.RECORD_HEADER) + entries).joinToString("\n"))
+    }
 
     @BeforeEach
     fun setUp() {
@@ -81,9 +104,27 @@ class SafReconcileDeletionsTest {
 
     /**
      * Describes the device folder as holding exactly [files], each a name to contents,
-     * all carrying the same old timestamp so nothing is kept for being newer.
+     * all carrying [modified] — old by default, so nothing is kept merely for being newer.
+     *
+     * ⚠️ One cursor serves every query of a sync, and its row counter is shared. That is
+     * sound only while no row here is a directory: the walk then issues exactly one query
+     * and never re-enters the counter. Add a directory row and the recursive query gets
+     * the same, already-exhausted cursor — `moveToNext()` simply returns false, with no
+     * error — so the walk reports a *complete* enumeration of an empty subtree and a test
+     * passes having enumerated nothing. [directoryRow] exists for that case: it hands out
+     * a separate cursor and lets the caller decide which query receives it.
+     *
+     * ⚠️ Also: a document opened from an earlier sync raises out of the reverse lookup
+     * below, and [copyDocumentToLocal] swallows it — so a redundant copy fails silently
+     * and the mirror keeps its old bytes. No assertion in this file can tell "kept the
+     * local copy" from "re-copied identical content"; `InitialSyncWiringTest` is where
+     * that distinction is observable.
      */
-    private fun deviceFolderHolding(vararg files: Pair<String, String>) {
+    private fun deviceFolderHolding(
+        vararg files: Pair<String, String>,
+        oversized: Set<String> = emptySet(),
+        modified: Long = DEVICE_TIME
+    ) {
         val byDocId = files.associate { (name, contents) -> "doc:$name" to contents }
         var row = -1
 
@@ -102,8 +143,15 @@ class SafReconcileDeletionsTest {
         every { cursor.getString(0) } answers { "doc:${files[row].first}" }
         every { cursor.getString(1) } answers { files[row].first }
         every { cursor.getString(2) } returns "text/plain"
-        every { cursor.getLong(3) } answers { files[row].second.toByteArray().size.toLong() }
-        every { cursor.getLong(4) } returns DEVICE_TIME
+        every { cursor.getLong(3) } answers {
+            val (name, contents) = files[row]
+            if (name in oversized) {
+                SafSyncEngine.MAX_FILE_SIZE + 1
+            } else {
+                contents.toByteArray().size.toLong()
+            }
+        }
+        every { cursor.getLong(4) } returns modified
 
         every { resolver.query(any(), any(), any(), any(), any()) } returns cursor
         every { resolver.openInputStream(any()) } answers {
@@ -168,6 +216,57 @@ class SafReconcileDeletionsTest {
         sync()
 
         assertTrue(mirrored("stranger.txt").isFile, "an unrecorded file is not a candidate")
+        // The half with teeth. Survival on its own proves little here -- an empty record
+        // keeps everything however the candidates were chosen. This says where the record
+        // comes from: what the device answered with, filtered to what the sync can vouch
+        // for. Build it from the mirror's own listing instead and a file the app never
+        // wrote becomes a candidate the moment anything else changes.
+        assertEquals(
+            listOf("a.txt"), recordedPaths(),
+            "the record must be built from the enumeration, not from what the mirror holds"
+        )
+    }
+
+    @Test
+    fun `a recorded path that resolves outside the mirror is never deleted`() {
+        // The record is built from provider-supplied display names, so a name carrying
+        // ".." puts a path in it that points out of the folder it belongs to. Resolving
+        // is what catches it, and lexical handling would not: a mirror is routinely a
+        // checked-out repository, so a link inside one is attacker-supplied in the
+        // ordinary case.
+        val outside = File(mirror.parentFile, "not-in-the-mirror.txt").apply {
+            writeText("someone else's file")
+            setLastModified(DEVICE_TIME)
+        }
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+        // Hand-written: no provider fixture here can produce such a display name, and the
+        // values are made to match so that only the confinement check can save the file.
+        writeRecord("../${outside.name}\t${outside.lastModified()}\t${outside.length()}")
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        val survived = outside.isFile
+        outside.delete()
+        assertTrue(survived, "a delete followed a recorded path out of the mirror")
+    }
+
+    @Test
+    fun `a recorded path that is now a directory is left alone`() {
+        // `stale.isFile` is the last thing between a corrupted record and a delete()
+        // aimed at a directory. File.delete() refuses a non-empty one, but an empty
+        // directory would go -- and a record is the wrong evidence for removing a
+        // directory at all, which is why the pass never does.
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+        val nowADirectory = File(mirror, "notes.txt").apply { mkdirs() }
+        writeRecord("notes.txt\t${nowADirectory.lastModified()}\t${nowADirectory.length()}")
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertTrue(nowADirectory.isDirectory, "a delete was aimed at a directory")
     }
 
     @Test
@@ -211,9 +310,12 @@ class SafReconcileDeletionsTest {
 
     @Test
     fun `a provider that stopped answering entirely removes nothing`() {
-        // Named for what it covers. It does not reach the enumerationComplete guard:
-        // every query fails, so `documents` is empty as well, and the guard beside it
-        // returns first. The test below is the one that pins the partial case.
+        // Named for what it covers. Both halves of the guard are true here -- every query
+        // fails, so the walk reports incomplete *and* `documents` comes back empty -- so
+        // removing either half alone leaves this green. `!enumerationComplete` is the left
+        // operand and short-circuits, so `documents.isEmpty()` is never even evaluated.
+        // The two tests that isolate the halves are the ones with teeth; this one only
+        // states that a dead provider costs nothing.
         deviceFolderHolding("a.txt" to "kept", "b.txt" to "still here")
         sync()
         val recordedBefore = record.readText()
@@ -297,6 +399,34 @@ class SafReconcileDeletionsTest {
     }
 
     @Test
+    fun `a reopen that changed nothing leaves the record intact for the sync after it`() {
+        // The record is rebuilt every sync, and the obvious way to write the rule that
+        // keeps a local edit out of it is "everything enumerated, minus everything the
+        // copy was skipped for". On a reopen where nothing changed, the copy is skipped
+        // for *every* file -- the mirror is already identical to the device -- so that
+        // version writes an empty record, and from the second reopen onward nothing is
+        // ever a deletion candidate again. It fails silently and no two-sync test can see
+        // it, which is why this one runs three.
+        deviceFolderHolding("a.txt" to "kept", "b.txt" to "doomed")
+        sync()
+
+        deviceFolderHolding("a.txt" to "kept", "b.txt" to "doomed")
+        sync()
+        assertEquals(
+            listOf("a.txt", "b.txt"), recordedPaths(),
+            "a reopen that changed nothing emptied the record"
+        )
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertFalse(
+            mirrored("b.txt").exists(),
+            "the record stopped covering a file it had already synced, so the removal never landed"
+        )
+    }
+
+    @Test
     fun `an enumeration that succeeded and returned nothing removes nothing`() {
         // A folder the user emptied and a provider answering for a volume that is no
         // longer mounted are the same two rows of nothing from here. Acting on it costs
@@ -312,6 +442,238 @@ class SafReconcileDeletionsTest {
         assertTrue(mirrored("a.txt").isFile, "an empty answer is not proof the folder is empty")
         assertTrue(mirrored("b.txt").isFile, "an empty answer is not proof the folder is empty")
         assertEquals(recordedBefore, record.readText(), "nothing was learned, so nothing is recorded")
+    }
+
+    @Test
+    fun `a file past the limit is never copied and never recorded`() {
+        // Half of what the oversize branch has to do, and the half a first sync can show:
+        // nothing is fetched, and the path stays out of the record. The other half -- that
+        // the branch must `continue` before recording even when a file *is* sitting there
+        // -- needs a file to exist at that path first, and is the test below.
+        deviceFolderHolding(
+            "a.txt" to "kept",
+            "video.mp4" to "stands in for something enormous",
+            oversized = setOf("video.mp4")
+        )
+        sync()
+
+        assertFalse(mirrored("video.mp4").exists(), "a file past the limit must not be copied")
+        assertEquals(
+            listOf("a.txt"), recordedPaths(),
+            "a path no sync has ever written must stay out of the record"
+        )
+
+        // The editor puts something of the user's own at that path, older than the record.
+        val mine = mirrored("video.mp4").apply {
+            writeText("my own notes")
+            setLastModified(DEVICE_TIME)
+        }
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertEquals(
+            "my own notes", mine.readText(),
+            "the user's file at a path the sync skipped was deleted"
+        )
+    }
+
+    @Test
+    fun `a recorded file whose content changed without its timestamp is kept`() {
+        // The case that says why the record holds identity rather than paths and a single
+        // "when was this written" stamp. Writers that preserve mtime -- unzip, cp -p,
+        // rsync -t, git checkout -- are named in shouldOverwriteMirror's own reasoning as
+        // things that happen in these folders. Under the rule this replaced, such a file
+        // was deleted: its timestamp was not newer than the record, so nothing stood
+        // between it and the delete. The length moved, and that is enough to know it is
+        // no longer the copy that was recorded.
+        deviceFolderHolding("a.txt" to "kept", "notes.txt" to "from the device")
+        sync()
+
+        val restored = mirrored("notes.txt").apply {
+            writeText("restored by a checkout, and the clock did not move")
+            setLastModified(DEVICE_TIME)
+        }
+        // Without this the timestamp half could be what saves the file, and the length
+        // half -- the one this test exists for -- would go unpinned.
+        assertEquals(
+            DEVICE_TIME, restored.lastModified(),
+            "the fixture failed to hold the timestamp still, so it is testing the wrong half"
+        )
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertEquals(
+            "restored by a checkout, and the clock did not move", restored.readText(),
+            "a file whose length changed under an unchanged timestamp is not the copy recorded"
+        )
+    }
+
+    @Test
+    fun `a record written by an older build never triggers a deletion`() {
+        // The first format was one path per line, with nothing in it that could show the
+        // file is still the copy it names. Reading such a line as a candidate would
+        // delete on exactly the evidence this change exists to stop trusting -- and every
+        // install that already has a mirror carries one. Two things now refuse it, the
+        // missing header and the field count, and either alone is enough.
+        deviceFolderHolding("a.txt" to "kept", "b.txt" to "doomed")
+        sync()
+        record.writeText("a.txt\nb.txt")
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertTrue(
+            mirrored("b.txt").isFile,
+            "an unverifiable record line must never be acted on"
+        )
+        assertEquals(
+            listOf("a.txt"), recordedPaths(),
+            "the pass should still leave a record this build can use"
+        )
+    }
+
+    @Test
+    fun `a file that grew past the limit keeps its mirror copy when the device drops it`() {
+        // The mutation the test above cannot reach: move `recordIdentity` into the
+        // oversize branch. On a first sync nothing is at that path, so its `isFile` guard
+        // hides the mutation. Here the file was under the limit at sync 1 -- so a real
+        // copy exists -- and is over it at sync 2, which is when the branch would vouch
+        // for a file it did not fetch. Sync 3 then deletes it.
+        deviceFolderHolding("a.txt" to "kept", "report.pdf" to "small enough for now")
+        sync()
+        assertTrue(mirrored("report.pdf").isFile, "the first sync has to bring it down")
+
+        deviceFolderHolding(
+            "a.txt" to "kept",
+            "report.pdf" to "small enough for now",
+            oversized = setOf("report.pdf")
+        )
+        sync()
+        assertEquals(
+            listOf("a.txt"), recordedPaths(),
+            "a sync that did not fetch a file cannot vouch for what is at its path"
+        )
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertTrue(
+            mirrored("report.pdf").isFile,
+            "the mirror copy was deleted on the word of a sync that never read the file"
+        )
+    }
+
+    @Test
+    fun `a recorded file rewritten to the same length is kept`() {
+        // The timestamp half of the identity check. Drop it and only length is compared,
+        // which misses every in-place edit that does not change a file's size -- a version
+        // string, a flag, a fixed-width field, a database page. The sibling test covers
+        // the mirror image, a length change under an unchanged timestamp; neither half is
+        // pinned without both.
+        deviceFolderHolding("a.txt" to "kept", "notes.txt" to "from the device")
+        sync()
+
+        val rewritten = mirrored("notes.txt").apply { writeText("edited in place") }
+        assertEquals(
+            "from the device".length, rewritten.readText().length,
+            "the fixture must change the content without changing the length"
+        )
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertEquals(
+            "edited in place", rewritten.readText(),
+            "a same-length edit is invisible to a length-only check, and was deleted"
+        )
+    }
+
+    @Test
+    fun `a recorded path reached through a link out of the mirror is never deleted`() {
+        // What separates resolving the path from checking it for "..". A mirror is
+        // routinely a checked-out repository, and a repository can hold a symlinked
+        // directory; a record entry naming a file through one carries no ".." at all, so
+        // a lexical check waves it through and the delete lands on a real file outside
+        // the folder the user opened.
+        val outsideDir = File(mirror.parentFile, "outside-dir").apply { mkdirs() }
+        val victim = File(outsideDir, "victim.txt").apply {
+            writeText("not ours to delete")
+            setLastModified(DEVICE_TIME)
+        }
+        Files.createSymbolicLink(File(mirror, "linked").toPath(), outsideDir.toPath())
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+        writeRecord("linked/victim.txt\t${victim.lastModified()}\t${victim.length()}")
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        val survived = victim.isFile
+        outsideDir.deleteRecursively()
+        assertTrue(survived, "a delete followed a link out of the mirror")
+    }
+
+    @Test
+    fun `a copy that failed does not vouch for what was already there`() {
+        // copyDocumentToLocal writes beside its destination and renames, deliberately
+        // leaving the destination untouched when it fails. So after a failed copy the
+        // path still holds whatever was there -- which can be an edit of the user's that
+        // no sync ever wrote. Reading identity back from disk then records that edit as
+        // ours, and matching is exactly what licenses the delete.
+        deviceFolderHolding("a.txt" to "kept", "notes.txt" to "from the device")
+        sync()
+
+        val onlyCopy = mirrored("notes.txt").apply {
+            writeText("an hour of writing")
+            setLastModified(DEVICE_TIME + 1_000)
+        }
+
+        // The device's copy moves ahead, so the sync tries to overwrite -- and cannot.
+        deviceFolderHolding(
+            "a.txt" to "kept",
+            "notes.txt" to "changed on the device",
+            modified = DEVICE_TIME + 5_000
+        )
+        every { resolver.openInputStream(any()) } returns null
+        sync()
+
+        assertEquals(
+            "an hour of writing", onlyCopy.readText(),
+            "a failed copy must leave the destination alone"
+        )
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertEquals(
+            "an hour of writing", onlyCopy.readText(),
+            "the failed copy vouched for the user's edit, and the next sync deleted it"
+        )
+    }
+
+    @Test
+    fun `a record with no header is ignored even when its lines parse`() {
+        // The header is the only thing that says which format follows, and until this
+        // test nothing would have noticed its removal: every record this build writes
+        // carries the header at line 0, where the field-count check skips it anyway, and
+        // the only header-less fixture in this file has one-field lines that the same
+        // check rejects. So the guard whose entire purpose is to make a future format
+        // fail closed was the one guard here with no anchor of its own -- deletable as
+        // dead code, with a green suite.
+        deviceFolderHolding("a.txt" to "kept", "b.txt" to "doomed")
+        sync()
+        val doomed = mirrored("b.txt")
+        // Exactly what this build would have written for it, minus the header. Every
+        // other check passes: three fields, a real path, an identity that matches.
+        record.writeText("b.txt\t${doomed.lastModified()}\t${doomed.length()}")
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        assertTrue(doomed.isFile, "a record this build cannot identify was acted on anyway")
     }
 
     @Test
