@@ -25,7 +25,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 1. **Install** -- Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 150-200 MB.
 2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. This takes 5-10 seconds and only happens once.
-3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. Select any you want now, or skip and add them later. Selected toolchains download automatically via the Play Store.
+3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. This is the only time you are asked, so pick everything you expect to need ([#92](https://github.com/rmyndharis/VSCodroid/issues/92)). Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
@@ -220,14 +220,18 @@ Some extensions are exclusive to the Microsoft Marketplace and not published on 
 
 ### Generating an SSH Key
 
-Generate the key from the terminal:
+Generate the key from the terminal, naming the output file explicitly:
 
 ```bash
-ssh-keygen -t ed25519 -C "your@email.com"
+ssh-keygen -t ed25519 -C "your@email.com" -f ~/.ssh/id_ed25519
 ```
 
-Press Enter at each prompt to accept the defaults. This creates the key pair at
-`~/.ssh/id_ed25519`.
+Press Enter twice at the passphrase prompts to leave the passphrase empty.
+
+Name the output path with `-f` rather than accepting the default. OpenSSH derives its
+default key path from the system user database, which an Android app sandbox does not
+provide, so the default can resolve somewhere unwritable and fail with
+`Saving key "..." failed: No such file or directory`.
 
 ### Copying Your Public Key
 
@@ -318,9 +322,13 @@ When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can p
    npm run dev
    # Output: Local: http://localhost:5173/
    ```
-2. Tap the `http://localhost:5173/` link the server prints in the terminal — VSCodroid
-   hands links outside the editor to your device's browser
-3. If the link is not tappable, copy the URL and open it in your browser directly
+2. Open the Command Palette (**Ctrl+Shift+P**) and run `Terminal: Open Last URL Link`
+3. The page opens in your device's browser
+
+The terminal underlines the URL, but tapping it does nothing: VS Code only follows a
+terminal link on Ctrl+click, and a touch tap carries no Ctrl. The command above exists
+for exactly this case. `Terminal: Open Detected Link...` lets you pick from every link
+currently on screen instead of just the last one.
 
 Any `http://localhost:PORT` address works, whatever port your dev server picked.
 
