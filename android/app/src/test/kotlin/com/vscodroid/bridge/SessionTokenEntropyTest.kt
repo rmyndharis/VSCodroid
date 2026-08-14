@@ -5,6 +5,8 @@ import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockkObject
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -30,6 +32,10 @@ class SessionTokenEntropyTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
     }
+
+    /** mockkObject replaces the singleton process-wide; see BridgeTokenUniformityTest.tearDown. */
+    @AfterEach
+    fun tearDown() = unmockkAll()
 
     private fun tokens(n: Int): List<String> = List(n) { SecurityManager().getSessionToken() }
 

@@ -8,6 +8,7 @@ import android.provider.DocumentsContract
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -46,6 +47,10 @@ class InitialSyncWiringTest {
     fun removeSyncRecord() {
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
     }
+
+    /** mockkStatic replaces the class process-wide; see BridgeTokenUniformityTest.tearDown. */
+    @AfterEach
+    fun tearDown() = unmockkAll()
 
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context

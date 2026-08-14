@@ -5,6 +5,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockkObject
 import io.mockk.Runs
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -33,6 +35,10 @@ class SecurityManagerTest {
         every { Logger.e(any(), any(), any()) } just Runs
         manager = SecurityManager()
     }
+
+    /** mockkObject replaces the singleton process-wide; see BridgeTokenUniformityTest.tearDown. */
+    @AfterEach
+    fun tearDown() = unmockkAll()
 
     // ── Token Generation ─────────────────────────────────────────────────
 

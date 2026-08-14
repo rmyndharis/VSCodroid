@@ -7,6 +7,8 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.Runs
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -45,6 +47,10 @@ class PortFinderTest {
         context = mockk(relaxed = true)
         every { context.getSharedPreferences(any(), any()) } returns prefs
     }
+
+    /** mockkObject replaces the singleton process-wide; see BridgeTokenUniformityTest.tearDown. */
+    @AfterEach
+    fun tearDown() = unmockkAll()
 
     @Nested
     inner class FindAvailablePortTest {
