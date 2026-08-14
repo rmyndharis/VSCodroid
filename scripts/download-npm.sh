@@ -5,15 +5,39 @@ set -euo pipefail
 # Extracts lib/node_modules/npm/ to assets/usr/lib/node_modules/npm/.
 # Strips docs, man pages, and test files to minimize size.
 #
-# npm version is locked to the one bundled with Node.js 20.18.1 (npm 10.8.2).
+# npm comes from the Node release the app actually runs, not from a number of
+# its own.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
 WORK_DIR="$ROOT_DIR/toolchains/build/npm"
 
-NODE_VERSION="v20.18.1"
-NPM_VERSION="10.8.2"
+# Read from the version the native addons are compiled against. The runtime has
+# to equal that -- an addon built for one Node and loaded by another is the
+# defect check_pair exists for -- so it is the one place this repository states
+# which Node this app is.
+#
+# This was pinned to v20.18.1 on its own, a leftover from the hand-cross-compiled
+# runtime abandoned for segfaulting inside several CLI tools. The app therefore
+# shipped npm from a Node release it no longer ran, and nothing compared the two.
+# Nothing was broken by it -- npm 10 supports Node >=20.5.0 -- which is exactly
+# why it survived a runtime bump unnoticed.
+NODE_MAJOR_MINOR_PATCH=$(sed -n 's/^NODE_VERSION="${NODE_VERSION:-\([0-9.]*\)}".*/\1/p' \
+    "$SCRIPT_DIR/build-native-addons.sh" | head -1)
+if [ -z "$NODE_MAJOR_MINOR_PATCH" ]; then
+    echo "ERROR: could not read NODE_VERSION from build-native-addons.sh." >&2
+    echo "       npm is sourced from the Node release the app runs; without that" >&2
+    echo "       number there is nothing to source it from." >&2
+    exit 1
+fi
+NODE_VERSION="v$NODE_MAJOR_MINOR_PATCH"
+
+# What that release carries. Declared rather than derived because scripts/
+# consumers read it without downloading anything -- device-test.sh falls back to
+# it when a checkout has no assets tree -- and it is asserted against the tarball
+# below, so it cannot quietly disagree with what ships.
+NPM_VERSION="11.16.0"
 NODE_TARBALL="node-${NODE_VERSION}-linux-arm64.tar.xz"
 NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
 
@@ -87,7 +111,13 @@ EXTRACTED_VERSION=$(node -e "console.log(require('$NPM_SRC/package.json').versio
 
 echo "  npm version: $EXTRACTED_VERSION"
 if [ "$EXTRACTED_VERSION" != "$NPM_VERSION" ]; then
-    echo "  WARNING: Expected npm $NPM_VERSION but got $EXTRACTED_VERSION"
+    # Fatal, not a warning. NPM_VERSION is read by other scripts as the answer to
+    # "which npm ships", so a warning here means they answer with a number the
+    # build already knew was wrong -- and the build carries on and ships the
+    # other one.
+    echo "  ERROR: NPM_VERSION says $NPM_VERSION but $NODE_VERSION carries $EXTRACTED_VERSION." >&2
+    echo "         Update NPM_VERSION in this script to $EXTRACTED_VERSION." >&2
+    exit 1
 fi
 
 # --- Step 3: Strip unnecessary files ---

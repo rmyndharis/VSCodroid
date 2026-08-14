@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- npm upgraded 10.8.2 → 11.16.0, the version the bundled Node runtime actually ships with. The app had been packaging npm taken from an older Node release it no longer runs, left behind when the runtime was replaced
 - The release now checks the app bundle against the store's size limits before publishing anything, rather than measuring it and carrying on. A bundle that has grown too large previously failed at store upload with the download release already public, leaving one version shipping through two channels with different contents
 - The on-device test suite now checks that what shipped actually runs: Python has to import the ten modules that need a bundled library behind them, the shell has to start, and git's HTTPS helper has to be executable. Five Python modules were dead on shipped builds for months while every check passed. The suite also stopped expecting a Node version the app replaced two releases ago — the versions it checks are now read from what was built rather than written down
 - Extensions dropped from the bundled set are now removed from the build tree instead of lingering and shipping in development builds
