@@ -310,7 +310,10 @@ if [ -n "$SERVER_PORT" ]; then
     $ADB forward tcp:$SERVER_PORT tcp:$SERVER_PORT 2>/dev/null
     # /version is answered before the connection-token check, so it probes
     # liveness without a token. "/" would answer 403 to this unauthenticated
-    # curl, and the old 200-499 range counted that as a pass.
+    # curl, and the old 200-499 range counted that as a pass -- which means it
+    # would have reported a healthy server while that server refused every
+    # request it received. The range was too wide to distinguish "running" from
+    # "reachable and saying no", and the token only made that visible.
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$SERVER_PORT/version" 2>/dev/null || true)
     if [ "$HTTP_CODE" = "200" ]; then
         pass "health_check (HTTP $HTTP_CODE)"
