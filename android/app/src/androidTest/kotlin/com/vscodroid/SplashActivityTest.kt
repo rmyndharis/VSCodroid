@@ -8,10 +8,13 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.vscodroid.util.ServerReadyHelper
 import org.junit.After
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 /**
  * Instrumented tests for [SplashActivity].
@@ -83,18 +86,30 @@ class SplashActivityTest {
     fun subsequentLaunch_skipsExtraction() {
         ServerReadyHelper.markSetupComplete(context)
 
-        val startTime = System.currentTimeMillis()
+        // Observed, not timed. This asserted `elapsed < 12_000` against a clock
+        // that included its own Thread.sleep(3000), so what it measured was how
+        // fast the machine was rather than whether extraction ran. Three
+        // readings of first-run on one emulator came out 61s, 78s and 200s --
+        // the last while a Gradle build shared the machine. No threshold
+        // survives a 3x spread; one that passes today is only waiting for a
+        // busier afternoon.
+        //
+        // Extraction rewrites server.js. If it is skipped the file is not
+        // touched, and that is directly visible.
+        val serverJs = File(context.filesDir, "server/server.js")
+        assumeTrue("Skipping: assets not extracted yet", serverJs.exists())
+        val before = serverJs.lastModified()
+
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
         Thread.sleep(3000)  // give it time to transition
 
-        val elapsed = System.currentTimeMillis() - startTime
-        // Verify version is still set (extraction was skipped, not re-run)
         val version = getSetupPrefs().getString("setup_version", null)
         assertNotNull("setup_version should still be set after skip", version)
-
-        // Elapsed includes our sleep, so just verify it didn't re-extract
-        // (which would take 3-4s on top of our sleep)
-        assertTrue("Skip path should be fast", elapsed < 12_000)
+        assertEquals(
+            "server.js was rewritten, so extraction ran instead of being skipped",
+            before,
+            serverJs.lastModified(),
+        )
         scenario.close()
     }
 

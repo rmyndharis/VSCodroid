@@ -229,3 +229,20 @@ jobs:
       - name: Run unit tests
         working-directory: android
         run: ./gradlew testDebugUnitTest
+
+      # Compiles the instrumented tests without running them, which is the only
+      # thing CI can do for them and is better than the nothing that was here.
+      #
+      # They cannot be RUN on any runner GitHub offers, and that is measured
+      # rather than assumed: the app is arm64-v8a only, so the emulator has to
+      # be arm64 too; ubuntu-latest has /dev/kvm but only accelerates x86_64,
+      # and ubuntu-24.04-arm reports no /dev/kvm and no virtualisation flag at
+      # all. An arm64 image there would be pure software emulation, for a 340 MB
+      # APK that boots a Node server.
+      #
+      # What this does catch is the second way they were rotting: nothing
+      # compiled them either, so they could drift out of the app's API and stay
+      # broken indefinitely. See androidTest/README.md.
+      - name: Compile the instrumented tests
+        working-directory: android
+        run: ./gradlew assembleDebugAndroidTest

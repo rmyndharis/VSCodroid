@@ -29,11 +29,30 @@ class ServerHealthTest {
     fun setUp() {
         ServerReadyHelper.markSetupComplete(context)
 
-        // Skip all server tests if vscode-reh assets aren't bundled.
-        // The server can't start without server-main.js.
+        // This class silently does not run on a clean install, and that is a
+        // known defect rather than a design. Measured, not inferred:
+        //
+        //   - Classes run alphabetically, so ServerHealthTest goes before
+        //     SplashActivityTest -- and SplashActivityTest is what triggers the
+        //     extraction that puts server-main.js in filesDir.
+        //   - connectedAndroidTest installs over any existing app, which keeps
+        //     filesDir, and uninstalls afterwards. So the first run on a device
+        //     someone else set up inherits their assets and passes; the next run
+        //     starts bare and all three of these skip.
+        //   - A skipped test reports zero failures. Reading the failure count
+        //     alone cannot tell "passed" from "never ran": on the clean run these
+        //     three reported 0.008s, 0.003s and 0.002s.
+        //
+        // An attempt to arrange the precondition here -- launch SplashActivity
+        // and wait for extraction -- did not work and is not shipped rather than
+        // shipped unverified. Whoever fixes it properly should make the skip
+        // loud, or order the suite so extraction happens first.
+        //
+        // Until then: READ THE SKIP COUNT, not just the failure count.
         val serverMainJs = File(context.filesDir, "server/vscode-reh/out/server-main.js")
         assumeTrue(
-            "Skipping: vscode-reh assets not bundled (run fetch-vscode-oss.sh)",
+            "SKIPPING, NOT PASSING: server assets are not extracted on this " +
+                "install, so nothing here ran. Launch the app once and re-run.",
             serverMainJs.exists()
         )
     }
@@ -53,7 +72,7 @@ class ServerHealthTest {
     }
 
     @Test
-    fun server_healthCheckReturns200to499() {
+    fun server_answersTheReadinessProbe() {
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
 
         val portReady = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
@@ -66,7 +85,17 @@ class ServerHealthTest {
 
     @Test
     fun server_survivesActivityRecreation() {
-        val scenario = ActivityScenario.launch(SplashActivity::class.java)
+        // MainActivity, not SplashActivity, and that is the whole reason this
+        // test could never pass. SplashActivity carries android:noHistory and
+        // finishes itself once setup is done, so by the time recreate() is
+        // called the scenario has nothing to recreate and ActivityScenario
+        // throws NullPointerException from its own null check. Nothing noticed,
+        // because nothing runs this suite.
+        //
+        // markSetupComplete() in setUp is what makes launching MainActivity
+        // directly legitimate here: it is the flag SplashActivity would have
+        // written before handing over.
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
 
         val portReady = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
         assumeTrue("Server port not reachable — skipping recreation test", portReady)
