@@ -48,6 +48,13 @@ jobs:
       - name: Check the documented build steps match the workflows
         run: python3 scripts/check-build-steps.py
 
+      # Reads two files and no assets, so it runs beside the other cheap check
+      # rather than inside the build. What it guards arrives a whole release
+      # after the change that causes it: raising targetSdk closes the local
+      # network, and the symptom is a friend's browser timing out.
+      - name: Check local network access survives the targetSdk in use
+        run: python3 scripts/check-local-network-permission.py
+
       - name: Run lint
         working-directory: android
         run: ./gradlew lint
