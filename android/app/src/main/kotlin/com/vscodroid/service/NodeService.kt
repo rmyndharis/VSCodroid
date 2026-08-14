@@ -53,7 +53,7 @@ class NodeService : Service() {
     private var restartCount = 0
     private var isServiceRunning = false
     private var launchJob: Job? = null
-    private var startupFailure: String? = null
+    private var startupNotice: String? = null
 
     /** Invoked when the server is healthy and accepting connections. */
     var onServerReady: ((port: Int) -> Unit)? = null
@@ -152,22 +152,31 @@ class NodeService : Service() {
     fun isServerReady(): Boolean = processManager.isReady()
 
     /**
-     * The message from a start attempt that gave up, or null if none has.
+     * The most recent thing worth saying about the start, or null if there is
+     * nothing.
+     *
+     * A notice rather than a failure, which the name and the strings both have
+     * to keep saying. Two of the three messages that reach here are terminal —
+     * a start that could not spawn, and a restart budget spent — and the third
+     * is `status_server_slow_start`, said while the server is still being waited
+     * for and may still come up. Reading them all as failures is what makes a
+     * slow start indistinguishable from a dead one to everything downstream,
+     * which is the thing this whole path exists to avoid.
      *
      * Exists because [onServerError] is a callback and a callback can be raised
-     * at a moment when nobody is listening. A start that times out while no
-     * activity is bound — which is every start that outlives the activity that
-     * began it — reports into a null field and is gone. The next activity to bind
-     * then finds a service that is not ready, waits for a readiness callback that
-     * will never come, and shows a loading placeholder indefinitely with nothing
-     * said.
+     * at a moment when nobody is listening. A start that outlives the activity
+     * that began it reports into a null field and is gone; the next activity to
+     * bind then finds a service that is not ready and waits, with nothing said.
      *
      * Read on the main thread by a newly bound client and written on the main
-     * thread by [launchServer] and [enterTerminalState], so it needs no
-     * synchronisation of its own — the same confinement [restartCount] and
-     * [launchJob] rely on.
+     * thread by [launchServer], [awaitLateReadiness] and [enterTerminalState],
+     * so it needs no synchronisation of its own — the same confinement
+     * [restartCount] and [launchJob] rely on.
+     *
+     * Cleared whenever a start begins and whenever one succeeds, so a reader
+     * that finds something here is looking at the current attempt.
      */
-    fun lastStartupFailure(): String? = startupFailure
+    fun lastStartupNotice(): String? = startupNotice
 
     /**
      * Posts the foreground notification again.
@@ -278,12 +287,12 @@ class NodeService : Service() {
         // A fresh attempt is not a failed one. Cleared here rather than on
         // success, so that the window in which a client can bind and read a
         // stale verdict from the previous attempt does not exist.
-        startupFailure = null
+        startupNotice = null
         launchJob = serviceScope.launch {
             val started = withContext(Dispatchers.IO) { processManager.startServer() }
             if (!started) {
                 Logger.e(tag, "Failed to start server process")
-                reportStartupFailure(getString(R.string.error_server_start))
+                reportStartupNotice(getString(R.string.error_server_start))
                 return@launch
             }
 
@@ -303,7 +312,7 @@ class NodeService : Service() {
             // t=35s stayed unreachable for as long as it ran.
             if (!processManager.isRunning()) {
                 Logger.e(tag, "Server timeout and the process is gone")
-                reportStartupFailure(getString(R.string.error_server_timeout))
+                reportStartupNotice(getString(R.string.error_server_timeout))
                 return@launch
             }
 
@@ -316,7 +325,7 @@ class NodeService : Service() {
     private fun announceReady() {
         // Recovery succeeded; future crashes should get a fresh retry budget.
         restartCount = 0
-        startupFailure = null
+        startupNotice = null
         Logger.i(tag, "Server is ready on port ${processManager.port}")
         onServerReady?.invoke(processManager.port)
     }
@@ -375,23 +384,29 @@ class NodeService : Service() {
 
             if (!noticed && SystemClock.elapsedRealtime() - startedAt >= LATE_READY_NOTICE_MS) {
                 noticed = true
-                Logger.e(tag, "Server still has not answered; saying so while continuing to ask")
-                reportStartupFailure(getString(R.string.error_server_timeout))
+                Logger.w(tag, "Server still has not answered; saying so while continuing to ask")
+                // Not error_server_timeout, which is what the branch above says
+                // when the process is gone. This one is said while the server is
+                // still being waited for, so it has to read as a status rather
+                // than an ending -- and a message that reads as an ending is how
+                // the whole of this loop stops meaning anything to the person
+                // reading it.
+                reportStartupNotice(getString(R.string.status_server_slow_start))
             }
         }
         Logger.w(tag, "Server process exited before it ever answered")
     }
 
     /**
-     * Raises a startup failure and remembers it.
+     * Says something about the start, now and later.
      *
      * Both halves matter and only the first used to happen. The callback reaches
      * an activity that is bound *now*; the field reaches the next one to bind,
      * which on a start that outlives its activity is the only one there is. See
-     * [lastStartupFailure].
+     * [lastStartupNotice] for why neither is called a failure.
      */
-    private fun reportStartupFailure(message: String) {
-        startupFailure = message
+    private fun reportStartupNotice(message: String) {
+        startupNotice = message
         onServerError?.invoke(message)
     }
 
@@ -496,7 +511,7 @@ class NodeService : Service() {
         // Recorded as well as raised: this is the terminal state, so an activity
         // that binds after it has to be told too. The notification says the same
         // thing, but the notification is not on screen while the editor is.
-        reportStartupFailure(stoppedText)
+        reportStartupNotice(stoppedText)
     }
 
     /**

@@ -739,14 +739,21 @@ class MainActivity : AppCompatActivity() {
         // ProcessManager.isReady.
         val service = nodeService ?: return
 
-        // Checked first, because a start that has already given up is not going
-        // to become ready and there is nothing to wait for. onServerError fired
-        // while this callback was still null, so without this the failure reaches
-        // nobody and the placeholder stays up for good.
-        val failure = service.lastStartupFailure()
-        if (failure != null) {
-            Logger.e(tag, "Server start had already failed before this activity bound: $failure")
-            Toast.makeText(this, failure, Toast.LENGTH_LONG).show()
+        // Checked first, because anything the service has to say about the start
+        // was said to a callback that did not exist yet — this activity was not
+        // bound when it happened, and nothing repeats it.
+        //
+        // Shown rather than judged. The notice may be terminal (a start that
+        // could not spawn, a restart budget spent) or it may be a slow server
+        // still being waited for, and the difference is in the message rather
+        // than in anything readable here. Either way the right thing to do is
+        // the same: say it and do not load, because the server is not serving.
+        // A slow one that comes up afterwards arrives through onServerReady,
+        // which is assigned above.
+        val notice = service.lastStartupNotice()
+        if (notice != null) {
+            Logger.w(tag, "Server start notice predating this binding: $notice")
+            Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
             return
         }
 

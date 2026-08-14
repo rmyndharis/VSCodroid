@@ -16,6 +16,18 @@
     <string name="extracting_message">Extracting core files\u2026</string>
     <string name="error_server_start">Failed to start development server</string>
     <string name="error_server_timeout">Server took too long to start</string>
+
+    <!-- Deliberately not an error_ string, and deliberately not the wording of
+         the one above it. This is said while the server is still being waited
+         for and may still come up, so it must not read as an ending: the app
+         goes on asking after saying it, and the editor opens if an answer
+         arrives. Borrowing the terminal wording would make a slow start
+         indistinguishable from a dead one to everyone downstream.
+
+         It also has to survive being read later. The next activity to bind
+         reads it through NodeService.lastStartupFailure() with no idea how long
+         ago it was recorded, so it says nothing about elapsed time. -->
+    <string name="status_server_slow_start">The development server is taking longer than usual to start. The editor will open as soon as it is ready.</string>
     <string name="error_webview_crash">Display crashed. Reloading\u2026</string>
     <string name="error_webview_too_old">Your WebView is too old. Please update Android System WebView.</string>
     <string name="status_updating_python">Updating Python…</string>
