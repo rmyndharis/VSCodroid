@@ -25,7 +25,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 1. **Install** -- Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 150-200 MB.
 2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. This takes 5-10 seconds and only happens once.
-3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. This is the only time you are asked, so pick everything you expect to need ([#92](https://github.com/rmyndharis/VSCodroid/issues/92)). Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
+3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
@@ -605,8 +605,9 @@ du -sh ~/projects/*
 du -sh ~/.vscodroid/extensions/*
 ```
 
-Removing an installed toolchain is not reachable from the editor yet
-([#92](https://github.com/rmyndharis/VSCodroid/issues/92)).
+To remove an installed toolchain, touch and hold the app icon and choose
+**Manage toolchains**. It is not reachable from inside the editor, deliberately —
+see [Installing After Setup](#installing-after-setup).
 
 ### App Crashes or Restarts Unexpectedly
 

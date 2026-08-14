@@ -425,12 +425,18 @@ class SplashActivity : AppCompatActivity() {
      * Publishes the launcher shortcut that opens [ToolchainActivity].
      *
      * The screen had no way in. It is not exported, it has no launcher entry,
-     * and its only caller is a BroadcastChannel command that nothing can send:
-     * every bundled extension of ours declares `main` without `browser`, so they
-     * run on the Node host, where BroadcastChannel is the one from
-     * node:worker_threads and shares nothing but a name with the DOM channel the
-     * relay opens in the WebView page. So the picker's one appearance decided
-     * the toolchains permanently.
+     * and its only caller is the `openToolchainSettings` command on the
+     * BroadcastChannel relay -- which no bundled extension sends. So the
+     * picker's one appearance decided the toolchains permanently.
+     *
+     * That last sentence used to explain itself by saying every bundled
+     * extension of ours ran on the Node host, where `BroadcastChannel` is the
+     * one from `node:worker_threads` and shares nothing but a name with the DOM
+     * channel the relay opens. That stopped being true: `saf-bridge` now
+     * declares `browser` and reaches the relay, and contributes six commands
+     * through it. `openToolchainSettings` is still not one of them, so the
+     * conclusion holds and the reason for it does not -- which is why the reason
+     * is written as history rather than as a standing fact.
      *
      * A launcher shortcut is deliberately the entry point that does not depend on
      * the WebView, because reaching this screen matters most when the editor

@@ -122,8 +122,14 @@ class KeyMappingTest {
             // the character. Giving '{' the pair belonging to '(' -- Digit9, 57 --
             // makes the extra key row type '(' when the user presses '{', and every
             // test in this file stays green.
+            // Every pair in the table where both halves are present, not the six
+            // that were visible in the first forty lines of it. The original list
+            // stopped at '<' because that is where the read stopped, which left
+            // five pairs asserting nothing -- including '?' and '_', both of
+            // which the extra key row sends.
             val pairs = listOf(
-                "{" to "[", "}" to "]", ":" to ";", "\"" to "'", "|" to "\\", "~" to "`"
+                "{" to "[", "}" to "]", ":" to ";", "\"" to "'", "|" to "\\", "~" to "`",
+                "<" to ",", ">" to ".", "_" to "-", "+" to "=", "?" to "/"
             )
             for ((shifted, plain) in pairs) {
                 val s = KeyMapping.getKeyDef(shifted)
