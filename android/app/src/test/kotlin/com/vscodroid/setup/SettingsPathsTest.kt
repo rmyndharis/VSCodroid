@@ -152,6 +152,104 @@ class SettingsPathsTest {
         }
     }
 
+    /**
+     * Two profiles under `profiles.linux`, which every other document here
+     * lacks.
+     *
+     * The prefix of the profile regexes is fenced with `[^{}]` so a lazy span
+     * cannot cross out of the bash object into a sibling. Nothing tested that:
+     * with one profile there is no brace to cross, so widening the fence to
+     * `[\s\S]` left all 24 cases green -- measured, after an earlier attempt
+     * that reported the opposite because the replacement it wrote was
+     * `[\\s\\S]`, a class of backslash-s-S that matches almost nothing and
+     * broke the regex instead of widening it.
+     *
+     * This is issue #3 from the other side of the key: that one rewrote a path
+     * into a directory, this one would rewrite the wrong profile's path.
+     */
+    @Nested
+    inner class SiblingProfiles {
+
+        // bash carries no path of its own, so the lazy span has to keep looking
+        // -- and the only thing left to find is the NEXT profile's. The fence is
+        // the only thing stopping it.
+        private fun bashWithoutPath(zshPath: String) = """
+            {
+                "claudeCode.claudeProcessWrapper": "$wrapper",
+                "extensions.verifySignature": false,
+                "terminal.integrated.profiles.linux": {
+                    "bash": {
+                        "icon": "terminal-bash"
+                    },
+                    "zsh": {
+                        "path": "$zshPath",
+                        "args": ["-i"]
+                    }
+                },
+                "git.path": "$git",
+                "terminal.integrated.shellIntegration.enabled": false
+            }
+        """.trimIndent()
+
+        @Test
+        fun `never rewrites a sibling profile's path as if it were bash`() {
+            val zsh = "$oldDir/libzsh.so"
+            val before = bashWithoutPath(zsh)
+
+            // Widening the prefix fence from [^{}] to anything that can cross a
+            // brace makes this match zsh's path and rewrite it to the bash
+            // binary. Every other document here gives bash a path of its own, so
+            // the lazy span stops before the fence ever matters -- measured: with
+            // one profile, widening the fence left all 24 cases green.
+            val result = refreshManagedPaths(before, shell, git, wrapper)
+
+            if (result != null) {
+                assertTrue(
+                    result.contains(""""path": "$zsh""""),
+                    "the zsh profile's path was rewritten:\n$result",
+                )
+                assertTrue(
+                    !result.contains(""""zsh": {\n        "path": "$shell""""),
+                    "bash's binary was written into the zsh profile:\n$result",
+                )
+            }
+        }
+
+        // bash has a stale path but no args, so the path rewrite fires -- which
+        // is what makes the result observable at all -- while the args span has
+        // nothing of bash's to find and must not go looking in the sibling.
+        private fun bashWithoutArgs(zshPath: String) = """
+            {
+                "claudeCode.claudeProcessWrapper": "$wrapper",
+                "extensions.verifySignature": false,
+                "terminal.integrated.profiles.linux": {
+                    "bash": {
+                        "path": "$oldDir/libbash.so",
+                        "icon": "terminal-bash"
+                    },
+                    "zsh": {
+                        "path": "$zshPath",
+                        "args": ["-i"]
+                    }
+                },
+                "git.path": "$git",
+                "terminal.integrated.shellIntegration.enabled": false
+            }
+        """.trimIndent()
+
+        @Test
+        fun `never clears a sibling profile's args as if they were bash's`() {
+            val result = requireNotNull(
+                refreshManagedPaths(bashWithoutArgs("$oldDir/libzsh.so"), shell, git, wrapper)
+            ) { "the stale bash path still needed repairing" }
+
+            assertTrue(
+                result.contains(""""args": ["-i"]"""),
+                "the zsh profile's args were cleared:\n$result",
+            )
+        }
+    }
+
     @Nested
     inner class LeavesAlone {
 
