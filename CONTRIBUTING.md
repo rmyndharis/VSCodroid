@@ -319,7 +319,18 @@ So it falls to a person. Run it:
 bash scripts/device-test.sh                 # build, install, and test
 bash scripts/device-test.sh --skip-build    # test an APK you already built
 bash scripts/device-test.sh --self-check    # no device: just check the suite reads its own expectations
+bash scripts/device-test.sh --instrumented  # run the androidTest suite on a booted arm64 emulator
 ```
+
+`--instrumented` checks its preconditions before handing off to
+`./gradlew connectedDebugAndroidTest`, because both things that go wrong here go
+wrong as a timeout rather than as a message: an x86_64 emulator accepts the
+install and then has no arm64 library to load, and the gitignored asset tree
+being absent produces an APK that builds, installs, opens, and dies. It names
+every missing precondition rather than stopping at the first. With more than one
+emulator attached it refuses and asks for `--device SERIAL`, which it passes on
+as `ANDROID_SERIAL` — Gradle would otherwise pick one for itself and not say
+which, so a green run would not name the API level it was green on.
 
 This suite once demanded Node `v20.x` for two releases after the runtime moved to
 24.18.0, and the drift was found by reading it rather than by running it. The

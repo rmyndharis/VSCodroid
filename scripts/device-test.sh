@@ -14,6 +14,9 @@
 #   --timeout N      Server-ready timeout in seconds (default: 120)
 #   --self-check     Resolve every expectation this suite derives, then exit.
 #                    Needs no device, so CI can run it.
+#   --instrumented   Check the preconditions, then run the instrumented suite
+#                    (./gradlew connectedDebugAndroidTest) and exit. Needs a
+#                    booted arm64 emulator or device.
 #
 # WHEN TO RUN THIS
 #
@@ -97,6 +100,7 @@ DEVICE=""
 VERBOSE=false
 TIMEOUT=120
 SELF_CHECK=false
+INSTRUMENTED=false
 
 # Parse args
 while [ $# -gt 0 ]; do
@@ -107,6 +111,7 @@ while [ $# -gt 0 ]; do
         --verbose)     VERBOSE=true ;;
         --timeout)     TIMEOUT="$2"; shift ;;
         --self-check)  SELF_CHECK=true ;;
+        --instrumented) INSTRUMENTED=true ;;
         -h|--help)
             sed -n '2,/^$/s/^# //p' "$0"
             exit 0 ;;
@@ -250,6 +255,94 @@ if $SELF_CHECK; then
         "$PASS" "$FAIL" "$SKIP"
     [ "$FAIL" -eq 0 ] || printf "${RED}Failures:${RESET}%b\n\n" "$FAILURES"
     exit $([ "$FAIL" -eq 0 ] && echo 0 || echo 1)
+fi
+
+# ── Instrumented suite ─────────────────────────────────────────────
+# The androidTest suite cannot run in CI, and that is measured rather than
+# assumed -- see androidTest/README.md. CI compiles it, which is the most it can
+# do; running it needs a person with an emulator, and this is the one command.
+#
+# The checks below are here because both failures they catch present as a
+# timeout rather than as an error, which is the worst way for a test run to go
+# wrong: an x86_64 emulator accepts the install and then has no arm64 library to
+# load, and an incomplete asset tree yields an APK that builds, installs, opens,
+# and dies with "error=2, No such file or directory" from a path nothing else
+# points at. Gradle's own checkPatchFingerprints covers a different question --
+# whether the server tree is CORRECT -- and skips entirely when the tree is
+# absent, which is exactly the case this covers.
+if $INSTRUMENTED; then
+    printf "\n${BOLD}Preconditions for the instrumented suite${RESET}\n"
+
+    ATTACHED=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}')
+    if [ -z "$ATTACHED" ]; then
+        fail "a device is attached" "no device in 'adb devices'; start an emulator first"
+    elif [ -n "$DEVICE" ] && ! printf '%s\n' "$ATTACHED" | grep -qx "$DEVICE"; then
+        fail "a device is attached" "--device $DEVICE is not among: $(printf '%s' "$ATTACHED" | tr '\n' ' ')"
+    elif [ -z "$DEVICE" ] && [ "$(printf '%s\n' "$ATTACHED" | wc -l | tr -d ' ')" -gt 1 ]; then
+        # Gradle would choose for itself and not say which, so a green run would
+        # not name the API level it was green on -- and this machine keeps
+        # emulators at three of them.
+        fail "one target, or one named" \
+            "attached: $(printf '%s' "$ATTACHED" | tr '\n' ' ') -- name one with --device SERIAL"
+    else
+        pass "a device is attached${DEVICE:+ ($DEVICE)}"
+
+        if [ "$($ADB shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+            pass "it has finished booting"
+        else
+            fail "it has finished booting" "sys.boot_completed is not 1; an emulator mid-boot answers adb and nothing else"
+        fi
+
+        ABI=$($ADB shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
+        case "$ABI" in
+            arm64*) pass "its ABI is $ABI" ;;
+            "")     fail "its ABI is arm64-v8a" "could not read ro.product.cpu.abi" ;;
+            *)      fail "its ABI is arm64-v8a" "this device reports $ABI; the app ships arm64-v8a only" ;;
+        esac
+    fi
+
+    # The gitignored build output. A fresh worktree has none of it, nothing
+    # fails, and the screen simply stays white -- documented in CONTRIBUTING.md
+    # under the on-device suite.
+    ASSETS="$ROOT_DIR/android/app/src/main/assets"
+    LIBNODE="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a/libnode.so"
+    if [ ! -f "$LIBNODE" ]; then
+        fail "the bundled runtime is present" "$LIBNODE is missing; run scripts/build-all.sh"
+    elif [ "$(wc -c < "$LIBNODE" | tr -d ' ')" -lt 1000 ]; then
+        fail "the bundled runtime is present" "$LIBNODE is the CI stub, not a runtime"
+    else
+        pass "the bundled runtime is present"
+    fi
+    if [ -f "$ASSETS/vscode-reh/out/server-main.js" ]; then
+        pass "the server tree is present"
+    else
+        fail "the server tree is present" \
+            "no assets/vscode-reh/out/server-main.js; run fetch-vscode-oss.sh then package-assets.sh"
+    fi
+    if [ -d "$ASSETS/usr" ]; then
+        pass "the bundled tools are present"
+    else
+        fail "the bundled tools are present" "no assets/usr; run scripts/download-termux-tools.sh"
+    fi
+
+    if [ "$FAIL" -ne 0 ]; then
+        printf "\n  ${RED}%d precondition(s) failed${RESET} — not starting the suite%b\n\n" \
+            "$FAIL" "$FAILURES"
+        exit 1
+    fi
+    # How --device reaches Gradle. Verified against AGP 8.9.1 rather than
+    # assumed: DeviceProviderInstrumentTestTask calls System.getenv on this
+    # name, and ConnectedDeviceProvider keeps it as androidSerialsEnv and
+    # filters the attached devices by it -- its "Connected device with serial
+    # '%s' not found!" is what an unattached serial produces.
+    [ -n "$DEVICE" ] && export ANDROID_SERIAL="$DEVICE"
+
+    printf "\n  ${GREEN}%d passed${RESET} — handing off to Gradle%s\n\n" \
+        "$PASS" "${DEVICE:+ (ANDROID_SERIAL=$DEVICE)}"
+    cd "$ROOT_DIR/android" || exit 1
+    # exec so the suite's own exit status is this script's, with no wrapper
+    # between a failing test and whoever is reading.
+    exec ./gradlew connectedDebugAndroidTest
 fi
 
 # ═══════════════════════════════════════════════════════════════════
