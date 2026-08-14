@@ -49,17 +49,12 @@ class SplashActivityTest {
         ServerReadyHelper.markSetupComplete(context)
     }
 
-    @Test
-    fun firstRun_launchesWithoutCrash() {
-        // Verify SplashActivity can be launched without throwing.
-        // The activity will run extraction and transition to MainActivity.
-        val scenario = ActivityScenario.launch(SplashActivity::class.java)
-        // If we get here, no crash on launch.
-        // Wait for extraction (30-60s on emulator, ~3-5s on device).
-        Thread.sleep(60_000)
-        scenario.close()
-        // Success: no exception thrown
-    }
+    // `firstRun_launchesWithoutCrash` stood here. It launched the activity, slept a
+    // flat 60 s and closed the scenario without asserting anything, so the only
+    // failure it could report was a throw out of onCreate -- which the test below
+    // also reports, while additionally catching a setup that ends in showSetupError()
+    // instead of markSetupComplete(). Its mutation coverage was a strict subset, and
+    // it cost 60.7 s of a 22-test run to add nothing.
 
     @Test
     fun firstRun_extractionSetsVersion() {

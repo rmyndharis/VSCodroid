@@ -41,8 +41,12 @@ XML rather than the exit code** — a run that fails before reaching the tests
 writes no results at all, and its exit code is indistinguishable from a genuine
 failure.
 
-Expect roughly three minutes. Two `SplashActivityTest` cases account for about
-70% of it, sleeping 60 seconds each while first-run setup completes.
+Expect roughly two minutes. It was three until `firstRun_launchesWithoutCrash`
+was removed: it slept a flat 60 seconds and then asserted nothing, so the only
+failure it could report was a throw out of `onCreate`, which
+`firstRun_extractionSetsVersion` reports as well — and that one also catches a
+setup ending in `showSetupError()`. The two-minute figure is the old
+three-minute run minus that test's measured 60.7 s, not a fresh measurement.
 
 ## What is here, and what it is worth
 
@@ -55,22 +59,30 @@ Expect roughly three minutes. Two `SplashActivityTest` cases account for about
 
 ## A green run is not necessarily a run
 
-`ServerHealthTest` **silently does not run on a clean install.** Classes execute
-alphabetically, so it goes before `SplashActivityTest` — and `SplashActivityTest`
-is what triggers the extraction that puts `server-main.js` in `filesDir`. Its
-`assumeTrue` then skips all three cases.
+`ServerHealthTest` used to **silently not run on a clean install.** Classes
+execute alphabetically, so it goes before `SplashActivityTest` — and
+`SplashActivityTest` is what triggers the extraction that puts `server-main.js`
+in `filesDir`. Its `assumeTrue` then skipped all three cases.
 
 `connectedAndroidTest` installs over an existing app, which keeps `filesDir`, and
 uninstalls afterwards. So the first run on a device someone else set up inherits
-their assets and passes; the next run starts bare and skips. Measured both ways
-— 1.6s / 0.9s / 5.3s in one run, and 0.008s / 0.003s / 0.002s in the next.
+their assets and passes; the next run starts bare. Measured both ways — 1.6s /
+0.9s / 5.3s in one run, and 0.008s / 0.003s / 0.002s in the next.
 
-**Read the skip count, not just the failure count.** A skipped test reports zero
-failures, and three tests that took two milliseconds did not measure anything.
+The instruction here used to be *read the skip count, not just the failure
+count*. That is an instruction to a human, and it is the kind that holds until
+the afternoon someone is in a hurry. The precondition is now an assertion: an
+install without extracted assets produces three red tests naming what to do
+about it, instead of three green ones that measured nothing.
 
-An attempt to arrange the precondition inside `setUp` did not work and was not
-shipped. Fixing it properly means either ordering the suite so extraction runs
-first, or making the skip fail the run.
+Two consequences worth knowing before the first red run:
+
+- On a freshly wiped device the fix is to **launch the app once** and re-run.
+  Arranging that inside `setUp` was attempted, did not work, and was not shipped.
+- These tests probe port 13337 by literal, while the app allocates through
+  `PortFinder.getOrAllocatePort()` and moves off that port when something else
+  holds it. The failure message says so, because on such a device the probe
+  fails for a reason that has nothing to do with the server.
 
 ## Two things this directory has already taught us
 

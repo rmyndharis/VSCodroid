@@ -5,7 +5,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.vscodroid.util.ServerReadyHelper
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -14,9 +13,10 @@ import java.io.File
 /**
  * Instrumented tests for VS Code server health.
  *
- * These tests require the VS Code Server assets (vscode-reh/) to be bundled
- * in the APK. If assets are missing (dev build without download scripts),
- * the tests are skipped via [assumeTrue].
+ * These tests require the server assets to be extracted into `filesDir`, which
+ * happens on the app's first launch. When they are not, the run FAILS rather than
+ * skipping: a skipped test reports zero failures, and zero failures is what a
+ * passing run also reports.
  *
  * Run separately from the fast Activity UI tests — these have 60s+ timeouts.
  */
@@ -29,8 +29,8 @@ class ServerHealthTest {
     fun setUp() {
         ServerReadyHelper.markSetupComplete(context)
 
-        // This class silently does not run on a clean install, and that is a
-        // known defect rather than a design. Measured, not inferred:
+        // This used to be an assumption, which meant the class silently did not run
+        // on a clean install. Measured, not inferred:
         //
         //   - Classes run alphabetically, so ServerHealthTest goes before
         //     SplashActivityTest -- and SplashActivityTest is what triggers the
@@ -38,21 +38,22 @@ class ServerHealthTest {
         //   - connectedAndroidTest installs over any existing app, which keeps
         //     filesDir, and uninstalls afterwards. So the first run on a device
         //     someone else set up inherits their assets and passes; the next run
-        //     starts bare and all three of these skip.
-        //   - A skipped test reports zero failures. Reading the failure count
+        //     starts bare and all three of these skipped.
+        //   - A skipped test reports zero failures, and reading the failure count
         //     alone cannot tell "passed" from "never ran": on the clean run these
-        //     three reported 0.008s, 0.003s and 0.002s.
+        //     three reported 0.008s, 0.003s and 0.002s. The instruction left here
+        //     was to READ THE SKIP COUNT -- an instruction to a human, which is
+        //     the part that does not survive contact with a busy afternoon.
         //
-        // An attempt to arrange the precondition here -- launch SplashActivity
-        // and wait for extraction -- did not work and is not shipped rather than
-        // shipped unverified. Whoever fixes it properly should make the skip
-        // loud, or order the suite so extraction happens first.
-        //
-        // Until then: READ THE SKIP COUNT, not just the failure count.
+        // It now fails, which is what a missing prerequisite deserves when the
+        // alternative is being indistinguishable from success. An attempt to
+        // arrange the precondition here -- launch SplashActivity and wait for
+        // extraction -- did not work and is not shipped rather than shipped
+        // unverified, so the fix is still the operator's: launch the app once.
         val serverMainJs = File(context.filesDir, "server/vscode-reh/out/server-main.js")
-        assumeTrue(
-            "SKIPPING, NOT PASSING: server assets are not extracted on this " +
-                "install, so nothing here ran. Launch the app once and re-run.",
+        assertTrue(
+            "Server assets are not extracted on this install, so nothing here can " +
+                "run. Launch the app once (via SplashActivity) and re-run.",
             serverMainJs.exists()
         )
     }
@@ -76,7 +77,7 @@ class ServerHealthTest {
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
 
         val portReady = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
-        assumeTrue("Server port not reachable — skipping health check", portReady)
+        assertTrue(PORT_UNREACHABLE, portReady)
 
         val healthy = ServerReadyHelper.healthCheck(13337, timeoutMs = 10_000L)
         assertTrue("HTTP health check should succeed", healthy)
@@ -98,7 +99,7 @@ class ServerHealthTest {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
 
         val portReady = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
-        assumeTrue("Server port not reachable — skipping recreation test", portReady)
+        assertTrue(PORT_UNREACHABLE, portReady)
 
         // Simulate configuration change (rotation)
         scenario.recreate()
@@ -108,5 +109,20 @@ class ServerHealthTest {
         val stillHealthy = ServerReadyHelper.healthCheck(13337, timeoutMs = 10_000L)
         assertTrue("Server should survive activity recreation", stillHealthy)
         scenario.close()
+    }
+
+    private companion object {
+        /**
+         * These three probe 13337 by literal, while the app allocates through
+         * `PortFinder.getOrAllocatePort()`, which remembers its choice in
+         * SharedPreferences("vscodroid") and moves off 13337 whenever something else
+         * holds it. On such a device the probe fails for a reason that has nothing to
+         * do with the server, so the message says so rather than leaving the reader to
+         * work it out. Read from PortFinder, not measured on a device.
+         */
+        const val PORT_UNREACHABLE =
+            "Server never became reachable on port 13337 within 60s. If this device " +
+                "already had 13337 taken, PortFinder will have moved the app to " +
+                "another port and this probe is looking at the wrong one."
     }
 }
