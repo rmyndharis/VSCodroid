@@ -57,20 +57,26 @@ class ServerReadinessCallSiteTest {
     }
 
     @Test
-    fun `and it does ask something`() {
+    fun `both places that decide on the server ask it`() {
         // A file with neither call would satisfy the test above. This is the
         // control for it, not a second assertion about the same thing.
         //
-        // The number of call sites is deliberately not pinned: two is what there
-        // are today, and a third would be a normal thing to add.
+        // A floor of two rather than of one, and the difference is a real hole
+        // that a threshold of `> 0` left open: there are two decisions here, the
+        // bind-time check and the resume-from-background guard, and reverting
+        // just one of them restores half the defect while leaving both tests
+        // green. Either one alone is enough to put a user in front of a dead
+        // port.
+        //
+        // A floor rather than an exact count, because a third site would be an
+        // ordinary thing to add and should not have to come here first.
         check(mainActivity.isFile) { "MainActivity.kt not found" }
 
         val readinessCalls = codeLines().count { (_, line) -> line.contains("isServerReady()") }
 
         assertTrue(
-            readinessCalls > 0,
-            "the readiness check must be asked for somewhere, or the test above is " +
-                "satisfied by deleting the question entirely",
+            readinessCalls >= 2,
+            "both decisions must ask the readiness question; found $readinessCalls call site(s)",
         )
     }
 }

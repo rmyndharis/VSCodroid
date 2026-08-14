@@ -112,8 +112,14 @@ class NodeService : Service() {
     override fun onDestroy() {
         Logger.i(tag, "Service destroying")
         isServiceRunning = false
-        processManager.stopServer()
+        // Scope first, then the process — the same order [shutdown] uses, for the
+        // reason it writes down: a coroutine still inside the readiness poll
+        // would otherwise get a window in which it can observe a server being
+        // killed and report it ready. Nothing observes that today, because this
+        // instance dies with the service, but the two teardown paths disagreeing
+        // is how the next reader learns the wrong order.
         serviceScope.cancel()
+        processManager.stopServer()
         super.onDestroy()
     }
 
@@ -282,15 +288,71 @@ class NodeService : Service() {
 
             val ready = withContext(Dispatchers.IO) { processManager.waitForReady() }
             if (ready) {
-                // Recovery succeeded; future crashes should get a fresh retry budget.
-                restartCount = 0
-                Logger.i(tag, "Server is ready on port ${processManager.port}")
-                onServerReady?.invoke(processManager.port)
-            } else {
-                Logger.e(tag, "Server timeout")
+                announceReady()
+                return@launch
+            }
+
+            // The poll is bounded; the server is not obliged to agree. A process
+            // that is still alive here has not failed at anything -- it is slow,
+            // and this project's own device harness budgets 120 seconds for the
+            // same event that this gives up on at 30 (scripts/device-test.sh,
+            // TIMEOUT=120). Reporting a failure for it would be a false alarm,
+            // and, worse, stopping here used to make it permanent: nothing else
+            // in the app ever probes again, so a server that bound its port at
+            // t=35s stayed unreachable for as long as it ran.
+            if (!processManager.isRunning()) {
+                Logger.e(tag, "Server timeout and the process is gone")
                 reportStartupFailure(getString(R.string.error_server_timeout))
+                return@launch
+            }
+
+            Logger.w(tag, "Server has not answered yet; still watching a live process")
+            awaitLateReadiness()
+        }
+    }
+
+    /** Records a ready server and tells whoever is listening. */
+    private fun announceReady() {
+        // Recovery succeeded; future crashes should get a fresh retry budget.
+        restartCount = 0
+        startupFailure = null
+        Logger.i(tag, "Server is ready on port ${processManager.port}")
+        onServerReady?.invoke(processManager.port)
+    }
+
+    /**
+     * Keeps asking after the start poll has given up.
+     *
+     * The bound on [ProcessManager.waitForReady] is patience, not a verdict, and
+     * separating the two is the whole of this function. Without it the app had a
+     * cliff: a start slower than the poll left `isReady()` false permanently,
+     * both call sites in `MainActivity` refused, `onServerReady` could never fire
+     * because the coroutine that fires it had already returned, and the only ways
+     * out were a crash or a kill. A server that was running and serving could not
+     * be reached.
+     *
+     * Bounded by liveness rather than by time, which is the honest bound: while
+     * the process is alive the answer can still change, and when it dies the
+     * watchdog takes over -- `onServerCrashed` drives the restart, so this loop
+     * leaves quietly rather than reporting a failure the crash path is about to
+     * report properly.
+     *
+     * Slower than the start poll on purpose. The first thirty seconds are when an
+     * answer is most likely and someone is watching a placeholder; after that,
+     * asking every two seconds finds a late server promptly and costs one
+     * loopback connection in between.
+     */
+    private suspend fun awaitLateReadiness() {
+        while (processManager.isRunning()) {
+            delay(LATE_READY_POLL_MS)
+            val ready = withContext(Dispatchers.IO) { processManager.probeReadiness() }
+            if (ready) {
+                Logger.i(tag, "Server answered after the start poll had given up")
+                announceReady()
+                return
             }
         }
+        Logger.w(tag, "Server process exited before it ever answered")
     }
 
     /**
@@ -491,6 +553,16 @@ internal const val RESTART_DELAY_MS = 2000L
 
 /** Cap on the doubling, so the wait cannot grow without bound. */
 internal const val MAX_BACKOFF_SHIFT = 4
+
+/**
+ * How often a server is asked again once the start poll has given up on it.
+ *
+ * Slower than the start poll's 200 ms because the urgency has passed and the
+ * process may sit here for as long as it lives; fast enough that a server which
+ * binds late is found within a couple of seconds of binding rather than at the
+ * next thing that happens to ask.
+ */
+internal const val LATE_READY_POLL_MS = 2_000L
 
 /**
  * Whether a server that has already crashed [restartCount] times gets another

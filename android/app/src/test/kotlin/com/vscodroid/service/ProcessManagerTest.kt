@@ -604,14 +604,59 @@ class ServerReadinessTest {
         // reused across restarts -- it keeps its port on purpose -- so a stale
         // true would report the dead server's readiness for the whole of the new
         // server's startup, which is the window this work is about.
+        //
+        // The spawn is made to fail, and that is what makes the test mean what it
+        // says. Written against a successful `/bin/echo` start it passed without
+        // startServer clearing anything at all: echo exits before the assertion
+        // and the watchdog's own clear had already run, so the test was measuring
+        // the watchdog while claiming to measure startServer. A failed spawn
+        // starts no watchdog -- the clear happens before the ProcessBuilder call,
+        // the throw is caught, and nothing else in the class has run -- so
+        // startServer is the only thing that can have cleared it.
+        //
+        // It is also the sharper case. A restart whose spawn fails must not leave
+        // the dead server's readiness standing for a caller to act on.
+        every { Environment.getNodePath(any()) } returns "/nonexistent/node"
         manager.readyField = true
 
-        val exited = CountDownLatch(1)
-        manager.onServerCrashed = { exited.countDown() }
-        assertTrue(manager.startServer(), "/bin/echo must start, or this proves nothing")
+        assertFalse(manager.startServer(), "the spawn must fail, or this proves nothing")
 
         assertFalse(manager.isReady(), "a server that is starting is not serving")
-        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `a probe after the poll has given up still records readiness`() {
+        // Kills: dropping the `_isReady = true` record from probeReadiness, which
+        // would leave waitForReady's bounded loop as the only writer again.
+        //
+        // This is the piece that removes the cliff. A start slower than the poll
+        // used to leave the flag false for as long as the process lived, because
+        // the only writer lived inside a loop that had already returned -- both
+        // call sites then refused a server that was serving. Asking again has to
+        // be able to change the answer, or asking again is pointless.
+        //
+        // Deliberately not preceded by waitForReady: this is the standalone
+        // probe, on a manager that has never polled.
+        serving(200)
+        assertFalse(manager.isReady(), "the fixture must start out not ready")
+
+        assertTrue(manager.probeReadiness(), "a server answering 200 is serving")
+        assertTrue(manager.isReady(), "and asking again has to be able to change the answer")
+    }
+
+    @Test
+    fun `a probe against a server that is not serving leaves the answer alone`() {
+        // The other direction, and the reason the record is conditional: a probe
+        // that fails must not clear a readiness established earlier, because a
+        // single refused connection during a restart is not evidence the server
+        // has stopped -- the watchdog owns that transition.
+        val server = StubServer(200)
+        manager.portField = server.port
+        server.stop()
+        manager.readyField = true
+
+        assertFalse(manager.probeReadiness())
+        assertTrue(manager.isReady(), "one failed probe must not be treated as a stop")
     }
 
     @Test

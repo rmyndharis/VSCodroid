@@ -208,12 +208,8 @@ class ProcessManager(private val context: Context) {
     suspend fun waitForReady(timeoutMs: Long = 30_000, pollIntervalMs: Long = 200): Boolean {
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < timeoutMs) {
-            if (isServerHealthy()) {
+            if (probeReadiness()) {
                 Logger.i(tag, "Server ready after ${System.currentTimeMillis() - startTime}ms")
-                // Recorded here, at the one place in the app that actually asks
-                // the server whether it is serving. Callers on the main thread
-                // cannot ask -- see isReady.
-                _isReady = true
                 return true
             }
             delay(pollIntervalMs)
@@ -375,12 +371,38 @@ class ProcessManager(private val context: Context) {
      * probe's own result where it already runs gives the main thread the true
      * answer without the I/O.
      *
-     * Set by [waitForReady] and cleared by [startServer], [stopServer], and the
-     * watchdog when the process exits. It is deliberately not re-derived: a
-     * server that was serving a moment ago and has since died clears this through
-     * the watchdog, not through a fresh probe nobody is in a position to run.
+     * Set by [probeReadiness] and cleared by [startServer], [stopServer], and the
+     * watchdog when the process exits. It is deliberately not re-derived on read:
+     * a server that was serving a moment ago and has since died clears this
+     * through the watchdog, not through a fresh probe nobody on the main thread
+     * is in a position to run.
+     *
+     * That leaves a window worth naming rather than implying away. Between the
+     * process dying and the watchdog's `waitFor()` returning, this still answers
+     * true while the port is already dead. It is the gap between two statements
+     * rather than anything the app waits on — before this flag existed the same
+     * caller was wrong for the whole of a restart, so the window shrank by
+     * several orders of magnitude — but it did not close, and a caller that must
+     * not be wrong even briefly wants [probeReadiness] instead.
      */
     fun isReady(): Boolean = _isReady
+
+    /**
+     * Asks the server once, and records the answer if it is yes.
+     *
+     * Blocking — it is [isServerHealthy] underneath, so it belongs off the main
+     * thread like every other caller of that.
+     *
+     * The single place `_isReady` is ever set true, which is the point of it
+     * existing rather than being written inline in [waitForReady]. [waitForReady]
+     * is a *bounded* poll, and something has to keep asking after that bound is
+     * spent: a server the poll gave up on is not a server that failed, and it can
+     * still bind its port a second later. When the only writer lived inside the
+     * bounded loop, that second later was unreachable — the flag stayed false for
+     * as long as the process lived, and every caller reading it refused a server
+     * that was serving perfectly well.
+     */
+    fun probeReadiness(): Boolean = isServerHealthy().also { if (it) _isReady = true }
 
     // -- Internal --
 
