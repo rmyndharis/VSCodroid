@@ -649,13 +649,25 @@ class ToolchainManager(private val context: Context) {
 
                 tempDir.mkdirs()
 
+                // Asked before the first request rather than only after the
+                // download. Every other check of this flag sits past the
+                // manifest fetch, so a pack cancelled while queued still spent
+                // a request and, on a stalled connection, up to three read
+                // timeouts of it -- with the first-run queue waiting behind.
+                if (download.cancelled) {
+                    Logger.i(tag, "HTTP download cancelled for $packName")
+                    return@execute
+                }
+
                 // Resolved before the payload, not after. A release that cannot
                 // vouch for this ZIP should cost a few hundred bytes and a clear
                 // refusal, rather than 179 MB and then a refusal.
-                val expectedDigest = publishedDigestFor(url)
+                val expectedDigest = publishedDigestFor(url, download)
 
                 // Download
-                downloadWithRetries(packName, url, zipFile, estimatedSize, download)
+                retrying(packName, download) {
+                    downloadFile(packName, url, zipFile, estimatedSize, download)
+                }
 
                 if (download.cancelled) {
                     Logger.i(tag, "HTTP download cancelled for $packName")
@@ -713,36 +725,40 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Retries download up to MAX_RETRIES times with exponential backoff.
-     * Does not retry on 404 (zips not uploaded yet) — fails immediately.
+     * Runs [attempt] up to MAX_RETRIES + 1 times with exponential backoff.
+     *
+     * Shared by both things this class fetches, and that is a correctness
+     * property rather than deduplication. It was written for the ZIP alone, and
+     * putting the manifest fetch in front of it without routing it through
+     * meant a zero-tolerance request ran ahead of a fault-tolerant one: on
+     * mobile data, a stall that the ZIP would have absorbed ended the whole
+     * install after one read timeout, having transferred nothing. Hardening the
+     * payload is no good if it lowers the odds of getting one.
+     *
+     * Does not retry on 404, which stays right for both. A ZIP not uploaded to
+     * the release will not appear on the third attempt, and neither will a
+     * manifest that the release does not carry.
      */
     @Throws(IOException::class)
-    private fun downloadWithRetries(
-        packName: String,
-        url: String,
-        destFile: File,
-        estimatedSize: Long,
-        download: HttpDownload,
-    ) {
+    private fun <T> retrying(what: String, download: HttpDownload, attempt: () -> T): T {
         var lastException: IOException? = null
-        for (attempt in 0..MAX_RETRIES) {
+        for (n in 0..MAX_RETRIES) {
             try {
-                if (attempt > 0) {
-                    val backoffMs = (1L shl attempt) * 1000  // 2s, 4s
-                    Logger.i(tag, "Retry $attempt/$MAX_RETRIES for $packName after ${backoffMs}ms")
+                if (n > 0) {
+                    val backoffMs = (1L shl n) * 1000  // 2s, 4s
+                    Logger.i(tag, "Retry $n/$MAX_RETRIES for $what after ${backoffMs}ms")
                     Thread.sleep(backoffMs)
                 }
-                downloadFile(packName, url, destFile, estimatedSize, download)
-                return  // Success
+                return attempt()
             } catch (e: IOException) {
                 lastException = e
                 if (download.cancelled) throw e
                 // Don't retry on 404
                 if (e.message?.contains("404") == true) throw e
-                Logger.w(tag, "Download attempt $attempt failed for $packName: ${e.message}")
+                Logger.w(tag, "Attempt $n failed for $what: ${e.message}")
             }
         }
-        throw lastException ?: IOException("Download failed after ${MAX_RETRIES + 1} attempts")
+        throw lastException ?: IOException("$what failed after ${MAX_RETRIES + 1} attempts")
     }
 
     /**
@@ -813,9 +829,17 @@ class ToolchainManager(private val context: Context) {
      * `sha256sum` output, and this function exists because the payload it
      * describes is not to be taken on trust -- reading an unbounded remote body
      * into memory on the way to saying so would be the same trust by another
-     * name. A body cut at the bound either still carries the line for this ZIP
-     * or does not, and a line cut mid-way fails the 64-hex test in
-     * [digestFromManifest]; both end in a refusal rather than a wrong digest.
+     * name.
+     *
+     * A body cut at the bound cannot produce a wrong digest, though it is worth
+     * being exact about why, because there are two cases and only one of them
+     * is the obvious one. A cut landing in the *digest* leaves a field that is
+     * not 64 hex characters, which [digestFromManifest] skips. A cut landing in
+     * the *name* leaves a perfectly valid digest beside a shortened filename --
+     * nothing rejects that line, and nothing needs to: names are compared whole,
+     * so it matches no ZIP anyone asked for. Either way the lookup finds
+     * nothing and the install is refused. (This said "a line cut mid-way fails
+     * the 64-hex test", which is true of the first case only.)
      */
     @Throws(IOException::class)
     private fun fetchManifest(url: String): String =
@@ -845,11 +869,17 @@ class ToolchainManager(private val context: Context) {
      * Releases cannot reach that state unnoticed: the same step in `release.yml`
      * that packages the ZIPs writes this manifest and fails the release if a ZIP
      * named in [ToolchainRegistry] is missing from either.
+     *
+     * Retried on the same terms as the payload. Being first in the sequence and
+     * less tolerant than what follows it is the one way this check could make
+     * installs worse rather than safer.
      */
     @Throws(IOException::class)
-    private fun publishedDigestFor(zipUrl: String): String {
+    private fun publishedDigestFor(zipUrl: String, download: HttpDownload): String {
         val zipName = zipUrl.substringAfterLast('/')
-        val manifest = fetchManifest(manifestUrlFor(zipUrl))
+        val manifest = retrying("$zipName digest manifest", download) {
+            fetchManifest(manifestUrlFor(zipUrl))
+        }
         return digestFromManifest(manifest, zipName)
             ?: throw IOException(
                 "The release's digest manifest does not name $zipName; refusing to install a " +
@@ -916,7 +946,7 @@ class ToolchainManager(private val context: Context) {
 
         if (!isCompleteTransfer(declaredBytes, bytesRead)) {
             // The counts are logged rather than put in the message, and
-            // that is not a style choice: downloadWithRetries decides
+            // that is not a style choice: retrying() decides
             // whether an error is retryable by looking for "404" as a
             // substring of the message, so any byte count printed there
             // is a number that can turn a retryable truncation into an
@@ -1283,15 +1313,28 @@ private const val MANIFEST_NAME = "toolchains.sha256"
 /**
  * Where to find the digest manifest for a toolchain ZIP: beside it.
  *
- * Derived from the ZIP's own URL rather than written down separately, and that
- * is the point rather than brevity. Both come from `releases/latest/download/`,
- * which is a moving target -- it names whichever release is newest at the moment
- * of the request. Two independently-written URLs pointing at "latest" can be
- * read either side of a release being published, and the failure that produces
- * is a digest from one release checked against a payload from another: a refused
- * install with nothing wrong, and no way to tell it apart from the tampering
- * this check exists to catch. Sharing the directory does not eliminate that
- * window, but it removes the second constant that could drift from the first.
+ * Derived from the ZIP's own URL rather than written down separately, which
+ * removes a second constant that could drift from the first. It does **not**
+ * remove the window underneath, and that window is larger than it looks.
+ *
+ * Both URLs go through `releases/latest/download/`, which names whichever
+ * release is newest at the moment of each request -- and the two requests are
+ * not adjacent. The manifest is read first, then the payload transfers, with up
+ * to two backed-off retries behind it: minutes for the 146 MB Java pack on a
+ * phone connection, not an instant. A release published anywhere in that span
+ * hands back new bytes to check against a digest read from the old release.
+ *
+ * That fails closed -- the digests disagree, nothing is installed -- so it costs
+ * a refused install rather than a bad one, and retrying succeeds. What it costs
+ * beyond that is diagnostic: in the log it is indistinguishable from the
+ * tampering this check exists to catch.
+ *
+ * Closing it properly means resolving `latest` to a concrete release once and
+ * building both URLs from that, so the pair cannot straddle a publish. That is
+ * deliberately not done here: it depends on the shape of GitHub's redirect
+ * chain for release assets, which nothing in this repository has measured, and
+ * a wrong guess about it breaks every install rather than a rare one. Measure
+ * it against a real release first.
  */
 internal fun manifestUrlFor(zipUrl: String): String =
     zipUrl.substringBeforeLast('/') + "/" + MANIFEST_NAME

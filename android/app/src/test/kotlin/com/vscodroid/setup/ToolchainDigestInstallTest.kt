@@ -59,8 +59,18 @@ private class LoopbackServer {
     @Volatile
     var routes: Map<String, ByteArray> = emptyMap()
 
-    /** Every path asked for, in order, including ones that answered 404. */
+    /** Every path asked for, in order, including ones that answered 404 or 503. */
     val requested: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    /**
+     * Paths that answer 503 for their first N requests and normally after that,
+     * so a test can be a flaky connection rather than a broken one.
+     */
+    @Volatile
+    var transientFailures: Map<String, Int> = emptyMap()
+
+    private val failuresServed: MutableMap<String, Int> =
+        Collections.synchronizedMap(mutableMapOf())
 
     private val thread = Thread {
         while (!socket.isClosed) {
@@ -77,6 +87,11 @@ private class LoopbackServer {
     fun stop() = socket.close()
 
     private fun serve(conn: Socket) {
+        // A client that connects and then sends nothing would otherwise park
+        // the accept loop, and the test would fail by timing out somewhere far
+        // from the cause. Nothing does that today; this keeps it that way.
+        conn.soTimeout = 5_000
+
         val reader = conn.getInputStream().bufferedReader()
         val requestLine = reader.readLine() ?: return
         while (true) {
@@ -86,6 +101,18 @@ private class LoopbackServer {
 
         val path = requestLine.split(" ").getOrNull(1) ?: "/"
         requested.add(path)
+
+        val budget = transientFailures[path] ?: 0
+        val alreadyFailed = failuresServed[path] ?: 0
+        if (alreadyFailed < budget) {
+            failuresServed[path] = alreadyFailed + 1
+            conn.getOutputStream().apply {
+                write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                flush()
+            }
+            conn.shutdownOutput()
+            return
+        }
 
         val body = routes[path]
         val out = conn.getOutputStream()
@@ -232,6 +259,18 @@ class ToolchainDigestInstallTest {
         server.requested.count { it == path }
     }
 
+    /**
+     * The per-request cancellation tokens `downloadViaHttp` keeps while a
+     * download is outstanding. Reached by reflection because the alternative is
+     * exposing a download's bookkeeping on the public surface so a test can
+     * watch it, which makes the class worse to make the test simpler.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun outstandingOf(m: ToolchainManager): Map<String, Any> =
+        ToolchainManager::class.java.getDeclaredField("httpDownloads")
+            .apply { isAccessible = true }
+            .get(m) as Map<String, Any>
+
     private fun manager() = ToolchainManager(context).apply {
         onStateChange = { pack, status, pct ->
             events.add(Triple(pack, status, pct))
@@ -333,6 +372,89 @@ class ToolchainDigestInstallTest {
             0, timesRequested(zipPath),
             "the payload was downloaded before the release was asked to vouch for it",
         )
+    }
+
+    // ── the manifest is as fault-tolerant as the payload ─────────────────
+
+    /**
+     * The manifest fetch runs *before* the ZIP, and the ZIP has always had three
+     * attempts with backoff. Putting a zero-tolerance request in front of a
+     * fault-tolerant one would mean a single stall on mobile data ends an
+     * install that used to survive it -- a hardening change lowering the odds of
+     * getting a payload at all.
+     *
+     * Taking `retrying(...)` back out of `publishedDigestFor` turns this red:
+     * the 503 becomes the outcome instead of a hiccup.
+     */
+    @Test
+    fun `a manifest request that fails once is retried rather than ending the install`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        server.transientFailures = mapOf(manifestPath to 1)
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "one failed manifest request ended the install: $events",
+        )
+        assertEquals(2, timesRequested(manifestPath), "the manifest request was not retried")
+    }
+
+    /**
+     * A 404 must still fail on the first attempt. Retrying it would spend two
+     * backoffs re-asking for a file the release does not carry, and the answer
+     * would not change.
+     */
+    @Test
+    fun `a missing manifest is not retried`() {
+        publishManifest(null)
+
+        installAndWait()
+
+        assertEquals(AssetPackStatus.FAILED, statuses().last())
+        assertEquals(1, timesRequested(manifestPath), "a 404 manifest was retried")
+    }
+
+    // ── cancellation is honoured before the first request ────────────────
+
+    /**
+     * Every other read of the cancellation flag sits past the manifest fetch, so
+     * a pack cancelled while queued behind another one still spent a request --
+     * and on a stalled connection, up to three read timeouts of it, with the
+     * first-run queue waiting behind it.
+     *
+     * Made deterministic by blocking the task inside the disk-space pre-flight,
+     * which is the last thing that happens before the check under test, rather
+     * than racing `cancel()` against the executor.
+     */
+    @Test
+    fun `a cancelled install does not request anything`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+
+        val reachedPreflight = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            reachedPreflight.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            8L * 1024 * 1024 * 1024
+        }
+
+        val manager = manager()
+        manager.install("toolchain_test")
+        assertTrue(reachedPreflight.await(10, TimeUnit.SECONDS), "the task never reached the pre-flight")
+
+        manager.cancel("toolchain_test")
+        release.countDown()
+
+        // A cancellation reports no status, so the task's own bookkeeping is
+        // what says it finished: downloadViaHttp drops its token in a finally.
+        val outstanding = outstandingOf(manager)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (outstanding.isNotEmpty() && System.nanoTime() < deadline) Thread.sleep(20)
+        assertTrue(outstanding.isEmpty(), "the cancelled task never finished")
+
+        assertEquals(0, timesRequested(manifestPath), "a cancelled install still fetched the manifest")
+        assertEquals(0, timesRequested(zipPath), "a cancelled install still fetched the payload")
     }
 
     @Test

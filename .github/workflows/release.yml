@@ -346,8 +346,16 @@ jobs:
           # installed at all -- so a release that packages a ZIP and omits its
           # digest breaks that toolchain for every sideloaded user, including
           # ones already on it. Failing here is the cheap end of that.
+          # awk with an exact string compare rather than grep with a pattern.
+          # Every one of these names carries a dot, and to grep a dot is "any
+          # character", so `toolchain_goXzip` in the manifest would satisfy the
+          # check for `toolchain_go.zip`. False positive only -- it can accept a
+          # wrong name, never reject a right one -- and unreachable while
+          # sha256sum generates this file from the real ZIPs. But a gate is here
+          # to be relied on, and the field is a filename, so compare it as one.
           for zip_name in $zips; do
-            if ! grep -q "  $zip_name\$" toolchain-zips/toolchains.sha256; then
+            if ! awk -v n="$zip_name" '$2 == n { found = 1 } END { exit !found }' \
+                 toolchain-zips/toolchains.sha256; then
               echo "::error::$zip_name is packaged but absent from toolchains.sha256; sideloaded installs would refuse it."
               exit 1
             fi
