@@ -69,8 +69,6 @@ echo "Creating directory structure..."
 mkdir -p "$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$ROOT_DIR/android/app/src/main/assets/vscode-reh"
 mkdir -p "$ROOT_DIR/android/app/src/main/assets/extensions"
-mkdir -p "$ROOT_DIR/test/projects"
-mkdir -p "$ROOT_DIR/test/extensions"
 echo "  ✓ Directories created"
 
 echo ""

@@ -4,6 +4,13 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
+> **Historical document — describes the plan as of 2026-02-10, not the suite.**
+> Section 5.1 lists fixture projects under `test/`; only one of them was ever
+> created, none was consumed by anything, and the directory was removed. For what
+> the suite actually is, read it: `android/app/src/test/` for the JVM tests that
+> run on every pull request, and `android/app/src/androidTest/` — whose README
+> explains why no CI runs it — for the device suite.
+
 ---
 
 ## 1. Testing Philosophy

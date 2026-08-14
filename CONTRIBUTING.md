@@ -190,7 +190,6 @@ VSCodroid/
 │   ├── NNNN-<description>.patch      # Flat, applied in filename order, before gulp
 │   └── fingerprints.txt              # How each patch is proven to have reached the package
 ├── docs/                          # Project documentation
-├── test/                          # Test suites and fixtures
 ├── MILESTONES.md                  # Development milestones M0-M6
 ├── NOTICE.md                      # Third-party attribution
 └── README.md                      # Project overview
