@@ -49,10 +49,10 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building VS Code $version"
 
-          # The commit that tag points at, stored rather than trusted. A tag is
-          # a mutable name; the build script clones by it and would follow it
-          # wherever upstream moved it, with nothing on this side holding an
-          # expectation to compare against.
+          # The commit to build. A tag is a mutable name, so it is the commit
+          # that selects the source and the tag that is advisory -- the build
+          # script fetches this SHA directly and then compares, rather than
+          # fetching the tag and hoping.
           #
           # When the version comes from the file the commit does too, and the
           # build refuses anything else. An operator who overrides the version
@@ -61,10 +61,18 @@ jobs:
           # to write into VSCODE_COMMIT if they go on to bump.
           if [ -n "$INPUT_VERSION" ]; then
             # Peeled first: for an annotated tag refs/tags/X is the tag object
-            # and refs/tags/X^{} is the commit, and it is the commit that a
-            # clone leaves at HEAD. Asking for both in one call would not help,
-            # because ls-remote sorts by refname and the unpeeled ref sorts
-            # first. Two calls, no parsing.
+            # and refs/tags/X^{} is the commit, and it is the commit that has to
+            # be fetched. Asking for both in one call would not help, because
+            # ls-remote sorts by refname and the unpeeled ref sorts first. Two
+            # calls, no parsing.
+            #
+            # Do not delete the first call as dead code. It is dead against this
+            # repository's pin today -- VS Code's tags are lightweight, so
+            # refs/tags/X^{} does not exist and the fallback is what fires -- and
+            # it stops being dead the first time upstream publishes an annotated
+            # tag, silently pinning a tag object that no checkout can ever equal.
+            # Verified against torvalds/linux v6.6, where the two refs differ:
+            # 5260836 (tag object) against ffc2532 (commit).
             commit=$(git ls-remote https://github.com/microsoft/vscode.git "refs/tags/$version^{}" | cut -f1)
             [ -n "$commit" ] || commit=$(git ls-remote https://github.com/microsoft/vscode.git "refs/tags/$version" | cut -f1)
             echo "::notice::$version resolves to $commit - record this in VSCODE_COMMIT if you bump to it"
@@ -81,11 +89,16 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "Pinned to commit $commit"
 
-          # .nvmrc at the tag is authoritative for the build host. Reading it
-          # here rather than hardcoding keeps a version bump from silently
-          # building on the wrong Node.
+          # .nvmrc is authoritative for the build host. Reading it rather than
+          # hardcoding keeps a version bump from silently building on the wrong
+          # Node.
+          #
+          # Read at the commit, not at the tag, for the same reason the source
+          # is fetched at the commit: a moved tag would otherwise pick the Node
+          # of a tree this build is not building. Measured that raw serves a
+          # SHA, and that an unknown one fails rather than returning something.
           node_version=$(curl -fsSL \
-            "https://raw.githubusercontent.com/microsoft/vscode/${version}/.nvmrc")
+            "https://raw.githubusercontent.com/microsoft/vscode/${commit}/.nvmrc")
           echo "node=$node_version" >> "$GITHUB_OUTPUT"
           echo "Building with Node $node_version"
 

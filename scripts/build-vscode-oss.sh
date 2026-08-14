@@ -103,9 +103,27 @@ df -h "$WORK" | tail -1 | awk '{print "  disk free   : "$4" of "$2}'
 step "Source"
 if [ ! -d "$SRC/.git" ]; then
     t0=$SECONDS
-    git clone --depth 1 --branch "$VSCODE_VERSION" \
-        https://github.com/microsoft/vscode.git "$SRC"
+    # By commit, not by tag, and that is the whole point rather than a detail.
+    # Selecting on the tag would leave a mutable name deciding which bytes
+    # arrive: the comparison below would catch a moved tag, but catching it is
+    # all it could do -- every build would then fail, including a rebuild of the
+    # release already published, and the only way out would be to accept
+    # upstream's new commit. Naming the commit keeps the tree reproducible
+    # whatever happens to the name, and the comparison becomes a second belt
+    # rather than the only one.
+    #
+    # init + fetch rather than clone, because `git clone --branch` takes a ref
+    # and never a raw SHA. github.com serves a SHA to fetch -- measured, along
+    # with the negative: an unknown SHA is refused by upload-pack with "not our
+    # ref" and exit 128, so a wrong pin fails here, before anything is
+    # downloaded, rather than at the comparison after it.
+    mkdir -p "$SRC"
+    git -C "$SRC" init -q
+    git -C "$SRC" remote add origin https://github.com/microsoft/vscode.git
+    git -C "$SRC" fetch --depth 1 origin "$VSCODE_COMMIT"
+    git -C "$SRC" checkout -q FETCH_HEAD
     elapsed $(( SECONDS - t0 ))
+    echo "  fetched : $VSCODE_COMMIT (tag $VSCODE_VERSION is advisory)"
 else
     echo "  already cloned"
 fi
@@ -121,14 +139,28 @@ cd "$SRC"
 # Its position is load-bearing and cheap on purpose: this runs before npm ci,
 # so a wrong pin costs seconds instead of the half hour a full build takes.
 # Moving it later would keep the check and lose that.
-HEAD_COMMIT="$(git rev-parse HEAD)"
+#
+# The redirect and the `|| true` are for a $SRC whose .git exists but is not
+# readable -- an interrupted fetch, a truncated volume. The guard above skips
+# the fetch on the strength of that directory existing, so rev-parse is then
+# asked of a non-repository and answers "fatal: not a git repository" or "fatal:
+# ambiguous argument 'HEAD'" on exit 128. set -e would abort on that, which is
+# closed but hands the operator git's text when the message below already has
+# the right answer for exactly that state.
+#
+# --verify, not a bare rev-parse. Measured: in a repository with no commits a
+# bare `git rev-parse HEAD` prints the literal string "HEAD" on stdout while
+# failing on stderr, which would reach the message below as an "actual" commit
+# of HEAD. --verify prints nothing in that state and nothing when .git is not a
+# repository at all, so the empty check covers both.
+HEAD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || true)"
 if [ "$HEAD_COMMIT" != "$VSCODE_COMMIT" ]; then
     cat >&2 <<EOF
 
   ERROR: this source tree is not the pinned commit.
 
     expected : $VSCODE_COMMIT  (VSCODE_COMMIT)
-    actual   : $HEAD_COMMIT  (tag $VSCODE_VERSION, or whatever this work volume held)
+    actual   : ${HEAD_COMMIT:-(this directory has a .git that git cannot read)}
 
   Three things produce this and they want different answers, so it refuses
   rather than guessing:
