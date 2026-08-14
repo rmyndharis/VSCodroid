@@ -1320,9 +1320,10 @@ private const val MANIFEST_NAME = "toolchains.sha256"
  * Both URLs go through `releases/latest/download/`, which names whichever
  * release is newest at the moment of each request -- and the two requests are
  * not adjacent. The manifest is read first, then the payload transfers, with up
- * to two backed-off retries behind it: minutes for the 146 MB Java pack on a
- * phone connection, not an instant. A release published anywhere in that span
- * hands back new bytes to check against a digest read from the old release.
+ * to two backed-off retries behind it: minutes for the largest pack, Go at
+ * 179 MB, on a phone connection -- not an instant. A release published anywhere
+ * in that span hands back new bytes to check against a digest read from the
+ * release before it.
  *
  * That fails closed -- the digests disagree, nothing is installed -- so it costs
  * a refused install rather than a bad one, and retrying succeeds. What it costs
