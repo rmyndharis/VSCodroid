@@ -113,7 +113,9 @@ if (!fs.existsSync(rehEntryPoint)) {
     // server.main.ts rewrites the user-data path to <server-data-dir>/data
     // before the token resolver sees it -- generates one with crypto.randomUUID
     // if it is absent, writes it back with mode 0600, and then requires it on
-    // every route except /version. Passing --connection-token-file here instead would be
+    // every route except /version, /delay-shutdown and /callback -- the last
+    // of those added by patch 0012, because it is reached by the system browser
+    // at the end of an OAuth redirect and carries neither cookie nor token. Passing --connection-token-file here instead would be
     // worse in a specific way: the forwarding list below is a whitelist, so an
     // unlisted flag is dropped silently and the server would run wide open with
     // nothing in the log to say so.

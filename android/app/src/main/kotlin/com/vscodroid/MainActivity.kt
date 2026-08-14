@@ -310,8 +310,14 @@ class MainActivity : AppCompatActivity() {
                 // Authentication is not a reason to rebuild here: the cookie the
                 // connection token rides in lasts a week and this branch fires at
                 // five minutes. A process idle long enough for it to expire will
-                // have been killed by Android first, and a cold start mints a
-                // fresh token anyway.
+                // have been killed by Android first, and the cold start that
+                // follows re-sends the token in the query, which the server turns
+                // into a fresh cookie.
+                //
+                // Not a fresh token -- an earlier version of this comment said
+                // that and it is wrong. The server writes the token once and
+                // reuses it on every later start, so what a cold start renews is
+                // the cookie, never the value inside it.
                 webView?.reload()
             }
             bgMs > HEALTH_CHECK_THRESHOLD_MS -> {
@@ -542,6 +548,17 @@ class MainActivity : AppCompatActivity() {
         val token = nodeService?.getConnectionToken()
         val url = if (token.isNullOrEmpty()) withoutToken
                   else "$withoutToken&tkn=${Uri.encode(token)}"
+
+        // Say so when it is missing. Navigating without the token still happens
+        // -- a page the user can retry beats no page at all -- but the server
+        // answers it with a bare "Forbidden.", and the line below is identical
+        // whether or not the token went with it. That combination is why this
+        // failure took a screenshot to find during development instead of a log
+        // line: everything read like a healthy start.
+        if (token.isNullOrEmpty()) {
+            Logger.e(tag, "No connection token; the workbench will be refused. " +
+                "Expected at ${Environment.getConnectionTokenPath(this)}")
+        }
 
         Logger.i(tag, "Loading VS Code at $withoutToken")
         wv.loadUrl(url)

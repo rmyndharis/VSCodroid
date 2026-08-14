@@ -74,7 +74,7 @@ jobs:
             android/app/src/main/assets/extensions/
             android/app/src/main/jniLibs/arm64-v8a/
             server/vscode-reh/
-          key: assets-${{ hashFiles('VSCODE_VERSION', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'android/app/src/main/assets/extensions/**') }}
+          key: assets-${{ hashFiles('VSCODE_VERSION', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'android/app/src/main/assets/extensions/**') }}
           # The fallback is what let a removed extension come back: it restores
           # any earlier tree, and the run then saves that tree forward under its
           # own key. It stays, because a partial hit still saves most of a build

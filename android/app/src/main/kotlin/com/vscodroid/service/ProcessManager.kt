@@ -40,7 +40,8 @@ class ProcessManager(private val context: Context) {
     val port: Int get() = _port
 
     /**
-     * The connection token the server requires on every request but `/version`.
+     * The connection token the server requires on every route except `/version`,
+     * `/delay-shutdown` and `/callback`.
      *
      * The server owns this value, not us: with no connection-token flag on its
      * command line it reads the file [Environment.getConnectionTokenPath] names,

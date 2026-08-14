@@ -105,7 +105,8 @@ class NodeService : Service() {
     fun getPort(): Int = processManager.port
 
     /**
-     * The token the server requires on every request but `/version`, or null
+     * The token the server requires on every route except `/version`,
+     * `/delay-shutdown` and `/callback`, or null
      * before the server has written it.
      */
     fun getConnectionToken(): String? = processManager.connectionToken
