@@ -21,10 +21,15 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * Tests for [ProcessManager]'s start guard and port allocation.
@@ -462,6 +467,11 @@ private var ProcessManager.serverProcessField: Process?
 private val ProcessManager.isShuttingDownField: Boolean
     get() = field("isShuttingDown").getBoolean(this)
 
+/** Reaches `ProcessManager._isReady`, which is private production state. */
+private var ProcessManager.readyField: Boolean
+    get() = field("_isReady").getBoolean(this)
+    set(value) = field("_isReady").setBoolean(this, value)
+
 /** Reaches [ProcessManager._port], which is private production state. */
 private var ProcessManager.portField: Int
     get() = field("_port").getInt(this)
@@ -469,6 +479,243 @@ private var ProcessManager.portField: Int
 
 private fun field(name: String) =
     ProcessManager::class.java.getDeclaredField(name).apply { isAccessible = true }
+
+/**
+ * Readiness: whether the server is *serving*, as opposed to whether its process
+ * exists.
+ *
+ * The two were the same question to every caller until they were not.
+ * `MainActivity` navigated its WebView the moment `isRunning()` was true, and
+ * that is true from the instant the process is spawned — while the editor server
+ * inside it is still seconds away from binding its port, and for the whole of a
+ * restart after a crash. The user got a connection-refused page, and
+ * `onReceivedError` only logs, so nothing took it away again.
+ *
+ * These pin the flag's transitions rather than the navigation, because the
+ * navigation lives in an Activity and no JVM test can reach it. What they can do
+ * is make sure the answer the Activity now trusts is the answer the health probe
+ * actually gave.
+ */
+class ServerReadinessTest {
+
+    @TempDir
+    lateinit var tempDir: File
+
+    private lateinit var manager: ProcessManager
+    private lateinit var contextMock: Context
+    private var stub: StubServer? = null
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.e(any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+
+        mockkObject(Environment)
+        every { Environment.getNodePath(any()) } returns "/bin/echo"
+        every { Environment.getServerScript(any()) } returns "server.js"
+        every { Environment.buildProcessEnvironment(any(), any()) } returns emptyMap()
+        every { Environment.getExtensionsDir(any()) } returns "extensions"
+        every { Environment.getUserDataDir(any()) } returns "data"
+        every { Environment.getLogsDir(any()) } returns "logs"
+
+        contextMock = mockk<Context>(relaxed = true)
+        every { contextMock.cacheDir } returns tempDir
+        every { contextMock.filesDir } returns tempDir
+
+        manager = ProcessManager(contextMock)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        stub?.stop()
+        manager.stopServer()
+        unmockkAll()
+    }
+
+    /** Points the manager at a loopback server that answers with [status]. */
+    private fun serving(status: Int): StubServer =
+        StubServer(status).also { stub = it; manager.portField = it.port }
+
+    @Test
+    fun `readiness comes from the probe answering, not from the process existing`() {
+        // Kills: moving `_isReady = true` out of the `if (isServerHealthy())`
+        // branch in waitForReady, or deriving readiness from process liveness
+        // anywhere. There is no process at all here -- serverProcess is null and
+        // isRunning() is false -- so a liveness-derived answer cannot pass.
+        serving(200)
+
+        assertFalse(manager.isRunning(), "the fixture must have no process, or it proves nothing")
+        val ready = runBlocking { manager.waitForReady(timeoutMs = 3_000, pollIntervalMs = 25) }
+
+        assertTrue(ready, "a server answering 200 is ready")
+        assertTrue(manager.isReady(), "and the answer has to be recorded for the main thread")
+    }
+
+    @Test
+    fun `the probe asks the route that answers before the token check`() {
+        // Kills: probing `/` instead of `/version`. `/` answers 403 as soon as
+        // the server requires a connection token, so a probe pointed at it can
+        // only ever report a healthy start for a server that will serve the user
+        // nothing but Forbidden. `/version` is answered before that check.
+        val server = serving(200)
+
+        runBlocking { manager.waitForReady(timeoutMs = 3_000, pollIntervalMs = 25) }
+
+        assertEquals("GET /version", server.lastRequestLine()?.substringBeforeLast(' '))
+    }
+
+    @Test
+    fun `a server that answers Forbidden is not ready`() {
+        // Kills: relaxing the probe from `responseCode == 200` to `< 500` or
+        // `< 400`. That exact relaxation shipped once. 403 is the value that
+        // discriminates -- a 404 or a 500 would fail against the relaxed form
+        // too, and so would prove less.
+        serving(403)
+
+        val ready = runBlocking { manager.waitForReady(timeoutMs = 400, pollIntervalMs = 25) }
+
+        assertFalse(ready, "403 is an answer, but it is not a healthy one")
+        assertFalse(manager.isReady(), "and it must not leave the flag set")
+    }
+
+    @Test
+    fun `nothing listening is not ready`() {
+        // The cold-start window itself: a port is allocated and the process is
+        // spawning, but nothing is bound to it yet. This is the state the
+        // Activity used to navigate into.
+        val server = StubServer(200)
+        manager.portField = server.port
+        server.stop()
+
+        val ready = runBlocking { manager.waitForReady(timeoutMs = 400, pollIntervalMs = 25) }
+
+        assertFalse(ready)
+        assertFalse(manager.isReady())
+    }
+
+    @Test
+    fun `starting clears a readiness left over from the previous server`() {
+        // Kills: deleting `_isReady = false` from startServer(). This instance is
+        // reused across restarts -- it keeps its port on purpose -- so a stale
+        // true would report the dead server's readiness for the whole of the new
+        // server's startup, which is the window this work is about.
+        manager.readyField = true
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "/bin/echo must start, or this proves nothing")
+
+        assertFalse(manager.isReady(), "a server that is starting is not serving")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `stopping clears readiness`() {
+        // Kills: deleting `_isReady = false` from stopServer(). Without it a
+        // stopped server still reports itself ready, and the next activity to
+        // bind navigates straight at it.
+        manager.readyField = true
+
+        manager.stopServer()
+
+        assertFalse(manager.isReady())
+    }
+
+    @Test
+    fun `the watchdog clears readiness when the process dies`() {
+        // Kills: deleting `_isReady = false` from startWatchdog, or putting it
+        // after the isShuttingDown early return so only deliberate stops clear
+        // it. The crash is the case that matters -- the process is respawned
+        // within seconds and the flag has to be false for that whole window.
+        val release = CountDownLatch(1)
+        val process = mockk<Process>(relaxed = true) {
+            every { isAlive } returns true
+            every { waitFor() } answers { release.await(5, TimeUnit.SECONDS); 137 }
+        }
+        manager.serverProcessField = process
+        manager.readyField = true
+
+        val crashed = CountDownLatch(1)
+        manager.onServerCrashed = { crashed.countDown() }
+        ProcessManager::class.java.getDeclaredMethod("startWatchdog")
+            .apply { isAccessible = true }
+            .invoke(manager)
+
+        // Positive control: without it the assertion below would also pass on a
+        // fixture that was never ready to begin with.
+        assertTrue(manager.isReady(), "the fixture must start out ready")
+
+        release.countDown()
+        assertTrue(crashed.await(5, TimeUnit.SECONDS), "the watchdog never saw the exit")
+        assertFalse(manager.isReady(), "a process that has exited is not serving")
+    }
+}
+
+/**
+ * A loopback HTTP server small enough to have no dependencies.
+ *
+ * `com.sun.net.httpserver` is not on the Android unit-test compile classpath, and
+ * the probe under test needs so little — a status line and a framed empty body —
+ * that a raw socket says it in fewer lines than working around that would take.
+ *
+ * It records the request line so a test can assert *which* route was asked for,
+ * which is half of what the probe's contract says.
+ */
+private class StubServer(status: Int) {
+
+    private val socket = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
+    private val requestLine = AtomicReference<String?>(null)
+
+    @Volatile
+    private var running = true
+
+    val port: Int get() = socket.localPort
+
+    /** The request line of the most recent request, or null if there was none. */
+    fun lastRequestLine(): String? = requestLine.get()
+
+    init {
+        thread(name = "stub-http", isDaemon = true) {
+            while (running) {
+                try {
+                    socket.accept().use { client ->
+                        val reader = client.getInputStream().bufferedReader()
+                        requestLine.set(reader.readLine())
+                        // Headers to the blank line, so the client sees a
+                        // complete exchange rather than a reset.
+                        while (true) {
+                            val line = reader.readLine()
+                            if (line.isNullOrEmpty()) break
+                        }
+                        client.getOutputStream().apply {
+                            write(
+                                ("HTTP/1.1 $status Stub\r\n" +
+                                    "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray()
+                            )
+                            flush()
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (!running) break
+                }
+            }
+        }
+    }
+
+    fun stop() {
+        running = false
+        try {
+            socket.close()
+        } catch (e: Exception) {
+            // Closing an already-closed socket is the normal path out of accept().
+        }
+    }
+}
 
 /**
  * The bootstrap reports a killed child as 128 + signal. Before that, every signal

@@ -480,8 +480,14 @@ class MainActivity : AppCompatActivity() {
         if (ts == 0L || serverPort == 0) return
         backgroundedAt = 0
 
-        // Don't interfere if server is restarting — onServerReady handles reload
-        if (nodeService?.isServerRunning() != true) return
+        // Don't interfere if server is restarting — onServerReady handles reload.
+        //
+        // The same distinction as in setupServiceCallbacks, and the same reason:
+        // a restart respawns the process long before the editor server inside it
+        // is answering, so isServerRunning() calls a mid-restart server healthy
+        // and lets the branches below reload the page into a port that is not
+        // listening yet.
+        if (nodeService?.isServerReady() != true) return
 
         val bgMs = SystemClock.elapsedRealtime() - ts
         when {
@@ -716,15 +722,37 @@ class MainActivity : AppCompatActivity() {
         // first moment the request has anywhere to go.
         if (notificationRefreshPending) refreshServiceNotification()
 
-        // If the server is already running (activity recreated, rotation, etc.),
-        // the launchServer() coroutine has already completed and won't fire again.
-        // Check immediately and load the WebView if the server process is alive.
-        // Note: isServerRunning() checks process.isAlive (no I/O), whereas
-        // isServerHealthy() does HTTP — which throws NetworkOnMainThreadException.
+        // A server that became ready before this activity bound will never fire
+        // onServerReady at it — launchServer()'s coroutine has already finished —
+        // so the state has to be asked for rather than waited on.
+        //
+        // isServerReady(), not isServerRunning(). The latter is Process.isAlive,
+        // which is true from the moment the process is spawned and stays true for
+        // the seconds the editor server takes to bind its port, and for the whole
+        // of a restart after a crash. Navigating on it points the WebView at a
+        // port with nothing listening, and onReceivedError only logs, so what the
+        // user gets is a connection-refused page that nothing clears.
+        //
+        // The real probe is HTTP and cannot run here — NetworkOnMainThreadException
+        // — which is what made the wrong question attractive. isServerReady()
+        // reports what that probe already found, at no cost. See
+        // ProcessManager.isReady.
         val service = nodeService ?: return
+
+        // Checked first, because a start that has already given up is not going
+        // to become ready and there is nothing to wait for. onServerError fired
+        // while this callback was still null, so without this the failure reaches
+        // nobody and the placeholder stays up for good.
+        val failure = service.lastStartupFailure()
+        if (failure != null) {
+            Logger.e(tag, "Server start had already failed before this activity bound: $failure")
+            Toast.makeText(this, failure, Toast.LENGTH_LONG).show()
+            return
+        }
+
         val port = service.getPort()
-        if (port > 0 && service.isServerRunning()) {
-            Logger.i(tag, "Server already running on port $port, loading immediately")
+        if (port > 0 && service.isServerReady()) {
+            Logger.i(tag, "Server already serving on port $port, loading immediately")
             serverPort = port
             loadVSCode(port)
         }

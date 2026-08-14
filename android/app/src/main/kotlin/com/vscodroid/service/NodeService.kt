@@ -52,6 +52,7 @@ class NodeService : Service() {
     private var restartCount = 0
     private var isServiceRunning = false
     private var launchJob: Job? = null
+    private var startupFailure: String? = null
 
     /** Invoked when the server is healthy and accepting connections. */
     var onServerReady: ((port: Int) -> Unit)? = null
@@ -133,6 +134,33 @@ class NodeService : Service() {
 
     /** Returns `true` if the Node.js process is alive. */
     fun isServerRunning(): Boolean = processManager.isRunning()
+
+    /**
+     * Whether the server has answered a health check and has not stopped since.
+     *
+     * This is the question a caller almost always means when it reaches for
+     * [isServerRunning], and [ProcessManager.isReady] explains the difference and
+     * why it matters. Costs no I/O, so it is safe on the main thread.
+     */
+    fun isServerReady(): Boolean = processManager.isReady()
+
+    /**
+     * The message from a start attempt that gave up, or null if none has.
+     *
+     * Exists because [onServerError] is a callback and a callback can be raised
+     * at a moment when nobody is listening. A start that times out while no
+     * activity is bound — which is every start that outlives the activity that
+     * began it — reports into a null field and is gone. The next activity to bind
+     * then finds a service that is not ready, waits for a readiness callback that
+     * will never come, and shows a loading placeholder indefinitely with nothing
+     * said.
+     *
+     * Read on the main thread by a newly bound client and written on the main
+     * thread by [launchServer] and [enterTerminalState], so it needs no
+     * synchronisation of its own — the same confinement [restartCount] and
+     * [launchJob] rely on.
+     */
+    fun lastStartupFailure(): String? = startupFailure
 
     /**
      * Posts the foreground notification again.
@@ -240,11 +268,15 @@ class NodeService : Service() {
         // still inside waitForReady()'s 30s poll. Without this the two overlap and
         // both report readiness for the same server.
         launchJob?.cancel()
+        // A fresh attempt is not a failed one. Cleared here rather than on
+        // success, so that the window in which a client can bind and read a
+        // stale verdict from the previous attempt does not exist.
+        startupFailure = null
         launchJob = serviceScope.launch {
             val started = withContext(Dispatchers.IO) { processManager.startServer() }
             if (!started) {
                 Logger.e(tag, "Failed to start server process")
-                onServerError?.invoke(getString(R.string.error_server_start))
+                reportStartupFailure(getString(R.string.error_server_start))
                 return@launch
             }
 
@@ -256,9 +288,22 @@ class NodeService : Service() {
                 onServerReady?.invoke(processManager.port)
             } else {
                 Logger.e(tag, "Server timeout")
-                onServerError?.invoke(getString(R.string.error_server_timeout))
+                reportStartupFailure(getString(R.string.error_server_timeout))
             }
         }
+    }
+
+    /**
+     * Raises a startup failure and remembers it.
+     *
+     * Both halves matter and only the first used to happen. The callback reaches
+     * an activity that is bound *now*; the field reaches the next one to bind,
+     * which on a start that outlives its activity is the only one there is. See
+     * [lastStartupFailure].
+     */
+    private fun reportStartupFailure(message: String) {
+        startupFailure = message
+        onServerError?.invoke(message)
     }
 
     /**
@@ -359,7 +404,10 @@ class NodeService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
-        onServerError?.invoke(stoppedText)
+        // Recorded as well as raised: this is the terminal state, so an activity
+        // that binds after it has to be told too. The notification says the same
+        // thing, but the notification is not on screen while the editor is.
+        reportStartupFailure(stoppedText)
     }
 
     /**

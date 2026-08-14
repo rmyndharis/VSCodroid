@@ -36,6 +36,12 @@ class ProcessManager(private val context: Context) {
     @Volatile
     private var isShuttingDown = false
 
+    // Volatile for the same reason isShuttingDown is: the watchdog thread clears
+    // it when the process exits, while the main thread reads it to decide whether
+    // to navigate the WebView.
+    @Volatile
+    private var _isReady = false
+
     /** The port the server is listening on. Only valid after [startServer] returns true. */
     val port: Int get() = _port
 
@@ -119,6 +125,12 @@ class ProcessManager(private val context: Context) {
         }
 
         isShuttingDown = false
+        // A server that is starting is not serving, and this is the assignment
+        // that makes a restart honest: the flag survives in this instance across
+        // restarts exactly as the port does, so leaving it set would report the
+        // previous server's readiness for the new one during the seconds it takes
+        // to bind.
+        _isReady = false
         // Keep the port across restarts. The WebView's loaded URL and the WebViewClient
         // are both bound to it, and neither is rebuilt on restart: initBridge() guards on
         // bridgeInitialized (MainActivity.kt:494), so the client keeps the port it was
@@ -198,6 +210,10 @@ class ProcessManager(private val context: Context) {
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             if (isServerHealthy()) {
                 Logger.i(tag, "Server ready after ${System.currentTimeMillis() - startTime}ms")
+                // Recorded here, at the one place in the app that actually asks
+                // the server whether it is serving. Callers on the main thread
+                // cannot ask -- see isReady.
+                _isReady = true
                 return true
             }
             delay(pollIntervalMs)
@@ -267,6 +283,7 @@ class ProcessManager(private val context: Context) {
      */
     fun stopServer() {
         isShuttingDown = true
+        _isReady = false
         Logger.i(tag, "Stopping server...")
         serverProcess?.let { process ->
             try {
@@ -340,6 +357,31 @@ class ProcessManager(private val context: Context) {
     /** Returns `true` if the server process is alive. */
     fun isRunning(): Boolean = serverProcess?.isAlive == true
 
+    /**
+     * Whether the server has answered a health check and has not stopped since.
+     *
+     * Not the same question as [isRunning], and the gap between them is wide
+     * enough to have shipped a bug. `isRunning` asks whether a process exists;
+     * this asks whether the thing inside it is serving. Between the two lies
+     * every start — the process is spawned in milliseconds and the editor server
+     * it forks takes seconds to bind its port — and every restart after a crash.
+     * A caller that navigates a WebView on `isRunning` therefore points it at a
+     * port with nothing listening, and gets a connection-refused page.
+     *
+     * The answer costs nothing to read, which is the other half of why this
+     * exists. [isServerHealthy] is the real probe and it blocks on HTTP, so it
+     * cannot be called from the main thread — that constraint is what pushed the
+     * navigation decision onto `isRunning` in the first place. Recording the
+     * probe's own result where it already runs gives the main thread the true
+     * answer without the I/O.
+     *
+     * Set by [waitForReady] and cleared by [startServer], [stopServer], and the
+     * watchdog when the process exits. It is deliberately not re-derived: a
+     * server that was serving a moment ago and has since died clears this through
+     * the watchdog, not through a fresh probe nobody is in a position to run.
+     */
+    fun isReady(): Boolean = _isReady
+
     // -- Internal --
 
     /**
@@ -380,6 +422,12 @@ class ProcessManager(private val context: Context) {
         watchdogThread = thread(name = "node-watchdog", isDaemon = true) {
             try {
                 val exitCode = serverProcess?.waitFor() ?: return@thread
+                // Before the shutdown branch, not inside it. A process that has
+                // exited is not serving whatever the reason, and this is the only
+                // thread that learns about a crash -- leaving the flag set here
+                // would have the main thread navigate to a dead port for the
+                // whole restart, which is the case this flag exists for.
+                _isReady = false
                 if (isShuttingDown) {
                     Logger.i(tag, "Server shut down gracefully")
                     return@thread
