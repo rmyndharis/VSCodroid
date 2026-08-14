@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "VSCodroid Welcome",
   "description": "Welcome walkthrough for VSCodroid",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -45,7 +45,7 @@
           {
             "id": "tools",
             "title": "Your development tools",
-            "description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js 20** + npm 10 — ready\n\n$(check) **Python 3.12** + pip — ready\n\n$(check) **Git 2.53** — ready\n\n$(check) **make** — ready\n\nMore toolchains (Go, Rust, Java, C/C++, Ruby) coming soon.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
+            "description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js** + npm — ready\n\n$(check) **Python** + pip — ready\n\n$(check) **Git** — ready\n\n$(check) **make** — ready\n\n**Go**, **Java 17** and **Ruby** install on demand. Long-press the VSCodroid icon on your home screen and pick **Toolchains**.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
             "media": {
               "svg": "media/tools.svg"
             },

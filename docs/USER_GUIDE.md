@@ -130,9 +130,9 @@ node -v           # Node.js 24.x
 npm -v            # npm 11.x
 python3 --version # Python 3.14.x
 pip --version     # pip (bundled with Python)
-git --version     # Git 2.53.0
-bash --version    # Bash 5.3.9
-tmux -V           # tmux 3.6a
+git --version     # Git 2.55.x
+bash --version    # Bash 5.3.x
+tmux -V           # tmux 3.7.x
 make --version    # GNU Make 4.4.1
 ssh -V            # OpenSSH (bundled client)
 rg --version      # ripgrep (powers VS Code search)

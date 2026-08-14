@@ -1,0 +1,32 @@
+<svg width="280" height="200" viewBox="0 0 280 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Terminal window -->
+  <rect x="20" y="15" width="240" height="170" rx="8" fill="var(--vscode-terminal-background, #1e1e1e)" stroke="var(--vscode-editorWidget-border)" stroke-width="1.5"/>
+
+  <!-- Title bar -->
+  <rect x="20" y="15" width="240" height="26" rx="8" fill="var(--vscode-titleBar-activeBackground)"/>
+  <rect x="20" y="33" width="240" height="8" fill="var(--vscode-titleBar-activeBackground)"/>
+  <text x="140" y="32" font-family="monospace" font-size="10" fill="var(--vscode-titleBar-activeForeground)" text-anchor="middle">bash</text>
+
+  <!-- Terminal content. This was three version queries printing the numbers that
+       shipped when the picture was drawn, and all three were wrong within two
+       releases: the runtimes come from the Termux index at build time, so a
+       number committed here goes stale on its own. Running code shows the same
+       thing, that the tools are on PATH and work, with output that cannot drift.
+       (An XML comment cannot contain two hyphens in a row, which is why the
+       flag is described here rather than written out.) -->
+  <text x="30" y="60" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
+  <text x="50" y="60" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">node -e 'console.log(1+1)'</text>
+  <text x="30" y="76" font-family="monospace" font-size="10" fill="#569cd6">2</text>
+
+  <text x="30" y="96" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
+  <text x="50" y="96" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">python3 -c 'print("hi")'</text>
+  <text x="30" y="112" font-family="monospace" font-size="10" fill="#569cd6">hi</text>
+
+  <text x="30" y="132" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
+  <text x="50" y="132" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">git init demo</text>
+  <text x="30" y="148" font-family="monospace" font-size="10" fill="#569cd6">Initialized empty Git repository</text>
+
+  <text x="30" y="168" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
+  <!-- Blinking cursor -->
+  <rect x="50" y="159" width="7" height="12" fill="var(--vscode-terminalCursor-foreground, #cccccc)" opacity="0.8"/>
+</svg>

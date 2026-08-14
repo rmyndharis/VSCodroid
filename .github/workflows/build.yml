@@ -183,6 +183,13 @@ jobs:
           python3 scripts/check-langserver-patterns.py \
             android/app/src/main/assets/vscode-reh/extensions
 
+      # The welcome screen is committed source describing runtimes resolved from
+      # the Termux index at build time, so anything it states about them is
+      # correct only until the next rebuild. It was wrong for two releases and
+      # nothing noticed, because a hardcoded string cannot disagree with itself.
+      - name: Check the welcome screen states nothing that goes stale
+        run: python3 scripts/check-welcome-claims.py
+
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug
