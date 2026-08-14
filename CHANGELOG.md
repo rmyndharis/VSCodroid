@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Java toolchain is now checked the same way, completing the set — every downloadable toolchain is examined before it is packaged
 
 ### Added
+- You can now preview your own dev server at the device's network address from inside the editor, not only at `localhost` — the same thing a laptop does when you check how a page looks from another machine on the same Wi-Fi
 - **GitHub Copilot Chat now works on device**: the bundled extension's platform packages are aliased under the name Android resolves, its SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic so model selection completes end to end
 - **Claude Code extension support**: the marketplace serves its musl build, the CLI starts through the bundled musl loader, and a loopback DNS proxy gives musl binaries working name resolution
 - A glibc compatibility shim: prebuilt glibc-only native addons (spdlog, sqlite3 and friends) now load against Bionic through versioned forwarder stubs instead of dying at `dlopen`. It supplies what Bionic has no equivalent for — the `__isoc99_` scanf family, the `tolower`/`toupper` character tables, and `copy_file_range` on devices below Android 14 — and translates what the two libraries number differently, so `getaddrinfo` and `getnameinfo` answer the question the addon actually asked instead of a differently-numbered one

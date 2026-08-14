@@ -1,11 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Default: HTTPS only for all external traffic -->
-    <base-config cleartextTrafficPermitted="false" />
+    <!-- Cleartext is permitted because this app is a development environment, and
+         the thing being developed is served over plain HTTP by every framework
+         there is. A dev server on this device answers at the device's own network
+         address, and previewing it in the editor - or reaching it from a laptop on
+         the same Wi-Fi - is the point of the product, not an edge case.
 
-    <!-- Exception: allow cleartext HTTP for localhost only (VS Code Server) -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">localhost</domain>
-        <domain includeSubdomains="false">127.0.0.1</domain>
-    </domain-config>
+         The obvious narrower rule cannot be written. Network security config
+         matches <domain> entries by hostname, an exact string with an optional
+         subdomain flag; it understands neither CIDR notation nor address ranges,
+         so "any private address" has no spelling here. The addresses in question
+         are also not known at build time - they change with the network the device
+         joins - and this file is static XML compiled into the APK, so they cannot
+         be added later either. The choice was between permitting cleartext and
+         telling users their own app is unreachable from the editor.
+
+         What this does not change: every remote service the editor talks to - the
+         extension marketplace, extension downloads, resource fetches - is HTTPS
+         and stays HTTPS. What changes is that the platform is no longer the thing
+         enforcing that.
+
+         Reachability from other devices is a separate matter: Android's local
+         network permission gates inbound connections from SDK 37 onward, and that
+         needs a manifest permission rather than anything in this file. -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
