@@ -1,0 +1,34 @@
+# How each patch is proven to have reached the packaged output.
+#
+# Applying a patch to the source proves nothing about the package: the file may
+# not be in this target's graph, or the build may inline an older copy. So each
+# patch leaves a fingerprint that survives minification, and the packaged tree is
+# searched for it.
+#
+# Format, one line per patch in patches/:
+#
+#   NNNN label|bundle|pattern      the bundle must contain the pattern
+#   NNNN label|-|why               no fingerprint is possible; how it is proven instead
+#
+# Every patch needs a line. A patch with no line fails the check rather than
+# passing silently, which is the whole point: an absent line used to be
+# indistinguishable from a forgotten one.
+#
+# Choosing a pattern: match something the patch introduces that minification
+# cannot rewrite -- a string literal, an HTML attribute, a comparison against a
+# literal. Never a variable name; those are mangled. Verify the pattern appears
+# zero times in an unpatched bundle before trusting it, because a pattern that
+# already matched proves nothing at all.
+
+0001 platform|out/server-main.js|platform==="android"
+0002 userDataPath|out/vs/platform/terminal/node/ptyHostMain.js|case"android"
+0003 ptyHost worker|out/server-main.js|__vsc_disconnect
+0004 extHost worker|out/server-main.js|worker_thread Extension Host
+0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
+0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
+0007 persist secrets|-|flips a single boolean, and its only distinctive text is a comment that minification strips
+0008 activitybar height|out/vs/code/browser/workbench/workbench.js|.activitybar .composite-bar
+0009 alpine target|out/server-main.js|Android: requesting the alpine target platform
+0010 moduleignore keep|-|edits build/.moduleignore, so its proof is the file surviving into the tree; verify-server-tree.py requires that path
+0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
+0012 callback route|out/server-main.js|==="/callback"

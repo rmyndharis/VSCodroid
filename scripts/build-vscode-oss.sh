@@ -353,37 +353,21 @@ fail=0
 # because only this side has the patches and the expectation file.
 python3 "$SCRIPT_DIR/verify-server-tree.py" "$OUT" || fail=1
 
-# Applying a patch to the source proves nothing about the package: the file may
-# not be in this target's graph, or the build may inline an older copy. Each
-# patch therefore leaves a fingerprint that has to survive minification, and the
-# packaged output is searched for it.
+# Every patch has to be proven present in the packaged output, not merely
+# applied to the source. The expectations and the reasoning live in
+# patches/fingerprints.txt; this runs them.
+#
+# It takes the tree as an argument on purpose, the way verify-server-tree.py
+# does, so the same check can run on the fetch side against a downloaded
+# tarball. That case is the one with no other signal: a tarball predating a
+# patch has the same name, the same version, and a digest that verifies,
+# because a digest proves the file is intact rather than that it is the right
+# file.
+# Skipped for a deliberately unadapted build, the same condition that governs
+# whether the patches were applied at all -- checking a tree for patches nobody
+# applied would fail it for doing exactly what was asked.
 if [ -d "$PATCHES" ] && [ -n "$(ls -A "$PATCHES"/*.patch 2>/dev/null)" ]; then
-    # patch | bundle it must reach | fingerprint that survives minification
-    # Not every patch leaves one: 0007 flips a single boolean and its only
-    # distinctive text is a comment, which minification strips. 0010 edits
-    # build/.moduleignore, so its proof is a file surviving into the tree,
-    # which verify-server-tree.py checks as a required path. An absent row is
-    # deliberate, not an oversight.
-    while IFS='|' read -r id bundle pattern; do
-        [ -z "$id" ] && continue
-        if [ -f "$OUT/$bundle" ] && grep -q "$pattern" "$OUT/$bundle"; then
-            echo "  ok      $id reached $(basename "$bundle")"
-        else
-            echo "  FAIL    $id did not reach $bundle"
-            fail=1
-        fi
-    done <<'FINGERPRINTS'
-0001 platform|out/server-main.js|platform==="android"
-0002 userDataPath|out/vs/platform/terminal/node/ptyHostMain.js|case"android"
-0003 ptyHost worker|out/server-main.js|__vsc_disconnect
-0004 extHost worker|out/server-main.js|worker_thread Extension Host
-0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
-0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
-0008 activitybar height|out/vs/code/browser/workbench/workbench.js|.activitybar .composite-bar
-0009 alpine target|out/server-main.js|Android: requesting the alpine target platform
-0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
-0012 callback route|out/server-main.js|==="/callback"
-FINGERPRINTS
+    python3 "$SCRIPT_DIR/check-patch-fingerprints.py" "$OUT" "$PATCHES" || fail=1
 fi
 
 if [ -d "$BRANDING" ]; then
