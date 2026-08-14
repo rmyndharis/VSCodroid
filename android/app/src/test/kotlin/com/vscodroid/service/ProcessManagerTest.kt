@@ -13,6 +13,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -107,6 +108,66 @@ class ProcessManagerTest {
     fun `allocates a port on the first start`() {
         assertTrue(startAndAwaitWatchdog())
         assertNotEquals(0, manager.port, "the first start must allocate a port")
+    }
+
+    // -- Connection token --
+
+    @Test
+    fun `reads the token the server wrote`() {
+        writeTokenFile("  6f1e4c2a-token\n")
+
+        assertEquals("6f1e4c2a-token", manager.connectionToken, "surrounding whitespace must be trimmed")
+    }
+
+    @Test
+    fun `has no token before the server has written one`() {
+        every { Environment.getUserDataDir(any()) } returns File(tempDir, "empty").absolutePath
+
+        assertNull(manager.connectionToken, "an absent file must not produce a token")
+    }
+
+    @Test
+    fun `treats an empty token file as no token`() {
+        // An empty string would otherwise be appended as `tkn=`, which the server
+        // rejects like any wrong token -- a 403 that looks nothing like its cause.
+        writeTokenFile("   \n")
+
+        assertNull(manager.connectionToken, "a blank file must not produce a token")
+    }
+
+    @Test
+    fun `reads the token file once`() {
+        val token = writeTokenFile("cached-token")
+        assertEquals("cached-token", manager.connectionToken)
+
+        assertTrue(token.delete(), "test could not remove the token file")
+        assertEquals(
+            "cached-token", manager.connectionToken,
+            "the token must be cached; the workbench asks for it on every intercepted request"
+        )
+    }
+
+    /**
+     * Writes the token where the server actually puts it, through the same
+     * derivation production uses.
+     *
+     * The `data/` level is the whole point: the server rewrites the user-data
+     * path to `<server-data-dir>/data` before it resolves the token, so a path
+     * built straight from `--user-data-dir` lands one directory too high and
+     * finds nothing. [Environment.getConnectionTokenPath] is left unstubbed so
+     * that derivation is what runs here.
+     */
+    private fun writeTokenFile(contents: String): File {
+        val userDataDir = File(tempDir, "user-data")
+        every { Environment.getUserDataDir(any()) } returns userDataDir.absolutePath
+
+        val token = File(Environment.getConnectionTokenPath(mockk(relaxed = true)))
+        assertEquals(
+            File(userDataDir, "data/token").absolutePath, token.absolutePath,
+            "the token path must stay under data/, where the server writes it",
+        )
+        token.parentFile!!.mkdirs()
+        return token.apply { writeText(contents) }
     }
 
     /**

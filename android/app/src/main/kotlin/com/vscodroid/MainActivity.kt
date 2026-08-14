@@ -304,7 +304,17 @@ class MainActivity : AppCompatActivity() {
         when {
             bgMs > FORCE_RELOAD_THRESHOLD_MS -> {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
-                webView?.reload()
+                // Rebuilt rather than reload()ed, because this is the one reload
+                // that can outlive its own authentication: the cookie carrying the
+                // connection token is set for a week, and this branch exists
+                // precisely for a WebView that has been idle a long time. Going
+                // through loadVSCode() re-sends the token in the query, which the
+                // server turns into a fresh cookie. The JS-triggered reloads below
+                // stay as they are -- they run on a page that is demonstrably still
+                // authenticated, and reaching them would mean putting the token
+                // where page scripts can read it. loadVSCode() keeps the folder
+                // on screen by itself and initBridge() is already idempotent.
+                loadVSCode(serverPort)
             }
             bgMs > HEALTH_CHECK_THRESHOLD_MS -> {
                 checkConnectionHealth(bgMs)
@@ -490,10 +500,11 @@ class MainActivity : AppCompatActivity() {
 
         // Register ServiceWorkerClient BEFORE loading VS Code — service worker
         // script fetches bypass WebViewClient.shouldInterceptRequest entirely.
-        VSCodroidWebViewClient.setupServiceWorkerInterception(port)
+        VSCodroidWebViewClient.setupServiceWorkerInterception(port) { nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
             allowedPort = port,
+            connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
             onPageLoaded = { injectBridgeToken() }
         )
@@ -509,8 +520,19 @@ class MainActivity : AppCompatActivity() {
      */
     private fun navigateToFolder(port: Int, folderPath: String) {
         val wv = webView ?: return
-        val url = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
-        Logger.i(tag, "Loading VS Code at $url")
+        // The token rides in the query once. The server consumes it on `/`, turns
+        // it into the vscode-tkn cookie and redirects with the folder intact;
+        // everything after that authenticates itself — the cookie for pages, the
+        // query for resource requests, an auth message for the WebSocket.
+        //
+        // Logged without it: this line is the one place the token would otherwise
+        // reach logcat, which is readable by anything holding READ_LOGS.
+        val withoutToken = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
+        val token = nodeService?.getConnectionToken()
+        val url = if (token.isNullOrEmpty()) withoutToken
+                  else "$withoutToken&tkn=${Uri.encode(token)}"
+
+        Logger.i(tag, "Loading VS Code at $withoutToken")
         wv.loadUrl(url)
     }
 

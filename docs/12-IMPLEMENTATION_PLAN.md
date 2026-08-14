@@ -785,11 +785,10 @@ android/app/src/main/kotlin/com/vscodroid/
        "$filesDir/server/server.js",
        "--host=127.0.0.1",
        "--port=$port",
-       "--without-connection-token",
        "--extensions-dir=$home/.vscodroid/extensions",
        "--user-data-dir=$home/.vscodroid",
        "--server-data-dir=$home/.vscodroid",
-       "--accept-server-license-terms"
+       "--log=info"
    )
    ```
 

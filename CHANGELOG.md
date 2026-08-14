@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On-demand toolchain downloads, the server tarball, npm, extensions and every bundled tool are now verified against the strongest digest their source publishes, and a missing or wrong digest fails the build instead of shipping unverified bytes
 
 ### Security
+- The on-device editor server now requires a connection token. The server generates it on first start and keeps it in the app's private storage; the app supplies it automatically, so nothing changes in day-to-day use and servers you run yourself are unaffected. Binding to `127.0.0.1` is not access control on Android, so the editor's own loopback socket needed authentication of its own rather than relying on the interface it listens on
+- Startup readiness is now judged by the one endpoint answered before that check. The previous check treated any reply below a server error as healthy, which would have reported a fully successful startup for a server that could only answer "forbidden"
 - The loopback DNS proxy that gives musl binaries working name resolution now requires a per-boot token. Binding to `127.0.0.1` is not access control on Android — loopback is not isolated per app — so any installed app could previously have used it as an open forwarder for arbitrary outbound connections attributed to VSCodroid
 - A rejected tunnel request through that proxy no longer leaves a connection pinned open. Any app on the device could previously open them in a loop and hold file descriptors in VSCodroid's server for as long as it kept running — without a token, without reaching the network, and without leaving a trace in the log
 

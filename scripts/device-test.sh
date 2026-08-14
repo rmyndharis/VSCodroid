@@ -308,11 +308,14 @@ fi
 if [ -n "$SERVER_PORT" ]; then
     # Forward device port to localhost
     $ADB forward tcp:$SERVER_PORT tcp:$SERVER_PORT 2>/dev/null
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$SERVER_PORT/" 2>/dev/null || true)
-    if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 500 ] 2>/dev/null; then
+    # /version is answered before the connection-token check, so it probes
+    # liveness without a token. "/" would answer 403 to this unauthenticated
+    # curl, and the old 200-499 range counted that as a pass.
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$SERVER_PORT/version" 2>/dev/null || true)
+    if [ "$HTTP_CODE" = "200" ]; then
         pass "health_check (HTTP $HTTP_CODE)"
     else
-        fail "health_check" "Expected 200-499, got $HTTP_CODE"
+        fail "health_check" "Expected 200, got $HTTP_CODE"
     fi
     # Remove port forward
     $ADB forward --remove tcp:$SERVER_PORT 2>/dev/null

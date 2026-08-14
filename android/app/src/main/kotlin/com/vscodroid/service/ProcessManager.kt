@@ -38,6 +38,42 @@ class ProcessManager(private val context: Context) {
     /** The port the server is listening on. Only valid after [startServer] returns true. */
     val port: Int get() = _port
 
+    /**
+     * The connection token the server requires on every request but `/version`.
+     *
+     * The server owns this value, not us: with no connection-token flag on its
+     * command line it reads the file [Environment.getConnectionTokenPath] names,
+     * generates one if it is absent, and writes it back with mode 0600. Reading
+     * that file is therefore the only way to learn it, and it is only there once
+     * the server has started — which is why this is read on demand rather than
+     * cached at construction.
+     *
+     * Returns null before the server has written it. Callers that need it are all
+     * downstream of readiness, so in practice that is the "server failed to start"
+     * path, where a missing token is not the interesting failure.
+     */
+    val connectionToken: String?
+        get() = cachedToken ?: readTokenFile()?.also { cachedToken = it }
+
+    @Volatile
+    private var cachedToken: String? = null
+
+    // Cached on the first successful read and never invalidated, which is correct
+    // rather than merely convenient: the server generates the token only when the
+    // file is absent and otherwise reuses what is there, so the value survives its
+    // own restarts. Without the cache this would be a filesystem read on every
+    // intercepted request, and the workbench issues hundreds during a cold load.
+    private fun readTokenFile(): String? = try {
+        File(Environment.getConnectionTokenPath(context))
+            .takeIf { it.isFile }
+            ?.readText()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not read the connection token: ${e.message}")
+        null
+    }
+
     // -- Callbacks --
 
     /** Invoked on the caller's coroutine when the server responds to a health check. */
@@ -90,18 +126,25 @@ class ProcessManager(private val context: Context) {
         val serverScript = Environment.getServerScript(context)
         val env = Environment.buildProcessEnvironment(context, _port)
 
+        // These arguments reach server.js, not the editor server it forks. server.js
+        // reads host, port and log as defaults and forwards exactly four keys --
+        // extensions-dir, user-data-dir, server-data-dir and logsPath -- while
+        // building the rest of the command itself. Two flags that used to sit here,
+        // --without-connection-token and --accept-server-license-terms, were read by
+        // nobody: server.js writes its own. They are gone rather than corrected,
+        // because an argument that looks decisive and does nothing is worse than a
+        // missing one, and the next person to change authentication would have
+        // started here.
         val command = listOf(
             nodePath,
             "--max-old-space-size=512",
             serverScript,
             "--host=127.0.0.1",
             "--port=$_port",
-            "--without-connection-token",
             "--extensions-dir=${Environment.getExtensionsDir(context)}",
             "--user-data-dir=${Environment.getUserDataDir(context)}",
             "--server-data-dir=${Environment.getUserDataDir(context)}",
             "--logsPath=${Environment.getLogsDir(context)}",
-            "--accept-server-license-terms",
             "--log=info"
         )
 
@@ -147,15 +190,21 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
-     * Performs a synchronous HTTP GET to `http://127.0.0.1:{port}/`.
+     * Performs a synchronous HTTP GET to `http://127.0.0.1:{port}/version`.
      *
-     * Accepts any non-server-error response (< 500) as healthy.
-     * VS Code Server returns 200 for the web UI; our fallback server
-     * returns 200 for /healthz. Both paths are covered.
+     * `/version` is answered before the connection-token check — the server
+     * handles it and returns, then gates everything else — so this stays a pure
+     * liveness probe and does not need the token.
+     *
+     * It also has to be `/version` rather than `/`. This accepted anything below
+     * 500, which was fine while every route answered 200, and became wrong the
+     * moment the server started requiring a token: `/` then answers 403, and a
+     * readiness check that counts 403 as healthy reports a successful startup for
+     * a server that will serve the user nothing but Forbidden.
      */
     fun isServerHealthy(): Boolean {
         return try {
-            val url = URL("http://127.0.0.1:$_port/")
+            val url = URL("http://127.0.0.1:$_port/version")
             val connection = url.openConnection() as HttpURLConnection
             connection.connectTimeout = 1000
             connection.readTimeout = 1000
@@ -163,7 +212,7 @@ class ProcessManager(private val context: Context) {
             connection.instanceFollowRedirects = false
             val responseCode = connection.responseCode
             connection.disconnect()
-            responseCode in 200..499
+            responseCode == 200
         } catch (e: Exception) {
             false
         }

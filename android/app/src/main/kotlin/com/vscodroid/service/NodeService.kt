@@ -104,6 +104,12 @@ class NodeService : Service() {
     /** Returns the port the server is listening on, or 0 if not yet started. */
     fun getPort(): Int = processManager.port
 
+    /**
+     * The token the server requires on every request but `/version`, or null
+     * before the server has written it.
+     */
+    fun getConnectionToken(): String? = processManager.connectionToken
+
     /** Performs a synchronous health check against the running server. */
     fun isServerHealthy(): Boolean = processManager.isServerHealthy()
 

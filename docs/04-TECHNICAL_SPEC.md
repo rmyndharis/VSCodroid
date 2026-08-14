@@ -391,11 +391,10 @@ $NATIVE_LIB_DIR/libnode.so \
   $FILES_DIR/server/server.js \
   --host=127.0.0.1 \
   --port=$PORT \
-  --without-connection-token \
   --extensions-dir=$HOME/.vscodroid/extensions \
   --user-data-dir=$HOME/.vscodroid \
   --server-data-dir=$HOME/.vscodroid \
-  --accept-server-license-terms
+  --log=info
 ```
 
 ---

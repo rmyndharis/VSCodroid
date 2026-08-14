@@ -157,6 +157,23 @@ object Environment {
     fun getMachineSettingsPath(context: Context): String =
         "${getUserDataDir(context)}/data/Machine/settings.json"
 
+    /**
+     * The file the server keeps its connection token in.
+     *
+     * Under `data/`, not directly under the user-data dir, and for exactly the
+     * reason [getMachineSettingsPath] documents: `server.main.ts:39-40` sets
+     * `USER_DATA_PATH = <server-data-dir>/data` and the token resolver reads the
+     * already-rewritten value, so `--user-data-dir` never names this path
+     * itself. Deriving it by hand from that flag puts it one directory too high,
+     * where nothing writes it -- the same shape of mistake as writing settings to
+     * `User/settings.json`.
+     *
+     * The server creates it with mode 0600 on first start and reuses it after
+     * that, so it is stable across server restarts and app updates.
+     */
+    fun getConnectionTokenPath(context: Context): String =
+        "${getUserDataDir(context)}/data/token"
+
     fun getExtensionsDir(context: Context): String =
         "${context.filesDir}/home/.vscodroid/extensions"
 

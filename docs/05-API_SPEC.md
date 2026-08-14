@@ -304,11 +304,10 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 ```
 --host=127.0.0.1              # Localhost only
 --port=PORT                   # Dynamic port
---without-connection-token    # No auth needed (localhost)
 --extensions-dir=PATH         # Custom extensions location
 --user-data-dir=PATH          # User settings location
 --server-data-dir=PATH        # Server data location
---accept-server-license-terms # Required flag
+--logsPath=PATH               # Log directory
 --log=info                    # Log level
 ```
 

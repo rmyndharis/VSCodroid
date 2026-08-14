@@ -103,12 +103,23 @@ if (!fs.existsSync(rehEntryPoint)) {
         log('info', 'Product configuration updated');
     }
 
-    // Build server arguments
+    // Build server arguments.
+    //
+    // No connection-token flag of any kind, and that absence is the security
+    // property rather than an omission. With none of --without-connection-token,
+    // --connection-token or --connection-token-file present, the server reads
+    // <server-data-dir>/data/token -- not <user-data-dir>/token, because
+    // server.main.ts rewrites the user-data path to <server-data-dir>/data
+    // before the token resolver sees it -- generates one with crypto.randomUUID
+    // if it is absent, writes it back with mode 0600, and then requires it on
+    // every route except /version. Passing --connection-token-file here instead would be
+    // worse in a specific way: the forwarding list below is a whitelist, so an
+    // unlisted flag is dropped silently and the server would run wide open with
+    // nothing in the log to say so.
     const serverArgs = [
         rehEntryPoint,
         '--host', HOST,
         '--port', String(PORT),
-        '--without-connection-token',
         '--accept-server-license-terms',
         // Without this every folder opens in Restricted Mode, which blocks most
         // extensions from activating.

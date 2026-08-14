@@ -63,7 +63,11 @@ object ServerReadyHelper {
     }
 
     /**
-     * Polls the server's HTTP endpoint until it responds with a 200-499 status code.
+     * Polls the server's `/version` endpoint until it responds with 200.
+     *
+     * `/version` is the one route answered before the connection-token check, so
+     * it stays a pure liveness probe. Probing `/` instead would report a healthy
+     * server on the strength of a 403.
      *
      * @param port Server port to check.
      * @param timeoutMs Maximum time to wait.
@@ -73,13 +77,13 @@ object ServerReadyHelper {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             try {
-                val conn = URL("http://127.0.0.1:$port/").openConnection() as HttpURLConnection
+                val conn = URL("http://127.0.0.1:$port/version").openConnection() as HttpURLConnection
                 conn.connectTimeout = 2000
                 conn.readTimeout = 2000
                 conn.requestMethod = "GET"
                 val code = conn.responseCode
                 conn.disconnect()
-                if (code in 200..499) return true
+                if (code == 200) return true
             } catch (_: Exception) {
                 // Server not ready yet
             }

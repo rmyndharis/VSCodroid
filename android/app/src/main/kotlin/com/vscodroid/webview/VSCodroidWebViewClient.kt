@@ -21,6 +21,7 @@ import java.net.URL
 
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
+    private val connectionToken: () -> String?,
     private val onCrash: () -> Unit,
     private val onPageLoaded: () -> Unit
 ) : WebViewClient() {
@@ -55,7 +56,7 @@ class VSCodroidWebViewClient(
      * Local path format: /{quality}-{commit}/static/{path}
      */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-        return interceptCdnRequest(request, allowedPort)
+        return interceptCdnRequest(request, allowedPort, connectionToken())
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
@@ -115,12 +116,12 @@ class VSCodroidWebViewClient(
          *
          * Must be called before the WebView loads any page that uses service workers.
          */
-        fun setupServiceWorkerInterception(port: Int) {
+        fun setupServiceWorkerInterception(port: Int, connectionToken: () -> String?) {
             try {
                 val swController = ServiceWorkerController.getInstance()
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
-                        return interceptCdnRequest(request, port)
+                        return interceptCdnRequest(request, port, connectionToken())
                     }
                 })
                 Logger.i(TAG, "ServiceWorkerClient registered for CDN interception on port $port")
@@ -137,7 +138,9 @@ class VSCodroidWebViewClient(
          * 2. *.vscode-resource.vscode-cdn.net — extension webview resources → local file/proxy
          * 3. HASH.vscode-cdn.net — VS Code static assets → rewrite to localhost
          */
-        internal fun interceptCdnRequest(request: WebResourceRequest, port: Int): WebResourceResponse? {
+        internal fun interceptCdnRequest(
+            request: WebResourceRequest, port: Int, token: String?
+        ): WebResourceResponse? {
             val uri = request.url
             val host = uri.host ?: return null
 
@@ -158,11 +161,11 @@ class VSCodroidWebViewClient(
             // Service workers are disabled; we serve these directly from the filesystem.
             val resourceAuthority = "vscode-resource.vscode-cdn.net"
             if (host.endsWith(".$resourceAuthority")) {
-                return interceptResourceRequest(uri, host, resourceAuthority, port)
+                return interceptResourceRequest(uri, host, resourceAuthority, port, token)
             }
 
             val path = uri.path ?: return null
-            val localUrl = rewriteCdnUrl(path, uri.query, port)
+            val localUrl = rewriteCdnUrl(path, uri.query, port, token)
 
             if (localUrl == null) {
                 Logger.w(TAG, "CDN URL could not be rewritten: $uri")
@@ -183,7 +186,7 @@ class VSCodroidWebViewClient(
          * all sub-resource requests from webview iframes, making SWs unnecessary.
          */
         private fun interceptResourceRequest(
-            uri: Uri, host: String, resourceAuthority: String, port: Int
+            uri: Uri, host: String, resourceAuthority: String, port: Int, token: String?
         ): WebResourceResponse? {
             val prefix = host.removeSuffix(".$resourceAuthority")
             val parts = prefix.split("+", limit = 2)
@@ -238,7 +241,7 @@ class VSCodroidWebViewClient(
             if (authority.isNotEmpty()) {
                 val query = uri.query
                 val queryPart = if (!query.isNullOrEmpty()) "?$query" else ""
-                val localUrl = "http://127.0.0.1:$port$path$queryPart"
+                val localUrl = withToken("http://127.0.0.1:$port$path$queryPart", token)
                 return proxyToLocalhost(localUrl, "GET", "remote-resource:$path")
             }
 
@@ -319,7 +322,7 @@ class VSCodroidWebViewClient(
          * Input:  /stable/cd4ee3b1.../out/vs/workbench/contrib/webview/browser/pre/index.html
          * Output: http://127.0.0.1:{port}/stable-cd4ee3b1.../static/out/vs/workbench/contrib/webview/browser/pre/index.html
          */
-        private fun rewriteCdnUrl(path: String, query: String?, port: Int): String? {
+        private fun rewriteCdnUrl(path: String, query: String?, port: Int, token: String?): String? {
             val segments = path.removePrefix("/").split("/", limit = 3)
             if (segments.size < 2) return null
 
@@ -329,7 +332,27 @@ class VSCodroidWebViewClient(
 
             val localPath = "/$quality-$commit/static/$rest"
             val queryPart = if (!query.isNullOrEmpty()) "?$query" else ""
-            return "http://127.0.0.1:$port$localPath$queryPart"
+            return withToken("http://127.0.0.1:$port$localPath$queryPart", token)
+        }
+
+        /**
+         * Appends the connection token to a URL that points at our own server.
+         *
+         * These requests need it carried explicitly. The workbench authenticates
+         * itself with the `vscode-tkn` cookie, but everything here is re-fetched
+         * through HttpURLConnection, which has its own cookie store and shares
+         * nothing with the WebView — so without the query parameter the server
+         * answers 403 and the asset silently fails to load.
+         *
+         * Deliberately not folded into proxyToLocalhost(), despite the name of
+         * that function: one of its callers proxies http/https resources to
+         * whatever host an extension's webview references, and putting the token
+         * there would hand our credential to that host.
+         */
+        private fun withToken(url: String, token: String?): String {
+            if (token.isNullOrEmpty()) return url
+            val separator = if (url.contains('?')) "&" else "?"
+            return "$url$separator" + "tkn=" + Uri.encode(token)
         }
 
         private fun isStaticAsset(path: String): Boolean {

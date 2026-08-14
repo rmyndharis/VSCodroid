@@ -45,7 +45,7 @@ If you use the bundled SSH client to connect to remote servers, those connection
 
 ### Internal Communication (Localhost Only)
 
-The VS Code editor UI communicates with the local server process over `localhost` (127.0.0.1). This traffic never leaves your device. It is not accessible to other apps or devices on your network.
+The VS Code editor UI communicates with the local server process over `localhost` (127.0.0.1). This traffic never leaves your device. The server listens on the loopback interface only, so nothing on your network can reach it, and it requires a token held in the app’s private storage before it will answer a request.
 
 ## What We Do NOT Do
 
