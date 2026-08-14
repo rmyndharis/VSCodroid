@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Icon for the "Toolchains" launcher shortcut.
+
+    Drawn as a filled disc rather than a bare glyph on purpose: the launcher
+    renders this in its own process, outside this app's theme, and a single-colour
+    glyph disappears against whichever background - light or dark - it does not
+    happen to contrast with. The disc carries its own contrast everywhere.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <path
+        android:fillColor="#007ACC"
+        android:pathData="M0,24 A24,24 0 1,1 48,24 A24,24 0 1,1 0,24 Z" />
+
+    <!-- A toolchain is a package added to the device, so: a box. -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M24,11 L35,17.2 L35,29.8 L24,36 L13,29.8 L13,17.2 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.6" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M13,17.2 L24,23.4 L35,17.2 M24,23.4 L24,36"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.6" />
+</vector>

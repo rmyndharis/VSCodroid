@@ -37,7 +37,7 @@
 
     <!-- Toolchain picker (first-run) -->
     <string name="picker_title">What do you code in?</string>
-    <string name="picker_subtitle">Optional \u2014 you can add these anytime in Settings.</string>
+    <string name="picker_subtitle">Optional \u2014 touch and hold the app icon to add or remove these later.</string>
     <string name="picker_included">Node.js, Python, and Git are already included.</string>
     <string name="picker_continue">Continue</string>
     <string name="picker_skip">Skip</string>
@@ -59,4 +59,10 @@
     <string name="toolchain_cancel">Cancel</string>
     <string name="toolchain_remove_confirm_title">Remove %s?</string>
     <string name="toolchain_remove_confirm_message">This will delete all %s files. You can reinstall anytime.</string>
+
+    <!-- Launcher shortcut: the only entry point to the toolchain screen that
+         does not depend on the WebView. Short label is what the launcher shows
+         in the long-press menu, so it has to stay short enough not to be cut. -->
+    <string name="shortcut_toolchains_short">Toolchains</string>
+    <string name="shortcut_toolchains_long">Manage toolchains</string>
 </resources>

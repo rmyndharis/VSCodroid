@@ -395,10 +395,14 @@ Either way they land in the app's own storage and survive app updates.
 
 ### Installing After Setup
 
-The Language Picker is shown only once, and there is currently no way to reach the
-toolchain settings screen after that
-([#92](https://github.com/rmyndharis/VSCodroid/issues/92)). Choose everything you expect
-to need on first launch.
+The Language Picker is shown only once, but the screen it offers stays reachable.
+**Touch and hold the VSCodroid icon** — on the home screen or in the app drawer — and
+choose **Manage toolchains**. Installing and removing work exactly as they do during
+setup, so a language you skipped is not lost.
+
+The shortcut deliberately does not go through the editor. Reaching this screen matters
+most when the editor is the part that will not start, so the way in does not depend on
+it.
 
 ### Using Installed Toolchains
 

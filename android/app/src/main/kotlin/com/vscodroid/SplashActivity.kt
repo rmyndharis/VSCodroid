@@ -10,6 +10,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -395,11 +398,74 @@ class SplashActivity : AppCompatActivity() {
     // -- Navigation --
 
     private fun launchMain() {
+        publishToolchainShortcut()
         startActivity(Intent(this, MainActivity::class.java).apply {
             data = intent?.data
             intent?.extras?.let { putExtras(it) }
         })
         finish()
+    }
+
+    /**
+     * Publishes the launcher shortcut that opens [ToolchainActivity].
+     *
+     * The screen had no way in. It is not exported, it has no launcher entry,
+     * and its only caller is a BroadcastChannel command that nothing can send:
+     * every bundled extension of ours declares `main` without `browser`, so they
+     * run on the Node host, where BroadcastChannel is the one from
+     * node:worker_threads and shares nothing but a name with the DOM channel the
+     * relay opens in the WebView page. So the picker's one appearance decided
+     * the toolchains permanently.
+     *
+     * A launcher shortcut is deliberately the entry point that does not depend on
+     * the WebView, because reaching this screen matters most when the editor
+     * layer is the thing that is broken.
+     *
+     * Pushed at runtime rather than declared in res/xml/shortcuts.xml, for two
+     * reasons that both bite:
+     *
+     *  - A static shortcut names its target package as a literal, and
+     *    applicationIdSuffix makes that literal wrong for every build except
+     *    release. Intent(this, ToolchainActivity::class.java) is correct in all
+     *    of them.
+     *  - A static shortcut exists from the moment the app is installed, so a
+     *    long-press before the first launch would open the screen with
+     *    filesDir/usr not yet extracted, and install a toolchain over a base
+     *    that is not there. Publishing from launchMain() -- the one funnel every
+     *    completed startup passes through -- means the shortcut cannot exist
+     *    before the setup it needs.
+     *
+     * Re-pushed on every launch on purpose: it is how an install that predates
+     * this change gains the shortcut, and how the label follows a locale change.
+     *
+     * Failure is swallowed for the same reason the launch-time refresh above
+     * swallows its own: a missing shortcut is worth less than the editor, and
+     * crashing here would leave a launch loop with no explanation.
+     */
+    private fun publishToolchainShortcut() {
+        try {
+            val published = ShortcutManagerCompat.pushDynamicShortcut(
+                this,
+                ShortcutInfoCompat.Builder(this, "toolchains")
+                    .setShortLabel(getString(R.string.shortcut_toolchains_short))
+                    .setLongLabel(getString(R.string.shortcut_toolchains_long))
+                    .setIcon(IconCompat.createWithResource(this, R.drawable.ic_shortcut_toolchain))
+                    .setIntent(
+                        Intent(this, ToolchainActivity::class.java)
+                            .setAction(Intent.ACTION_VIEW)
+                    )
+                    .build()
+            )
+            // It reports refusal by returning false, not by throwing -- rate
+            // limiting is the documented case. Ignoring that would make the only
+            // route to this screen disappear with nothing to show for it, which
+            // is the failure mode the screen already had.
+            if (!published) {
+                Logger.w(tag, "Toolchain shortcut was refused; the screen has no other entry point")
+            }
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not publish the toolchain shortcut: ${e.message}")
+        }
     }
 }
 
@@ -411,10 +477,12 @@ class SplashActivity : AppCompatActivity() {
  * finished -- including states this build has never heard of -- because the cost
  * of being wrong is not symmetric, though neither side is free.
  *
- * A pack wrongly treated as finished costs that toolchain, and costs it for
- * good: nothing in the UI reaches ToolchainActivity, whose only caller is a
- * BroadcastChannel command (AndroidBridge.kt:229, MainActivity.kt:907), so
- * there is no "install it later" for an ordinary user to fall back on.
+ * A pack wrongly treated as finished costs that toolchain until the user
+ * installs it again, which they now can: publishToolchainShortcut() gives
+ * ToolchainActivity a launcher shortcut. Until that existed the loss was
+ * permanent -- the screen's only caller was a BroadcastChannel command nothing
+ * can send (AndroidBridge.kt:229, MainActivity.kt:907) -- so this paragraph
+ * used to read "and costs it for good".
  *
  * A pack wrongly waited on costs that toolchain and every one queued behind it,
  * because the queue stops rather than skips, and leaves the screen sitting there
