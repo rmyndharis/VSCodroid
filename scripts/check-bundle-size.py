@@ -77,6 +77,14 @@ def main(argv) -> int:
     if not sizes:
         print(f"  FAIL   no modules found in {aab.name}; the bundle layout changed")
         return 1
+    # And so would a bundle with asset packs but no base module: every pack sits
+    # far under the larger per-pack cap, so the run prints nothing but "ok" while
+    # the one module carrying the 500 MB limit was never examined. The empty case
+    # above was guarded and this one, which is the same shape, was not.
+    if "base" not in sizes:
+        print(f"  FAIL   no base module in {aab.name}; "
+              f"found {', '.join(sorted(sizes))}")
+        return 1
 
     failed = False
     for module, (comp, raw) in sorted(sizes.items(), key=lambda kv: -kv[1][0]):
