@@ -3,6 +3,7 @@ package com.vscodroid.service
 import android.app.ActivityManager
 import android.content.Context
 import com.vscodroid.util.Environment
+import com.vscodroid.util.PortFinder
 import com.vscodroid.util.Logger
 import io.mockk.every
 import io.mockk.just
@@ -216,6 +217,91 @@ class ProcessManagerTest {
         assertTrue(
             output.contains("--max-old-space-size=$expected"),
             "the derived ceiling must reach the command line; got: $output"
+        )
+    }
+
+    @Test
+    fun `the port on the command line is the one PortFinder handed out`() {
+        // `allocates a port on the first start` asserts only that the port is not
+        // zero, which stays true if the wiring is replaced by any number at all.
+        // What matters is that the port the server is told to listen on is the
+        // remembered one: PortFinder exists so the WebView origin survives a cold
+        // start, and a port chosen anywhere else silently empties the workbench's
+        // IndexedDB.
+        //
+        // 41234 is outside the scan range PortFinder itself would return, so a
+        // reimplementation that scans instead of asking cannot produce it.
+        mockkObject(PortFinder)
+        every { PortFinder.getOrAllocatePort(any()) } returns 41234
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertEquals(41234, manager.port, "the manager must report the allocated port")
+        assertTrue(
+            output.contains("--port=41234"),
+            "the allocated port must reach the command line; got: $output"
+        )
+    }
+
+    @Test
+    fun `a restart clears the shutdown flag so the next crash is still a crash`() {
+        // stopServer() sets isShuttingDown so the watchdog does not read a
+        // deliberate stop as a crash. Nothing cleared it on the way back in until
+        // startServer() did, and without that the flag stays set for the rest of
+        // the process: the next real crash is logged as a graceful shutdown and
+        // onServerCrashed never fires, so the automatic restart that exists for
+        // exactly that case never runs. The app sits with a dead server and a
+        // log line saying it shut down cleanly.
+        assertTrue(manager.startServer(), "the fixture server must start")
+        manager.stopServer()
+
+        // Fails by timeout if the flag survived: the watchdog returns early and
+        // the callback is never invoked.
+        assertTrue(
+            startAndAwaitWatchdog(),
+            "a server started after a deliberate stop must still report its exit"
+        )
+    }
+
+    @Test
+    fun `a low-RAM device gets the floor on the command line`() {
+        // The pure function is covered; this is the only thing that runs the
+        // branch reading the flag off a device. It also settles a claim worth
+        // recording: ActivityManager.MemoryInfo() is constructible in a plain JVM
+        // test and its fields are writable, so heapCeilingForDevice does not
+        // always fall through to its catch -- the try block completes here and
+        // produces a value the catch cannot.
+        //
+        // 8 GB with the flag set, so the expected 256 can only come from the flag
+        // being read: on totalMem alone 8 GB derives the maximum, not the floor.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns true
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 8L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        assertNotEquals(
+            HEAP_CEILING_MIN_MB, heapCeilingMb(8L * 1024, isLowRam = false),
+            "the fixture must not pick a size that reaches the floor without the flag"
+        )
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=$HEAP_CEILING_MIN_MB"),
+            "the low-RAM flag must reach the command line; got: $output"
         )
     }
 
