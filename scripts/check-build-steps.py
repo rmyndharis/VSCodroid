@@ -8,8 +8,11 @@ built without them:
 
   * every script a workflow runs is mentioned in CONTRIBUTING.md, so following
     the documentation produces the tree CI produces;
-  * every script the PR build runs is also run by build-all.sh, so the
-    "run them all at once" shortcut is not a shorter path to a different tree.
+  * every script the PR build's asset-preparation job runs is also run by
+    build-all.sh, so the "run them all at once" shortcut is not a shorter path
+    to a different tree. Scoped to that one job on purpose: other jobs in the
+    same workflow run things -- a device test harness, for one -- that
+    build-all.sh has no business invoking.
 
 The lists are read from the files rather than restated here. A hand-maintained
 fourth copy would be one more thing to drift, which is the defect this exists to
@@ -44,6 +47,26 @@ def named_by(pattern, path):
     return set(pattern.findall(path.read_text()))
 
 
+def job_body(path, job):
+    """The lines of one job in a workflow, by indentation.
+
+    Only the job that prepares assets is compared against build-all.sh. Reading
+    the whole file was the first version of this and it was too broad: the same
+    workflow also runs a device test harness, which build-all.sh has no business
+    invoking, and the check failed on a change that was correct. Scoping to the
+    job is the fix; exempting the script by name would have muted the rule
+    instead of correcting it.
+    """
+    lines = path.read_text().splitlines()
+    start = next((i for i, line in enumerate(lines)
+                  if line.startswith(f"  {job}:")), None)
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines))
+                if re.match(r"^  \w[\w-]*:", lines[i])), len(lines))
+    return "\n".join(lines[start:end])
+
+
 def mentioned_in(path, names):
     text = path.read_text()
     return {name for name in names if name in text}
@@ -66,7 +89,12 @@ def main() -> int:
         for wf in sorted(WORKFLOWS.glob("*.yml"))
     }
     ci_all = set().union(*per_workflow.values()) if per_workflow else set()
-    ci_pr = per_workflow.get("build.yml", set())
+    # The asset-preparation job specifically, not the whole workflow.
+    build_job = job_body(WORKFLOWS / "build.yml", "build")
+    if build_job is None:
+        print("  FAIL   no 'build' job in build.yml; the job layout changed")
+        return 1
+    ci_pr = set(IN_WORKFLOW.findall(build_job))
 
     # An empty left-hand side would make both assertions below vacuously true,
     # which is the failure this whole script exists to prevent -- a check that
