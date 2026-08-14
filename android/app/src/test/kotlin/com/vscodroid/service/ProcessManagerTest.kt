@@ -98,8 +98,9 @@ class ProcessManagerTest {
 
     @Test
     fun `keeps the port across a restart`() {
-        // The WebView's loaded URL and the bridge's allowed-origin check are bound
-        // to the port and are not rebuilt on restart, so it has to stay put.
+        // The WebView's loaded URL and the WebViewClient are bound to the port and are
+        // not rebuilt on restart, so it has to stay put. (This named the bridge's
+        // allowed-origin check as the second binding until #144 removed that check.)
         manager.portField = 45678
         manager.serverProcessField = mockk<Process>(relaxed = true) {
             every { isAlive } returns false

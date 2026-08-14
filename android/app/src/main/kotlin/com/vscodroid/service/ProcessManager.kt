@@ -110,8 +110,13 @@ class ProcessManager(private val context: Context) {
         }
 
         isShuttingDown = false
-        // Keep the port across restarts. The WebView's loaded URL and the bridge's
-        // allowed-origin check are both bound to it, and neither is rebuilt on restart.
+        // Keep the port across restarts. The WebView's loaded URL and the WebViewClient
+        // are both bound to it, and neither is rebuilt on restart: initBridge() guards on
+        // bridgeInitialized (MainActivity.kt:494), so the client keeps the port it was
+        // constructed with, and it is what CDN interception and the localhost check read
+        // (VSCodroidWebViewClient.kt:59,89). This used to cite the bridge's allowed-origin
+        // check as the second binding; that check was removed in #144 because nothing
+        // called it.
         // Across cold starts it is the workbench's IndexedDB that is bound to it —
         // see PortFinder.getOrAllocatePort.
         if (_port == 0) {
