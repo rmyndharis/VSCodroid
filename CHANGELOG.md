@@ -164,6 +164,64 @@ VSCodroid is now publicly available on Google Play. This release represents the 
 ### Changed
 - Google Play production access granted — app now publicly available
 
+## [0.2.9] - 2026-02-27
+
+The last of four releases in twelve days that each corrected one part of the same
+problem: the app drew behind the system bars without accounting for them. This one
+moved to AGP 8.9.1 with Activity 1.12.4 and Core 1.16.0.
+
+## [0.2.8] - 2026-02-27
+
+Material updated to 1.14.0-alpha09, which cleared the edge-to-edge warnings the
+previous release surfaced.
+
+## [0.2.5] - 2026-02-27
+
+Removed theme attributes for edge-to-edge handling that the platform had
+deprecated.
+
+## [0.2.4] - 2026-02-26
+
+Removed `fitsSystemWindows` from the layouts, where it worked against the
+edge-to-edge handling rather than with it.
+
+## [0.2.3] - 2026-02-15
+
+Edge-to-edge layout corrections, the Manage section hidden, and the Activity Bar
+no longer overflowing. Release signing gained a local configuration and a
+`build-aab.sh` script, so a bundle could be produced outside CI.
+
+## [0.2.2-m6] - 2026-02-14
+
+The release that got the app onto Google Play, and the last one before 1.0.0.
+
+Extensions could sign in and stay signed in: OAuth callbacks now return from
+Chrome to the WebView through an intent, and extension secrets survive a restart
+instead of being asked for again. Reopening the app while its server was already
+running no longer showed a white screen. The mobile menu and the on-screen
+keyboard stopped fighting each other over the same space.
+
+An OpenSSH client was bundled, with its libraries and corrected paths. App
+upgrades gained migration hooks, so an update preserves what the previous version
+wrote. Cleartext traffic was restricted to localhost and URL validation tightened.
+
+Verified on four physical devices rather than an emulator -- a Redmi on Android
+13, a POCO with 4 GB of RAM on Android 14, and a OnePlus on Android 16 -- along
+with the toolchain download, its HTTP fallback, uninstall cleanup, and a release
+build with R8 enabled.
+
+---
+
+**About the five entries above.** They were written retroactively, reconstructed
+from the commit history, because these releases shipped without changelog entries
+at the time. What each one says is what its commits did; none of it was recorded
+as a release note when it happened. Two of the fixes -- the AGP and Material
+upgrades -- also appear under 1.0.0, which was written as a cumulative note
+covering everything since 0.1.0.
+
+There is no 0.2.6 or 0.2.7. No such tag was ever created, so nothing is missing
+between 0.2.5 and 0.2.8.
+
 ## [0.1.0-m0] - 2026-02-10
 
 This release represents the cumulative work across milestones M0 through M5, bringing VSCodroid from initial project structure to a fully functional IDE on Android.
@@ -235,5 +293,11 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Android intent handling for "Open with VSCodroid"
 
 [Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.1.0-m0...v1.0.0
-[0.1.0-m0]: https://github.com/rmyndharis/VSCodroid/releases/tag/v0.1.0-m0
+[1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.9...v1.0.0
+[0.2.9]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.8...v0.2.9
+[0.2.8]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.5...v0.2.8
+[0.2.5]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.2-m6...v0.2.3
+[0.2.2-m6]: https://github.com/rmyndharis/VSCodroid/compare/v0.1.0-alpha...v0.2.2-m6
+[0.1.0-m0]: https://github.com/rmyndharis/VSCodroid/releases/tag/v0.1.0-alpha
