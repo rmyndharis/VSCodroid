@@ -376,10 +376,18 @@ run_tool() {
 
 # Test 15: node
 NODE_OUT=$(run_tool "files/usr/bin/node" --version)
-if echo "$NODE_OUT" | grep -q "^v20\."; then
+# Derived, not pinned. This asserted v20.x while the runtime moved to 24.18.0 --
+# the test would have failed every build had anything run it. The version the
+# native addons are compiled against is the one the runtime has to be: a
+# disagreement between those two is itself the defect, so read it from there.
+NODE_EXPECTED=$(sed -n 's/^NODE_VERSION="${NODE_VERSION:-\([0-9.]*\)}".*/\1/p' \
+    "$ROOT_DIR/scripts/build-native-addons.sh" | head -1)
+if [ -z "$NODE_EXPECTED" ]; then
+    fail "tool_node" "could not read NODE_VERSION from build-native-addons.sh"
+elif echo "$NODE_OUT" | grep -q "^v${NODE_EXPECTED}$"; then
     pass "tool_node ($NODE_OUT)"
 else
-    fail "tool_node" "Expected v20.x, got: $NODE_OUT"
+    fail "tool_node" "Expected v$NODE_EXPECTED (what the addons are built against), got: $NODE_OUT"
 fi
 
 # Test 16: npm (via node + npm-cli.js)
@@ -388,10 +396,26 @@ NPM_OUT=$($ADB shell run-as "$PKG" env \
     "PATH=$DATA_DIR/files/usr/bin:$NATIVE_LIB_DIR" \
     "LD_LIBRARY_PATH=$DATA_DIR/files/usr/lib:$NATIVE_LIB_DIR" \
     files/usr/bin/node files/usr/lib/node_modules/npm/bin/npm-cli.js --version 2>&1)
-if echo "$NPM_OUT" | grep -q "^10\."; then
+# npm ships as files, so what it should report is readable rather than guessable.
+# The pinned "10.x" here happens to be right today; it is derived anyway, because
+# being right today is exactly what the node assertion above was until it wasn't.
+NPM_PKG="$ROOT_DIR/android/app/src/main/assets/usr/lib/node_modules/npm/package.json"
+NPM_EXPECTED=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" \
+    "$NPM_PKG" 2>/dev/null)
+# The packaged tree is the better source -- it is what actually shipped -- but a
+# CI checkout that only installed the APK does not have it. Falling back to the
+# constant the download script uses keeps this derived rather than skipped: a
+# silent skip in CI is the shape this whole suite exists to remove.
+if [ -z "$NPM_EXPECTED" ]; then
+    NPM_EXPECTED=$(sed -n 's/^NPM_VERSION="\([0-9.]*\)".*/\1/p' \
+        "$ROOT_DIR/scripts/download-npm.sh" | head -1)
+fi
+if [ -z "$NPM_EXPECTED" ]; then
+    fail "tool_npm" "could not determine the expected npm version from tree or script"
+elif [ "$NPM_OUT" = "$NPM_EXPECTED" ]; then
     pass "tool_npm ($NPM_OUT)"
 else
-    fail "tool_npm" "Expected 10.x, got: $NPM_OUT"
+    fail "tool_npm" "Expected $NPM_EXPECTED (the version in the tree), got: $NPM_OUT"
 fi
 
 # Test 17: python3
@@ -423,6 +447,61 @@ if echo "$RG_OUT" | grep -q "ripgrep"; then
     pass "tool_rg ($(echo "$RG_OUT" | head -1))"
 else
     fail "tool_rg" "Expected ripgrep, got: $RG_OUT"
+fi
+
+# Test 19b: bash actually starts
+BASH_OUT=$(run_tool "files/usr/bin/bash" -c 'echo bash-ok')
+if [ "$BASH_OUT" = "bash-ok" ]; then
+    pass "tool_bash"
+else
+    fail "tool_bash" "Expected bash-ok, got: $BASH_OUT"
+fi
+
+# Test 19c: the Python modules that need a shared library behind them.
+#
+# `python3 --version` above proves the interpreter starts and nothing more. Each
+# of these is a separate .so that has to have been bundled and found, and every
+# one of them was broken on a shipped build at some point while every gate
+# stayed green: bz2, lzma and dbm.gnu had no library bundled at all, and two
+# more were bundled under a name nothing looks for. An import is the only thing
+# that distinguishes "present" from "loads".
+#
+# Imported one per line so the failure names the module. A single combined
+# import would report only the first one to break.
+PY_MODULE_FAILURES=""
+for module in bz2 lzma sqlite3 ssl ctypes curses.panel dbm.gnu zlib readline pip; do
+    MOD_OUT=$(run_tool "files/usr/bin/python3" -c "import $module")
+    if [ -n "$MOD_OUT" ]; then
+        PY_MODULE_FAILURES="$PY_MODULE_FAILURES $module"
+        vlog "import $module: $MOD_OUT"
+    fi
+done
+if [ -z "$PY_MODULE_FAILURES" ]; then
+    pass "python_modules (10 imported)"
+else
+    fail "python_modules" "failed to import:$PY_MODULE_FAILURES"
+fi
+
+# Test 19d: git's HTTPS remote helper can be executed at all.
+#
+# SELinux denies execute_no_trans on app_data_file, so a helper that is a real
+# file under filesDir cannot be exec'd by the app no matter what its mode bits
+# say -- that is what broke `git clone https://` until the binary moved to
+# nativeLibraryDir and filesDir kept only a symlink to it. Invoked with no
+# arguments it exits complaining about usage; what matters is that it got far
+# enough to complain. 126 and "Permission denied" are the regression.
+#
+# Note this runs through `run-as`, which is a different SELinux domain than the
+# app (runas_app against untrusted_app) and is more permissive about exec. So a
+# pass here is weaker than it looks: it catches the helper going missing or
+# losing its mode bits, not a domain refusal. Only the app's own terminal can
+# answer that, which is why the symlink shape is asserted separately above.
+HELPER_OUT=$(run_tool "files/usr/libexec/git-core/git-remote-https" 2>&1)
+HELPER_RC=$?
+if [ "$HELPER_RC" -eq 126 ] || echo "$HELPER_OUT" | grep -qi "permission denied"; then
+    fail "git_remote_helper" "cannot execute git-remote-https (rc=$HELPER_RC): $HELPER_OUT"
+else
+    pass "git_remote_helper (executed, rc=$HELPER_RC)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
