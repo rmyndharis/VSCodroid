@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.ToolchainManager
+import com.vscodroid.util.padForSystemBars
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.util.Logger
@@ -33,6 +34,7 @@ class ToolchainActivity : AppCompatActivity() {
         )
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_toolchain)
+        findViewById<android.view.View>(R.id.toolchainRoot).padForSystemBars()
 
         toolchainManager = ToolchainManager(this)
 
