@@ -264,7 +264,7 @@ checkouts differed.
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).
 - `fetch-vscode-oss.sh` needs the `gh` CLI authenticated, or `VSCODE_OSS_URL` pointing at a tarball. This is now enforced rather than assumed: a cached tarball is checked against the digest its release carries, and when `gh` cannot report that digest the script stops instead of building bytes nothing verified. `VSCODE_OSS_SHA256` gives the `VSCODE_OSS_URL` path a digest to check against, which is the way to work offline against a tarball you already trust.
-- The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools; its scripts and Termux-derived node patches were removed in `1323df7` and are recoverable from git history if that fallback is ever needed.
+- The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools; its scripts and Termux-derived node patches were removed on 2026-08-14 and are recoverable with `git log --diff-filter=D -- toolchains/` if that fallback is ever needed.
 
 ## The on-device test suite
 
