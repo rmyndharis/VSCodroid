@@ -32,6 +32,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.vscodroid.util.Environment
 import com.vscodroid.bridge.AndroidBridge
@@ -565,15 +566,7 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
-            // Ask for a fresh insets pass on the container, whose listener
-            // (ExtraKeyRow.setupWithRootView) owns all positioning. On the
-            // recreateWebView path the tree is already attached, so without an
-            // explicit request the container padding and key-row visibility
-            // would wait for the next rotation or keyboard. The WebView itself
-            // is never padded: measured on API 35, the renderer ignores the
-            // view's own padding (window.innerHeight stays the full view
-            // height), so padding it documents an intention the pixels ignore.
-            ViewCompat.requestApplyInsets(findViewById(R.id.webViewContainer))
+            applyWindowInsetsPadding(wv)
             wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
             // viewport-fit=cover enables rendering into display cutout area
@@ -617,6 +610,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Keeps `env(safe-area-inset-*)` at zero inside the page. Load-bearing,
+     * and not for the reason its shape suggests.
+     *
+     * The padding does NOT position anything: the WebView render engine
+     * ignores the view's own padding — with it applied, the page still
+     * reports `window.innerHeight` equal to the full view height, and the
+     * container padding from [ExtraKeyRow.setupWithRootView] is what places
+     * the editor below the bars. What the padding DOES feed is Chromium's
+     * safe-area computation, roughly `safeArea = cutout − viewPadding`.
+     * Remove it and the page suddenly reads `env(safe-area-inset-top)` =
+     * the full cutout height — even though the container already moved the
+     * view out of the cutout — and the workbench squeezes its title bar to
+     * zero height: measured on API 36, `.titlebar-container` collapsed from
+     * 35px to 0 and the command center, navigation arrows and layout
+     * controls vanished. Both states were measured over CDP before this
+     * comment was written; do not delete this listener as a "no-op" again.
+     *
+     * It lives here rather than in `onCreate` because [recreateWebView]
+     * replaces the view, and a listener registered once against the original
+     * dies with it. The explicit request is what makes it take effect on the
+     * replacement: insets are dispatched on attach, and after a recreation
+     * this runs on a view that is already attached, so without asking for a
+     * fresh pass the padding would wait for the next rotation or keyboard.
+     */
+    private fun applyWindowInsetsPadding(view: View) {
+        ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+            // Cutout included for the same reason as the container listener:
+            // in landscape the hole sits on a side edge where systemBars()
+            // is zero, and only a matching pad keeps env() at zero there.
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(view)
+    }
 
     private fun setupExtraKeyRow() {
         extraKeyRow = findViewById(R.id.extraKeyRow)
