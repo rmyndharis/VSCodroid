@@ -150,7 +150,87 @@ function activate(context) {
         }
     );
 
-    context.subscriptions.push(openFolderCmd, recentFolderCmd);
+    // -- Open in Browser --
+
+    const openInBrowserCmd = vscode.commands.registerCommand(
+        'vscodroid.openInBrowser',
+        async () => {
+            const url = await vscode.window.showInputBox({
+                title: 'Open in Browser',
+                prompt: 'Enter a URL to open in your device browser',
+                value: 'http://localhost:'
+            });
+            if (!url || !url.trim()) return;
+
+            try {
+                await sendBridgeCommand('openExternalUrl', { url: url.trim() });
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Failed to open browser: ${err.message}`);
+            }
+        }
+    );
+
+    // -- SSH keys --
+
+    const generateSshKeyCmd = vscode.commands.registerCommand(
+        'vscodroid.generateSshKey',
+        async () => {
+            try {
+                const json = /** @type {string} */ (await sendBridgeCommand('generateSshKey'));
+                const result = JSON.parse(json || '{}');
+                if (result.success) {
+                    vscode.window.showInformationMessage(
+                        'SSH key created at ~/.ssh/id_ed25519. Run "VSCodroid: Copy SSH Public Key" to add it to your Git host.'
+                    );
+                } else {
+                    vscode.window.showErrorMessage(
+                        `SSH key generation failed: ${result.error || 'unknown error'}`
+                    );
+                }
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`SSH key generation failed: ${err.message}`);
+            }
+        }
+    );
+
+    const copySshPublicKeyCmd = vscode.commands.registerCommand(
+        'vscodroid.copySshPublicKey',
+        async () => {
+            try {
+                const pubKey = /** @type {string} */ (await sendBridgeCommand('getSshPublicKey'));
+                if (!pubKey || !pubKey.trim()) {
+                    vscode.window.showWarningMessage(
+                        'No SSH key yet. Run "VSCodroid: Generate SSH Key" first.'
+                    );
+                    return;
+                }
+                // The editor's own clipboard, so this needs nothing from Android.
+                await vscode.env.clipboard.writeText(pubKey.trim());
+                vscode.window.showInformationMessage('SSH public key copied to clipboard.');
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Could not read the SSH public key: ${err.message}`);
+            }
+        }
+    );
+
+    // -- About --
+
+    const aboutCmd = vscode.commands.registerCommand('vscodroid.about', async () => {
+        try {
+            await sendBridgeCommand('showAboutDialog');
+        } catch (/** @type {*} */ err) {
+            vscode.window.showErrorMessage(`Failed to open About: ${err.message}`);
+        }
+    });
+
+    context.subscriptions.push(
+        openFolderCmd,
+        recentFolderCmd,
+        openInBrowserCmd,
+        generateSshKeyCmd,
+        copySshPublicKeyCmd,
+        aboutCmd
+    );
 }
 
 function deactivate() {
