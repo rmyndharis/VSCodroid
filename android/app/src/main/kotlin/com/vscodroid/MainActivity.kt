@@ -646,18 +646,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Fix #2: Injects CSS to enlarge touch targets for phone-sized screens.
-     * Active at a viewport of 600px or narrower (phones, not tablets).
+     * Fix #2: Injects CSS to enlarge touch targets when the pointer is a fingertip.
      * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
      *
-     * The width test is a media query rather than a `window.innerWidth` check because
-     * this runs once per page load while the viewport keeps changing after it.
-     * MainActivity declares `configChanges` for `orientation`, `screenSize` and
-     * `screenLayout` (AndroidManifest.xml:48), so a rotation or a split-screen resize
-     * does not recreate the activity, and with no `onConfigurationChanged` nothing
-     * re-invokes this injection — a snapshot taken here held until something reloaded
-     * the page, such as switching folders. Letting the browser re-evaluate the query
-     * covers both directions and every later resize for free.
+     * The test is `pointer: coarse`, not a viewport width, because what these rules
+     * compensate for is the fingertip — and a fingertip does not change size with the
+     * screen. A phone held in landscape is wider than any width threshold that still
+     * excludes tablets, so a width test left exactly the orientation people turn to
+     * for code width with desktop-sized targets. Conversely a tablet driven by a
+     * mouse or a DeX-style desktop reports `fine` and correctly gets none of this.
+     *
+     * Height would have been the wrong axis for the same reason it looks tempting:
+     * `windowSoftInputMode="adjustResize"` (AndroidManifest.xml:49) shrinks the
+     * window when the soft keyboard opens, and the WebView takes what is left
+     * (`layout_weight="1"`), so a height threshold would switch the sizing on and off
+     * while the user types.
+     *
+     * It has to be a media query rather than anything sampled in Kotlin: this runs
+     * once per page load, and MainActivity declares `configChanges` for `orientation`,
+     * `screenSize` and `screenLayout` (AndroidManifest.xml:48) with no
+     * `onConfigurationChanged`, so nothing re-invokes the injection when the window
+     * changes. Letting the browser hold the condition costs nothing and never goes
+     * stale.
      */
     private fun injectTouchTargetCSS() {
         webView?.evaluateJavascript(
@@ -667,8 +677,8 @@ class MainActivity : AppCompatActivity() {
                 var s = document.createElement('style');
                 s.id = 'vscodroid-touch-css';
                 s.textContent = [
-                    '/* VSCodroid: Enlarged touch targets for mobile */',
-                    '@media (max-width: 600px) {',
+                    '/* VSCodroid: Enlarged touch targets for touch input */',
+                    '@media (pointer: coarse) {',
                     '  .monaco-list-row { min-height: 36px !important; padding: 2px 0 !important; }',
                     '  .tabs-container .tab { min-height: 40px !important; }',
                     '  .activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
