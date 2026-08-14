@@ -40,10 +40,22 @@ else
     echo "  ⚠ ANDROID_HOME not set (needed for building APK)"
 fi
 
-if [ -n "${ANDROID_NDK_HOME:-}" ]; then
-    echo "  ✓ ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+# Fatal, not a warning. build-all.sh runs this first and then spends roughly
+# twenty minutes downloading before build-native-addons.sh and
+# build-glibc-shim.sh both exit on a missing NDK -- a prerequisite that was
+# knowable in the first second. REQUIRE_NDK=0 keeps the old behaviour for
+# someone checking an environment they do not intend to build in.
+if [ -n "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}" ]; then
+    echo "  ✓ ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}"
+elif [ "${REQUIRE_NDK:-1}" = "0" ]; then
+    echo "  ⚠ ANDROID_NDK_HOME not set (needed to build the native addons)"
 else
-    echo "  ⚠ ANDROID_NDK_HOME not set (needed for cross-compilation)"
+    echo "  ERROR: ANDROID_NDK_HOME is not set." >&2
+    echo "         build-native-addons.sh and build-glibc-shim.sh both need it," >&2
+    echo "         and they run after the downloads. Set it now rather than" >&2
+    echo "         twenty minutes from now, or re-run with REQUIRE_NDK=0 to skip" >&2
+    echo "         this check." >&2
+    exit 1
 fi
 
 # Initialize submodules
