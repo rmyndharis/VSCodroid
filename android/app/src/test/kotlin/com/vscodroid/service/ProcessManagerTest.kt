@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
 
 /**
@@ -110,6 +111,38 @@ class ProcessManagerTest {
         assertNotEquals(0, manager.port, "the first start must allocate a port")
     }
 
+    @Test
+    fun `the shutdown flag is set before the process is destroyed`() {
+        // The watchdog decides crash-versus-stop by reading isShuttingDown, and it
+        // wakes the moment the child dies. So the flag has to be true *before*
+        // destroy() is called; set afterwards, the watchdog can read a stale false,
+        // call it a crash, and restart the server the user just asked to stop.
+        //
+        // On a phone that is not cosmetic. The server holds the foreground service
+        // and the extension host, so a stop that silently restarts leaves the
+        // process alive after the user believed they had ended it.
+        //
+        // Asserted at the moment of destroy() rather than by watching for a
+        // restart. A behavioural test was tried first and did not discriminate:
+        // with the assignment moved one line down it still passed, because the
+        // child takes long enough to die that the flag is set before the watchdog
+        // can observe it. A test of ordering has to observe the ordering; racing
+        // it only measures how fast the machine is.
+        val flagWhenDestroyed = AtomicBoolean(false)
+        val process = mockk<Process>(relaxed = true) {
+            every { isAlive } returns true
+            every { destroy() } answers { flagWhenDestroyed.set(manager.isShuttingDownField) }
+        }
+        manager.serverProcessField = process
+
+        manager.stopServer()
+
+        assertTrue(
+            flagWhenDestroyed.get(),
+            "isShuttingDown must already be true when the process is destroyed"
+        )
+    }
+
     // -- Connection token --
 
     @Test
@@ -192,6 +225,10 @@ class ProcessManagerTest {
 private var ProcessManager.serverProcessField: Process?
     get() = field("serverProcess").get(this) as Process?
     set(value) = field("serverProcess").set(this, value)
+
+/** Reaches [ProcessManager.isShuttingDown], which is private production state. */
+private val ProcessManager.isShuttingDownField: Boolean
+    get() = field("isShuttingDown").getBoolean(this)
 
 /** Reaches [ProcessManager._port], which is private production state. */
 private var ProcessManager.portField: Int
