@@ -352,6 +352,22 @@ rule could go back to preferring the newer file and lose nothing. If a fixture
 cannot be written that tells two cases apart, that is worth reading as a
 statement about the code rather than about the test.
 
+And some methods cannot be called at all. A lifecycle callback needs an Activity,
+an Activity cannot be built in a plain JVM test, and mockk cannot intercept the
+`super` call inside it -- `onTrimMemory` gives "Method onTrimMemory in
+android.app.Activity not mocked" however it is approached. Extraction cannot make
+a line in there reachable. What it can do is **empty the method until nothing
+worth testing is left inside it**: move the decision out with the data it needs,
+and leave behind only `super`, one call, and the effects that genuinely need the
+platform. `applyMemoryPressure` came out that way, and the comparison bug it
+guards against went from surviving the whole suite to dying against one test.
+
+The boundary matters, because this reads like permission to split anything.
+It applies where a test cannot invoke the method: lifecycle callbacks, platform
+`super` calls. Everywhere else the six call sites before it needed no production
+change at all -- the seam already existed and was idle. Reach for this only after
+looking for that, and say which one you found.
+
 ## Building
 
 ### Debug Build

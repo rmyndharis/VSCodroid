@@ -50,15 +50,53 @@ class CrashReporterTest {
     inner class BeforeInitTest {
 
         @Test
-        fun `getLastCrash returns null before init`() {
-            // Reset crashDir to uninitialized state via reflection
-            val field = CrashReporter::class.java.getDeclaredField("crashDir")
-            field.isAccessible = true
-            // CrashReporter uses lateinit, so we need to check its behavior
-            // when crashDir IS initialized but empty vs not initialized
-            val crashDir = initCrashDir()
-            // With initialized but empty dir, should return null
+        fun `an initialised but empty directory yields no crash`() {
+            // Renamed. This was called `getLastCrash returns null before init`
+            // and began by calling initCrashDir(), so it described a state it
+            // never created: deleting the uninitialised guard left it green.
+            // What it does cover is worth keeping, under a name that says so.
+            initCrashDir()
+
             assertNull(CrashReporter.getLastCrash(), "No crash logs should mean null")
+        }
+
+        @Test
+        fun `asking before init answers instead of throwing`() {
+            // The state the old name claimed. crashDir is lateinit, so reading it
+            // unset raises UninitializedPropertyAccessException -- and this is
+            // reached from AndroidBridge.getLastCrash, a @JavascriptInterface
+            // method. An exception there does not land in Logcat as a Kotlin
+            // stack: it crosses into the WebView as a JS-side failure on a call
+            // the workbench made, which is about as far from the cause as a
+            // symptom can travel.
+            //
+            // The window is real. MainActivity calls checkPreviousCrash() during
+            // onCreate, and the bridge is reachable as soon as the page loads.
+            uninitialiseCrashDir()
+
+            assertNull(
+                CrashReporter.getLastCrash(),
+                "the guard must answer, because the caller is across the JS bridge"
+            )
+        }
+
+        @Test
+        fun `every reader survives being asked before init`() {
+            // getLastCrash is the one with a bridge caller, but all four share
+            // the same lateinit field and the same guard, and a fix applied to
+            // one is exactly the kind that gets applied to one.
+            uninitialiseCrashDir()
+
+            assertNull(CrashReporter.getLastCrash())
+            assertFalse(CrashReporter.hasPendingCrash())
+            CrashReporter.clearCrashLogs()
+        }
+
+        /** Puts the singleton back into the state a fresh process starts in. */
+        private fun uninitialiseCrashDir() {
+            CrashReporter::class.java.getDeclaredField("crashDir")
+                .apply { isAccessible = true }
+                .set(CrashReporter, null)
         }
 
         @Test
