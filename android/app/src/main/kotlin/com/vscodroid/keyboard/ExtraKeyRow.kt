@@ -92,7 +92,14 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     fun setupWithRootView(rootView: View) {
         ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            // The display cutout is its own inset type, not part of systemBars().
+            // Portrait hides that: the status bar is at least as tall as the
+            // cutout. Landscape does not: the punch-hole sits on a side edge
+            // where systemBars() reports 0, putting the camera over the
+            // activity bar. Combining the types takes the max per edge.
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
 
@@ -100,8 +107,8 @@ class ExtraKeyRow @JvmOverloads constructor(
             // This ensures the WebView content area shrinks when the keyboard opens.
             // The container is a vertical LinearLayout, so this row then takes its
             // own height out of the WebView rather than covering the page.
-            val bottomInset = maxOf(systemBars.bottom, ime.bottom)
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, bottomInset)
+            val bottomInset = maxOf(bars.bottom, ime.bottom)
+            v.setPadding(bars.left, bars.top, bars.right, bottomInset)
 
             visibility = if (imeVisible) View.VISIBLE else View.GONE
             if (!imeVisible) {
