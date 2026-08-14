@@ -1,0 +1,18 @@
+name: zz kvm probe (temporary)
+on:
+  push:
+    branches: [chore/instrumented-tests]
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - run: |
+          echo "arch: $(uname -m)"
+          ls -la /dev/kvm 2>&1 || echo "NO /dev/kvm"
+          egrep -c '(vmx|svm)' /proc/cpuinfo 2>/dev/null || echo "no vmx/svm flag"
+  x64:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "arch: $(uname -m)"
+          ls -la /dev/kvm 2>&1 || echo "NO /dev/kvm"
