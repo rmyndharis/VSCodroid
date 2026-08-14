@@ -24,6 +24,13 @@ class StaticMockCleanupTest {
 
     private val processWideMock = Regex("""\bmockk(Object|Static|Constructor)\s*\(""")
 
+    /**
+     * A call, not the word. Matching the bare string accepted a class whose only
+     * "unmockk" was in a comment saying it should have one -- which is the exact
+     * shape of the mistake this guard exists to catch.
+     */
+    private val teardown = Regex("""\bunmockk\w*\s*\(""")
+
     @Test
     fun `every class that mocks process-wide also tears it down`() {
         // Resolved by probing rather than assumed: the working directory of the test JVM is
@@ -46,7 +53,7 @@ class StaticMockCleanupTest {
         val offenders = sources
             .filter { file ->
                 val text = file.readText()
-                processWideMock.containsMatchIn(text) && !text.contains("unmockk")
+                processWideMock.containsMatchIn(text) && !teardown.containsMatchIn(text)
             }
             .map { it.name }
             .sorted()

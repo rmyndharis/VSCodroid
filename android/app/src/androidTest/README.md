@@ -73,12 +73,18 @@ XML rather than the exit code** — a run that fails before reaching the tests
 writes no results at all, and its exit code is indistinguishable from a genuine
 failure.
 
-Expect roughly two minutes. It was three until `firstRun_launchesWithoutCrash`
-was removed: it slept a flat 60 seconds and then asserted nothing, so the only
-failure it could report was a throw out of `onCreate`, which
-`firstRun_extractionSetsVersion` reports as well — and that one also catches a
-setup ending in `showSetupError()`. The two-minute figure is the old
-three-minute run minus that test's measured 60.7 s, not a fresh measurement.
+Read the times out of that XML rather than trusting a figure written here. The
+one recorded run in this checkout — a Pixel 9 Pro XL AVD on API 36 — reports
+116.1 s of suite time for 22 tests, of which `firstRun_launchesWithoutCrash`
+alone was 60.686 s. That test is gone: it slept a flat 60 seconds and asserted
+nothing, so the only failure it could report was a throw out of `onCreate`,
+which `firstRun_extractionSetsVersion` reports as well in 11.7 s — and that one
+also catches a setup ending in `showSetupError()`.
+
+So 21 tests and roughly 52 s of test time remain, plus whatever the build and
+install cost, which the XML does not measure. This paragraph claimed three
+minutes for a long time; the recorded run says otherwise, which is what reading
+the XML is for.
 
 ## What is here, and what it is worth
 

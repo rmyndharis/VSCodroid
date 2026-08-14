@@ -36,6 +36,12 @@ concurrency:
   group: r8-${{ github.ref }}
   cancel-in-progress: true
 
+# Reading the checkout and writing an artifact is all this needs. build.yml and
+# lint.yml inherit the repository default instead; release.yml and pages.yml
+# declare theirs, and this follows those two.
+permissions:
+  contents: read
+
 jobs:
   minify:
     name: R8

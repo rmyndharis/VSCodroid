@@ -63,10 +63,21 @@ class PortFinderTest {
      */
     private fun holdEntireScanRange(): List<ServerSocket> {
         val held = mutableListOf<ServerSocket>()
-        while (held.size < 1024) {
-            val port = PortFinder.findAvailablePort()
-            if (port >= EPHEMERAL_BASE) break
-            held += ServerSocket(port)
+        try {
+            while (held.size < 1024) {
+                val port = PortFinder.findAvailablePort()
+                if (port >= EPHEMERAL_BASE) break
+                held += ServerSocket(port)
+            }
+        } catch (e: Exception) {
+            // findAvailablePort() reports a port as free and this binds it, which is
+            // two steps: another process can take it in between, and ServerSocket
+            // then throws. Without this the throw escapes before the caller's
+            // `val held = ...` completes, so its finally never runs and every socket
+            // bound so far stays open for the life of the test JVM -- holding most of
+            // the production scan range and failing whichever test runs next.
+            held.forEach { it.close() }
+            throw e
         }
         return held
     }
