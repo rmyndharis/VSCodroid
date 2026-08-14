@@ -75,10 +75,38 @@ PROSE_ALLOWED = (
     "python3",   # the command's name
 )
 
+# The illustrations need the same escape hatch, and not having one was an
+# asymmetry rather than a decision. Prose can declare a number and carry on;
+# a picture could not, so a rule refusing it left no sanctioned way through --
+# only editing the rule, which is how a gate stops being trusted.
+#
+# It is not hypothetical. `http://127.0.0.1:3000` in a mock terminal is refused
+# today, matching `127.0.0` as a version string, and that address is what this
+# app's own dev-server preview shows. `make 4 targets` is refused too.
+#
+# Empty on purpose: the illustrations that ship carry only code samples no rule
+# matches. An entry here is a claim that a number in a picture is deliberate,
+# and it should be as reviewable as one in prose.
+MEDIA_ALLOWED = ()
+
 
 def welcome_dir():
-    """The bundled welcome extension, whatever version it is at."""
-    found = sorted(EXTENSIONS.glob("vscodroid.vscodroid-welcome-*"))
+    """The bundled welcome extension, whatever version it is at.
+
+    Ordered by parsed version rather than by name, because lexically 1.10.0
+    sorts below 1.9.0 and this would then check the older directory and pass.
+    Only one ever ships, so this cannot bite today -- but the failure it would
+    produce is a green gate reading the wrong file, which is the shape this
+    script exists to prevent.
+    """
+    def version(path):
+        tail = path.name.rsplit("-", 1)[-1]
+        try:
+            return tuple(int(part) for part in tail.split("."))
+        except ValueError:
+            return ()
+
+    found = sorted(EXTENSIONS.glob("vscodroid.vscodroid-welcome-*"), key=version)
     return found[-1] if found else None
 
 
@@ -94,7 +122,10 @@ def texts(directory):
     for svg in sorted(directory.glob("media/*.svg")):
         # Comments explain why a claim was removed and would match the rules
         # they document, which would make this script fail on its own reasoning.
-        yield svg.name, re.sub(r"<!--.*?-->", "", svg.read_text(), flags=re.S)
+        body = re.sub(r"<!--.*?-->", "", svg.read_text(), flags=re.S)
+        for allowed in MEDIA_ALLOWED:
+            body = body.replace(allowed, "")
+        yield svg.name, body
 
 
 def prose(directory):
