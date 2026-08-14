@@ -165,10 +165,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        val pressure = memoryPressureOf(level)
+        // Deciding and recording live together in applyMemoryPressure. Nothing
+        // here branches on the level, because nothing here can be run: this
+        // method cannot be invoked without an Activity, and an Activity cannot
+        // be built in a plain JVM test, so any decision left inside it is a
+        // decision no test can reach. What remains is super, one call, and two
+        // effects that need the Activity anyway.
+        val pressure = applyMemoryPressure(File(cacheDir, "tmp"), level)
         if (pressure == PRESSURE_NONE) return
         Logger.w(tag, "Memory pressure: $pressure (trim level $level)")
-        writeMemoryPressure(pressure)
         webView?.evaluateJavascript(
             "window.__vscodroid?.onLowMemory?.($level)", null
         )
@@ -271,18 +276,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     // -- Internal --
-
-    private fun writeMemoryPressure(pressure: String) {
-        try {
-            val tmpDir = File(cacheDir, "tmp")
-            // A severity, not Android's trim level. The monitor on the other end
-            // has no business knowing Android's numbering, and when it did, it
-            // compared values that are not ordered by severity.
-            File(tmpDir, "vscodroid-memory-pressure").writeText(pressure)
-        } catch (e: Exception) {
-            Logger.d(tag, "Failed to write memory pressure: ${e.message}")
-        }
-    }
 
     /**
      * After resuming from background, checks if the VS Code connection is still
@@ -1017,4 +1010,46 @@ internal fun memoryPressureOf(level: Int): String = when (level) {
     // hint Android has. This is the only line that changes behaviour, and it
     // changes it for exactly the value that was wrong.
     else -> PRESSURE_NONE
+}
+
+/**
+ * Decides what a trim level means and records it for the process monitor.
+ *
+ * Deciding and recording are one unit, and splitting them is what made this
+ * untestable: the decision sat in `onTrimMemory`, which cannot be invoked
+ * without an Activity, while the recording sat in a private method that reached
+ * `this.cacheDir` for the one thing it needed. Neither half could be reached, so
+ * the wire between the pinned predicate and the file the monitor reads was
+ * covered by nothing — and replacing [memoryPressureOf] here with a `>=`
+ * comparison, the exact defect this whole path exists to prevent, left the
+ * entire suite green.
+ *
+ * Takes the directory rather than reaching for one, so the caller supplies what
+ * it already has and a test supplies a temporary one.
+ *
+ * @return the severity, so the caller can log it and notify the workbench —
+ *   both of which need the Activity and neither of which decides anything.
+ */
+internal fun applyMemoryPressure(tmpDir: File, level: Int): String {
+    val pressure = memoryPressureOf(level)
+    if (pressure != PRESSURE_NONE) writeMemoryPressure(tmpDir, pressure)
+    return pressure
+}
+
+/**
+ * Writes the severity where `process-monitor.js` looks for it.
+ *
+ * A severity, not Android's trim level. The monitor on the other end has no
+ * business knowing Android's numbering, and when it did, it compared values
+ * that are not ordered by severity.
+ *
+ * Failure is swallowed: the file is a hint for a monitor, and losing it is
+ * worth less than the memory callback it is reporting on.
+ */
+internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
+    try {
+        File(tmpDir, "vscodroid-memory-pressure").writeText(pressure)
+    } catch (e: Exception) {
+        Logger.d("MainActivity", "Failed to write memory pressure: ${e.message}")
+    }
 }
