@@ -70,7 +70,8 @@ Common commands:
 
 ### Settings
 
-Settings are accessed through **Ctrl+,** or the Command Palette. VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
+Open the Command Palette (**Ctrl+Shift+P**) and run `Preferences: Open Settings (UI)`.
+VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
 
 - Word wrap is enabled in the diff editor.
 - Git path is preconfigured to the bundled Git binary.
@@ -219,23 +220,24 @@ Some extensions are exclusive to the Microsoft Marketplace and not published on 
 
 ### Generating an SSH Key
 
-1. Open the Command Palette: **Ctrl+Shift+P**
-2. Type: **VSCodroid: Generate SSH Key**
-3. An ed25519 key pair is created at `~/.ssh/id_ed25519`
-4. The public key is displayed in a notification
+Generate the key from the terminal:
+
+```bash
+ssh-keygen -t ed25519 -C "your@email.com"
+```
+
+Press Enter at each prompt to accept the defaults. This creates the key pair at
+`~/.ssh/id_ed25519`.
 
 ### Copying Your Public Key
 
-1. Open the Command Palette: **Ctrl+Shift+P**
-2. Type: **VSCodroid: Copy SSH Public Key**
-3. The public key is copied to your clipboard
-4. Paste it into your GitHub, GitLab, or Bitbucket account under Settings > SSH Keys
-
-Alternatively, view it from the terminal:
+Print the public key in the terminal, then select the output and copy it:
 
 ```bash
 cat ~/.ssh/id_ed25519.pub
 ```
+
+Paste it into your GitHub, GitLab, or Bitbucket account under Settings > SSH Keys.
 
 ### Configuring Git
 
@@ -316,12 +318,11 @@ When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can p
    npm run dev
    # Output: Local: http://localhost:5173/
    ```
-2. Open the Command Palette: **Ctrl+Shift+P**
-3. Type: **VSCodroid: Open in Browser**
-4. Enter the URL (e.g., `http://localhost:5173`)
-5. The page opens in your default browser
+2. Tap the `http://localhost:5173/` link the server prints in the terminal — VSCodroid
+   hands links outside the editor to your device's browser
+3. If the link is not tappable, copy the URL and open it in your browser directly
 
-You can also use the shortcut **Ctrl+Shift+B** to open the browser prompt directly.
+Any `http://localhost:PORT` address works, whatever port your dev server picked.
 
 ### npm and npx
 
@@ -376,15 +377,20 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 ### Installing During First Run
 
-The Language Picker appears on first launch. Select the languages you want and they download automatically via the Play Store.
+The Language Picker appears on first launch. Select the languages you want and they
+download in the background.
+
+Toolchains are never bundled inside the APK. Play Store installs fetch them as
+on-demand asset packs; sideloaded installs download them over HTTP from the
+[latest GitHub Release](https://github.com/rmyndharis/VSCodroid/releases/latest).
+Either way they land in the app's own storage and survive app updates.
 
 ### Installing After Setup
 
-1. Open the Command Palette: **Ctrl+Shift+P**
-2. Type: **VSCodroid: Open Toolchain Settings**
-3. Browse available toolchains, click **Install** on the ones you want
-
-From GitHub Releases builds (sideloaded APK), all toolchains are bundled directly in the APK.
+The Language Picker is shown only once, and there is currently no way to reach the
+toolchain settings screen after that
+([#92](https://github.com/rmyndharis/VSCodroid/issues/92)). Choose everything you expect
+to need on first launch.
 
 ### Using Installed Toolchains
 
@@ -411,7 +417,8 @@ java Main
 
 ### Removing Toolchains
 
-Open Toolchain Settings from the Command Palette and click **Remove** next to installed toolchains to free up storage.
+Removing an installed toolchain is not reachable from the editor yet — see
+[Installing After Setup](#installing-after-setup).
 
 ---
 
@@ -551,7 +558,7 @@ If `npm install` fails with errors:
 
 ### Git Push/Pull Fails
 
-- **Permission denied (publickey)** -- generate an SSH key (Command Palette > "VSCodroid: Generate SSH Key") and add it to your GitHub/GitLab account.
+- **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519` in the terminal and add it to your GitHub/GitLab account.
 - **SSL certificate error** -- this should not occur with bundled certificates. If it does, check that you are using `git@` (SSH) URLs instead of `https://`.
 
 ### App Uses Too Much Storage
@@ -573,7 +580,8 @@ du -sh ~/projects/*
 du -sh ~/.vscodroid/extensions/*
 ```
 
-You can also remove on-demand toolchains you no longer need via Toolchain Settings.
+Removing an installed toolchain is not reachable from the editor yet
+([#92](https://github.com/rmyndharis/VSCodroid/issues/92)).
 
 ### App Crashes or Restarts Unexpectedly
 
@@ -586,7 +594,7 @@ This is usually caused by Android's memory management killing background process
 
 ### Dev Server Not Accessible in Browser
 
-If "VSCodroid: Open in Browser" opens but the page does not load:
+If the browser opens but the page does not load:
 
 1. Verify the server is running in the terminal (check for errors).
 2. Make sure you are using `http://localhost:PORT`, not `http://127.0.0.1:PORT` or `http://0.0.0.0:PORT`.

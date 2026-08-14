@@ -138,19 +138,23 @@
 | TT-3 | git clone | `git clone https://github.com/user/repo` | Clones successfully with SSL | | |
 | TT-4 | python3 | `python3 -c "print('hello')"` | Prints hello | | |
 | TT-5 | npm init + install | `npm init -y && npm install express` | package.json created, express installed | | |
-| TT-6 | SSH key gen | Command palette > Generate SSH Key | Key created, public key displayed | | |
-| TT-7 | SSH key copy | Command palette > Copy SSH Public Key | Key copied to clipboard | | |
+| TT-6 | SSH key gen | `ssh-keygen -t ed25519` in the terminal | Key pair created at `~/.ssh/id_ed25519` | | |
+| TT-7 | SSH key read | `cat ~/.ssh/id_ed25519.pub` | Public key printed and selectable | | |
 | TT-8 | tmux | `tmux new-session -d && tmux ls` | Session listed | | |
 | TT-9 | ripgrep | `rg "pattern" .` | Search results shown | | |
 | TT-10 | VS Code Search | Use Search sidebar (Ctrl+Shift+F) | Results appear, file navigation works | | |
 
 ## 12. SAF & External Files
 
+> ⚠️ These three cannot pass yet: the folder picker cannot be invoked
+> ([#79](https://github.com/rmyndharis/VSCodroid/issues/79)), so nothing downstream of
+> it is reachable. Leave them unchecked until that is fixed.
+
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| SF-1 | Open external folder | Command palette > Open Folder | SAF picker opens, folder syncs to mirror | | |
-| SF-2 | Edit sync-back | Edit a file from SAF folder, save | Changes sync back to original location | | |
-| SF-3 | Recent folders | Open a folder, close app, reopen, check recents | Previously opened folder appears in recents | | |
+| SF-1 | Open external folder | Command palette > VSCodroid: Open Folder from Device | SAF picker opens, folder syncs to mirror | BLOCKED | picker unreachable |
+| SF-2 | Edit sync-back | Edit a file from SAF folder, save | Changes sync back to original location | BLOCKED | depends on SF-1 |
+| SF-3 | Recent folders | Open a folder, close app, reopen, check recents | Previously opened folder appears in recents | BLOCKED | depends on SF-1 |
 
 ---
 
