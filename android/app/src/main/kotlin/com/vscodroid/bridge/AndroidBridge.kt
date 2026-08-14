@@ -1,5 +1,6 @@
 package com.vscodroid.bridge
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -7,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.webkit.JavascriptInterface
 import androidx.browser.customtabs.CustomTabsIntent
+import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
@@ -26,6 +28,17 @@ import java.io.File
  * method whose JavaScript side has no timeout of its own.
  */
 private const val KEYGEN_TIMEOUT_SECONDS = 60L
+
+/**
+ * How long generateSshKey waits for the stdout drain after the child has exited.
+ *
+ * Not a second timeout on the work -- the process is already gone by the time
+ * this is used, so the only thing outstanding is whatever sits in the pipe
+ * buffer. It is a bound on principle: the point of draining on a separate thread
+ * is that no unbounded wait remains on the bridge thread, and an unbounded join
+ * would put one straight back.
+ */
+private const val DRAIN_JOIN_MILLIS = 1_000L
 
 class AndroidBridge(
     private val context: Context,
@@ -245,6 +258,11 @@ class AndroidBridge(
     fun openToolchainSettings(authToken: String) {
         if (!security.validateToken(authToken)) return
         Logger.i(tag, "Opening toolchain settings")
+        showToolchainSettings()
+    }
+
+    /** The navigation on its own, so a non-bridge caller can reach it too. */
+    private fun showToolchainSettings() {
         val intent = Intent(context, com.vscodroid.ToolchainActivity::class.java)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
@@ -252,7 +270,74 @@ class AndroidBridge(
 
     // -- Toolchain Management --
 
-    private val toolchainManager by lazy { ToolchainManager(context) }
+    /**
+     * The bridge's own manager, wired to hear back from what it starts.
+     *
+     * It had no `onStateChange` at all, and on a Play install that is the
+     * difference between an install and a stall. Play answers a large download
+     * with REQUIRES_USER_CONFIRMATION and then waits: nothing further happens
+     * until a system dialog is shown and accepted. `ToolchainManager` reports
+     * that status and goes no further -- it has no Activity of its own -- so
+     * with no listener on this side the status was reported into a null and
+     * `installToolchain` from the page did nothing, forever, with no error
+     * anywhere the user could see.
+     */
+    private val toolchainManager: ToolchainManager by lazy {
+        ToolchainManager(context).apply {
+            onStateChange = { packName, status, _ -> onToolchainState(packName, status) }
+        }
+    }
+
+    /**
+     * Resolves what a Play install needs from a foreground component, and
+     * balances the registration [ToolchainManager.install] makes on our behalf.
+     *
+     * The unregister is the other half of a pair that had no other half:
+     * `install()` calls `registerListener()` before every Play fetch and nothing
+     * here ever undid it, so this instance stayed subscribed to Play Core for
+     * the life of the process. Terminal states are where the pair closes --
+     * after COMPLETED, FAILED or CANCELED there is nothing further to hear, and
+     * the next `install()` subscribes again. Harmless on the HTTP path, which
+     * never registers: the unregister is guarded and does nothing.
+     */
+    private fun onToolchainState(packName: String, status: Int) {
+        when (status) {
+            AssetPackStatus.REQUIRES_USER_CONFIRMATION -> confirmLargeDownload(packName)
+            AssetPackStatus.COMPLETED,
+            AssetPackStatus.FAILED,
+            AssetPackStatus.CANCELED -> toolchainManager.unregisterListener()
+        }
+    }
+
+    /**
+     * Shows Play's own confirmation dialog for a download it will not start
+     * unattended.
+     *
+     * The dialog needs an Activity, and this bridge is handed one --
+     * `MainActivity` constructs it with `context = this`. So the ordinary path
+     * resolves the confirmation where the user already is, rather than sending
+     * them somewhere to repeat themselves.
+     *
+     * The fallback exists because the constructor takes a `Context`, not an
+     * `Activity`, and nothing enforces which one arrives. It opens the toolchain
+     * screen, which builds its own manager and shows this same dialog when it
+     * sees the status. Worth being plain about what that is and is not: it is a
+     * visible surface for a download that is otherwise stuck silently, not a
+     * guarantee the confirmation reappears -- Play Core does not promise to
+     * re-emit a state to a listener that registers afterwards. Surfacing the
+     * stall is the point.
+     */
+    private fun confirmLargeDownload(packName: String) {
+        val activity = context as? Activity
+        if (activity != null) {
+            Logger.i(tag, "Pack $packName needs confirmation; asking the user")
+            activity.runOnUiThread { toolchainManager.showConfirmationDialog(activity) }
+            return
+        }
+        Logger.w(tag, "Pack $packName needs confirmation and this bridge has no Activity; " +
+            "opening the toolchain screen so the download is not stuck out of sight")
+        showToolchainSettings()
+    }
 
     /**
      * Returns JSON array of all available toolchains (installed or not).
@@ -364,7 +449,33 @@ class AndroidBridge(
                 redirectErrorStream(true)
             }.start()
 
-            val output = process.inputStream.bufferedReader().readText()
+            // Drained on its own thread, and that ordering is the guarantee
+            // rather than a detail. readText() returns at EOF, and EOF on a
+            // child's stdout arrives when the child exits -- so reading before
+            // the wait makes the wait unreachable in precisely the case it was
+            // written for. A ssh-keygen that hangs while holding stdout open
+            // parked this thread with no bound at all, and this thread is the
+            // WebView's bridge thread: every other bridge call queues behind it,
+            // so one stuck key generation freezes clipboard, storage and
+            // toolchain calls too. The timeout below was already here, already
+            // documented as protecting the caller, and simply never got to run.
+            //
+            // Draining concurrently is also what keeps the wait honest in the
+            // other direction: with waitFor first and no reader, a child that
+            // filled the ~64 KB pipe buffer would block on write and never
+            // exit, turning the same hang into a guaranteed timeout instead of
+            // a completed key.
+            var output = ""
+            val drain = Thread {
+                output = try {
+                    process.inputStream.bufferedReader().readText()
+                } catch (e: Exception) {
+                    ""
+                }
+            }
+            drain.isDaemon = true
+            drain.start()
+
             // Bounded, because an unbounded wait here parks the JavaScript caller
             // for as long as the binary hangs -- and the caller is a WebView
             // bridge method, so what the user sees is a dialog that never
@@ -378,6 +489,12 @@ class AndroidBridge(
                 result.put("error", "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s")
                 return result.toString()
             }
+            // The child has exited, so its end of the pipe is closed and the
+            // drain is at most one buffer from EOF. The join publishes what it
+            // read; it is bounded so that this line cannot quietly become the
+            // unbounded wait the lines above exist to remove. Overrunning it
+            // costs the diagnostic text in the error message, nothing else.
+            drain.join(DRAIN_JOIN_MILLIS)
             val exitCode = process.exitValue()
 
             if (exitCode == 0 && keyFile.exists()) {

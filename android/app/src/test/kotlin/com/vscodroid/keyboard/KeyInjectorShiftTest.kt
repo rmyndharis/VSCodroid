@@ -4,6 +4,8 @@ import android.webkit.WebView
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -31,6 +33,20 @@ class KeyInjectorShiftTest {
     private val script = slot<String>()
     private val webView = mockk<WebView>(relaxed = true).also {
         every { it.evaluateJavascript(capture(script), any()) } returns Unit
+    }
+
+    /**
+     * The suite runs in one JVM with no `forkEvery`, so anything MockK replaces
+     * process-wide outlives the class that replaced it. Nothing here does that
+     * today -- a plain `mockk` is an object, not a global -- but the rule is
+     * uniform for a reason: `BridgeTokenUniformityTest` documents how a class
+     * exempting itself on those grounds ends up poisoning `CrashReporterTest`,
+     * and an exemption that depends on nobody adding a `mockkStatic` later is
+     * not an exemption.
+     */
+    @AfterEach
+    fun tearDown() {
+        unmockkAll()
     }
 
     private fun inject(key: String, shiftKey: Boolean = false): String {

@@ -11,6 +11,7 @@ import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import androidx.appcompat.widget.AppCompatTextView
+import androidx.core.widget.TextViewCompat
 import com.vscodroid.R
 
 @SuppressLint("ClickableViewAccessibility")
@@ -43,12 +44,7 @@ class ExtraKeyButton @JvmOverloads constructor(
             }
 
             override fun onSingleTapUp(e: MotionEvent): Boolean {
-                if (isToggle) {
-                    isToggleActive = !isToggleActive
-                    onKeyAction?.invoke(keyValue, isToggleActive)
-                } else {
-                    onKeyAction?.invoke(keyValue, true)
-                }
+                emitPress()
                 return true
             }
 
@@ -57,12 +53,60 @@ class ExtraKeyButton @JvmOverloads constructor(
                 if (alternates.isNotEmpty()) {
                     performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     onLongPressAction?.invoke(this@ExtraKeyButton, alternates)
-                } else {
-                    // No alternates — treat as repeated key press
-                    onKeyAction?.invoke(keyValue, true)
+                    return
                 }
+                // A key with no alternates delivers one press, the same one a tap
+                // delivers, through the same call below.
+                //
+                // The comment here used to read "treat as repeated key press"
+                // while the body did exactly one invoke, and the two cannot both
+                // be right: GestureDetector fires onLongPress once per hold and
+                // sends nothing on release, so there is no repeat here and never
+                // was. What is written now is what happens.
+                //
+                // It stays that way on purpose, because no key on this row wants
+                // repeating. The two that would -- Backspace and the arrows --
+                // are not ExtraKeyButtons at all: KeyPages carries neither, the
+                // soft keyboard owns backspace (KeyInjector's beforeinput
+                // listener already turns Ctrl+Backspace into delete-word), and
+                // the arrows come from GesturePad, whose drag emits them
+                // continuously through three acceleration gears -- a better
+                // answer than key repeat, and the reason those buttons were
+                // removed. What is left with no alternates is Tab, Esc and
+                // punctuation, where repeating is not a feature but a way to
+                // spray `;;;;;;;;` into a source file from one hold that ran
+                // long. A repeat loop here would add a timer whose stop path has
+                // to survive ACTION_CANCEL, pager swipes, detach and the row
+                // being hidden with the IME -- real failure modes, bought for a
+                // key that wants none of it.
+                emitPress()
             }
         })
+
+    /**
+     * Delivers one press of this key.
+     *
+     * One path for a tap and for a long press, and being one path is the fix
+     * rather than tidiness. They used to differ: `onSingleTapUp` flipped
+     * `isToggleActive` and reported the new value, while the long-press branch
+     * reported a bare `true` and flipped nothing. Ctrl, Alt and Shift are
+     * toggles with no alternates, so they are the only toggles that reach that
+     * branch -- and holding one a moment too long switched the modifier on
+     * inside [ExtraKeyRow] while the button carried on looking off. The next tap
+     * then read as "switch on" from the button's side and arrived as "switch
+     * off" on the row's, so the modifier the user could see and the modifier
+     * being applied were inverted from each other until something reset them.
+     *
+     * With one call site the two cannot diverge again, which is a stronger
+     * guarantee than a test: this is a `View` callback, so nothing in the JVM
+     * unit suite can invoke it. [pressedState] carries the part that can be
+     * pinned.
+     */
+    private fun emitPress() {
+        val state = pressedState(isToggle, isToggleActive)
+        if (isToggle) isToggleActive = state
+        onKeyAction?.invoke(keyValue, state)
+    }
 
     init {
         gravity = Gravity.CENTER
@@ -75,9 +119,16 @@ class ExtraKeyButton @JvmOverloads constructor(
         isClickable = true
         isFocusable = false
 
-        // Auto-shrink text to fit within button width
-        setAutoSizeTextTypeUniformWithConfiguration(
-            8, 13, 1, TypedValue.COMPLEX_UNIT_SP
+        // Auto-shrink text to fit within button width.
+        //
+        // Called through TextViewCompat rather than the method inherited from
+        // AppCompatTextView, which carries @RestrictTo and is meant only for
+        // calls from inside AppCompat itself. Same work underneath: the wrapper
+        // passes its four arguments straight through to the platform method on
+        // API 27 and above, and minSdk here is 33, so the compatibility branch
+        // below that is never taken.
+        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
+            this, 8, 13, 1, TypedValue.COMPLEX_UNIT_SP
         )
 
         // Rounded corner background
@@ -116,3 +167,21 @@ class ExtraKeyButton @JvmOverloads constructor(
     private fun dpToPx(dp: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), resources.displayMetrics).toInt()
 }
+
+/**
+ * The active-state one press reports, given the kind of key and where it stands.
+ *
+ * Split out of [ExtraKeyButton] because that class is a `View` and cannot be
+ * constructed in a JVM unit test -- its initialiser reaches resources, colours
+ * and display metrics on the first line. This is the half of the press that is
+ * arithmetic, so it can be checked, and it is the half the defect lived in: a
+ * long press on a modifier reported a constant `true` instead of the flipped
+ * state, so it could not turn a modifier off and could not agree with the
+ * button's appearance.
+ *
+ * Be plain about the limit. This pins what a press should report; it cannot pin
+ * that both gesture callbacks ask. That wiring is held by there being exactly
+ * one caller rather than by a test.
+ */
+internal fun pressedState(isToggle: Boolean, isActive: Boolean): Boolean =
+    if (isToggle) !isActive else true

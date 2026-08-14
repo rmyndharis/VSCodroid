@@ -2,6 +2,7 @@ package com.vscodroid.bridge
 
 import java.net.URI
 import com.vscodroid.util.Logger
+import java.security.MessageDigest
 import java.security.SecureRandom
 
 class SecurityManager {
@@ -10,8 +11,32 @@ class SecurityManager {
 
     fun getSessionToken(): String = sessionToken
 
+    /**
+     * Whether [token] is this session's token.
+     *
+     * Compared with [MessageDigest.isEqual] rather than `==`. String equality
+     * returns at the first differing character, so how long the comparison takes
+     * is a function of how much of the token the caller got right -- the shape
+     * that lets a secret be recovered one character at a time instead of guessed
+     * whole.
+     *
+     * Against a 32-byte SecureRandom token that attack is theoretical and stays
+     * theoretical; nobody is walking 2^256 through a WebView bridge. It is
+     * changed anyway because the correct primitive is free here and the
+     * reasoning that makes `==` acceptable is entirely about the current token
+     * size -- a fact this function does not state, does not enforce, and would
+     * not notice losing. `isEqual` examines every byte and depends on no such
+     * premise.
+     *
+     * Contract is unchanged: same signature, same answers, same rejection log.
+     * Twenty-eight `@JavascriptInterface` methods validate through here and
+     * `BridgeTokenUniformityTest` pins that they all do.
+     */
     fun validateToken(token: String): Boolean {
-        val valid = token == sessionToken
+        val valid = MessageDigest.isEqual(
+            token.toByteArray(Charsets.UTF_8),
+            sessionToken.toByteArray(Charsets.UTF_8),
+        )
         if (!valid) {
             Logger.w(tag, "Invalid auth token rejected")
         }

@@ -84,7 +84,7 @@ object KeyMapping {
      * as keys, so escaping is load-bearing rather than defensive: without it the
      * generated object is a syntax error and the whole interceptor fails to install.
      */
-    private fun jsQuote(s: String): String = buildString {
+    internal fun jsQuote(s: String): String = buildString {
         append('"')
         for (c in s) {
             if (c == '"' || c == '\\') append('\\')

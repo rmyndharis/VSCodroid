@@ -817,11 +817,6 @@ class FirstRunSetup(private val context: Context) {
         Logger.i(tag, "Rewrote the .bashrc prompt block ($PROMPT_VERSION)")
     }
 
-    private fun isSymlink(file: File): Boolean = try {
-        Os.lstat(file.absolutePath)
-        file.canonicalPath != file.absolutePath
-    } catch (e: Exception) { false }
-
     private fun npmBashFunctions(): String = """
 
 # npm/npx — shell functions (SELinux blocks exec of scripts under filesDir)
@@ -1581,6 +1576,64 @@ internal fun retiredOwnExtensionDirs(present: List<String>, bundled: List<String
             base(name).let { it != null && it !in bundledBases }
     }
 }
+
+/**
+ * Whether [file] is itself a symbolic link.
+ *
+ * There were two of these in this package, asking two different questions, and
+ * that is the defect rather than any symptom. This one now asks `lstat`, the way
+ * `ToolchainManager` always did. The other asked whether `canonicalPath`
+ * differed from `absolutePath`, which is not a question about [file]:
+ * canonicalisation resolves links anywhere along the path, so it answers
+ * "does this path traverse any symlink", and it answers that about the whole
+ * path shape rather than about the last component.
+ *
+ * Be precise about what that did and did not cost, because the obvious story is
+ * wrong and was written here before it was measured. On API 36 and 37
+ * `/data/user/0` is a separate mount rather than a link to `/data/data` --
+ * measured on both emulators, `ls -ld` shows a directory and `/proc/mounts`
+ * shows its own `ext4` entry -- so canonicalisation moves an app-private path
+ * nowhere at all. The old rule therefore answered false for a regular file and
+ * true for a real link: the right answers, at the only call site that uses it
+ * ([FirstRunSetup.createNpmWrappers]), by coincidence. No stale `npm` wrapper
+ * survived because of it. An earlier version of this comment claimed one did.
+ *
+ * The coincidence is the problem. It is rented from a path shape the platform
+ * owns and we do not, it has been otherwise on Android before, and it fails in
+ * both directions when it changes: a genuinely symlinked parent makes every
+ * regular file under it read as a link, so the delete this guards stops
+ * happening; and `canonicalPath` throws on paths `lstat` handles, which the
+ * catch below turns into "not a link" for something that is one.
+ *
+ * `lstat` is the one call that does not follow the final component, so it needs
+ * none of that to be true. The mode test is split out so it can be pinned by a
+ * test; see [isSymlinkMode].
+ */
+internal fun isSymlink(file: File): Boolean =
+    try {
+        isSymlinkMode(Os.lstat(file.absolutePath).st_mode)
+    } catch (e: Exception) {
+        false
+    }
+
+/**
+ * Whether an `st_mode` as returned by `lstat` describes a symbolic link.
+ *
+ * Written against the raw POSIX file-type constants rather than
+ * `OsConstants.S_ISLNK`, and that is a testability decision worth stating
+ * plainly. `Os.lstat` cannot run in a JVM unit test, so the only part of this
+ * predicate a test can reach is the arithmetic on a mode it supplies itself --
+ * and `S_ISLNK` is a method on a stubbed platform class, so a test calling it
+ * gets "not mocked" rather than an answer. The constants are no better: this
+ * module sets no `isReturnDefaultValues`, and `OsConstants.S_IFMT` is not a
+ * compile-time constant, so a unit test reads it as 0. A mask of zero makes
+ * every mode compare equal, which is the same "true for everything" failure
+ * this function exists to end.
+ *
+ * The values are fixed by the Linux ABI that Bionic implements: `S_IFMT` is
+ * 0170000 and `S_IFLNK` is 0120000.
+ */
+internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
 
 /**
  * Writes [dest] through a temporary file, so a failure leaves no partial file

@@ -14,8 +14,21 @@ class KeyInjector(private val webView: WebView) {
         metaKey: Boolean = false
     ) {
         val keyDef = KeyMapping.getKeyDefOrLetter(key)
-        val jsKey = keyDef.key.replace("'", "\\'").replace("\"", "\\\"")
-        val jsCode = keyDef.code.replace("'", "\\'")
+        // Quoted by [KeyMapping.jsQuote], which is the table's own escaper and
+        // the only one in this package that is correct.
+        //
+        // What was here escaped `'` and `"` and left `\` alone, which is exactly
+        // the character the table holds as a key. For the `\` entry it rendered
+        // `key: '\',` -- the backslash escapes the closing quote, the string
+        // runs on into the rest of the object, and the whole injected IIFE is a
+        // SyntaxError. `evaluateJavascript` reports a parse failure to a null
+        // callback, so the key did nothing at all and did it silently. It is
+        // reachable: the `/` key offers `\` as its long-press alternate.
+        //
+        // jsQuote emits a double-quoted literal, so these are no longer wrapped
+        // in quotes here -- doing both would produce a quoted quote.
+        val jsKey = KeyMapping.jsQuote(keyDef.key)
+        val jsCode = KeyMapping.jsQuote(keyDef.code)
         // Force shiftKey=true for characters that require Shift on a physical keyboard
         val effectiveShift = shiftKey || keyDef.requiresShift
 
@@ -23,8 +36,8 @@ class KeyInjector(private val webView: WebView) {
             (function() {
                 var target = document.activeElement || document.body;
                 var eventInit = {
-                    key: '${jsKey}',
-                    code: '${jsCode}',
+                    key: ${jsKey},
+                    code: ${jsCode},
                     keyCode: ${keyDef.keyCode},
                     which: ${keyDef.keyCode},
                     ctrlKey: ${ctrlKey},
