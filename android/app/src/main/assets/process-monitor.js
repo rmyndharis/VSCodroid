@@ -13,7 +13,12 @@ const path = require('path');
 
 const SCAN_INTERVAL_MS = 10_000;
 const IDLE_KILL_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
-const MEMORY_PRESSURE_KILL_LEVEL = 15; // TRIM_MEMORY_RUNNING_CRITICAL
+// The severities that justify shedding idle language servers, as words written
+// by the Android side. It used to be a number compared with >= against Android's
+// trim levels, which are not ordered by severity: TRIM_MEMORY_UI_HIDDEN is 20
+// and means "the UI is hidden", so every app switch cleared a threshold meant
+// for genuine memory pressure and killed every idle language server.
+const KILL_ON_PRESSURE = new Set(['critical']);
 
 const LANG_SERVER_PATTERNS = [
     'tsserver', 'typescript-language-server',
@@ -197,7 +202,7 @@ function scan() {
 
         // 4. Check memory pressure and kill idle LS if needed
         const pressure = readMemoryPressure();
-        if (pressure >= MEMORY_PRESSURE_KILL_LEVEL) {
+        if (KILL_ON_PRESSURE.has(pressure)) {
             const killed = killIdleLangServers(now);
             for (const k of killed) {
                 warnings.push(`Killed idle language server PID ${k.pid} (${k.cmd}) due to memory pressure`);
@@ -257,10 +262,10 @@ function killIdleLangServers(now) {
 
 function readMemoryPressure() {
     const content = readFileQuiet(pressurePath);
-    if (!content) return 0;
+    if (!content) return '';
     // Delete after reading (one-shot signal)
     try { fs.unlinkSync(pressurePath); } catch { }
-    return parseInt(content.trim(), 10) || 0;
+    return content.trim();
 }
 
 module.exports = { start, stop };

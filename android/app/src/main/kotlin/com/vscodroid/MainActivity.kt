@@ -5,6 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+import android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE
+import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
+import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
+import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.net.Uri
@@ -165,15 +170,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        @Suppress("DEPRECATION")
-        if (level >= TRIM_MEMORY_RUNNING_LOW) {
-            Logger.w(tag, "Low memory signal: level=$level")
-            writeMemoryPressure(level)
-            webView?.evaluateJavascript(
-                "window.__vscodroid?.onLowMemory?.($level)", null
-            )
-        }
+        val pressure = memoryPressureOf(level)
+        if (pressure == PRESSURE_NONE) return
+        Logger.w(tag, "Memory pressure: $pressure (trim level $level)")
+        writeMemoryPressure(pressure)
+        webView?.evaluateJavascript(
+            "window.__vscodroid?.onLowMemory?.($level)", null
+        )
     }
+
 
     // -- SAF Folder Picker --
 
@@ -272,10 +277,13 @@ class MainActivity : AppCompatActivity() {
 
     // -- Internal --
 
-    private fun writeMemoryPressure(level: Int) {
+    private fun writeMemoryPressure(pressure: String) {
         try {
             val tmpDir = File(cacheDir, "tmp")
-            File(tmpDir, "vscodroid-memory-pressure").writeText(level.toString())
+            // A severity, not Android's trim level. The monitor on the other end
+            // has no business knowing Android's numbering, and when it did, it
+            // compared values that are not ordered by severity.
+            File(tmpDir, "vscodroid-memory-pressure").writeText(pressure)
         } catch (e: Exception) {
             Logger.d(tag, "Failed to write memory pressure: ${e.message}")
         }
@@ -1147,4 +1155,49 @@ class MainActivity : AppCompatActivity() {
         /** Force page reload if backgrounded longer than this. */
         private const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
     }
+}
+
+// Severities the process monitor understands. Words rather than numbers so that
+// nothing downstream is tempted to compare them with >=, which is the defect
+// this replaced.
+internal const val PRESSURE_NONE = "none"
+internal const val PRESSURE_MODERATE = "moderate"
+internal const val PRESSURE_CRITICAL = "critical"
+
+/**
+ * What a trim level actually says about memory, which is not what comparing
+ * it says.
+ *
+ * Android's constants are not ordered by severity. `TRIM_MEMORY_UI_HIDDEN`
+ * is 20 and sits above `TRIM_MEMORY_RUNNING_CRITICAL` at 15, but it does not
+ * describe memory at all — it means "your UI is no longer visible" and
+ * arrives on every single backgrounding, on a device with gigabytes free.
+ * A `>=` comparison therefore read an ordinary app switch as worse than a
+ * genuine critical warning, and every language server idle for five minutes
+ * — which, after five minutes in another app, is all of them — was killed.
+ *
+ * So this maps rather than compares, and the next constant Android adds
+ * cannot clear a threshold by accident. Raising the number would have looked
+ * like a fix and been wrong again at the next value.
+ */
+@Suppress("DEPRECATION")
+internal fun memoryPressureOf(level: Int): String = when (level) {
+    // Every level that already shed idle work keeps doing so. Critical while
+    // running, and the cached levels, which all mean the system is reclaiming
+    // and this process is a candidate — shrinking our own footprint there is
+    // what keeps the app alive rather than merely responsive.
+    TRIM_MEMORY_RUNNING_CRITICAL,
+    TRIM_MEMORY_BACKGROUND,
+    TRIM_MEMORY_MODERATE,
+    TRIM_MEMORY_COMPLETE -> PRESSURE_CRITICAL
+
+    // Reported, and deliberately not enough to kill anything, exactly as
+    // before: 10 sat below the old threshold of 15.
+    TRIM_MEMORY_RUNNING_LOW -> PRESSURE_MODERATE
+
+    // TRIM_MEMORY_UI_HIDDEN (20) lands here, with TRIM_MEMORY_RUNNING_MODERATE
+    // (5). The first is not about memory at all; the second is the mildest
+    // hint Android has. This is the only line that changes behaviour, and it
+    // changes it for exactly the value that was wrong.
+    else -> PRESSURE_NONE
 }
