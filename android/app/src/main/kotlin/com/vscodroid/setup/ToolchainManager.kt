@@ -349,9 +349,17 @@ class ToolchainManager(private val context: Context) {
     // -- File operations --
 
     private fun installFromDirectory(packName: String, assetsDir: File) {
+        // Both of these report FAILED before returning, and that is load-bearing
+        // rather than tidy. Every other way out of this function ends in a state
+        // being reported -- success at the end, and the caller's catch on a throw
+        // -- but a plain return reported nothing, and the first-run queue is
+        // driven entirely by those reports. A pack whose manifest was missing or
+        // malformed therefore stalled setup on the progress screen instead of
+        // being skipped, which is a far worse outcome than one absent toolchain.
         val manifestFile = File(assetsDir, "$packName.json")
         if (!manifestFile.exists()) {
             Logger.e(tag, "No $packName.json in asset pack $packName")
+            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
             return
         }
 
@@ -359,6 +367,7 @@ class ToolchainManager(private val context: Context) {
         val name = manifest.optString("name", "")
         if (name.isEmpty()) {
             Logger.e(tag, "Invalid manifest.json in $packName: missing 'name'")
+            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
             return
         }
         Logger.i(tag, "Installing toolchain: $name (from $packName)")

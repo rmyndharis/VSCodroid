@@ -30,6 +30,9 @@ class SplashActivity : AppCompatActivity() {
     private var toolchainManager: ToolchainManager? = null
     private var downloadQueue = mutableListOf<String>()
     private var currentDownloadIndex = -1
+
+    /** Packs that have already moved the queue on. See [advancePast]. */
+    private val settledPacks = mutableSetOf<String>()
     private var cancelled = false
 
     // Progress UI refs (only valid after setContentView to progress layout)
@@ -220,6 +223,7 @@ class SplashActivity : AppCompatActivity() {
 
         downloadQueue = packNames.toMutableList()
         currentDownloadIndex = -1
+        settledPacks.clear()
         cancelled = false
         progressRows.clear()
 
@@ -324,14 +328,6 @@ class SplashActivity : AppCompatActivity() {
                 row.progressBar.progress = 100
                 row.statusText.text = getString(R.string.progress_done)
                 row.statusText.setTextColor(getColor(R.color.colorSuccess))
-                // Start next download
-                downloadNext()
-            }
-            AssetPackStatus.FAILED -> {
-                row.statusText.text = getString(R.string.progress_failed)
-                row.statusText.setTextColor(getColor(R.color.colorError))
-                // Skip failed and continue with next
-                downloadNext()
             }
             AssetPackStatus.PENDING, AssetPackStatus.WAITING_FOR_WIFI -> {
                 row.statusText.text = getString(R.string.progress_waiting)
@@ -343,7 +339,57 @@ class SplashActivity : AppCompatActivity() {
                     Logger.e(tag, "Failed to show confirmation dialog", e)
                 }
             }
+            // Anything else ends this pack without installing it. FAILED is the
+            // expected one; CANCELED arrives when the download is cancelled from
+            // the Play notification rather than from this screen, and UNKNOWN and
+            // NOT_INSTALLED arrive when Play has nothing to report for it.
+            else -> {
+                if (status != AssetPackStatus.FAILED) {
+                    Logger.w(tag, "Pack $packName ended at status $status")
+                }
+                row.statusText.text = getString(R.string.progress_failed)
+                row.statusText.setTextColor(getColor(R.color.colorError))
+            }
         }
+
+        // Deliberately outside the when, and that is the whole fix.
+        //
+        // Advancing used to be a call inside two of the branches, so a status
+        // matching no branch advanced nothing: downloadNext() was never reached
+        // and the screen sat on its progress list for the rest of the session,
+        // with every toolchain behind the stalled one left uninstalled. Deciding
+        // it here, from the status alone, means a branch cannot forget to do it
+        // -- which is the shape the bug had, rather than the particular states
+        // it happened to miss.
+        //
+        // The stall is not a dead end, and an earlier version of this comment
+        // said it was: cancelButton is always visible and goes straight to
+        // launchMain(), and a relaunch skips setup entirely because
+        // markSetupComplete() has already run by the time this screen appears.
+        if (isTerminalPackStatus(status)) {
+            advancePast(packName)
+        }
+    }
+
+    /**
+     * Moves the queue past [packName], at most once.
+     *
+     * A pack can reach a terminal state more than once -- Play reporting CANCELED
+     * and then NOT_INSTALLED for the same cancellation, or a late event for a pack
+     * the queue has already left behind. Without this, the second one would step
+     * over whichever pack was actually downloading and leave it uninstalled with
+     * its row still reading "installing".
+     *
+     * Nothing on the ordinary path relies on this: each pack reaches a terminal
+     * state once and advances once. It is here for the repeats, which is why the
+     * repeat logs at debug rather than warning.
+     */
+    private fun advancePast(packName: String) {
+        if (!settledPacks.add(packName)) {
+            Logger.d(tag, "Ignoring repeat terminal state for $packName")
+            return
+        }
+        downloadNext()
     }
 
     // -- Navigation --
@@ -355,4 +401,27 @@ class SplashActivity : AppCompatActivity() {
         })
         finish()
     }
+}
+
+/**
+ * Whether [status] means the pack will not arrive on its own.
+ *
+ * Only five states are still going somewhere: the two transfer states, the two
+ * waiting states, and the confirmation prompt. Everything else counts as
+ * finished -- including states this build has never heard of -- because the cost
+ * of being wrong is not symmetric. A pack wrongly treated as finished costs one
+ * toolchain, which the user can install later from inside the app. A pack
+ * wrongly waited on costs them the app: first-run setup never reaches the
+ * editor, and relaunching returns to the same screen.
+ *
+ * File scope so it can be tested without an Activity; this project's unit tests
+ * have no Robolectric.
+ */
+internal fun isTerminalPackStatus(status: Int): Boolean = when (status) {
+    AssetPackStatus.DOWNLOADING,
+    AssetPackStatus.TRANSFERRING,
+    AssetPackStatus.PENDING,
+    AssetPackStatus.WAITING_FOR_WIFI,
+    AssetPackStatus.REQUIRES_USER_CONFIRMATION -> false
+    else -> true
 }
