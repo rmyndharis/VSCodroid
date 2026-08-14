@@ -28,7 +28,7 @@ import org.junit.jupiter.params.provider.ValueSource
  */
 class UrlAllowlistWiringTest {
 
-    private val manager = SecurityManager(allowedPort = 13337)
+    private val manager = SecurityManager()
 
     @BeforeEach
     fun silenceLogger() {

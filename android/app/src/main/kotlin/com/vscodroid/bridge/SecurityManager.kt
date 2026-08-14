@@ -4,7 +4,7 @@ import java.net.URI
 import com.vscodroid.util.Logger
 import java.security.SecureRandom
 
-class SecurityManager(private val allowedPort: Int) {
+class SecurityManager {
     private val tag = "SecurityManager"
     private val sessionToken: String = generateToken()
 
@@ -44,16 +44,6 @@ class SecurityManager(private val allowedPort: Int) {
         }
         if (!allowed) {
             Logger.w(tag, "Blocked URL: $url")
-        }
-        return allowed
-    }
-
-    fun isAllowedOrigin(origin: String?): Boolean {
-        if (origin == null) return false
-        val allowed = origin == "http://127.0.0.1:$allowedPort" ||
-                origin == "http://localhost:$allowedPort"
-        if (!allowed) {
-            Logger.w(tag, "Rejected origin: $origin")
         }
         return allowed
     }

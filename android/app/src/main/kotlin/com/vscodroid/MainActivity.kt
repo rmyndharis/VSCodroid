@@ -501,7 +501,7 @@ class MainActivity : AppCompatActivity() {
         if (bridgeInitialized) return
         bridgeInitialized = true
 
-        securityManager = SecurityManager(port)
+        securityManager = SecurityManager()
         val clipboardBridge = ClipboardBridge(this)
         val bridge = AndroidBridge(
             context = this,

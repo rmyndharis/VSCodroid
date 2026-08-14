@@ -31,7 +31,7 @@ class SessionTokenEntropyTest {
         every { Logger.i(any(), any()) } just Runs
     }
 
-    private fun tokens(n: Int): List<String> = List(n) { SecurityManager(13337).getSessionToken() }
+    private fun tokens(n: Int): List<String> = List(n) { SecurityManager().getSessionToken() }
 
     @Test
     fun `every byte position varies across a large sample`() {
@@ -71,7 +71,7 @@ class SessionTokenEntropyTest {
 
     @Test
     fun `the token still has the shape the bridge expects`() {
-        val token = SecurityManager(13337).getSessionToken()
+        val token = SecurityManager().getSessionToken()
         assertTrue(token.matches(Regex("[0-9a-f]{64}")), "expected 64 lowercase hex characters, got '$token'")
     }
 }

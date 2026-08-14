@@ -17,11 +17,10 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 
 /**
- * Tests for [SecurityManager] — token generation/validation, URL allowlist, origin checking.
+ * Tests for [SecurityManager] — token generation/validation and the URL allowlist.
  */
 class SecurityManagerTest {
 
-    private val testPort = 9742
     private lateinit var manager: SecurityManager
 
     @BeforeEach
@@ -32,7 +31,7 @@ class SecurityManagerTest {
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
-        manager = SecurityManager(testPort)
+        manager = SecurityManager()
     }
 
     // ── Token Generation ─────────────────────────────────────────────────
@@ -61,7 +60,7 @@ class SecurityManagerTest {
 
         @Test
         fun `different instances generate different tokens`() {
-            val other = SecurityManager(testPort)
+            val other = SecurityManager()
             assertNotEquals(
                 manager.getSessionToken(),
                 other.getSessionToken(),
@@ -127,42 +126,6 @@ class SecurityManagerTest {
         ])
         fun `blocks non-https non-mailto URLs`(url: String) {
             assertFalse(manager.isAllowedUrl(url), "URL should be blocked: $url")
-        }
-    }
-
-    // ── Origin Validation ────────────────────────────────────────────────
-
-    @Nested
-    inner class OriginValidationTest {
-
-        @Test
-        fun `allows 127_0_0_1 with correct port`() {
-            assertTrue(manager.isAllowedOrigin("http://127.0.0.1:$testPort"))
-        }
-
-        @Test
-        fun `allows localhost with correct port`() {
-            assertTrue(manager.isAllowedOrigin("http://localhost:$testPort"))
-        }
-
-        @Test
-        fun `rejects null origin`() {
-            assertFalse(manager.isAllowedOrigin(null))
-        }
-
-        @Test
-        fun `rejects wrong port`() {
-            assertFalse(manager.isAllowedOrigin("http://127.0.0.1:9999"))
-        }
-
-        @Test
-        fun `rejects external origin`() {
-            assertFalse(manager.isAllowedOrigin("https://evil.com"))
-        }
-
-        @Test
-        fun `rejects https localhost`() {
-            assertFalse(manager.isAllowedOrigin("https://127.0.0.1:$testPort"))
         }
     }
 }
