@@ -75,11 +75,18 @@ window.__vscodroid.onOAuthError(provider: string, error: string); // OAuth failu
 
 Exposed via `@JavascriptInterface`:
 
+Every method takes the session token and validates it before doing anything; a call
+with a token that does not match is refused and returns the method's empty value
+(`false`, `null`, `""`, `"{}"`, `"[]"`, `0`, or nothing). Read it from
+`window.__vscodroid.authToken`, which MainActivity sets once the bridge is installed.
+`BridgeTokenUniformityTest` enumerates the methods by reflection and fails if one is
+added without the check, so this holds for the class rather than for the list below.
+
 #### Clipboard
 
 ```kotlin
 @JavascriptInterface
-fun copyToClipboard(text: String): Boolean
+fun copyToClipboard(authToken: String, text: String): Boolean
 // Copies text to Android system clipboard
 // Returns: true if successful
 
@@ -89,7 +96,7 @@ fun readFromClipboard(authToken: String): String?
 // Returns: clipboard text or null
 
 @JavascriptInterface
-fun hasClipboardText(): Boolean
+fun hasClipboardText(authToken: String): Boolean
 // Checks if clipboard has text content
 ```
 
@@ -102,13 +109,13 @@ fun openExternalUrl(url: String, authToken: String)
 // Used by: VS Code "Open in Browser" actions
 
 @JavascriptInterface
-fun onBackPressed(): Boolean
+fun onBackPressed(authToken: String): Boolean
 // Called from VS Code when back button override is needed
 // Returns: true if VS Code handled back navigation (closed a panel/dialog)
 //          false if app should handle back (minimize/exit)
 
 @JavascriptInterface
-fun minimizeApp()
+fun minimizeApp(authToken: String)
 // Moves app to background (moveTaskToBack)
 
 @JavascriptInterface
@@ -188,7 +195,7 @@ fun getDeviceInfo(authToken: String): String
 // }
 
 @JavascriptInterface
-fun getThemeMode(): String
+fun getThemeMode(authToken: String): String
 // Returns: "light" or "dark" (follows Android system theme)
 ```
 
@@ -214,7 +221,7 @@ MainActivity handles the deep link intent and forwards parsed values to WebView 
 
 ```kotlin
 @JavascriptInterface
-fun logToNative(level: String, tag: String, message: String)
+fun logToNative(authToken: String, level: String, tag: String, message: String)
 // Sends log from WebView to Android Logcat
 // level: "debug", "info", "warn", "error"
 ```
