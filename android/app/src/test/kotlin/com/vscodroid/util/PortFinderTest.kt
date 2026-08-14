@@ -52,6 +52,30 @@ class PortFinderTest {
     @AfterEach
     fun tearDown() = unmockkAll()
 
+    /**
+     * Holds every port the scan hands out, until it has to fall through to `ServerSocket(0)`.
+     *
+     * Driven by what [PortFinder.findAvailablePort] actually returns rather than by a
+     * literal `13337 until 13337 + 64`. DEFAULT_PORT and SCAN_RANGE are private, so a test
+     * that restates them keeps compiling and quietly stops exhausting the range the moment
+     * either one moves. The cap is only a runaway guard: callers assert that the fallback
+     * was really reached, and that assertion is what fails if it is ever hit.
+     */
+    private fun holdEntireScanRange(): List<ServerSocket> {
+        val held = mutableListOf<ServerSocket>()
+        while (held.size < 1024) {
+            val port = PortFinder.findAvailablePort()
+            if (port >= EPHEMERAL_BASE) break
+            held += ServerSocket(port)
+        }
+        return held
+    }
+
+    private companion object {
+        /** Bottom of the kernel's ephemeral range (`net.ipv4.ip_local_port_range`). */
+        const val EPHEMERAL_BASE = 32768
+    }
+
     @Nested
     inner class FindAvailablePortTest {
 
@@ -79,9 +103,14 @@ class PortFinderTest {
 
         @Test
         fun `skips a port that is already bound`() {
-            ServerSocket(13337).use {
+            // Bind whatever the scan is currently handing out rather than the literal
+            // base. Naming the base meant this test threw BindException -- an
+            // environmental failure, not a verdict on PortFinder -- on any machine
+            // already using that port.
+            val taken = PortFinder.findAvailablePort()
+            ServerSocket(taken).use {
                 val port = PortFinder.findAvailablePort()
-                assertNotEquals(13337, port, "the scan must step over a bound port")
+                assertNotEquals(taken, port, "the scan must step over a bound port")
                 assertTrue(PortFinder.isPortAvailable(port))
             }
         }
@@ -104,12 +133,10 @@ class PortFinderTest {
             // launch -- remembering it would re-arm the very storage loss the fixed
             // scan base exists to avoid, and it would never migrate back once the
             // congestion clears.
-            val held = (13337 until 13337 + 64).mapNotNull {
-                runCatching { ServerSocket(it) }.getOrNull()
-            }
+            val held = holdEntireScanRange()
             try {
                 val port = PortFinder.getOrAllocatePort(context)
-                assertTrue(port >= 32768, "precondition failed: the scan range was not exhausted")
+                assertTrue(port >= EPHEMERAL_BASE, "precondition failed: the scan range was not exhausted")
                 assertEquals(0, stored, "an ephemeral port must not be persisted")
             } finally {
                 held.forEach { it.close() }
@@ -121,13 +148,19 @@ class PortFinderTest {
             // The old value is worth more than the emergency port: if the range was
             // only briefly full, the next cold start returns to the origin this
             // install has been using, with its IndexedDB intact.
-            stored = 13350
-            val held = (13337 until 13337 + 64).mapNotNull {
-                runCatching { ServerSocket(it) }.getOrNull()
-            }
+            // Taken before the range is held, so it is a port inside the scan range --
+            // the only kind getOrAllocatePort is willing to remember. Asserted rather
+            // than assumed: if something else already owns the whole range, the scan
+            // returns an ephemeral port here, and remembering one of those would make
+            // the assertion below pass without exercising the branch at all.
+            val remembered = PortFinder.findAvailablePort()
+            assertTrue(remembered < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+
+            val held = holdEntireScanRange()
+            stored = remembered
             try {
                 PortFinder.getOrAllocatePort(context)
-                assertEquals(13350, stored, "the remembered port must survive an ephemeral fallback")
+                assertEquals(remembered, stored, "the remembered port must survive an ephemeral fallback")
             } finally {
                 held.forEach { it.close() }
             }
