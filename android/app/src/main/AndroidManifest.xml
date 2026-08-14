@@ -49,16 +49,6 @@
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.VSCodroid">
 
-            <!-- Open code files from file managers and other apps -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data android:mimeType="text/*" />
-                <data android:mimeType="application/json" />
-            </intent-filter>
-
             <!-- Extension callback relay: vscodroid://callback?data=... -->
             <!-- Bridges localStorage gap between Chrome (callback.html) and WebView -->
             <intent-filter>
@@ -69,63 +59,21 @@
                 <data android:scheme="vscodroid" android:host="callback" />
             </intent-filter>
 
-            <!-- Open code files by extension (file:// and content:// schemes).
-                 mimeType is required for content:// URIs — use text/* plus specific
-                 code-related types instead of */* to avoid matching photos/music/etc. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
+            <!-- No VIEW filter for file:// or content:// here, and that is deliberate.
+                 Two of them used to advertise this app for about twenty source-file
+                 extensions, and nothing ever opened one: handleIntent() called
+                 window.__vscodroid.onFileOpen, which has had no consumer since the
+                 initial commit. Choosing VSCodroid from "Open with" brought up the
+                 editor on the default folder with no file, no message and nothing in
+                 the log to attach to a bug report.
 
-                <data android:scheme="file" />
-                <data android:scheme="content" />
-                <data android:host="*" />
-
-                <!-- MIME types for code files -->
-                <data android:mimeType="text/*" />
-                <data android:mimeType="application/json" />
-                <data android:mimeType="application/javascript" />
-                <data android:mimeType="application/xml" />
-                <data android:mimeType="application/x-shellscript" />
-                <data android:mimeType="application/octet-stream" />
-
-                <!-- JavaScript / TypeScript -->
-                <data android:pathPattern=".*\\.js" />
-                <data android:pathPattern=".*\\.ts" />
-
-                <!-- Python -->
-                <data android:pathPattern=".*\\.py" />
-
-                <!-- Web -->
-                <data android:pathPattern=".*\\.html" />
-                <data android:pathPattern=".*\\.css" />
-
-                <!-- Data -->
-                <data android:pathPattern=".*\\.json" />
-                <data android:pathPattern=".*\\.xml" />
-                <data android:pathPattern=".*\\.yaml" />
-                <data android:pathPattern=".*\\.yml" />
-
-                <!-- Documentation -->
-                <data android:pathPattern=".*\\.md" />
-                <data android:pathPattern=".*\\.txt" />
-
-                <!-- Systems -->
-                <data android:pathPattern=".*\\.go" />
-                <data android:pathPattern=".*\\.rs" />
-                <data android:pathPattern=".*\\.c" />
-                <data android:pathPattern=".*\\.cpp" />
-                <data android:pathPattern=".*\\.h" />
-
-                <!-- JVM -->
-                <data android:pathPattern=".*\\.java" />
-                <data android:pathPattern=".*\\.kt" />
-
-                <!-- Ruby -->
-                <data android:pathPattern=".*\\.rb" />
-
-                <!-- Shell -->
-                <data android:pathPattern=".*\\.sh" />
-            </intent-filter>
+                 Implementing it is not a matter of wiring the hook up. A content://
+                 URI has no POSIX path, and the server only ever sees POSIX paths, so
+                 the file has to be materialised locally, at which point saving
+                 writes to a copy and the user's edits never reach the file they
+                 opened. Advertising nothing is honest; advertising this and silently
+                 dropping edits would not be. Folders still open through the SAF
+                 picker, which does have the sync engine that makes write-back work. -->
         </activity>
 
         <!-- Toolchain settings: manage on-demand language toolchains -->

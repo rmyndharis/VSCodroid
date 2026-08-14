@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- VSCodroid no longer offers itself in the Android "Open with" list for source files. It advertised about twenty file types and never opened any of them: picking it brought up the editor on the default folder with no file and no message. Folders still open through "Open Folder from Device"
 - Builds now check that the downloaded server tree actually carries every patch this repository applies, instead of only checking that at build time. A tree built before a patch landed has the same filename, the same version and a digest that verifies, so nothing here could previously tell it apart -- and an app could ship a server missing a fix that the repository already contained
 - The build now refuses a server tree that is missing any of the Android adaptations, instead of checking only the ones someone remembered to list. A patch added without its check used to produce a clean-looking build that quietly shipped without it
 - npm upgraded 10.8.2 → 11.16.0, the version the bundled Node runtime actually ships with. The app had been packaging npm taken from an older Node release it no longer runs, left behind when the runtime was replaced
