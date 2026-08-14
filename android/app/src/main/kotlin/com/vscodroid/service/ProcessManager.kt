@@ -1,5 +1,6 @@
 package com.vscodroid.service
 
+import android.app.ActivityManager
 import android.content.Context
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
@@ -135,9 +136,10 @@ class ProcessManager(private val context: Context) {
         // because an argument that looks decisive and does nothing is worse than a
         // missing one, and the next person to change authentication would have
         // started here.
+        val heapMb = heapCeilingForDevice()
         val command = listOf(
             nodePath,
-            "--max-old-space-size=512",
+            "--max-old-space-size=$heapMb",
             serverScript,
             "--host=127.0.0.1",
             "--port=$_port",
@@ -157,7 +159,7 @@ class ProcessManager(private val context: Context) {
             serverProcess = processBuilder.start().also { it.outputStream.close() }
             startOutputReader()
             startWatchdog()
-            Logger.i(tag, "Server process started with PID ${getServerPid()}")
+            Logger.i(tag, "Server process started with PID ${getServerPid()}, heap ceiling ${heapMb}MB")
             true
         } catch (e: Exception) {
             Logger.e(tag, "Failed to start server", e)
@@ -246,6 +248,28 @@ class ProcessManager(private val context: Context) {
         serverProcess = null
         watchdogThread?.interrupt()
         watchdogThread = null
+    }
+
+
+    /**
+     * The V8 heap ceiling for this device.
+     *
+     * Reading the device is the point: the flag was a literal 512 regardless of
+     * whether the phone had 2 GB or 16 GB. On a small device that left no
+     * headroom -- the flag caps the V8 heap, not process RSS, so the native
+     * heap, ICU data and loaded addons all sit outside it, and what actually
+     * ends the process is Android's low-memory killer, which does not read
+     * flags. On a large device the extra RAM went unused.
+     */
+    private fun heapCeilingForDevice(): Int = try {
+        val am = context.getSystemService(ActivityManager::class.java)
+        val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        heapCeilingMb(info.totalMem / 1_048_576, am.isLowRamDevice)
+    } catch (e: Exception) {
+        // Reading it is not worth failing a start over, and the old literal is
+        // the right thing to fall back to: it is what every device ran until now.
+        Logger.w(tag, "Could not read device memory, using the default ceiling: ${e.message}")
+        HEAP_CEILING_DEFAULT_MB
     }
 
     /**
@@ -356,4 +380,35 @@ internal fun signalName(signum: Int): String = when (signum) {
     11 -> "SIGSEGV"
     15 -> "SIGTERM"
     else -> "signal $signum"
+}
+
+/** What every device ran before the ceiling was derived, and the fallback. */
+internal const val HEAP_CEILING_DEFAULT_MB = 512
+internal const val HEAP_CEILING_MIN_MB = 256
+internal const val HEAP_CEILING_MAX_MB = 768
+
+/**
+ * An eighth of RAM, held inside a band.
+ *
+ * The eighth is a budget rather than a measurement: the editor server is one of
+ * several processes this app is responsible for, and the flag governs only the
+ * V8 heap inside one of them. The floor exists because below it the editor
+ * cannot open a real project at all, so a device that cannot afford the floor is
+ * going to struggle whatever number is chosen. The ceiling exists because past
+ * it the limit stops being what ends the process -- Android's low-memory killer
+ * does, and it does not read flags.
+ *
+ * A device the manufacturer flagged as low-RAM gets the floor whatever its
+ * total says, because that flag is the OEM stating the device is constrained in
+ * ways totalMem does not show.
+ */
+internal fun heapCeilingMb(totalRamMb: Long, isLowRam: Boolean): Int {
+    if (isLowRam) return HEAP_CEILING_MIN_MB
+    // Guard the unreadable case rather than trusting it: totalMem has been seen
+    // to report 0 on emulators, and 0/8 would silently become the floor while
+    // looking like a considered decision.
+    if (totalRamMb <= 0) return HEAP_CEILING_DEFAULT_MB
+    return (totalRamMb / 8).coerceIn(
+        HEAP_CEILING_MIN_MB.toLong(), HEAP_CEILING_MAX_MB.toLong()
+    ).toInt()
 }

@@ -225,3 +225,47 @@ class SignalNameTest {
         assertEquals("signal 31", signalName(31))
     }
 }
+
+/**
+ * The ceiling was a literal 512 on every device. These assert the shape of the
+ * replacement rather than the constants, because the constants are a budget and
+ * may be retuned; what must not change is that a 2 GB phone and a 16 GB phone
+ * stop getting the same answer.
+ */
+class HeapCeilingTest {
+
+    @Test
+    fun `a four gigabyte device keeps what every device used to get`() {
+        // The value this replaced. Stated so a retune has to notice it moved the
+        // midpoint, rather than discovering it from a bug report.
+        assertEquals(HEAP_CEILING_DEFAULT_MB, heapCeilingMb(4L * 1024, isLowRam = false))
+    }
+
+    @Test
+    fun `a small device gets less than a large one`() {
+        val small = heapCeilingMb(2L * 1024, isLowRam = false)
+        val large = heapCeilingMb(12L * 1024, isLowRam = false)
+        assert(small < large) { "2 GB got $small, 12 GB got $large" }
+    }
+
+    @Test
+    fun `the band holds at both ends`() {
+        assertEquals(HEAP_CEILING_MIN_MB, heapCeilingMb(1L * 1024, isLowRam = false))
+        assertEquals(HEAP_CEILING_MAX_MB, heapCeilingMb(64L * 1024, isLowRam = false))
+    }
+
+    @Test
+    fun `a device the manufacturer flagged as low-RAM gets the floor`() {
+        // Whatever totalMem says: the flag is the OEM stating the device is
+        // constrained in ways the number does not show.
+        assertEquals(HEAP_CEILING_MIN_MB, heapCeilingMb(8L * 1024, isLowRam = true))
+    }
+
+    @Test
+    fun `an unreadable total falls back rather than silently taking the floor`() {
+        // totalMem has been seen reporting 0 on emulators, and 0/8 clamps to the
+        // floor, which would look like a considered decision.
+        assertEquals(HEAP_CEILING_DEFAULT_MB, heapCeilingMb(0, isLowRam = false))
+        assertEquals(HEAP_CEILING_DEFAULT_MB, heapCeilingMb(-1, isLowRam = false))
+    }
+}
