@@ -7,6 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 
 // Parse command-line arguments
 const args = {};
@@ -192,9 +193,23 @@ if (!fs.existsSync(rehEntryPoint)) {
             process.exit(1);
         });
 
-        server.on('exit', (code) => {
+        server.on('exit', (code, signal) => {
+            // A killed child reports code === null and the signal separately, and
+            // `code || 0` collapsed that to a clean zero -- so a server killed for
+            // running out of memory, or by Android's phantom-process limit, was
+            // logged as having exited cleanly while the watchdog restarted it. The
+            // log then said both, one line apart.
+            //
+            // 128 + signum is the shell convention, and it is what the Kotlin side
+            // already expects: its 137 branch exists to name SIGKILL and could
+            // never be reached.
+            if (signal) {
+                const signum = os.constants.signals[signal] || 0;
+                log('warn', `VS Code Server killed by ${signal}`);
+                process.exit(128 + signum);
+            }
             log('info', `VS Code Server exited with code ${code}`);
-            process.exit(code || 0);
+            process.exit(code ?? 0);
         });
 
         process.on('SIGTERM', () => {

@@ -322,9 +322,17 @@ class ProcessManager(private val context: Context) {
                     Logger.i(tag, "Server shut down gracefully")
                     return@thread
                 }
-                when (exitCode) {
-                    0 -> Logger.i(tag, "Server exited cleanly")
-                    137 -> Logger.w(tag, "Server killed (OOM or phantom limit)")
+                when {
+                    exitCode == 0 -> Logger.i(tag, "Server exited cleanly")
+                    exitCode == 137 -> Logger.w(tag, "Server killed (OOM or phantom limit)")
+                    // The bootstrap reports a killed child as 128 + signal, so any
+                    // other signal is named rather than printed as a bare number.
+                    // Before, none of these could arrive: the bootstrap collapsed
+                    // every signal to a clean zero, so even the 137 branch above
+                    // was unreachable.
+                    exitCode in 129..192 -> Logger.w(
+                        tag, "Server killed by ${signalName(exitCode - 128)}"
+                    )
                     else -> Logger.e(tag, "Server crashed with exit code $exitCode")
                 }
                 onServerCrashed?.invoke(exitCode)
@@ -333,4 +341,19 @@ class ProcessManager(private val context: Context) {
             }
         }
     }
+}
+
+/**
+ * The POSIX signal name for a number, for the few that actually end a process
+ * here. Named rather than numbered because "killed by SIGKILL" and "killed by
+ * SIGSEGV" send a reader to different places, while "exit code 139" sends them
+ * to a search engine.
+ */
+internal fun signalName(signum: Int): String = when (signum) {
+    2 -> "SIGINT"
+    6 -> "SIGABRT"
+    9 -> "SIGKILL"
+    11 -> "SIGSEGV"
+    15 -> "SIGTERM"
+    else -> "signal $signum"
 }

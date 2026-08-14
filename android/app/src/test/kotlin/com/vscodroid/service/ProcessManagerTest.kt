@@ -200,3 +200,28 @@ private var ProcessManager.portField: Int
 
 private fun field(name: String) =
     ProcessManager::class.java.getDeclaredField(name).apply { isAccessible = true }
+
+/**
+ * The bootstrap reports a killed child as 128 + signal. Before that, every signal
+ * was collapsed to a clean zero, so the branch naming SIGKILL was unreachable and
+ * a server killed for running out of memory was logged as having exited cleanly.
+ */
+class SignalNameTest {
+
+    @Test
+    fun `SIGKILL is the 137 the watchdog already looked for`() {
+        assertEquals("SIGKILL", signalName(137 - 128))
+    }
+
+    @Test
+    fun `the signals that actually end this process are named`() {
+        assertEquals("SIGSEGV", signalName(11))
+        assertEquals("SIGTERM", signalName(15))
+        assertEquals("SIGABRT", signalName(6))
+    }
+
+    @Test
+    fun `an unfamiliar signal is reported rather than hidden`() {
+        assertEquals("signal 31", signalName(31))
+    }
+}
