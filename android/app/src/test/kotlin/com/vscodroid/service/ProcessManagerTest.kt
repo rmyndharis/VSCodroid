@@ -257,7 +257,12 @@ class ProcessManagerTest {
         // onServerCrashed never fires, so the automatic restart that exists for
         // exactly that case never runs. The app sits with a dead server and a
         // log line saying it shut down cleanly.
-        assertTrue(manager.startServer(), "the fixture server must start")
+        // Through the helper for the first start too, so that watchdog has already
+        // finished before the flag is set. Started bare, it can still be between
+        // its flag check and its callback when the second start installs one --
+        // and then it counts the latch down itself, which would let this pass
+        // with the reset deleted.
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
         manager.stopServer()
 
         // Fails by timeout if the flag survived: the watchdog returns early and
