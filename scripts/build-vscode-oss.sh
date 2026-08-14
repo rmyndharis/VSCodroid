@@ -382,6 +382,7 @@ if [ -d "$PATCHES" ] && [ -n "$(ls -A "$PATCHES"/*.patch 2>/dev/null)" ]; then
 0008 activitybar height|out/vs/code/browser/workbench/workbench.js|.activitybar .composite-bar
 0009 alpine target|out/server-main.js|Android: requesting the alpine target platform
 0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
+0012 callback route|out/server-main.js|==="/callback"
 FINGERPRINTS
 fi
 

@@ -1,0 +1,61 @@
+Serve the OAuth callback before the connection token check.
+
+Every extension sign-in ends with the identity provider redirecting the browser
+to http://127.0.0.1:PORT/<product>/callback. On a desktop that request lands in
+the same browser that has the workbench open, so it carries the vscode-tkn
+cookie and the token check passes. On Android it does not. The provider is
+opened in a Chrome Custom Tab, which uses the browser's own cookie jar and not
+the app WebView's, so the callback arrives with no cookie at all. It carries no
+token in the query either: the workbench mints this URL from window.location,
+and the root handler strips the token from there before the workbench is ever
+loaded.
+
+So once a connection token is in force, the callback is answered 403 and the
+flow stops without a word. callback.html never loads, which means the intent://
+relay that 0006 adds to it never runs, vscodroid://callback never fires,
+MainActivity.handleExtensionCallback is never called, and the extension waits
+forever on a localStorage key that nothing will write. Nothing appears in the
+workbench; the sign-in simply hangs. Measured on an API 36 emulator against the
+tokenful server: /version answered 200, / answered 403, and
+/callback?vscode-reqid=1 answered 403.
+
+Serving it early costs nothing that was being protected. _handleCallback takes
+only the response object, ignores the request entirely, and returns a static
+callback.html; the only data the page acts on is the query the caller supplied
+itself. What actually reaches the app is the vscodroid://callback intent, and
+the manifest lets any app on the device fire that directly, so this route was
+never the thing standing between an attacker and the workbench.
+
+The literal '/callback' matches the '/version' and '/delay-shutdown' checks
+directly above it, and is deliberately not webClientServer.ts's CALLBACK_PATH,
+which is module-local there. It also leaves a fingerprint that survives
+minification: === "/callback" appears nowhere in an unpatched bundle, where the
+route is only ever compared against a hoisted constant.
+
+diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+index e7ae07d..f9546ee 100644
+--- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
++++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+@@ -141,6 +141,22 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+ 			return void res.end('OK');
+ 		}
+ 
++		// OAuth callback
++		//
++		// Answered before the connection token check, because this request does
++		// not come from the workbench. It arrives in the system browser at the
++		// end of an OAuth redirect, and that browser holds neither the cookie
++		// nor a token in the query, so gating it turns every extension sign-in
++		// into a Forbidden page and then a silent hang.
++		//
++		// Nothing here was being protected: _handleCallback ignores the request
++		// entirely and returns a static callback.html, whose only data is the
++		// query the caller supplied itself.
++		if (pathname === '/callback' && this._webClientServer) {
++			this._webClientServer.handle(req, res, parsedUrl, pathname);
++			return;
++		}
++
+ 		if (!httpRequestHasValidConnectionToken(this._connectionToken, req, parsedUrl)) {
+ 			// invalid connection token
+ 			return serveError(req, res, 403, `Forbidden.`);
