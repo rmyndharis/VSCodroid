@@ -11,6 +11,7 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
 import android.net.Uri
 import android.os.IBinder
@@ -22,6 +23,7 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import java.io.File
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
@@ -178,9 +180,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // enableEdgeToEdge() must be called BEFORE super.onCreate().
-        // Handles status bar, navigation bar, and system bar styling automatically
-        // with backward compatibility across Android 13-16+.
-        enableEdgeToEdge()
+        // SystemBarStyle.dark, not the default auto: auto follows the SYSTEM
+        // theme, but this app is always dark (#1E1E1E, no values-night), so in
+        // device light mode the default drew dark icons on a dark background.
+        // dark() pins light icons regardless of device theme.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 

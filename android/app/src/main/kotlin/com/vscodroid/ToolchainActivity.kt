@@ -1,6 +1,8 @@
 package com.vscodroid
 
+import android.graphics.Color
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -24,7 +26,11 @@ class ToolchainActivity : AppCompatActivity() {
     private lateinit var adapter: ToolchainPickerAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // dark(): the app is always dark; auto would follow the system theme (see MainActivity).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_toolchain)
 
