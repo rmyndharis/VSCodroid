@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Check the process monitor can recognise the language servers that ship.
+
+    check-langserver-patterns.py <extensions-dir>
+
+process-monitor.js labels a process as a language server by substring-matching
+its command line against a list of patterns, and that list is what decides which
+processes the idle-kill can reclaim. A pattern that matches nothing is invisible
+twice over: the server keeps running, it keeps counting against Android's
+phantom-process budget, and the feature built to manage exactly that never sees
+it.
+
+That already happened. The list carried 'css-languageserver',
+'html-languageserver' and 'json-languageserver' while the processes VS Code
+actually launches are cssServerMain.js, htmlServerMain.js and jsonServerMain.js,
+so the three servers most likely to be running were the three the monitor could
+not see. Nothing reported it, because a pattern that matches nothing looks
+exactly like a language server that is not running.
+
+This compares the list against the servers in the tree being packaged. It cannot
+cover servers that arrive with extensions a user installs later -- those are the
+rest of the list, and they are unverifiable here by construction. What it does
+cover is everything this repository chooses to ship, which is where the drift
+was.
+"""
+
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+MONITOR = ROOT / "android/app/src/main/assets/process-monitor.js"
+
+# VS Code's built-in language servers are all named <lang>ServerMain.js.
+SERVER_ENTRY = "*ServerMain.js"
+
+
+def patterns():
+    """The pattern list, or empty when it cannot be found.
+
+    Empty rather than raising: the caller turns that into a message naming what
+    it looked for. A traceback exits non-zero too, but it tells whoever hits it
+    that this script broke rather than that the list moved, which sends them to
+    the wrong file.
+    """
+    src = MONITOR.read_text()
+    start = src.find("const LANG_SERVER_PATTERNS")
+    if start < 0:
+        return []
+    end = src.find("];", start)
+    if end < 0:
+        return []
+    return re.findall(r"'([^']+)'", src[start:end])
+
+
+def main(extensions):
+    pats = patterns()
+    # An empty list would make every assertion below vacuously true, and this
+    # reads the list out of a JavaScript file, so the parse failing quietly is a
+    # real possibility rather than a theoretical one.
+    if not pats:
+        print(f"  FAIL   no patterns parsed from {MONITOR.name}; the list moved or changed shape")
+        return 1
+
+    servers = sorted(extensions.rglob(SERVER_ENTRY))
+    if not servers:
+        print(f"  FAIL   no {SERVER_ENTRY} under {extensions}; "
+              "either nothing ships them or the naming convention changed")
+        return 1
+
+    failed = False
+    for server in servers:
+        # The command line carries the full path, so matching the path is what
+        # the monitor will actually be doing.
+        cmd = str(server)
+        hit = next((p for p in pats if p in cmd), None)
+        if hit:
+            print(f"  ok      {server.name} matched by {hit!r}")
+        else:
+            print(f"  FAIL    {server.name} is matched by no pattern")
+            print(f"            {server.relative_to(extensions)}")
+            failed = True
+
+    if failed:
+        print(f"         Add a pattern to LANG_SERVER_PATTERNS in {MONITOR.name}.")
+        print("         Until then the monitor cannot see it, and the idle-kill "
+              "cannot reclaim it.")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("usage: check-langserver-patterns.py <extensions-dir>", file=sys.stderr)
+        sys.exit(2)
+    path = pathlib.Path(sys.argv[1])
+    if not path.is_dir():
+        print(f"  FAIL    {path} is not a directory", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(main(path))

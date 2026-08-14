@@ -24,8 +24,16 @@ const LANG_SERVER_PATTERNS = [
     'tsserver', 'typescript-language-server',
     'pylsp', 'pyright', 'python-language-server', 'jedi',
     'gopls', 'rust-analyzer', 'clangd',
-    'eslint', 'vscode-eslint', 'css-languageserver',
-    'html-languageserver', 'json-languageserver',
+    'eslint', 'vscode-eslint',
+    // The three bundled with VS Code, named as they actually launch. They were
+    // 'css-languageserver', 'html-languageserver' and 'json-languageserver',
+    // which match nothing: the processes are cssServerMain.js, htmlServerMain.js
+    // and jsonServerMain.js. So the servers most likely to be running were the
+    // ones the monitor could not see, and the idle-kill never reclaimed them
+    // while they counted against the phantom-process budget.
+    // scripts/check-langserver-patterns.py fails the build if these stop matching
+    // what ships.
+    'cssServerMain.js', 'htmlServerMain.js', 'jsonServerMain.js',
     'tailwindcss'
 ];
 

@@ -237,6 +237,11 @@ Each script downloads pre-built binaries and places them in the correct location
 | `download-go.sh` | Downloads Go toolchain from Termux | `toolchain_go/src/main/assets/` |
 | `download-ruby.sh` | Downloads Ruby + deps from Termux | `toolchain_ruby/src/main/assets/` |
 | `download-java.sh` | Downloads OpenJDK 17 + deps from Termux | `toolchain_java/src/main/assets/` |
+| `check-build-steps.py` | Checks the documented build sequence, `build-all.sh` and the workflows still name the same scripts | exit status |
+| `check-langserver-patterns.py` | Checks the process monitor can recognise the language servers being packaged. A pattern matching nothing is invisible twice: the server keeps running, keeps counting against the phantom-process budget, and the idle-kill never sees it | exit status |
+| `check-patch-fingerprints.py` | Checks a packaged tree carries every patch in `patches/`, using the expectations in `patches/fingerprints.txt`. Takes the tree as an argument, so the same check can run against a downloaded tarball | exit status |
+| `check-bundle-size.py` | Checks the release bundle against Play's per-module size caps before anything is published, rather than at upload | exit status |
+| `check-local-network-permission.py` | Checks local network access survives the `targetSdk` in use | exit status |
 
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).
