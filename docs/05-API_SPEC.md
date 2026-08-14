@@ -30,13 +30,23 @@ webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
 
 ### 2.2 Bridge Security Model
 
-Bridge exposure is restricted with a capability-token model plus origin checks:
+Bridge exposure is controlled by a per-session capability token. That is the whole
+mechanism -- there is no origin-based control, and there cannot be one on this transport:
+`@JavascriptInterface` does not carry the caller's origin, so a bridge method has nothing to
+compare.
 
-1. **Trusted origin only**: bridge calls are processed only when top-level URL is `http://127.0.0.1:<port>/...` (or `http://localhost:<port>/...`).
-2. **Per-session token**: Kotlin generates a random token at server start and injects it only into trusted workbench context.
-3. **Sensitive method gating**: clipboard read, external URL open, storage permission, file/folder picker, and device info require valid token.
-4. **Scheme allowlist**: `openExternalUrl()` allows `https://` and `mailto:` only; blocks `javascript:`, `file:`, `intent:`, and custom schemes.
-5. **Deny by default**: calls from extension webviews (`vscode-webview://`), iframes, or unknown origins are rejected and logged.
+1. **Per-session token**: `SecurityManager` generates 32 random bytes at construction
+   (`SecurityManager.kt:51-55`). `MainActivity.injectBridgeToken()` writes it to
+   `window.__vscodroid.authToken` after the page loads (`MainActivity.kt:564-569`).
+2. **Every method, not a chosen subset**: all 28 `@JavascriptInterface` methods take the
+   token as their first parameter and validate it before doing anything, returning the
+   method's empty value on refusal. `BridgeTokenUniformityTest` enumerates them by
+   reflection and fails the build if one is added without the check, and a second test
+   asserts a refused call touches nothing -- so the rule holds for the class, not for a
+   list that was correct when it was written.
+3. **Scheme allowlist**: `openExternalUrl()` accepts `https://`, `mailto:`, and `http://`
+   to `localhost` or `127.0.0.1` (the last for dev-server preview). Everything else is
+   refused and logged, including unparseable URLs (`SecurityManager.kt:21-49`).
 
 ### 2.3 Kotlin → JavaScript Methods
 
