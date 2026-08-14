@@ -35,14 +35,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Verified against SHASUMS256.txt rather than piped straight into tar.
+# download-npm.sh and build-native-addons.sh already hold the same nodejs.org
+# artifact to this bar, and this one has further reach than either: it is the
+# Node that compiles the server tree every APK ships, so a tampered host runtime
+# is baked into the output rather than confined to a build step.
+#
+# grep exits non-zero when the release does not list the file, and `set -eux`
+# turns that into a failed build -- fail closed, not an empty expectation that
+# sha256sum would then accept.
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \
         arm64) node_arch=arm64 ;; \
         amd64) node_arch=x64 ;; \
         *) echo "unsupported build arch: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
-        | tar -xJ -C /usr/local --strip-components=1; \
+    tarball="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
+    cd /tmp; \
+    curl -fsSL -o "$tarball" "https://nodejs.org/dist/v${NODE_VERSION}/$tarball"; \
+    curl -fsSL -o SHASUMS256.txt "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"; \
+    grep " $tarball\$" SHASUMS256.txt > expected.sha256; \
+    sha256sum -c expected.sha256; \
+    tar -xJf "$tarball" -C /usr/local --strip-components=1; \
+    rm -f "$tarball" SHASUMS256.txt expected.sha256; \
     node --version; \
     npm --version
 

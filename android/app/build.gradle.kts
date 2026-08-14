@@ -78,9 +78,17 @@ android {
     assetPacks += listOf(":toolchain_go", ":toolchain_ruby", ":toolchain_java")
 
     lint {
-        // CI: Don't abort on lint errors — report them but allow the build to pass.
-        // A baseline file captures pre-existing issues so only NEW issues are flagged.
-        abortOnError = false
+        // The baseline is what makes this affordable: the 92 issues recorded in
+        // lint-baseline.xml are filtered out of every report, so what remains is
+        // what arrived after it was taken.
+        //
+        // abortOnError was false alongside it, and the two cancel out. The
+        // baseline narrows lint to new issues; the flag then discarded those
+        // too, so `./gradlew lint` ran in CI, produced a report, uploaded it,
+        // and could not fail a pull request whatever it found. The comment here
+        // claimed new issues were "flagged", which was true of the report and
+        // not of the build.
+        abortOnError = true
         baseline = file("lint-baseline.xml")
     }
 
@@ -148,3 +156,78 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
+
+// The server tree in assets/ has to carry this checkout's patches, and nothing
+// on this side looked. fetch-vscode-oss.sh runs the same check on what it
+// downloads, but package-assets.sh copies the tree in with a plain `cp -r` and
+// Gradle packages assets exactly as it finds them -- so a checkout whose last
+// fetch predates a patch produces an APK that builds, installs and opens with
+// the adaptation missing, and the first symptom is on a device. That already
+// happened: this was written against a working copy whose packaged server
+// predated patch 0012, so its /callback route answered 403 and every OAuth
+// sign-in hung, with every gate in the project green.
+//
+// It reads the six bundles named in patches/fingerprints.txt, not the 700 MB
+// tree around them: 0.11s, no network, nothing resolved. Cheap enough that
+// declaring Gradle inputs would cost the same hashing it would save.
+val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
+    group = "verification"
+    description = "Checks the server tree in assets/ carries every patch in patches/."
+
+    // The same directory named twice, from the two bases that apply: the script
+    // is run from the repository root, and file() resolves against this module.
+    val serverTree = "android/app/src/main/assets/vscode-reh"
+    val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("python3", "scripts/check-patch-fingerprints.py", serverTree)
+
+    // Absent is not stale. A source-only checkout has no server tree at all,
+    // and the lint and unit-test jobs create assets/vscode-reh/out as an empty
+    // stub purely so Gradle will run -- neither has anything to check, and
+    // failing them would report a download nobody ran as a patch nobody
+    // applied. Any tree that can produce a working APK has this file: it is the
+    // server's entry point, and verify-server-tree.py already requires it.
+    onlyIf { entryPoint.isFile }
+
+    // The script names which patch is missing; this adds what to do about it,
+    // which it has no way to know when it is not the fetcher calling.
+    isIgnoreExitValue = true
+    // Captured here rather than read inside doLast, where the receiver is Task
+    // and this property is not on it.
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(
+                "The server tree in assets/ is missing at least one patch this checkout applies.\n" +
+                    "The line above names which. This tree is older than patches/, and no\n" +
+                    "amount of rebuilding the APK will change that -- the patch is applied\n" +
+                    "when the server is built, not when the app is.\n" +
+                    "\n" +
+                    "Two ways forward:\n" +
+                    "\n" +
+                    "  Published server (normal case). Run the \"Build Code - OSS server\"\n" +
+                    "  workflow so a server-<version> release exists for the version in\n" +
+                    "  VSCODE_VERSION, then refresh the local tree:\n" +
+                    "      rm -f server/vscode-reh-web-linux-arm64-*.tar.gz\n" +
+                    "      ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n" +
+                    "  The cached tarball is only refetched when the digest on the release\n" +
+                    "  changes, so retrying without that rebuild will not reach you.\n" +
+                    "\n" +
+                    "  Locally, in Docker. See the header of scripts/build-vscode-oss.sh for\n" +
+                    "  the invocation, and remove the work volume first -- a reused one can\n" +
+                    "  satisfy a stage the script never ran:\n" +
+                    "      docker volume rm vscodroid-codeoss\n" +
+                    "  Then point the fetcher at what it produced:\n" +
+                    "      VSCODE_OSS_URL=file:///path/to/the.tar.gz ./scripts/fetch-vscode-oss.sh\n" +
+                    "      ./scripts/package-assets.sh"
+            )
+        }
+    }
+}
+
+// A dependency of the merge, not of the package or the assemble: the point is
+// to stop the wrong tree getting into an APK rather than to describe one that
+// already did.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(checkPatchFingerprints) }

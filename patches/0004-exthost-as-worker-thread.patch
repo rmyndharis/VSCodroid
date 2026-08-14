@@ -15,13 +15,11 @@ _sendSocketToExtensionHost is unreachable on the initial connection once the fla
 is off, but acceptReconnection() calls it without checking the flag at all. Left
 alone, send(msg, socket) would report success while dropping the socket, and the
 host would wait for a connection that never arrives with nothing logged. It now
-refuses and says so, which makes a failed reconnection diagnosable instead of
-silent. Reconnecting after a WebView recreation consequently needs a fresh
-connection rather than a resumed one; that is a real limitation, recorded here
-rather than discovered later.
-
-  noUnusedParameters di tsconfig: src/tsconfig.base.json:0,src/tsconfig.json:0
-  parameter dipakai di pesan log
+refuses and says so, naming the process in the message -- which is also what
+keeps that parameter referenced once the body that used it is gone. Reconnecting
+after a WebView recreation consequently needs a fresh connection rather than a
+resumed one; that is a real limitation, recorded here rather than discovered
+later.
 
 diff --git a/src/vs/server/node/extensionHostConnection.ts b/src/vs/server/node/extensionHostConnection.ts
 index 06d614b..04286bc 100644

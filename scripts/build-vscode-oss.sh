@@ -157,30 +157,42 @@ PY
     # gulpfile.reh.js:343-351 copies these four into the reh-web package as they
     # are. Upstream they are Microsoft's VS Code icon and name, which must not
     # travel with this app. The filenames are fixed by that same gulp task.
+    #
+    # Fatal, not a warning. "Keeping upstream" here means shipping Microsoft's
+    # icon and name inside the APK, which is the exposure this whole stage
+    # exists to remove -- the stage already refuses to run when the branding
+    # directory is absent, and a single file renamed or deleted put the same
+    # artwork in the package through a green build.
     for asset in manifest.json code-192.png code-512.png favicon.ico; do
-        if [ -f "$BRANDING/server/$asset" ]; then
-            cp "$BRANDING/server/$asset" "$SRC/resources/server/$asset"
-            echo "  resources/server/$asset"
-        else
-            echo "  WARNING: $BRANDING/server/$asset missing, keeping upstream" >&2
+        if [ ! -f "$BRANDING/server/$asset" ]; then
+            echo "  ERROR: $BRANDING/server/$asset is missing" >&2
+            echo "  gulpfile.reh.js copies these four into the package as they are, so" >&2
+            echo "  the alternative to ours is Microsoft's. Restore the file, or remove" >&2
+            echo "  it from this list if the packaging stopped using it." >&2
+            exit 1
         fi
+        cp "$BRANDING/server/$asset" "$SRC/resources/server/$asset"
+        echo "  resources/server/$asset"
     done
 
     # Two more marks live outside resources/server, inside the workbench bundle:
     # the titlebar app icon and the empty-editor watermark. One theme-agnostic
     # letterpress stands in for upstream's four themed variants.
-    if [ -f "$BRANDING/workbench/code-icon.svg" ] && [ -f "$BRANDING/workbench/letterpress.svg" ]; then
-        cp "$BRANDING/workbench/code-icon.svg" \
-            "$SRC/src/vs/workbench/browser/media/code-icon.svg"
-        echo "  src/vs/workbench/browser/media/code-icon.svg"
-        for variant in dark hcDark hcLight light; do
-            cp "$BRANDING/workbench/letterpress.svg" \
-                "$SRC/src/vs/workbench/browser/parts/editor/media/letterpress-$variant.svg"
-        done
-        echo "  src/vs/workbench/browser/parts/editor/media/letterpress-{dark,hcDark,hcLight,light}.svg"
-    else
-        echo "  WARNING: $BRANDING/workbench incomplete, keeping upstream workbench artwork" >&2
+    if [ ! -f "$BRANDING/workbench/code-icon.svg" ] || [ ! -f "$BRANDING/workbench/letterpress.svg" ]; then
+        echo "  ERROR: $BRANDING/workbench is incomplete" >&2
+        echo "  code-icon.svg is the titlebar mark and letterpress.svg the empty-editor" >&2
+        echo "  watermark. Upstream's are the VS Code logo, which is copyrighted and" >&2
+        echo "  cannot travel in this APK. Both files are required." >&2
+        exit 1
     fi
+    cp "$BRANDING/workbench/code-icon.svg" \
+        "$SRC/src/vs/workbench/browser/media/code-icon.svg"
+    echo "  src/vs/workbench/browser/media/code-icon.svg"
+    for variant in dark hcDark hcLight light; do
+        cp "$BRANDING/workbench/letterpress.svg" \
+            "$SRC/src/vs/workbench/browser/parts/editor/media/letterpress-$variant.svg"
+    done
+    echo "  src/vs/workbench/browser/parts/editor/media/letterpress-{dark,hcDark,hcLight,light}.svg"
 elif [ -n "${ALLOW_UNADAPTED:-}" ]; then
     echo "  no branding at $BRANDING — building unbranded (ALLOW_UNADAPTED set)"
 else
@@ -412,6 +424,21 @@ check("product.json key set unchanged", not added and not dropped,
 
 sys.exit(1 if bad else 0)
 PY
+
+    # The icons themselves, not only the name inside manifest.json. The Branding
+    # stage now refuses to run without them, but that proves what went into the
+    # source tree; this proves what came out of the package, which is the tree
+    # that gets redistributed. gulpfile.reh.js copies resources/server across
+    # verbatim, so byte-identical is the right bar -- measured against a
+    # packaged tree, where all four match branding/server exactly.
+    for asset in manifest.json code-192.png code-512.png favicon.ico; do
+        if cmp -s "$BRANDING/server/$asset" "$OUT/resources/server/$asset"; then
+            echo "  ok      resources/server/$asset is ours"
+        else
+            echo "  FAIL   resources/server/$asset is not the branded file"
+            fail=1
+        fi
+    done
 fi
 
 echo

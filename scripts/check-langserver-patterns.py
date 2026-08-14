@@ -22,6 +22,14 @@ cover servers that arrive with extensions a user installs later -- those are the
 rest of the list, and they are unverifiable here by construction. What it does
 cover is everything this repository chooses to ship, which is where the drift
 was.
+
+The comparison has to be the monitor's comparison, and for a while it was not.
+This matched each pattern against the whole path, as written; the monitor
+lower-cased the command line first and matched against that, so a pattern with a
+capital in it could not match there while matching perfectly here. Every run of
+this script said the three bundled servers were covered, and none of them was.
+Both sides now fold case and both look at the basename, which is the part that
+names the program rather than the directory somebody put it in.
 """
 
 import pathlib
@@ -70,10 +78,11 @@ def main(extensions):
 
     failed = False
     for server in servers:
-        # The command line carries the full path, so matching the path is what
-        # the monitor will actually be doing.
-        cmd = str(server)
-        hit = next((p for p in pats if p in cmd), None)
+        # classify() splits the command line on spaces and tests the basename of
+        # each argument, case-folded. The argument that carries a server is its
+        # path, so its basename is what has to match here.
+        name = server.name.lower()
+        hit = next((p for p in pats if p.lower() in name), None)
         if hit:
             print(f"  ok      {server.name} matched by {hit!r}")
         else:

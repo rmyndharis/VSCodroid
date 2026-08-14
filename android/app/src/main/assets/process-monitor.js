@@ -31,8 +31,15 @@ const LANG_SERVER_PATTERNS = [
     // and jsonServerMain.js. So the servers most likely to be running were the
     // ones the monitor could not see, and the idle-kill never reclaimed them
     // while they counted against the phantom-process budget.
+    //
+    // Renaming them was not enough on its own, and the second half took another
+    // release to find: classify() lower-cases the command line, so a pattern
+    // carrying a capital could never match it and these three stayed invisible
+    // under their correct names too. Matching is case-insensitive on both sides
+    // now, which is why they are still spelled the way the files are.
     // scripts/check-langserver-patterns.py fails the build if these stop matching
-    // what ships.
+    // what ships; scripts/test-process-monitor.js fails it if the matching
+    // itself regresses.
     'cssServerMain.js', 'htmlServerMain.js', 'jsonServerMain.js',
     'tailwindcss'
 ];
@@ -42,16 +49,21 @@ let pressurePath = '';
 let rootPid = 0;
 let myUid = 0;
 let scanTimer = null;
+// Overridable so the suite can point a scan at a fixture. /proc does not exist
+// on a macOS workstation and holds an uncontrolled process list on a CI runner,
+// which left every branch below unreachable from a test.
+let procRoot = '/proc';
 
 // Track language server CPU time for idle detection: pid -> { cpuTime, lastActive }
 const lsCpuTracker = new Map();
 
-function start(serverMainPid) {
+function start(serverMainPid, options) {
     const tmpDir = process.env.TMPDIR || '/tmp';
     outputPath = path.join(tmpDir, 'vscodroid-processes.json');
     pressurePath = path.join(tmpDir, 'vscodroid-memory-pressure');
     rootPid = serverMainPid;
     myUid = process.getuid();
+    procRoot = (options && options.procRoot) || '/proc';
 
     log('info', `Started (root PID=${rootPid}, UID=${myUid})`);
 
@@ -83,7 +95,7 @@ function readFileQuiet(filePath) {
  * Returns { ppid, uid } or null.
  */
 function readProcStatus(pid) {
-    const content = readFileQuiet(`/proc/${pid}/status`);
+    const content = readFileQuiet(path.join(procRoot, String(pid), 'status'));
     if (!content) return null;
 
     let ppid = -1, uid = -1;
@@ -104,7 +116,7 @@ function readProcStatus(pid) {
  * Returns the full command string.
  */
 function readCmdline(pid) {
-    const content = readFileQuiet(`/proc/${pid}/cmdline`);
+    const content = readFileQuiet(path.join(procRoot, String(pid), 'cmdline'));
     if (!content) return '';
     return content.replace(/\0/g, ' ').trim();
 }
@@ -114,7 +126,7 @@ function readCmdline(pid) {
  * Fields 14 and 15 (0-indexed) after splitting by space.
  */
 function readCpuTime(pid) {
-    const content = readFileQuiet(`/proc/${pid}/stat`);
+    const content = readFileQuiet(path.join(procRoot, String(pid), 'stat'));
     if (!content) return -1;
     // stat format: pid (comm) state ppid ... field14 field15 ...
     // comm can contain spaces/parens, so find the closing ')' first
@@ -139,17 +151,33 @@ function classify(cmdline) {
     // so we must check for exact match, not substring.
     if (/^com\.vscodroid(\.\w+)?$/.test(cmd)) return 'app';
 
+    // What a process IS gets decided on the basename of each argument; where it
+    // happens to live does not. Testing the whole command line made every
+    // pattern match its own name inside an unrelated path: 'eslint' matched
+    // /projects/my-eslint-tool/index.js and put a user's build script one idle
+    // period away from SIGTERM, and '/sh' matched /share and /shim. A launcher
+    // names what it runs in one argument, and the directories above that name
+    // are the user's to choose.
+    //
+    // The paths below stay on the whole line deliberately: saf-mirrors and
+    // saf-writeback ARE directories rather than program names, so a basename
+    // would never see them.
+    const names = cmd.split(' ').filter(Boolean).map((arg) => path.basename(arg));
+
     if (cmd.includes('server-main.js')) return 'server';
     if (cmd.includes('bootstrap-fork') && cmd.includes('filewatcher')) return 'fileWatcher';
     // SAF sync engine: mirrors content:// URIs to local filesystem for VS Code access
-    if (cmd.includes('saf-mirrors') || cmd.includes('saf-writeback') || cmd.includes('SafSync')) return 'safSync';
+    if (cmd.includes('saf-mirrors') || cmd.includes('saf-writeback') || cmd.includes('safsync')) return 'safSync';
     // ptyHost is now a worker_thread — no longer visible in /proc
-    if (cmd.includes('libtmux.so') || cmd.includes('/tmux')) return 'tmux';
-    if (cmd.includes('libbash.so') || cmd.includes('/bash')) return 'terminal';
-    if (cmd.includes('/sh') && !cmd.includes('bash')) return 'terminal';
+    if (names.includes('libtmux.so') || names.includes('tmux')) return 'tmux';
+    if (names.includes('libbash.so') || names.includes('bash')) return 'terminal';
+    // No "and not bash" guard needed once this is an exact name rather than a
+    // substring: 'bash' is simply not 'sh'.
+    if (names.includes('sh')) return 'terminal';
 
     for (const pattern of LANG_SERVER_PATTERNS) {
-        if (cmd.includes(pattern)) return 'langserver';
+        const needle = pattern.toLowerCase();
+        if (names.some((name) => name.includes(needle))) return 'langserver';
     }
 
     // Generic node bootstrap-fork (extension host, search, etc.)
@@ -169,7 +197,7 @@ function scan() {
         //    so tree-walking from rootPid would miss tmux server + its bash children.
         const allProcs = new Map();
         let entries;
-        try { entries = fs.readdirSync('/proc'); } catch { return; }
+        try { entries = fs.readdirSync(procRoot); } catch { return; }
 
         for (const entry of entries) {
             if (!/^\d+$/.test(entry)) continue;
@@ -179,16 +207,21 @@ function scan() {
             allProcs.set(pid, status);
         }
 
-        // 2. Classify each process (skip server.js bootstrap — that's us)
+        // 2. Classify each process, this one included
         const tree = [];
         const activeLsPids = new Set();
 
         for (const [pid, info] of allProcs) {
-            if (pid === process.pid) continue; // skip ourselves (server.js)
             const cmdline = readCmdline(pid);
             if (!cmdline) continue;
 
-            const type = classify(cmdline);
+            // This code runs inside server.js, which ProcessBuilder launched and
+            // which Android's per-UID phantom accounting counts like any other
+            // process. Skipping it as "ourselves" reported one fewer than the
+            // budget below is measured against, so every threshold fired one
+            // process late. Named rather than classified: the bootstrap's own
+            // command line matches no pattern and would come out 'unknown'.
+            const type = pid === process.pid ? 'bootstrap' : classify(cmdline);
             if (type === 'app') continue; // main Android process, not a phantom
             const parts = cmdline.split(' ');
             const shortCmd = path.basename(parts[0]) + (parts[1] ? ' ' + parts[1] : '');
@@ -218,7 +251,7 @@ function scan() {
             }
         }
 
-        // 5. Write snapshot (excluding server.js bootstrap itself)
+        // 5. Write snapshot
         const snapshot = {
             timestamp: now,
             total: tree.length,

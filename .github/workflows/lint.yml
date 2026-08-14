@@ -32,6 +32,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # For the JavaScript self-checks below. Pinned rather than left to
+      # whatever the runner image happens to carry, so the version they run
+      # under is the same one build.yml uses.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       # Lint only needs compiled Kotlin, not runtime assets.
       # Create minimal directory structure so Gradle does not fail.
       - name: Create minimal asset stubs
@@ -60,6 +68,24 @@ jobs:
       # the part that rots silently: the versions it derives from the tree.
       - name: Check the device suite can still read what it asserts
         run: bash scripts/device-test.sh --self-check
+
+      # The JavaScript that ships inside the APK: the server bootstrap, the
+      # phantom-process monitor, the platform override preloaded into every Node
+      # process, and the loopback DNS proxy. All four need Node and nothing
+      # else -- no assets, no SDK -- so they belong beside the other cheap gates
+      # rather than behind fifteen minutes of downloads in build.yml.
+      #
+      # test-dns-proxy.js existed, passed, and was run by nothing. What it
+      # covers is the Basic-auth token on the proxy every musl DNS lookup goes
+      # through, and loopback on Android is not isolated per app: that token is
+      # the only thing standing between the proxy and every other app on the
+      # device.
+      - name: Check the bundled JavaScript runtime
+        run: |
+          node scripts/test-dns-proxy.js
+          node scripts/test-process-monitor.js
+          node scripts/test-platform-fix.js
+          node scripts/test-server-bootstrap.js
 
       - name: Run lint
         working-directory: android

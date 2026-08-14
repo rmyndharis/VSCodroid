@@ -131,10 +131,59 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     echo "  Version: $VERSION"
     echo "  Download URL: $DOWNLOAD_URL"
 
-    # Skip if already extracted
-    if [ -d "$DEST_DIR" ] && [ -f "$DEST_DIR/package.json" ]; then
-        echo "  Already extracted: $DIR_NAME (skipping)"
-        continue
+    # files.sha256 sits right next to files.download in the metadata this loop
+    # already parses, and it is read here -- above the fast path -- rather than
+    # after it. The skip below used to jump over the comparison, the download
+    # and the engines check together, so an extracted tree was a tree nothing
+    # had ever verified, while the comment on the comparison claimed it failed
+    # closed "cached files included". CI's locked cache key narrowed that but
+    # did not close it: restore-keys falls back to any earlier tree.
+    SHA256_URL=$(python3 -c "import json; print(json.load(open('$METADATA_FILE'))['files'].get('sha256', ''))")
+    if [ -z "$SHA256_URL" ]; then
+        echo "  FAIL   $EXT_ID: metadata carries no files.sha256" >&2
+        exit 1
+    fi
+    # Unreachable is not the same as absent, and download-npm.sh already draws
+    # that line: a rebuild with no network still verifies what it has instead of
+    # dying in the fetch. The stamp below records the digest this tree was
+    # extracted against, so offline the claim narrows honestly from "still
+    # matches what Open VSX publishes" to "matched it when it was extracted".
+    STAMP="$WORK_DIR/${DIR_NAME}.verified"
+    # `|| true` binds to the assignment, not to the pipeline inside it, so a
+    # failed fetch lands as an empty EXPECTED and is decided below rather than
+    # aborting under set -e with only curl's message. --show-error keeps that
+    # message: it says whether this was no network or a 404, and those want
+    # different responses from whoever is reading.
+    EXPECTED=$(curl -sL --fail --show-error "$SHA256_URL" | awk '{print $1}' || true)
+
+    # Skip the download and the extraction, never the verification.
+    if [ -d "$DEST_DIR" ] && [ -f "$DEST_DIR/package.json" ] && [ -f "$STAMP" ]; then
+        RECORDED=$(cat "$STAMP")
+        if [ -z "$EXPECTED" ]; then
+            echo "  Already extracted: $DIR_NAME (Open VSX unreachable; verified at extraction)"
+        elif [ "$RECORDED" = "$EXPECTED" ]; then
+            echo "  Already extracted: $DIR_NAME (sha256 still matches what is published)"
+        else
+            echo "  Re-extracting $DIR_NAME: published sha256 has moved since it was extracted"
+            rm -rf "$DEST_DIR" "$STAMP"
+        fi
+        if [ -d "$DEST_DIR" ]; then
+            # Re-run rather than trusted: this compares engines.vscode against
+            # VSCODE_VERSION, which moves without the extension moving. A cached
+            # tree is precisely the case where the previous verdict has gone
+            # stale, and the failure it catches is silent -- the extension is
+            # registered, never activates, and logs nothing.
+            python3 "$SCRIPT_DIR/check-extension.py" "$DEST_DIR" "$ROOT_DIR/VSCODE_VERSION"
+            continue
+        fi
+    elif [ -d "$DEST_DIR" ]; then
+        echo "  Re-extracting $DIR_NAME: nothing on record says this tree was verified"
+        rm -rf "$DEST_DIR"
+    fi
+
+    if [ -z "$EXPECTED" ]; then
+        echo "  FAIL   $EXT_ID: no published digest at $SHA256_URL, and no verified tree to fall back on" >&2
+        exit 1
     fi
 
     # Download VSIX
@@ -145,19 +194,13 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
         echo "  Downloaded: $(du -sh "$VSIX_FILE" | cut -f1)"
     fi
 
-    # files.sha256 sits right next to files.download in the same metadata this
-    # loop already parses. These are executable payloads bundled into the APK,
-    # so they get the same bar as every other download script: fail closed,
-    # cached files included. (An earlier revision claimed Open VSX publishes no
-    # digests; review disproved that with a live fetch.)
-    SHA256_URL=$(python3 -c "import json; print(json.load(open('$METADATA_FILE'))['files'].get('sha256', ''))")
-    if [ -z "$SHA256_URL" ]; then
-        echo "  FAIL   $EXT_ID: metadata carries no files.sha256" >&2
-        exit 1
-    fi
-    EXPECTED=$(curl -sL --fail --show-error "$SHA256_URL" | awk '{print $1}')
+    # These are executable payloads bundled into the APK, so they get the same
+    # bar as every other download script: fail closed. (An earlier revision
+    # claimed Open VSX publishes no digests; review disproved that with a live
+    # fetch.) EXPECTED was read above, before the fast path, so that a tree this
+    # run does not download is held to the same comparison.
     ACTUAL=$( (sha256sum "$VSIX_FILE" 2>/dev/null || shasum -a 256 "$VSIX_FILE") | cut -d' ' -f1)
-    if [ -z "$EXPECTED" ] || [ "$ACTUAL" != "$EXPECTED" ]; then
+    if [ "$ACTUAL" != "$EXPECTED" ]; then
         echo "  FAIL   $EXT_ID: VSIX does not match files.sha256" >&2
         echo "         published : ${EXPECTED:-(empty)}" >&2
         echo "         file      : $ACTUAL" >&2
@@ -206,6 +249,11 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     # An extension whose engines.vscode is newer than the server fails silently:
     # it is registered, never activates, and nothing is logged.
     python3 "$SCRIPT_DIR/check-extension.py" "$DEST_DIR" "$ROOT_DIR/VSCODE_VERSION"
+
+    # Last, so a tree that failed any step above carries no record saying it
+    # passed. Kept out of $ASSETS_DIR on purpose: a file there would ship inside
+    # the APK, and a dot-name there would be swept by the dotfile rename above.
+    printf '%s\n' "$ACTUAL" > "$STAMP"
 
     echo "  Extracted: $(du -sh "$DEST_DIR" | cut -f1) -> $DIR_NAME"
 done

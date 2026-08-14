@@ -95,13 +95,42 @@ if (!fs.existsSync(rehEntryPoint)) {
     // Inject product overrides
     process.env.VSCODE_NLS_CONFIG = JSON.stringify({ locale: 'en', availableLanguages: {} });
 
-    // Override product.json
+    // Override product.json.
+    //
+    // Through a temporary file and a rename, because this process is killed as a
+    // matter of routine -- ProcessManager's watchdog exists to notice SIGKILL
+    // from the OOM killer and from Android's phantom-process limit. An in-place
+    // writeFileSync interrupted partway leaves truncated JSON, and rename(2)
+    // replaces the file in one step instead: a kill lands either side of it and
+    // never inside it. It also means a write that cannot finish -- no space, a
+    // directory that turned read-only -- leaves the existing file untouched
+    // rather than half-replaced.
+    //
+    // No fsync. The threat here is the process dying, not the device losing
+    // power, and the page cache outlives the process.
     const productJsonPath = path.join(REH_DIR, 'product.json');
     if (fs.existsSync(productJsonPath)) {
-        const product = JSON.parse(fs.readFileSync(productJsonPath, 'utf8'));
-        Object.assign(product, productOverrides);
-        fs.writeFileSync(productJsonPath, JSON.stringify(product, null, 2));
-        log('info', 'Product configuration updated');
+        try {
+            const product = JSON.parse(fs.readFileSync(productJsonPath, 'utf8'));
+            Object.assign(product, productOverrides);
+            const tmpPath = `${productJsonPath}.${process.pid}.tmp`;
+            try {
+                fs.writeFileSync(tmpPath, JSON.stringify(product, null, 2));
+                fs.renameSync(tmpPath, productJsonPath);
+            } catch (e) {
+                try { fs.unlinkSync(tmpPath); } catch { /* nothing was written */ }
+                throw e;
+            }
+            log('info', 'Product configuration updated');
+        } catch (e) {
+            // Carrying on beats exiting. The watchdog restarts this process, so
+            // an uncaught throw here is a crash loop that reaches the user as a
+            // white screen with no explanation; the server below will report the
+            // same file in its own terms, after this line has already named it.
+            log('error', `Could not apply the product configuration to ${productJsonPath}: ${e.message}`);
+            log('error', 'A truncated product.json is repaired by the asset extraction that ' +
+                'runs on the next app update, or by clearing app data.');
+        }
     }
 
     // Build server arguments.

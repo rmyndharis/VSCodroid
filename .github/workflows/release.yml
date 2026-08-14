@@ -98,6 +98,36 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # The gates the pull request path runs, applied to the bits actually being
+      # published. They were reachable on no other trigger: lint.yml fires on
+      # pull_request alone and build.yml on pull_request and push-to-main, so a
+      # hotfix pushed straight to main and tagged went out having passed none of
+      # them -- on the one build type that also runs R8.
+      #
+      # Before the downloads on purpose. Each reads committed source only, and
+      # failing in twenty seconds beats failing after six minutes of fetching.
+      # device-test.sh --self-check derives its Python expectation from the
+      # assets tree and reports it as skipped when there is none, so it is
+      # honest this early rather than wrong.
+      - name: Check the documented build steps match the workflows
+        run: python3 scripts/check-build-steps.py
+
+      - name: Check local network access survives the targetSdk in use
+        run: python3 scripts/check-local-network-permission.py
+
+      - name: Check the welcome screen states nothing that goes stale
+        run: python3 scripts/check-welcome-claims.py
+
+      - name: Check the device suite can still read what it asserts
+        run: bash scripts/device-test.sh --self-check
+
+      - name: Check the bundled JavaScript runtime
+        run: |
+          node scripts/test-dns-proxy.js
+          node scripts/test-process-monitor.js
+          node scripts/test-platform-fix.js
+          node scripts/test-server-bootstrap.js
+
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops
         # superseded versions from the pool, so refresh it before installing.
@@ -199,6 +229,20 @@ jobs:
             exit 1
           fi
 
+      # Needs the assets in place, so it runs here rather than with the checks
+      # above: it walks the packaged extensions tree.
+      - name: Check the monitor recognises the language servers that ship
+        run: |
+          python3 scripts/check-langserver-patterns.py \
+            android/app/src/main/assets/vscode-reh/extensions
+
+      # The unit suite ran on every pull request and on no tag, which put the
+      # published build on the wrong side of it. Before the signing keystore is
+      # decoded, so a failure here never reaches a step handling a secret.
+      - name: Run unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest
+
       # Decode signing keystore from base64 secret
       - name: Decode keystore
         env:
@@ -260,8 +304,25 @@ jobs:
           # one ZIP looks entirely normal while that one toolchain fails to
           # install for every sideloaded user -- including ones already on it.
           registry=android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt
+
+          # [a-z0-9_] rather than [a-z]: the three names in the registry today
+          # are all letters, so the narrower pattern matched every one of them
+          # and looked correct, while a toolchain_java21.zip added tomorrow
+          # would not be extracted and so would never be looked for. A gate that
+          # silently stops covering what it is added to cover is worse than one
+          # that was never written.
+          zips="$(grep -o 'toolchain_[a-z0-9_]*\.zip' "$registry" | sort -u)"
+
+          # grep exits 1 on no match, but a pipeline reports its LAST command,
+          # so `grep | sort` succeeds with nothing in it and the loop below then
+          # checks zero files and passes. The emptiness has to be tested here.
+          if [ -z "$zips" ]; then
+            echo "::error::No toolchain ZIP names found in $registry; the pattern stopped matching."
+            exit 1
+          fi
+
           missing=0
-          for zip_name in $(grep -o 'toolchain_[a-z]*\.zip' "$registry" | sort -u); do
+          for zip_name in $zips; do
             if [ ! -f "toolchain-zips/$zip_name" ]; then
               echo "::error::$registry links to $zip_name but it was not packaged."
               missing=1

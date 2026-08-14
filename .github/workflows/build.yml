@@ -166,13 +166,38 @@ jobs:
           bash scripts/build-glibc-shim.sh \
             --scan android/app/src/main/assets/vscode-reh \
             --scan android/app/src/main/assets/extensions
+      # Two `ls ... || true` lines stood here under this name, which is a
+      # listing rather than a check: nothing it could print would fail the job,
+      # an entirely empty assets tree included. That tree is gitignored build
+      # output, and an APK built without it is the quietest failure this project
+      # has -- it compiles, it installs, the splash screen appears, and then the
+      # screen stays white because there is no server to start. The release
+      # workflow's step of the same name at least weighed libnode.so.
       - name: Verify assets
         run: |
           echo "=== Assets ==="
-          ls -la android/app/src/main/assets/ || true
+          ls -la android/app/src/main/assets/
           echo ""
           echo "=== jniLibs ==="
-          ls -la android/app/src/main/jniLibs/arm64-v8a/ || true
+          ls -la android/app/src/main/jniLibs/arm64-v8a/
+          echo ""
+          server=android/app/src/main/assets/vscode-reh/out/server-main.js
+          libnode=android/app/src/main/jniLibs/arm64-v8a/libnode.so
+          for f in "$server" "$libnode"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing; this APK would install and open with nothing in it."
+              exit 1
+            fi
+          done
+          # The unit-test and lint jobs write a 64-byte libnode.so so Gradle will
+          # configure. Reaching a packaging job it would mean the real download
+          # never ran.
+          libnode_size="$(wc -c < "$libnode")"
+          if [ "$libnode_size" -lt 1000 ]; then
+            echo "::error::libnode.so is $libnode_size bytes -- that is the stub, not a runtime."
+            exit 1
+          fi
+          echo "server-main.js present; libnode.so $libnode_size bytes"
 
       # Needs the extensions tree, so it runs here rather than beside the other
       # cheap checks in lint. A pattern that matches nothing is invisible twice:
