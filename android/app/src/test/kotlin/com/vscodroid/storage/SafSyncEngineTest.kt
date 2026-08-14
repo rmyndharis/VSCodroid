@@ -145,6 +145,100 @@ class SafSyncEngineTest {
         }
     }
 
+    // ── shouldOverwriteMirror ───────────────────────────────────────────
+
+    @Nested
+    inner class ShouldOverwriteMirrorTest {
+
+        @Test
+        fun `copies when the mirror has no copy yet`() {
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = false, mirrorModified = 0, mirrorSize = 0,
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096
+                ),
+                "First sync must copy: there is nothing to lose"
+            )
+        }
+
+        @Test
+        fun `overwrites when the device copy is newer`() {
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
+                    sourceModified = 1_700_000_060_000, sourceSize = 4096
+                ),
+                "An edit made outside the app should reach the mirror"
+            )
+        }
+
+        @Test
+        fun `keeps local edits that are newer than the device copy`() {
+            // The defect this guards: reopening a folder re-ran the full copy and
+            // truncated the mirror, discarding edits not yet written back.
+            assertFalse(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 4096,
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096
+                ),
+                "A newer local edit must survive reopening the folder"
+            )
+        }
+
+        @Test
+        fun `does not overwrite when both sides match`() {
+            assertFalse(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096
+                ),
+                "Same timestamp and same size means the copy is current"
+            )
+        }
+
+        @Test
+        fun `re-copies a truncated file even though the mirror looks newer`() {
+            // A copy that failed part-way leaves a short file carrying a fresh
+            // timestamp. Timestamps alone would freeze it forever, and the
+            // write-back would then push the truncation onto the device.
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 700_000,
+                    sourceModified = 1_700_000_000_000, sourceSize = 2_000_000
+                ),
+                "A size mismatch means the mirror is not a copy of the source, whatever the clocks say"
+            )
+        }
+
+        @Test
+        fun `copies when the provider reports no timestamp`() {
+            // COLUMN_LAST_MODIFIED is optional; MTP, some USB-OTG and network
+            // providers leave it null, which arrives as 0. Treating unknown as
+            // "keep" would freeze those folders permanently, and nothing in the
+            // app can clear a mirror: clearSafMirrors and revokePermission have
+            // no callers. Copying is what the previous behaviour did, and it is
+            // the one that heals itself.
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
+                    sourceModified = 0, sourceSize = 4096
+                ),
+                "An unknown source timestamp must not freeze the mirror"
+            )
+        }
+
+        @Test
+        fun `still copies an absent file when the provider reports no timestamp`() {
+            assertTrue(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = false, mirrorModified = 0, mirrorSize = 0,
+                    sourceModified = 0, sourceSize = 4096
+                ),
+                "A missing mirror file must still be fetched even without timestamps"
+            )
+        }
+    }
+
     // ── Constants ────────────────────────────────────────────────────────
 
     @Nested

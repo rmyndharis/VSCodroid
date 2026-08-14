@@ -25,9 +25,12 @@ import kotlin.concurrent.thread
  * back to the original SAF location via [ContentResolver].
  *
  * ## Conflict Resolution
- * Local changes always win — VS Code is the editor, SAF is the backing store.
- * External changes to the SAF source are NOT detected (no push notification
- * mechanism exists for SAF). A manual "Refresh from device" action can re-sync.
+ * Local changes win when both sides changed: the mirror is only replaced when the
+ * source differs in size, carries no timestamp, or is newer than the copy already
+ * held. External changes are picked up the next time the folder is opened, which is
+ * the only refresh that exists — there is no "Refresh from device" action, and
+ * nothing calls [com.vscodroid.util.StorageManager.clearSafMirrors] either, so a
+ * mirror cannot be cleared from inside the app.
  */
 class SafSyncEngine(private val context: Context) {
 
@@ -72,6 +75,7 @@ class SafSyncEngine(private val context: Context) {
         val totalFiles = documents.count { !it.isDirectory }
         var filesDone = 0
         var skippedLarge = 0
+        var keptLocal = 0
 
         Logger.i(tag, "Enumerated ${documents.size} items ($totalFiles files)")
 
@@ -90,15 +94,29 @@ class SafSyncEngine(private val context: Context) {
                     onProgress(filesDone, totalFiles)
                     continue
                 }
+                if (!shouldOverwriteMirror(
+                        localPath.exists(), localPath.lastModified(), localPath.length(),
+                        doc.lastModified, doc.size
+                    )
+                ) {
+                    keptLocal++
+                    Logger.d(tag, "Kept newer local copy: ${doc.relativePath}")
+                    filesDone++
+                    onProgress(filesDone, totalFiles)
+                    continue
+                }
                 localPath.parentFile?.mkdirs()
-                copyDocumentToLocal(doc.uri, localPath)
+                copyDocumentToLocal(doc.uri, localPath, doc.lastModified)
                 filesDone++
                 onProgress(filesDone, totalFiles)
             }
         }
 
         val elapsed = System.currentTimeMillis() - startTime
-        Logger.i(tag, "Initial sync complete: $filesDone files ($skippedLarge skipped) in ${elapsed}ms")
+        Logger.i(
+            tag,
+            "Initial sync complete: $filesDone files ($skippedLarge too large, $keptLocal kept as newer) in ${elapsed}ms"
+        )
     }
 
     // -- File Watching (Write-back) --
@@ -169,7 +187,8 @@ class SafSyncEngine(private val context: Context) {
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_SIZE
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )
 
         try {
@@ -178,12 +197,16 @@ class SafSyncEngine(private val context: Context) {
                 val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                 val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
                 val sizeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+                // Not every provider fills this one, so a missing column is not fatal.
+                val modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
 
                 while (cursor.moveToNext()) {
                     val docId = cursor.getString(idIndex)
                     val name = cursor.getString(nameIndex)
                     val mimeType = cursor.getString(mimeIndex)
                     val size = cursor.getLong(sizeIndex)
+                    val lastModified =
+                        if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else 0L
                     val isDir = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
                     val relativePath = if (parentRelPath.isEmpty()) name else "$parentRelPath/$name"
@@ -195,7 +218,7 @@ class SafSyncEngine(private val context: Context) {
                     // Q1: Cache docId for fast write-back resolution
                     docIdCache[relativePath] = docId
 
-                    result.add(DocumentInfo(docUri, docId, relativePath, isDir, size))
+                    result.add(DocumentInfo(docUri, docId, relativePath, isDir, size, lastModified))
 
                     if (isDir) {
                         walkTree(treeUri, docId, relativePath, result)
@@ -218,14 +241,22 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Copies a single SAF document to a local file.
      */
-    private fun copyDocumentToLocal(docUri: Uri, dest: File) {
+    private fun copyDocumentToLocal(docUri: Uri, dest: File, sourceModified: Long) {
         try {
             context.contentResolver.openInputStream(docUri)?.use { input ->
                 FileOutputStream(dest).use { output ->
                     input.copyTo(output, COPY_BUFFER_SIZE)
                 }
             }
+            // Stamp the mirror with the source's own time so later syncs compare
+            // two timestamps from the same clock rather than a provider's against
+            // the local filesystem's.
+            if (sourceModified > 0) dest.setLastModified(sourceModified)
         } catch (e: Exception) {
+            // FileOutputStream truncates before the first byte arrives, so a failure
+            // here leaves a short file behind. Remove it: a half copy carrying a fresh
+            // mtime would otherwise be mistaken for a local edit worth keeping.
+            dest.delete()
             Logger.w(tag, "Failed to copy ${docUri.lastPathSegment} → ${dest.name}: ${e.message}")
         }
     }
@@ -447,6 +478,41 @@ class SafSyncEngine(private val context: Context) {
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
         /**
+         * Whether the mirror copy may be replaced with the one from the device folder.
+         *
+         * Opening a folder re-runs the whole copy, so this is what stands between a
+         * reopen and the loss of edits not yet written back.
+         *
+         * Timestamps alone are not enough to decide this, for two reasons found the
+         * hard way:
+         *
+         * - A size mismatch beats any timestamp. A copy that fails part-way leaves a
+         *   short file carrying a *fresh* mtime, which timestamps alone would read as
+         *   "newer, keep it" — freezing the truncation in place forever and letting
+         *   the write-back push it onto the device. Different sizes mean the mirror is
+         *   not a copy of the source, whatever the clocks say.
+         * - An unknown source timestamp (0) must still copy. COLUMN_LAST_MODIFIED is
+         *   optional, and treating unknown as "keep" would freeze such folders
+         *   permanently: nothing in the app can clear a mirror, so there would be no
+         *   way out short of clearing app data. Copying is what the old code did, and
+         *   it is the behaviour that heals itself.
+         *
+         * The comparison is only sound because [copyDocumentToLocal] stamps the mirror
+         * with the source's own timestamp, so both sides come from the same clock.
+         */
+        internal fun shouldOverwriteMirror(
+            mirrorExists: Boolean,
+            mirrorModified: Long,
+            mirrorSize: Long,
+            sourceModified: Long,
+            sourceSize: Long
+        ): Boolean =
+            !mirrorExists ||
+                mirrorSize != sourceSize ||
+                sourceModified == 0L ||
+                sourceModified > mirrorModified
+
+        /**
          * Directories to skip during sync — auto-generated and too large.
          * Q3: Removed "build" (legitimate source dir) and ".vscode" (workspace settings).
          */
@@ -491,7 +557,9 @@ internal data class DocumentInfo(
     val docId: String,
     val relativePath: String,
     val isDirectory: Boolean,
-    val size: Long
+    val size: Long,
+    /** Provider's last-modified time, or 0 when it does not report one. */
+    val lastModified: Long = 0
 )
 
 internal data class SyncJob(
