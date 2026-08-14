@@ -151,9 +151,37 @@ class FirstRunSetup(private val context: Context) {
         val tmpDir = File(context.cacheDir, "tmp")
         if (!tmpDir.exists()) tmpDir.mkdirs()
 
-        // App-external projects directory (visible in file managers)
-        val projectsDir = File(Environment.getProjectsDir(context))
-        if (!projectsDir.exists()) projectsDir.mkdirs()
+        ensureProjectsDir()
+    }
+
+    /**
+     * Recreates the projects directory if it has gone.
+     *
+     * Alone among the directories above, this one lives in app-external storage
+     * -- /storage/emulated/0/Android/data/<pkg>/files/projects -- which shows up
+     * in every file manager and is exactly the kind of path a cleaner app
+     * removes. The rest are under filesDir, where nothing outside the app can
+     * reach them, so they only ever need creating. This one needs repairing.
+     *
+     * Creating it once per version was not enough. isFirstRun() gates on
+     * versionName, so a folder deleted after setup stayed missing through every
+     * relaunch and force-stop: the explorer was empty, new files could not be
+     * saved, and terminals started in a directory that was not there. The only
+     * ways back were clearing app data or installing a new version.
+     *
+     * Asks isDirectory rather than exists, because a plain file at that path
+     * answers yes to the second question and is no more usable than nothing.
+     */
+    fun ensureProjectsDir(): String {
+        val dir = File(Environment.getProjectsDir(context))
+        if (!dir.isDirectory) {
+            if (dir.mkdirs()) {
+                Logger.i(tag, "Recreated the projects directory at $dir")
+            } else {
+                Logger.w(tag, "Could not recreate the projects directory at $dir")
+            }
+        }
+        return dir.absolutePath
     }
 
     private fun extractAssetDir(assetPath: String, destPath: String) {

@@ -65,6 +65,10 @@ class SplashActivity : AppCompatActivity() {
             setup.ensureToolchainEnvSourcing()
             setup.ensurePromptFix()
             setup.updateSettingsNativeLibPaths()
+            // Beside the other idempotent repairs, for the same reason they are
+            // here: it can disappear between launches. This one because it is
+            // visible in a file manager, not because the app moved it.
+            setup.ensureProjectsDir()
             // A toolchain keeps the manifest it was installed with, so a
             // packaging fix never reaches an install that already exists. This
             // gives those binaries back the execute bit they should have had.

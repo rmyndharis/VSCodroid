@@ -34,6 +34,7 @@ import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.service.NodeService
+import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import com.vscodroid.webview.VSCodroidWebChromeClient
@@ -457,7 +458,15 @@ class MainActivity : AppCompatActivity() {
         // onServerReady routes a restart through here without a folder. Falling back
         // to the folder already on screen keeps the user's workspace instead of
         // dropping them back into the default projects directory.
-        navigateToFolder(port, folderPath ?: folderFromUrl(webView?.url) ?: Environment.getProjectsDir(this))
+        // The default is created rather than merely named. Splash repairs it at
+        // launch, but that is not enough on its own: this activity can be
+        // started directly, and the folder can be deleted while the app is
+        // running. The URL-derived branch below already refuses a path that is
+        // not a directory; the default deserves the same care.
+        navigateToFolder(
+            port,
+            folderPath ?: folderFromUrl(webView?.url) ?: FirstRunSetup(this).ensureProjectsDir()
+        )
     }
 
     /**
