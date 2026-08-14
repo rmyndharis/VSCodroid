@@ -29,10 +29,14 @@
 #
 # So it is on a person, and the moments that matter are:
 #
-#   * before tagging a release;
+#   * before tagging a release -- this suite AND --instrumented, that one first,
+#     since it is the only one that starts the app rather than reading what was
+#     packed into it;
 #   * after changing scripts/download-*.sh or scripts/build-*.sh, which decide
 #     what gets bundled;
-#   * after a Node, Python or VS Code version bump.
+#   * after a Node, Python or VS Code version bump;
+#   * after touching MainActivity, SplashActivity, NodeService, ProcessManager or
+#     FirstRunSetup -- --instrumented, which is the only thing that covers them.
 #
 # This suite once demanded Node v20.x for two releases after the runtime moved
 # to 24.18.0. Nothing caught it, because nothing ran it. The versions it checks

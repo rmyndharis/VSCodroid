@@ -309,12 +309,21 @@ request `/system/bin/linker64`, so running them under `qemu-user` needs Android'
 Bionic from a system image — 2.1 GB, inside a partitioned disk image. Both routes
 were attempted and measured; the issue tracker carries the evidence.
 
-So it falls to a person. Run it:
+So it falls to a person. Two suites, one cadence — `device-test.sh` inspects what
+shipped, `--instrumented` runs the app:
 
-- before tagging a release;
+- before tagging a release — **both**, and the instrumented one first, because it
+  is the only thing here that starts the app rather than reading what was packed
+  into it;
 - after changing anything under `scripts/download-*.sh` or `scripts/build-*.sh`,
-  which decide what gets bundled;
-- after a Node, Python or VS Code version bump.
+  which decide what gets bundled — `device-test.sh`;
+- after a Node, Python or VS Code version bump — `device-test.sh`;
+- after touching `MainActivity`, `SplashActivity`, `NodeService`, `ProcessManager`
+  or `FirstRunSetup` — `--instrumented`, because that is the surface `androidTest/`
+  covers and no JVM test reaches it.
+
+The last one is new because it was missing: the instrumented suite had a command
+in the block below and no moment at which anyone owed it a run.
 
 ```bash
 bash scripts/device-test.sh                 # build, install, and test

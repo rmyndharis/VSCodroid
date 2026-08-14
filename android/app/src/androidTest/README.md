@@ -1,9 +1,18 @@
 # Instrumented tests
 
-**These do not run automatically. Nothing triggers them, and nothing can.**
+**These do not run automatically. Nothing triggers them, and no runner this
+project has measured can.**
 
 That is a measured conclusion, not an omission, and it is written here because a
-populated `androidTest/` directory otherwise reads as coverage.
+populated `androidTest/` directory otherwise reads as coverage. The wording is
+deliberately narrower than "nothing can": what was measured is two Linux runner
+families, which is not every runner GitHub offers. See *The route nobody has
+measured* below.
+
+Because nothing schedules them, the cadence is a person's. `CONTRIBUTING.md`
+names the moments; the one that belongs to this directory is **after touching
+MainActivity, SplashActivity, NodeService, ProcessManager or FirstRunSetup**, and
+before tagging a release.
 
 ## Why CI cannot run them
 
@@ -19,6 +28,29 @@ Measured on both runner families:
 So an arm64 image would run under pure software emulation, for a 340 MB APK
 that boots a Node server. This is the same wall `scripts/device-test.sh`
 documents for the same reason.
+
+## The route nobody has measured
+
+GitHub's `macos-14` / `macos-15` runners are Apple silicon, so an arm64 system
+image there would run under HVF rather than software emulation. **Nobody has
+tried it here**, and this section exists to price it honestly rather than to
+recommend it, because "nothing can" was overstating a measurement of two Linux
+runners.
+
+What such a job would have to solve first, one item of which is checkable
+without a runner and is true today:
+
+- the assets cache key in `build.yml` is `assets-${{ hashFiles(...) }}` with no
+  `runner.os` in it, so a macOS job would restore a tree built on Linux and save
+  its own forward under the same key — verified by reading the workflow;
+- the 874 MB asset tree would have to build on macOS, where `sed -i` is not the
+  GNU one (`scripts/download-*.sh` already use `python3` for in-place edits for
+  exactly this reason);
+- installing a 340 MB APK over the emulator's adb, then two `SplashActivityTest`
+  cases that wait on first-run extraction.
+
+None of that says it will not work. It says the cost is a day, not an
+afternoon, and that nobody should quote this section as evidence either way.
 
 ## What CI does instead
 
