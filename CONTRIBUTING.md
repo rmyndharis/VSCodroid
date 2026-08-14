@@ -9,6 +9,7 @@ Thank you for your interest in contributing to VSCodroid. This guide covers ever
 - [Project Structure](#project-structure)
 - [Download Scripts](#download-scripts)
 - [Building](#building)
+- [The on-device test suite](#the-on-device-test-suite)
 - [Testing on Device](#testing-on-device)
 - [How to Add a New Bundled Tool](#how-to-add-a-new-bundled-tool)
 - [How to Add a New Patch](#how-to-add-a-new-patch)
@@ -248,7 +249,7 @@ Each script downloads pre-built binaries and places them in the correct location
 - `fetch-vscode-oss.sh` needs the `gh` CLI authenticated, or `VSCODE_OSS_URL` pointing at a tarball.
 - The Node.js binary (`libnode.so`) is Termux's `nodejs-lts` package, installed by `download-node.sh`. It is not cross-compiled here and not checked in. An earlier hand-cross-compiled build was abandoned for segfaulting inside several CLI tools; `toolchains/build-node.sh` is what remains of it and is not part of any build.
 
-## Testing on a device
+## The on-device test suite
 
 `scripts/device-test.sh` installs the APK and checks that what shipped actually
 runs: the server answers, every bundled tool starts, and Python imports the ten
@@ -279,6 +280,34 @@ This suite once demanded Node `v20.x` for two releases after the runtime moved t
 versions it checks are now read from the build rather than written down, and
 `--self-check` runs in CI to confirm those readings still resolve — but neither
 replaces running it on a device.
+
+### Test the wire, not only the predicate
+
+Pulling a decision into a pure function makes it easy to test and easy to leave
+disconnected. Two of these shipped: `heapCeilingMb` and the port-reuse branch in
+`PortFinder` were both well covered, and both could be cut out of the code that
+runs with every one of their tests still green. The tests named the right
+behaviour and never checked that anything used it.
+
+Two habits catch it, and they are cheap:
+
+**Assert at the far end of the wire.** Something downstream can usually already
+observe the value. `ProcessManagerTest` spawns `/bin/echo` and merges stderr
+into stdout, so the process prints its own arguments and `onServerOutput`
+receives them -- the command line was observable before anyone tried to assert
+on it. Look for the seam that exists before adding one.
+
+**Pick a fixture value the broken path cannot also produce.** This is what let
+both of them through. A 4 GB device derives a 512 MB ceiling, which is exactly
+the literal that the regression restores, so the obvious fixture agrees with the
+bug; 3 GB derives 384 and the test bites. `findAvailablePort()` scans upward
+from a fixed default, so the first remembered port and a fresh scan return the
+same number, and a test comparing two calls to each other moves with the bug
+instead of catching it -- holding the first port forces the paths apart.
+
+Confirm it rather than assuming: delete the line under test, run the suite, and
+check that something red points at the deletion. A test that stays green has not
+been proven wrong, only proven silent.
 
 ## Building
 

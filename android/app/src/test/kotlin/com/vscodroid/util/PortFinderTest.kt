@@ -138,6 +138,35 @@ class PortFinderTest {
         }
 
         @Test
+        fun `does not drift back to a lower port once it has moved`() {
+            // `returns the same port on the next cold start` cannot see whether
+            // the port was remembered. findAvailablePort() scans upward from a
+            // fixed default, so while that default is free -- the ordinary case --
+            // a fresh scan returns the same number the remembered branch would
+            // have. Both calls move together, and the assertion holds with the
+            // branch deleted.
+            //
+            // Holding the first port forces the two paths apart: the remembered
+            // port is now the higher one, and only a scan would go back down to
+            // the lower one. Drifting back is not harmless -- it is a second
+            // origin change, and it discards whatever the workbench stored under
+            // the port we had just moved to.
+            val first = PortFinder.getOrAllocatePort(context)
+
+            val moved = ServerSocket(first).use {
+                PortFinder.getOrAllocatePort(context).also { moved ->
+                    assertNotEquals(first, moved, "a held port cannot be reused")
+                }
+            }
+
+            assertEquals(
+                moved, PortFinder.getOrAllocatePort(context),
+                "once $first was free again the remembered $moved must still win; " +
+                    "returning $first would empty the storage keyed to $moved",
+            )
+        }
+
+        @Test
         fun `moves off a remembered port that something else has taken`() {
             val first = PortFinder.getOrAllocatePort(context)
 

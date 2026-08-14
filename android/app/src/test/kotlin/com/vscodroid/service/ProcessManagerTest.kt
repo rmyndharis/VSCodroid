@@ -1,5 +1,6 @@
 package com.vscodroid.service
 
+import android.app.ActivityManager
 import android.content.Context
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
@@ -42,6 +43,7 @@ class ProcessManagerTest {
     lateinit var tempDir: File
 
     private lateinit var manager: ProcessManager
+    private lateinit var contextMock: Context
 
     @BeforeEach
     fun setUp() {
@@ -60,11 +62,11 @@ class ProcessManagerTest {
         every { Environment.getUserDataDir(any()) } returns "data"
         every { Environment.getLogsDir(any()) } returns "logs"
 
-        val context = mockk<Context>(relaxed = true)
-        every { context.cacheDir } returns tempDir
-        every { context.filesDir } returns tempDir
+        contextMock = mockk<Context>(relaxed = true)
+        every { contextMock.cacheDir } returns tempDir
+        every { contextMock.filesDir } returns tempDir
 
-        manager = ProcessManager(context)
+        manager = ProcessManager(contextMock)
     }
 
     @AfterEach
@@ -167,6 +169,50 @@ class ProcessManagerTest {
         // The unbounded overload would hang the caller forever, which is the
         // shape this replaced elsewhere in the app.
         verify(exactly = 0) { process.waitFor() }
+    }
+
+    @Test
+    fun `the derived heap ceiling reaches the command line`() {
+        // The wire, not the predicate. HeapCeilingTest pins how the number is
+        // computed and says nothing about whether it is used: replacing
+        // "--max-old-space-size=$heapMb" with a literal 512 left all of those
+        // green, because heapMb stayed referenced by the log line beside it and
+        // the file still compiled.
+        //
+        // The command line is already observable. startServer spawns /bin/echo
+        // in this fixture and redirects stderr into stdout, so the process
+        // prints its own arguments and onServerOutput receives them. Nothing had
+        // to be added to production code to see them -- the seam was already
+        // there, unused.
+        //
+        // 3 GB is chosen so the expected ceiling is 384, which no literal in the
+        // production path happens to equal. Asserting against 512 would have
+        // passed against the very mutation this exists to catch.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 3L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val expected = heapCeilingMb(3L * 1024, isLowRam = false)
+        assertNotEquals(
+            HEAP_CEILING_DEFAULT_MB, expected,
+            "the fixture must not pick the value a regression would also produce"
+        )
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(manager.startServer(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=$expected"),
+            "the derived ceiling must reach the command line; got: $output"
+        )
     }
 
     // -- Connection token --
