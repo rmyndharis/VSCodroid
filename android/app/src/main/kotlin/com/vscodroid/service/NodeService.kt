@@ -136,18 +136,19 @@ class NodeService : Service() {
      */
     fun getConnectionToken(): String? = processManager.connectionToken
 
-    /** Performs a synchronous health check against the running server. */
-    fun isServerHealthy(): Boolean = processManager.isServerHealthy()
-
-    /** Returns `true` if the Node.js process is alive. */
-    fun isServerRunning(): Boolean = processManager.isRunning()
-
     /**
      * Whether the server has answered a health check and has not stopped since.
      *
-     * This is the question a caller almost always means when it reaches for
-     * [isServerRunning], and [ProcessManager.isReady] explains the difference and
-     * why it matters. Costs no I/O, so it is safe on the main thread.
+     * The only server-state question this class answers, and the narrowness is
+     * deliberate. Two other wrappers stood here — one returning `Process.isAlive`
+     * and one forwarding the blocking health probe — and both are gone: see
+     * [ProcessManager.isReady] for what separates a process that exists from a
+     * server that serves, and why asking the first while meaning the second put a
+     * connection-refused page in front of users.
+     *
+     * Costs no I/O, so it is safe on the main thread. That is the property the
+     * removed pair could not offer, and the reason a caller should not have to
+     * choose between three names to find it.
      */
     fun isServerReady(): Boolean = processManager.isReady()
 
