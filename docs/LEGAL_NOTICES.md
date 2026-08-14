@@ -138,7 +138,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 ### npm
 
 - **Project**: https://www.npmjs.com
-- **Version**: 10.8.2 — pinned as `NPM_VERSION` in `scripts/download-npm.sh`, extracted from the nodejs.org tarball named there
+- **Version**: 11.16.0 — declared as `NPM_VERSION` in `scripts/download-npm.sh` and asserted against the nodejs.org tarball, which is the release the bundled Node runtime comes from
 - **License**: Artistic License 2.0
 - **Copyright**: Copyright (c) npm, Inc. and Contributors
 - **Full license**: https://github.com/npm/cli/blob/latest/LICENSE

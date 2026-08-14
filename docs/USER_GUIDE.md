@@ -125,9 +125,9 @@ Open the terminal with **Ctrl+`** or from the menu bar. VSCodroid includes a ful
 All tools are available immediately with no installation or setup:
 
 ```
-node -v           # Node.js 20.18.1
-npm -v            # npm 10.8.2
-python3 --version # Python 3.12.12
+node -v           # Node.js 24.x
+npm -v            # npm 11.x
+python3 --version # Python 3.14.x
 pip --version     # pip (bundled with Python)
 git --version     # Git 2.53.0
 bash --version    # Bash 5.3.9
