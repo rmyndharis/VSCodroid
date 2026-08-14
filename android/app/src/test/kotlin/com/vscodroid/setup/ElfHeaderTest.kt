@@ -59,15 +59,29 @@ class ElfHeaderTest {
     }
 
     @Test
-    fun `rejects ELF preceded by the wrong first byte`() {
-        // The one check nothing else here reaches. Every other rejection above
-        // is already decided by byte 1 not being 'E', so deleting the 0x7F
-        // comparison left the whole suite green -- measured, not assumed. This
-        // is the case that distinguishes a real object from anything whose
-        // second, third and fourth bytes happen to spell ELF.
-        assertFalse(isElfHeader(bytes(0x00, 0x45, 0x4C, 0x46)))
-        assertFalse(isElfHeader(bytes(0x7E, 0x45, 0x4C, 0x46)))
-        assertFalse(isElfHeader(" ELF".toByteArray()))
+    fun `rejects a header wrong in exactly one byte of the magic`() {
+        // One case per byte, each differing from a real header in that byte
+        // alone. Anything less leaves part of the magic untested, because the
+        // comparison short-circuits: every other rejection in this file is
+        // already decided by byte 0, so bytes 1, 2 and 3 were never reached by
+        // any input. Measured -- with the file as it stood, deleting the byte 1
+        // or byte 2 comparison kept every test green, and forcing byte 3 true
+        // did too.
+        //
+        // The consequence this file exists for applies to each equally: what is
+        // accepted here is handed the execute bit, and the repair pass only ever
+        // adds, so a wrong yes cannot be taken back.
+        assertFalse(isElfHeader(bytes(0x00, 0x45, 0x4C, 0x46)), "byte 0")
+        assertFalse(isElfHeader(bytes(0x7F, 0x00, 0x4C, 0x46)), "byte 1")
+        assertFalse(isElfHeader(bytes(0x7F, 0x45, 0x00, 0x46)), "byte 2")
+        assertFalse(isElfHeader(bytes(0x7F, 0x45, 0x4C, 0x00)), "byte 3")
+
+        // Realistic near-misses rather than synthetic ones: a file whose bytes
+        // spell ELF with something in front, and one that starts with the magic
+        // but ends in a different letter.
+        assertFalse(isElfHeader(" ELF".toByteArray()), "leading space")
+        assertFalse(isElfHeader(bytes(0x7E, 0x45, 0x4C, 0x46)), "0x7E not 0x7F")
+        assertFalse(isElfHeader(bytes(0x7F, 0x45, 0x4C, 0x47)), "ELG not ELF")
     }
 
     @Test
