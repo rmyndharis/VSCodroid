@@ -1023,16 +1023,27 @@ claude() {
         val settingsFile = File(Environment.getMachineSettingsPath(context))
         settingsFile.parentFile?.mkdirs()
         if (!settingsFile.exists()) {
-            // The terminal profile is inert today and is written for the day it is
-            // not. VS Code keys these settings `…profiles.linux`, the remote
-            // reports its platform as "android", so the whole block is skipped and
-            // terminals fall back to $SHELL — which is why Environment sets SHELL
-            // to the usr/bin/bash symlink rather than the .so. Verified on device:
-            // even an explicit --init-file placed in these args never reached the
-            // spawned shell. Fixing platform detection at source makes the profile
-            // live again, so it is kept correct: the path names the symlink so the
-            // basename is `bash`, and the args stay empty because VS Code only
+            // The terminal profile is read, and the `linux` suffix is not a guess.
+            // The workbench builds the key from the OS *integer* the remote sends:
+            // `getPlatformKey()` maps 1 to "windows", 2 to "osx" and everything
+            // else to "linux", and the server computes that integer as
+            // `isMacintosh || isIOS ? 2 : isWindows ? 1 : 3`. Linux is the branch
+            // nothing tests for, so Android — neither darwin nor win32 — has always
+            // landed on it. isLinux is not consulted anywhere on this path, so
+            // patches/0001 neither made this work nor is needed for it.
+            //
+            // Both fields below carry weight: the path names the symlink so the
+            // basename is `bash`, which is the key the ptyHost looks up to decide
+            // the injection arguments, and the args stay empty because it only
             // injects shell integration for empty or login args.
+            //
+            // This block was once documented as inert, on the grounds that the
+            // remote "reports its platform as android". No such mechanism exists —
+            // it reports an integer, never a platform string. The device
+            // measurement offered as proof predates the settings-path fix, when
+            // everything written here went to a file the workbench never read, so
+            // no default profile was selected and terminals took the $SHELL
+            // fallback for an unrelated reason.
             settingsFile.writeText("""
                 {
                     "workbench.startupEditor": "none",

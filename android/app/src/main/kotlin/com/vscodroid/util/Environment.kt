@@ -18,13 +18,18 @@ object Environment {
         //
         // SHELL names the usr/bin/bash symlink rather than the .so it points at,
         // and that indirection is what makes shell integration possible at all.
-        // VS Code never reads our terminal profile: profile settings are keyed
-        // `…profiles.linux`, and the remote reports its platform as "android", so
-        // the whole block is skipped and the terminal falls back to $SHELL with no
-        // arguments. It then decides whether to inject its bash integration by
-        // switching on the *basename* of whatever it launched — `libbash.so`
-        // matches nothing, `bash` matches. Verified on device: with the .so named
-        // here, no terminal ever received --init-file.
+        // The ptyHost picks the injection arguments from a table keyed by the
+        // executable's *basename*: `bash` maps to
+        // ["--init-file", "{0}/shellIntegration-bash.sh"], `libbash.so` matches
+        // nothing. The indirection pays twice, because setupToolSymlinks()
+        // re-points the link on every launch, so a reinstall that moves
+        // nativeLibraryDir cannot leave it dangling.
+        //
+        // SHELL is what a terminal falls back to when no profile supplies a
+        // default, so the basename has to be right on that path too — but it is
+        // not the only path. `terminal.integrated.profiles.linux` is read; see
+        // createDefaultSettings() in FirstRunSetup for why `linux` is the suffix
+        // the workbench looks up on Android.
         val shell = if (File("$nativeLibDir/libbash.so").exists())
             getTerminalShellPath(context)
         else
