@@ -228,6 +228,15 @@ class ProcessManager(private val context: Context) {
         // adopted that way has no `Process` behind it, so no watchdog, so its
         // later death goes unnoticed. Solving that is what makes adoption a piece
         // of work rather than a patch.
+        //
+        // Read that sentence before deciding adoption is cheap, because it is the
+        // SAME TRADE the refusal was removed for, running the other way. Refusing
+        // took a working editor from the user to fix bookkeeping and was rejected
+        // for it; adopting fixes the bookkeeping by giving up the ability to
+        // notice the server dying, which turns a loud failure into a silent one.
+        // Neither direction is free, and whoever takes this should choose
+        // deliberately rather than find out on the next attempt -- this path has
+        // already had four.
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR is a usable directory — Android may clear cache between
