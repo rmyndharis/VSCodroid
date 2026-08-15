@@ -19,22 +19,61 @@ import java.lang.reflect.Method
  * 28 match" while an undocumented method sat in the class. Two patterns keyed on one
  * literal are one check counted twice.
  *
- * This test is the half that cannot be spelled around. `isAnnotationPresent` asks the
- * compiled class, so a qualified annotation, an aliased import, an expression body, a
- * default parameter value with parentheses in it and an overload are all simply methods by
- * the time it looks -- and a commented-out method is not there at all, which is the case
- * the script gets backwards by reporting it as undocumented.
+ * This test cannot be spelled around. `isAnnotationPresent` asks the compiled class, so a
+ * qualified annotation, an aliased import, an expression body, a default parameter value
+ * with parentheses in it and an overload are all simply methods by the time it looks --
+ * and a commented-out method is not there at all, which is the case the script gets
+ * backwards by reporting it as undocumented.
  *
- * So the pair is deliberate rather than redundant: reflection settles WHICH methods exist,
- * text settles what their parameters are called and whether they are nullable. Neither
- * alone is the gate. Do not delete one because the other passes.
+ * WHAT IT DOES NOT DO, stated because the previous version of this paragraph said
+ * "reflection settles WHICH methods exist" and that sentence is what stopped the next
+ * reader checking. It was written to close the spelling class and was wrong about
+ * inheritance: `declaredMethods` skipped inherited methods that the page could call, and
+ * the confident comment outlived the gap. Three guards on this pair have now claimed a
+ * property they did not have, so this list is the point of the paragraph, not an aside.
+ *
+ *  - It compares names and ARITY. It does NOT compare return types: those are checked
+ *    only by `check-bridge-api-spec.py`. A method whose documented return type is wrong
+ *    passes here — measured on a five-way merge, 751 tests, 0 failures, while the script
+ *    reported the mismatch.
+ *  - It does not see parameter NAMES, their order, or nullability. None survive erasure.
+ *  - `@JvmOverloads` would produce two annotated methods sharing a name with different
+ *    arities. `documented()` collapses names, so whichever arity the spec states, the
+ *    other mismatches. No such method exists today; this fails loudly if one appears.
+ *  - `documented()` counts parameters by splitting on commas, so a documented generic
+ *    like `Map<String, Int>`, or a default value containing a comma, inflates the count
+ *    and fails a correct document. Also loud, also absent today.
+ *
+ * So the pair is deliberate rather than redundant, and BOTH halves are load-bearing and
+ * NEITHER is complete: reflection settles the set of callable methods, text settles their
+ * parameter names, order, nullability and return type. Do not delete one because the other
+ * passes, and do not read a green from either as "the spec matches the bridge".
  */
 class BridgeApiSpecParityTest {
 
     private val spec = File("../../docs/05-API_SPEC.md")
 
-    /** Every entry point the page can actually call, read from the compiled class. */
-    private fun registered(): List<Method> = AndroidBridge::class.java.declaredMethods
+    /**
+     * Every entry point the page can actually call, read from the compiled class.
+     *
+     * `.methods`, NOT `.declaredMethods`, and the difference is the whole point of this
+     * function. `addJavascriptInterface` exposes the class's *public* methods, which
+     * includes the ones it inherits; `declaredMethods` returns what this class declares
+     * and nothing it inherits. So a base class carrying one annotated method used to be
+     * callable from the page and invisible here — measured, with a `BridgeBase` holding a
+     * single method: twenty-nine callable methods, this test green, the script green too
+     * because its window is one file.
+     *
+     * Filtering `Any` is belt and braces — `java.lang.Object` declares nothing annotated —
+     * but it says what the set is meant to be rather than relying on that staying true.
+     *
+     * The swap also drops private methods, which is correct rather than incidental:
+     * `declaredMethods` returned them, so an annotated private method was demanded in the
+     * spec although no page can call it. `.methods` is public-only, which is exactly the
+     * set the bridge exposes.
+     */
+    private fun registered(): List<Method> = AndroidBridge::class.java.methods
+        .filter { it.declaringClass != Any::class.java }
         .filter { it.isAnnotationPresent(JavascriptInterface::class.java) }
         .sortedBy { it.name }
 
