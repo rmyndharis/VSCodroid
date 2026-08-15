@@ -111,14 +111,27 @@ class BridgeApiSpecParityTest {
      * side only has to be good enough to notice a name or an argument going missing,
      * because a doc-side miss fails loudly -- the method turns up as registered-but-absent
      * rather than passing quietly.
+     *
+     * The existence check lives HERE rather than in each caller, and that placement is the
+     * fix for a real defect: one of the two tests asserted `spec.exists()` first and the
+     * other did not, so deleting the file failed one of them with the path named and the
+     * other with a bare `FileNotFoundException` out of `readText()`. Both failed, so
+     * nothing shipped wrong -- but a caller could forget the guard, and one already had.
+     * Checking inside the reader means no caller can.
      */
-    private fun documented(): Map<String, Int> =
-        Regex("""(?m)^fun\s+(\w+)\s*\(([^)]*)\)""")
+    private fun documented(): Map<String, Int> {
+        assertTrue(
+            spec.exists(),
+            "spec not found at ${spec.absolutePath} -- this test resolves it relative to " +
+                "the Gradle test working directory, which is the module dir (android/app)",
+        )
+        return Regex("""(?m)^fun\s+(\w+)\s*\(([^)]*)\)""")
             .findAll(spec.readText())
             .associate { m ->
                 val params = m.groupValues[2].trim()
                 m.groupValues[1] to if (params.isEmpty()) 0 else params.split(',').size
             }
+    }
 
     @Test
     fun `the spec documents exactly the methods the bridge registers`() {
