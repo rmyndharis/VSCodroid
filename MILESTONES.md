@@ -448,9 +448,9 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Verify no secrets in APK (no API keys, tokens, or private keys bundled)
    - [x] Review all workbench.js patches for unintended side effects
    - [x] Confirm Android app sandbox isolation (no world-readable files)
-   - [x] Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
-   - [x] Fix: restrict cleartext HTTP to localhost only (network_security_config.xml)
-   - [x] Fix: use Uri.parse() for exact localhost host matching (prevents domain spoofing)
+   - [x] Validate that every `@JavascriptInterface` method checks the session token (`BridgeTokenUniformityTest` fails the build if one is added without it)
+   - [x] Decided against a URL allowlist, and removed the one that existed: this is a development tool, so any protocol and any address must open, including a wrong one. It had refused `http://192.168.1.x:PORT` — a LAN dev server, the most ordinary thing the product is for. `UrlAllowlistWiringTest` now pins the absence so a filter cannot return unnoticed
+   - [x] Decided against restricting cleartext, for the same reason: a dev server answers over plain HTTP at whatever address the device's network gives it, and `network-security-config` matches hostnames only — it can spell neither CIDR nor an address unknown at build time
    - [x] Fix: owner-only execute permissions on extracted binaries
 
 5. **Release build & signing**
