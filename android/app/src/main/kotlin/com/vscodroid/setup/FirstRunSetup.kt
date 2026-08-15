@@ -52,27 +52,42 @@ class FirstRunSetup(private val context: Context) {
         }
         val startTime = System.currentTimeMillis()
 
-        // Pre-flight: enough room for everything under assets/, plus slack.
-        //
-        // The asset total comes from the build rather than from a literal here --
-        // see EXTRACTED_ASSET_BYTES in app/build.gradle.kts for why. The slack on
-        // top covers what extraction does not account for: the per-file rounding
-        // of 23,000-odd files to filesystem blocks, and the handful of small files
-        // written afterwards (settings.json, .bashrc, ssh defaults, git config).
-        val available = context.filesDir.usableSpace
-        val required = BuildConfig.EXTRACTED_ASSET_BYTES + EXTRACTION_SLACK_BYTES
-        if (available < required) {
-            Logger.e(tag, "Insufficient storage: ${available / 1_048_576}MB available, ${required / 1_048_576}MB required")
-            return@withContext SetupResult.LOW_STORAGE
-        }
-
         try {
-            reportProgress("Creating directories...", 2)
-            createDirectories()
-
+            // Ahead of the pre-flight, not behind it, for the reason
+            // reconcilePythonRuntimeLocked gives for its own ordering: what frees
+            // disk has to run before what needs disk. This is where the previous
+            // server tree and the orphaned web client go -- hundreds of MB on a
+            // device upgrading across the pivot -- and behind the check it was
+            // gated by the shortfall it is the cure for. A device short of room
+            // returned LOW_STORAGE with those trees untouched, and Retry measured
+            // the same shortfall for ever, on the one install where there was
+            // something to reclaim.
+            //
+            // Safe this early because these migrations only delete, and only
+            // trees this version no longer reads. Nothing below has run yet, so
+            // there is nothing here for them to remove that was just written --
+            // which is the ordering hazard runPreExtractionMigrations exists to
+            // avoid, in the other direction.
             if (isUpgrade) {
                 runPreExtractionMigrations(previousVersionCode)
             }
+
+            // Pre-flight: enough room for everything under assets/, plus slack.
+            //
+            // The asset total comes from the build rather than from a literal here --
+            // see EXTRACTED_ASSET_BYTES in app/build.gradle.kts for why. The slack on
+            // top covers what extraction does not account for: the per-file rounding
+            // of 23,000-odd files to filesystem blocks, and the handful of small files
+            // written afterwards (settings.json, .bashrc, ssh defaults, git config).
+            val available = context.filesDir.usableSpace
+            val required = BuildConfig.EXTRACTED_ASSET_BYTES + EXTRACTION_SLACK_BYTES
+            if (available < required) {
+                Logger.e(tag, "Insufficient storage: ${available / 1_048_576}MB available, ${required / 1_048_576}MB required")
+                return@withContext SetupResult.LOW_STORAGE
+            }
+
+            reportProgress("Creating directories...", 2)
+            createDirectories()
 
             // Each of these is checked, and every one is attempted before the
             // check, so a failure names all of them rather than the first.
@@ -1774,6 +1789,11 @@ claude() {
      * anything that removes a stale tree has to happen first. Run afterwards it
      * would delete what was just unpacked, and the app would come up with no
      * server at all.
+     *
+     * It also runs before the storage pre-flight, which is a second ordering
+     * constraint with its own reason -- see the call site. Everything here only
+     * deletes, so nothing it does depends on the room the pre-flight is
+     * measuring.
      */
     private fun runPreExtractionMigrations(fromVersionCode: Int) {
         if (fromVersionCode < PIVOT_VERSION_CODE) {

@@ -19,6 +19,7 @@ import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -209,5 +210,45 @@ class ToolchainInstallTest {
         assertEquals(listOf(AssetPackStatus.COMPLETED), statuses())
         val state = File(filesDir, "home/.vscodroid/toolchains.json").readText()
         assertTrue(state.contains("\"go\""), "the install was reported but not recorded: $state")
+    }
+
+    /**
+     * An install whose record does not survive is not an install, and saying
+     * COMPLETED over it is the part that makes the loss silent.
+     *
+     * `toolchains.json` is four lines written after ~160 MB has already been
+     * copied, so it is exactly the write a device that has just filled up fails.
+     * What follows from losing it: `getInstalledToolchains()` does not name the
+     * toolchain, `toolchain-env.sh` is regenerated from a record that predates it
+     * so none of its commands exist in a terminal, and no manifest survives to
+     * tell an uninstall which files, symlinks and libraries those megabytes are
+     * -- they cannot be removed from the UI at all. Reported as COMPLETED, the
+     * picker shows 100% and Done, the first-run queue moves to the next pack, and
+     * the card reads "Install" again after the next launch with nothing said.
+     *
+     * The failure is arranged as the rest of this package arranges it, by
+     * occupying the temporary path `writeAtomically` derives from its
+     * destination.
+     */
+    @Test
+    fun `an install whose record cannot be written reports FAILED rather than COMPLETED`() {
+        val pack = File(filesDir, "pack-go").apply { mkdirs() }
+        File(pack, "toolchain_go.json").writeText("""{"name":"go","installRoot":"usr/opt/go"}""")
+        // Non-empty, so the cleanup delete() cannot quietly reclaim it and let the
+        // write through -- the point is that this write fails.
+        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
+        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
+        File(blocker, "occupied").writeText("x")
+
+        installFromDirectory(manager(), "toolchain_go", pack)
+
+        assertEquals(
+            listOf(AssetPackStatus.FAILED), statuses(),
+            "an unrecorded install was reported to the queue and the user as a finished one",
+        )
+        assertFalse(
+            File(filesDir, "home/.vscodroid/toolchains.json").exists(),
+            "the harness did not block the write, so this test proves nothing",
+        )
     }
 }

@@ -611,7 +611,20 @@ class ToolchainManager(private val context: Context) {
             // keeps that pass from walking a several-thousand-file tree to confirm it.
             manifest.put(KEY_EXEC_REPAIRED, true)
             state.put(manifest)
-            writeState(state)
+            // The record is what the install consists of, as far as everything
+            // else is concerned. Without it getInstalledToolchains() does not
+            // name the toolchain, the environment below is regenerated from a
+            // record that predates it -- readState() re-reads the file, so it
+            // reads back the old one -- and no manifest survives to tell
+            // uninstallLocked which files, symlinks and libraries the ~160 MB
+            // just copied consists of. Reporting COMPLETED on top of that is the
+            // part that makes it silent: the picker shows 100% and Done, the
+            // first-run queue moves on, and the card reads "Install" again after
+            // the next launch with nothing said.
+            if (!writeState(state)) {
+                onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                return
+            }
             regenerateEnvFileLocked()
         }
 
@@ -1363,12 +1376,19 @@ class ToolchainManager(private val context: Context) {
      * [writeAtomically] writes a sibling and renames it, and rename is the
      * operation that either happened or did not. A failure now costs the update
      * rather than the record.
+     *
+     * @return false when the record on disk is still the previous one. Keeping
+     *   the old record is the right outcome; reporting the update as if it
+     *   landed is not, and a caller whose next act is to tell the user the
+     *   toolchain is installed has to ask. [installFromDirectory] is that caller.
      */
-    private fun writeState(state: JSONArray) = synchronized(stateLock) {
+    private fun writeState(state: JSONArray): Boolean = synchronized(stateLock) {
         stateFile.parentFile?.mkdirs()
-        if (!writeAtomically(stateFile) { it.write(state.toString(2).toByteArray()) }) {
+        val written = writeAtomically(stateFile) { it.write(state.toString(2).toByteArray()) }
+        if (!written) {
             Logger.e(tag, "Could not write toolchains.json; it still holds the previous record")
         }
+        written
     }
 }
 

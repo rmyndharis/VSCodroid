@@ -67,44 +67,52 @@ class SplashActivity : AppCompatActivity() {
         // with no explanation. What survives a failure here is degraded rather
         // than dead — tools missing from PATH, a stale terminal profile — and
         // logcat is the only trace, so keep the message specific.
-        try {
-            setup.setupToolSymlinks()
-            setup.setupGitCore()
-            setup.setupGitCaBundle()
-            setup.setupRipgrepVscodeSymlink()
-            setup.setupCopilotAndroidAliases()
-            // Before the three below, all of which extend .bashrc only when it
-            // already exists. An install broken by an older release carries a
-            // truncated one, and every writer skipped it because it was there;
-            // this clears and rewrites it so the appenders have something whole
-            // to append to. It is confined to evidence that cannot be a user's
-            // own edit -- see the method for where that line is drawn.
-            setup.repairTruncatedSetupFiles()
-            setup.createNpmWrappers()
-            setup.ensureToolchainEnvSourcing()
-            setup.ensurePromptFix()
-            setup.updateSettingsNativeLibPaths()
-            // Beside the other idempotent repairs, for the same reason they are
-            // here: it can disappear between launches. This one because it is
-            // visible in a file manager, not because the app moved it.
-            setup.ensureProjectsDir()
-            // A toolchain keeps the manifest it was installed with, so a
-            // packaging fix never reaches an install that already exists. This
-            // gives those binaries back the execute bit they should have had.
-            // It returns immediately — the walk itself runs on the toolchain
-            // I/O thread, because the trees involved have thousands of files
-            // and this block is on the main thread.
-            ToolchainManager(this).repairInstalledToolchains()
-            // A folder whose permission the user withdrew in system settings never
-            // comes back through the app, so its mirror is disk nothing can reach.
-            // Here because it is the one point that is guaranteed to have no folder
-            // open: this activity always precedes MainActivity, and nothing can tell
-            // a mirror the editor is holding from one it is not. It returns
-            // immediately, for the reason the line above does.
-            SafStorageManager(this).reclaimRevokedMirrors()
-        } catch (e: Exception) {
-            Logger.e(tag, "Launch-time setup refresh failed", e)
-        }
+        //
+        // Guarded one at a time rather than as a block, because they share
+        // nothing but the launch they run in and a single catch made the first
+        // failure cost all of them. The likeliest thrower is not last: writing
+        // .npmrc is a certainty on the first launch after any reinstall, because
+        // its contents name nativeLibraryDir and that path is new every time, and
+        // a full disk turns that write into an exception. Behind it sat the
+        // repair that repoints git and the Claude Code wrapper at the directory
+        // the app has just moved to, and the reclaim of SAF mirrors whose
+        // permission the user withdrew — the only pass here that gives disk back.
+        // A full disk therefore stopped its own remedy, and did it again on every
+        // launch.
+        repair("tool symlinks") { setup.setupToolSymlinks() }
+        repair("git core") { setup.setupGitCore() }
+        repair("the git CA bundle") { setup.setupGitCaBundle() }
+        repair("the ripgrep symlink") { setup.setupRipgrepVscodeSymlink() }
+        repair("the Copilot aliases") { setup.setupCopilotAndroidAliases() }
+        // Before the three below, all of which extend .bashrc only when it
+        // already exists. An install broken by an older release carries a
+        // truncated one, and every writer skipped it because it was there;
+        // this clears and rewrites it so the appenders have something whole
+        // to append to. It is confined to evidence that cannot be a user's
+        // own edit -- see the method for where that line is drawn.
+        repair("the truncated-file repair") { setup.repairTruncatedSetupFiles() }
+        repair("the npm wrappers") { setup.createNpmWrappers() }
+        repair("the toolchain env sourcing") { setup.ensureToolchainEnvSourcing() }
+        repair("the prompt block") { setup.ensurePromptFix() }
+        repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
+        // Beside the other idempotent repairs, for the same reason they are
+        // here: it can disappear between launches. This one because it is
+        // visible in a file manager, not because the app moved it.
+        repair("the projects directory") { setup.ensureProjectsDir() }
+        // A toolchain keeps the manifest it was installed with, so a
+        // packaging fix never reaches an install that already exists. This
+        // gives those binaries back the execute bit they should have had.
+        // It returns immediately — the walk itself runs on the toolchain
+        // I/O thread, because the trees involved have thousands of files
+        // and this block is on the main thread.
+        repair("the toolchain repair pass") { ToolchainManager(this).repairInstalledToolchains() }
+        // A folder whose permission the user withdrew in system settings never
+        // comes back through the app, so its mirror is disk nothing can reach.
+        // Here because it is the one point that is guaranteed to have no folder
+        // open: this activity always precedes MainActivity, and nothing can tell
+        // a mirror the editor is holding from one it is not. It returns
+        // immediately, for the reason the line above does.
+        repair("the SAF mirror reclaim") { SafStorageManager(this).reclaimRevokedMirrors() }
 
         if (!setup.isFirstRun()) {
             // The interpreter ships in the APK and every install replaces it,
@@ -145,6 +153,28 @@ class SplashActivity : AppCompatActivity() {
         }
 
         runSetupWithRetry(setup, statusText, progressBar)
+    }
+
+    /**
+     * Runs one launch-time repair, so a failure costs that repair and no other.
+     *
+     * [what] names the repair in the log, and that is the second half of the
+     * reason this exists: the single catch it replaced logged one message for
+     * thirteen calls, so the trace said something had failed without saying
+     * which -- and the next line of the log was whatever the app did after
+     * skipping the rest.
+     *
+     * Swallowing is still deliberate. Every one of these runs on the main thread
+     * before the first frame, and a throw that escapes here crashes the app
+     * before it draws, which is a launch loop with no explanation. Degraded is
+     * the acceptable outcome; dead is not.
+     */
+    private fun repair(what: String, action: () -> Unit) {
+        try {
+            action()
+        } catch (e: Exception) {
+            Logger.e(tag, "Launch-time refresh of $what failed", e)
+        }
     }
 
     private fun runSetupWithRetry(
