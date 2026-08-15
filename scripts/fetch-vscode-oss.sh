@@ -278,9 +278,11 @@ RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
 # would copy in cleanly and then fail at exec -- with Search returning no
 # results, which is the same thing an empty workspace looks like.
 #
-# This file is also the only bundled ELF whose properties no step here decided:
-# every other one is produced by a download script that checks it, while this is
-# a plain cp out of a tarball built in another workflow on another machine.
+# This file is also the only bundled ELF that no step here produces: every other
+# one comes from a download script that fetched and checked it, while this is a
+# plain cp out of a tarball built in another workflow on another machine. It is
+# checked twice for that reason -- here, and again over the whole of jniLibs by
+# the verifyBundledBinaries Gradle task at packaging time.
 #
 # Checked at the source, BEFORE the copy, so a rejected rg never becomes
 # libripgrep.so at all. The sibling scripts all install first and verify after,

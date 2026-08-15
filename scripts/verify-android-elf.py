@@ -126,12 +126,13 @@ def main() -> int:
     # Optional so --dir can stand in for it. The nine existing callers each pass
     # exactly one path and are unaffected.
     ap.add_argument("file", type=pathlib.Path, nargs="?")
-    # Every download script checks the binary it just installed, which leaves the
-    # set as a whole unchecked at the moment it is packaged: a binary restored
-    # from a build cache, or left by an earlier fetch, is never re-examined --
-    # and this checker is in neither CI cache key, so tightening it does not
-    # re-examine anything either. --dir lets the packaging step ask the question
-    # about the directory that actually ships.
+    # --dir is what the packaging step uses to ask about the directory that
+    # actually ships, and it exists because per-file checking left a gap: every
+    # download script checks the binary it just installed, so a binary restored
+    # from a build cache, or left by an earlier fetch, used to go unexamined from
+    # then on. This checker is also in neither CI cache key -- 0 hits in both,
+    # against 1 for verify-server-tree.py -- so tightening it does not by itself
+    # cause a cached binary to be looked at again.
     ap.add_argument("--dir", type=pathlib.Path,
                     help="check every *.so in this directory instead of one file")
     ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
