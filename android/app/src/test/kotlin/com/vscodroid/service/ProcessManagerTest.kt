@@ -56,9 +56,13 @@ class ProcessManagerTest {
         // Mock Logger to avoid android.util.Log crashes in JVM tests
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
+        // The two-argument overloads are separate members and an unstubbed one
+        // calls through to android.util.Log, which is not mocked and throws.
+        every { Logger.w(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any()) } just Runs
 
         mockkObject(Environment)
         every { Environment.getNodePath(any()) } returns "/bin/echo"
@@ -106,13 +110,68 @@ class ProcessManagerTest {
         // The WebView's loaded URL and the WebViewClient are bound to the port and are
         // not rebuilt on restart, so it has to stay put. (This named the bridge's
         // allowed-origin check as the second binding until #144 removed that check.)
-        manager.portField = 45678
+        // A port that is genuinely free, rather than a literal. A restart now
+        // refuses to spawn onto a port something else holds, so a hardcoded number
+        // would quietly make this test depend on nothing else on the machine
+        // having taken it.
+        val free = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        manager.portField = free
         manager.serverProcessField = mockk<Process>(relaxed = true) {
             every { isAlive } returns false
         }
 
         assertTrue(startAndAwaitWatchdog())
-        assertEquals(45678, manager.port, "restart must reuse the original port")
+        assertEquals(free, manager.port, "restart must reuse the original port")
+    }
+
+    @Test
+    fun `a restart refuses to spawn onto a port something else is holding`() {
+        // The hole this closes. Only the cold path checked availability:
+        // PortFinder.getOrAllocatePort tests the remembered port before reusing
+        // it, while the restart branch reuses `_port` unconditionally. The health
+        // probe cannot cover for that, because it reads a response code and
+        // nothing else -- so a stale server answering 200 on our port sets
+        // _isReady, and NodeService.announceReady then resets the restart budget.
+        // The budget meant to end a crash loop could be refilled by the thing
+        // causing it.
+        //
+        // Reaching that state needs no stranger on the device: assets/server.js
+        // forks the editor server and forwards SIGTERM, but a SIGKILLed server.js
+        // forwards nothing and fork() sets no PDEATHSIG, so the grandchild
+        // outlives it still holding the socket.
+        //
+        // StubServer(null) is the right fixture precisely because it does not
+        // serve: it accepts and drops, which holds the port without answering.
+        // The refusal has to come from the port being taken, not from anything
+        // the holder says.
+        val holder = StubServer(null)
+        try {
+            manager.portField = holder.port
+
+            assertFalse(
+                manager.startServer(),
+                "a restart onto a held port must refuse rather than spawn a server " +
+                    "that cannot bind",
+            )
+            assertNull(
+                manager.serverProcessField,
+                "the refusal must happen before anything is spawned",
+            )
+        } finally {
+            holder.stop()
+        }
+
+        // Positive control, and it is the half that makes the assertion above mean
+        // something. Without it a startServer() broken so that it always returns
+        // false would pass everything above.
+        manager.portField = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
+            .use { it.localPort }
+
+        assertTrue(
+            startAndAwaitWatchdog(),
+            "a restart onto a free port must still start; the refusal is about the " +
+                "port being held, not about restarts",
+        )
     }
 
     @Test
