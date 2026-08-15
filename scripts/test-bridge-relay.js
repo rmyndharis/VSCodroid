@@ -218,10 +218,23 @@ async function main() {
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
         : '';
-    console.log(
+    say(
         `ok -- a declined URL surfaces "${refused.error[0]}", an opened one stays silent; ` +
-        `all ${coverage.sent} commands sent by an extension have a relay branch${unused}`,
+        `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
+}
+
+/**
+ * Writes synchronously, because the exit below cannot wait for it otherwise.
+ *
+ * `process.exit()` is documented to leave pending writes to stdout unflushed,
+ * and stdout is only synchronous when it is a TTY. Under CI it is a pipe, so a
+ * console.log immediately before the exit is exactly the line that goes
+ * missing -- and a check that exits 0 having printed nothing reads as a check
+ * that did not run.
+ */
+function say(text) {
+    fs.writeSync(1, text);
 }
 
 // Exit explicitly. The relay opens a BroadcastChannel inside the VM context and
@@ -230,5 +243,5 @@ async function main() {
 // finishing, which in CI is a stall rather than a pass.
 main().then(
     () => process.exit(0),
-    (e) => { console.error(e.message); process.exit(1); },
+    (e) => { fs.writeSync(2, `${e.message}\n`); process.exit(1); },
 );
