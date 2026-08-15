@@ -195,6 +195,19 @@ echo "  installed : jniLibs/arm64-v8a/libldmusl.so ($(du -h "$JNI_DIR/libldmusl.
 
 python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libldmusl.so"
 
+# What shipped, for write-build-manifest.py, the same way each Termux download
+# records itself in a resolved-*.tsv. The version is resolved from a live index
+# at build time rather than pinned, so with no record a release cannot afterwards
+# be asked which musl loader is inside it -- and this was the only bundled
+# download whose provenance the manifest could not state.
+#
+# Written last on purpose: after the install and after the ELF gate, so a run
+# that failed either leaves no record claiming success.
+printf '%s\t%s\t%s\n' musl "$MUSL_VERSION" \
+    "$( (sha256sum "$JNI_DIR/libldmusl.so" 2>/dev/null \
+         || shasum -a 256 "$JNI_DIR/libldmusl.so") | cut -d' ' -f1)" \
+    > "$WORK_DIR/resolved-musl.tsv"
+
 echo ""
 echo "=== musl loader ready ==="
 echo "  claudeCode.claudeProcessWrapper must point at this file; FirstRunSetup writes it."

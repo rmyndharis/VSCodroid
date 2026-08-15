@@ -113,6 +113,17 @@ def collect() -> list[str]:
     if not tarballs:
         lines.append("vscode-server\t-")
 
+    # Recorded on its own line rather than joining the glob below. The loader
+    # comes from Alpine's signature-verified index, not Termux's, so its record
+    # lives in toolchains/musl and its filename is an .apk -- version_from_filename
+    # reads Debian names and would report "-" for it. Its version is resolved from
+    # a live index like everything else here, which is what makes the record worth
+    # having: it was the only bundled download the manifest could not name.
+    musl = ROOT / "toolchains" / "musl" / "resolved-musl.tsv"
+    fields = musl.read_text().split() if musl.is_file() else []
+    lines.append(f"musl-loader\t{fields[1]}\t{fields[2]}" if len(fields) >= 3
+                 else "musl-loader\t-")
+
     # The index is signature-verified by verify-termux-index.sh before anything
     # reads a digest out of it, so recording its hash pins the whole set of
     # filenames and digests this build resolved, not just the files it kept.
