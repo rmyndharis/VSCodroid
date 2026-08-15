@@ -25,7 +25,7 @@ diff --git a/src/vs/workbench/browser/parts/compositeBar.ts b/src/vs/workbench/b
 index 8d1020b..dea1902 100644
 --- a/src/vs/workbench/browser/parts/compositeBar.ts
 +++ b/src/vs/workbench/browser/parts/compositeBar.ts
-@@ -533,7 +533,33 @@ export class CompositeBar extends Widget implements ICompositeBar {
+@@ -533,7 +533,35 @@ export class CompositeBar extends Widget implements ICompositeBar {
  		let maxVisible = compositesToShow.length;
  		const totalComposites = compositesToShow.length;
  		let size = 0;

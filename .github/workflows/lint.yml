@@ -63,6 +63,28 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # `git apply --stat` parses a patch without needing the tree it applies to,
+      # so the one thing that cannot be checked on a pull request -- whether the
+      # patches still apply -- is separated here from the thing that can: whether
+      # git can still read them at all. Editing prose inside a patch body without
+      # adjusting the hunk header produces a file that every check in this
+      # repository passed, because check-patch-fingerprints.py inspects the
+      # downloaded server tree rather than the patches. The failure then surfaced
+      # only in build-vscode-oss.yml, which is manual and runs once per VS Code
+      # bump, so the diagnosis arrived weeks after the commit that caused it.
+      - name: Check every patch is still readable by git
+        run: |
+          bad=0
+          for p in patches/*.patch; do
+            if ! git apply --stat "$p" >/dev/null 2>&1; then
+              echo "::error file=$p::git cannot parse this patch; the hunk header line counts probably no longer match the body"
+              git apply --stat "$p" || true
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] && echo "ok -- $(ls patches/*.patch | wc -l | tr -d ' ') patches parse"
+          exit "$bad"
+
       # The device suite itself cannot run here -- no /dev/kvm on GitHub's arm64
       # runners, and the bundled binaries need Android's linker. What can run is
       # the part that rots silently: the versions it derives from the tree.

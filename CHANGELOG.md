@@ -81,6 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- The next VS Code upgrade will build. One of the twelve source patches had prose
+  rewritten inside its body without its hunk header being adjusted to match, which
+  leaves a file `git apply` refuses to read -- and the server build applies the
+  patches with `set -e`, so it would have stopped there. Nothing caught it: the
+  patch checks this repository runs inspect the *downloaded* server tree, so they
+  answer whether a patch was applied, never whether it can still be read. Pull
+  requests now parse every patch, which is the half of the question that can be
+  answered without a VS Code checkout
 - In landscape, the editor no longer extends under the punch-hole camera. The
   cutout is its own inset, separate from the system bars; portrait masked the
   gap because the status bar is at least as tall as the hole
