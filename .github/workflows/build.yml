@@ -42,13 +42,19 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Cache downloaded tarballs/debs (before extraction) to avoid re-downloading ~200MB
+      # Cache downloaded tarballs/debs
+      #
+      # The .deb entry reads debs/, not the directory above it. It read
+      # termux-packages/*.deb and matched none of the 72 files actually there,
+      # so that cache never held a single package and every run refetched the
+      # lot. Note the path list below is a literal block: a `#` line inside it
+      # is a path, not a comment. (before extraction) to avoid re-downloading ~200MB
       - name: Cache download intermediates
         uses: actions/cache@v4
         with:
           path: |
             server/*.tar.gz
-            toolchains/termux-packages/*.deb
+            toolchains/termux-packages/debs/*.deb
             toolchains/termux-packages/Packages
             toolchains/build/npm/
             toolchains/extensions/

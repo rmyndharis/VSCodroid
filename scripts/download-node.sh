@@ -72,13 +72,18 @@ fi
 echo "  package : $PACKAGE $version"
 
 # This file becomes libnode.so, the entire server runtime, executed on every
-# user's device -- and it arrives over a third-party mirror. The index's SHA256
-# travels over the same channel as the payload, so this is integrity against
-# corruption, truncation and stale caches rather than a root of trust against
-# a hostile mirror; a file that does not match, cached or fresh, must not be
-# used.
+# user's device. The digest below comes from an index that verify-termux-index.sh
+# has already checked against Termux's signature, so the mirror it arrives over
+# cannot choose both the payload and the digest it is measured by. This used to
+# say the opposite, and correctly: until the index was anchored, the digest and
+# the payload travelled the same channel and this was integrity against
+# corruption rather than a root of trust. A file that does not match, cached or
+# fresh, must not be used.
 deb="debs/$(basename "$filename")"
 mkdir -p debs
+# Same record the other download scripts keep, so the build manifest is not
+# silently missing the one component that matters most.
+printf '%s %s %s\n' "$PACKAGE" "$filename" "${sha256:--}" > "$WORK_DIR/resolved-node.tsv"
 if [ ! -f "$deb" ]; then
     curl -sL --fail --show-error -o "$deb" "$TERMUX_REPO/$filename"
 fi

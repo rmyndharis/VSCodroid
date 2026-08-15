@@ -140,12 +140,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip gnupg
 
       # Cache downloaded tarballs/debs
+      #
+      # See build.yml: the .deb entry pointed one directory above the files and
+      # cached nothing, so every release refetched all 72 packages against a
+      # freshly resolved index — which is most of why re-running a tag could
+      # ship different binaries. The path list below is a literal block: a `#`
+      # line inside it is a path, not a comment.
       - name: Cache download intermediates
         uses: actions/cache@v4
         with:
           path: |
             server/*.tar.gz
-            toolchains/termux-packages/*.deb
+            toolchains/termux-packages/debs/*.deb
             toolchains/termux-packages/Packages
             toolchains/build/npm/
             toolchains/extensions/
@@ -275,6 +281,20 @@ jobs:
           bash scripts/download-ruby.sh
           bash scripts/download-java.sh
 
+      # Last step that can see what this build resolved, so it runs here rather
+      # than in the release job, which only ever sees the artifacts.
+      #
+      # Every Termux component is resolved from a live index at fetch time and
+      # nothing recorded the answer, so re-running this workflow on the same tag
+      # could ship different binaries with nothing to say so, and a bug report
+      # against a released version could not be tied to the binaries it shipped.
+      # A record, not a lock: Termux drops superseded .deb files from its pool,
+      # so a hard pin would break on every upstream bump.
+      - name: Record what this build resolved
+        run: |
+          python3 scripts/write-build-manifest.py -o build-manifest.txt
+          cat build-manifest.txt
+
       # Built here rather than on a maintainer's machine. While the server was a
       # pre-built download the host made no difference; building Code - OSS from
       # source, it decides the contents — @vscode/ripgrep's postinstall branches on
@@ -380,6 +400,7 @@ jobs:
             android/app/build/outputs/bundle/release/*.aab
             toolchain-zips/*.zip
             toolchain-zips/toolchains.sha256
+            build-manifest.txt
 
   github-release:
     name: GitHub Release
@@ -417,3 +438,4 @@ jobs:
             artifacts/**/*.zip
             artifacts/**/toolchains.sha256
             artifacts/checksums.sha256
+            artifacts/build-manifest.txt

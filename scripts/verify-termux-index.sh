@@ -55,9 +55,9 @@ PINNED_FPR="CC72CF8BA7DBFA0182877D045A897D96E57CF20C"
 
 # InRelease has no Valid-Until (measured -- it carries Origin, Label, Suite,
 # Codename, Date, Architectures, Components, Description and nothing else), so
-# a signature alone does not stop a host from serving last year's index for
-# ever and pinning every build to packages with known holes. Date is present,
-# and the live index was under a day old, so a month is far outside the normal
+# a signature alone does not stop a host serving last year's index for ever and
+# holding every build to packages with known holes. Date is present, and the
+# live index was under a day old, so a month is far outside the normal
 # publishing cadence while still leaving room for an upstream pause.
 MAX_INDEX_AGE_DAYS="${TERMUX_INDEX_MAX_AGE_DAYS:-30}"
 
@@ -96,30 +96,35 @@ trap 'rm -rf "$TMP"' EXIT
 export GNUPGHOME="$TMP/gnupg"
 mkdir -p "$GNUPGHOME"
 chmod 700 "$GNUPGHOME"
-
-curl -sL --fail --show-error -o "$TMP/InRelease" "$INRELEASE_URL"
 gpg --batch --quiet --import "$KEY_FILE"
 
-# --decrypt, not --verify: it writes out the signed payload and nothing else, so
-# the digest is read from bytes the signature covers. Parsing the file as
-# downloaded would also read anything appended after the signature block.
-if ! gpg --batch --status-fd 3 --decrypt "$TMP/InRelease" \
-        3>"$TMP/status" 2>/dev/null > "$TMP/payload"; then
-    echo "  ERROR: the InRelease signature at $INRELEASE_URL did not verify" >&2
-    sed 's/^/    /' "$TMP/status" >&2
-    exit 1
-fi
+# Returns 0 when the local index matches the signed one, 1 when it does not.
+# Anything that a refetch cannot fix exits from inside instead of returning: a
+# wrong signing key or a month-old InRelease is a verdict, not a transient.
+check_index() {
+    curl -sL --fail --show-error -o "$TMP/InRelease" "$INRELEASE_URL"
 
-# The exit code above is not enough on its own. gpg is happy with any key in the
-# keyring, so a check that stopped there would keep passing if a second key were
-# ever imported here. VALIDSIG names the key that actually signed.
-SIGNER_FPR="$(awk '/VALIDSIG/{print $3; exit}' "$TMP/status")"
-if [ "$SIGNER_FPR" != "$PINNED_FPR" ]; then
-    cat >&2 <<EOF
+    # --decrypt, not --verify: it writes out the signed payload and nothing
+    # else, so the digest is read from bytes the signature covers. Parsing the
+    # file as downloaded would also read anything appended after the signature.
+    if ! gpg --batch --status-fd 3 --decrypt "$TMP/InRelease" \
+            3>"$TMP/status" 2>/dev/null > "$TMP/payload"; then
+        echo "  ERROR: the InRelease signature at $INRELEASE_URL did not verify" >&2
+        sed 's/^/    /' "$TMP/status" >&2
+        exit 1
+    fi
+
+    # The exit code above is not enough on its own. gpg is happy with any key in
+    # the keyring, so a check that stopped there would keep passing if a second
+    # key were ever imported here. VALIDSIG names the key that actually signed.
+    local signer
+    signer="$(awk '/VALIDSIG/{print $3; exit}' "$TMP/status")"
+    if [ "$signer" != "$PINNED_FPR" ]; then
+        cat >&2 <<EOF
 
   The Termux index was signed by a key this repository does not pin.
 
-      signed by $SIGNER_FPR
+      signed by $signer
       pinned    $PINNED_FPR
 
   Either the repository rotated its signing key, or this index is not
@@ -128,69 +133,85 @@ if [ "$SIGNER_FPR" != "$PINNED_FPR" ]; then
   github.com/termux/termux-packages both publish it -- before changing
   PINNED_FPR in this script.
 EOF
-    exit 1
-fi
+        exit 1
+    fi
 
-INDEX_DATE="$(awk -F': ' '/^Date: /{print $2; exit}' "$TMP/payload")"
-if [ -n "$INDEX_DATE" ]; then
-    # python3 rather than date(1): parsing RFC 2822 needs -d on GNU and -j -f on
-    # BSD, and this script runs on both. python3 is already required by the
-    # verify-*.py gates either side of this one.
-    AGE_DAYS="$(python3 -c '
+    local index_date age_days
+    index_date="$(awk -F': ' '/^Date: /{print $2; exit}' "$TMP/payload")"
+    if [ -n "$index_date" ]; then
+        # python3 rather than date(1): parsing RFC 2822 needs -d on GNU and
+        # -j -f on BSD, and this runs on both. python3 is already required by
+        # the verify-*.py gates either side of this one.
+        age_days="$(python3 -c '
 import email.utils, sys, time
 t = email.utils.parsedate_to_datetime(sys.argv[1]).timestamp()
 print(int((time.time() - t) // 86400))
-' "$INDEX_DATE" 2>/dev/null || echo "")"
-    if [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -gt "$MAX_INDEX_AGE_DAYS" ]; then
-        cat >&2 <<EOF
+' "$index_date" 2>/dev/null || echo "")"
+        if [ -n "$age_days" ] && [ "$age_days" -gt "$MAX_INDEX_AGE_DAYS" ]; then
+            cat >&2 <<EOF
 
-  The Termux index is signed but stale -- $AGE_DAYS days old, limit $MAX_INDEX_AGE_DAYS.
+  The Termux index is signed but stale -- $age_days days old, limit $MAX_INDEX_AGE_DAYS.
 
       $INRELEASE_URL
-      dated $INDEX_DATE
+      dated $index_date
 
   A valid signature does not stop a host replaying an old index, which would
   hold every build to whatever was current then. Try another mirror with
   TERMUX_MIRROR, or raise TERMUX_INDEX_MAX_AGE_DAYS if upstream really has
   paused.
 EOF
+            exit 1
+        fi
+    fi
+
+    # Read only inside the SHA256 block. Every path in this file appears four
+    # times -- MD5Sum, SHA1, SHA256, SHA512 -- so a scan matching on the path
+    # alone would take whichever block it reached first and compare a SHA256
+    # against an MD5. Any unindented line starts a new block.
+    EXPECTED="$(awk -v e="$ENTRY" '
+        /^SHA256:/ { inblock = 1; next }
+        /^[A-Za-z]/ { inblock = 0 }
+        inblock && $3 == e { print $1; exit }
+    ' "$TMP/payload")"
+
+    if [ -z "$EXPECTED" ]; then
+        echo "  ERROR: signed InRelease carries no SHA256 for $ENTRY" >&2
+        echo "         $INRELEASE_URL" >&2
         exit 1
     fi
-fi
 
-# Read only inside the SHA256 block. Every path in this file appears four times
-# -- MD5Sum, SHA1, SHA256, SHA512 -- so a scan that matched on the path alone
-# would take whichever block it reached first and compare a SHA256 against an
-# MD5. Any unindented line starts a new block.
-EXPECTED="$(awk -v e="$ENTRY" '
-    /^SHA256:/ { inblock = 1; next }
-    /^[A-Za-z]/ { inblock = 0 }
-    inblock && $3 == e { print $1; exit }
-' "$TMP/payload")"
+    ACTUAL="$( (sha256sum "$PACKAGES_FILE" 2>/dev/null || shasum -a 256 "$PACKAGES_FILE") | cut -d' ' -f1)"
+    [ "$ACTUAL" = "$EXPECTED" ]
+}
 
-if [ -z "$EXPECTED" ]; then
-    echo "  ERROR: signed InRelease carries no SHA256 for $ENTRY" >&2
-    echo "         $INRELEASE_URL" >&2
-    exit 1
-fi
+# A stale index is the ordinary case here, not an attack: callers keep one for
+# sixty minutes, CI restores one under restore-keys that matches almost any
+# earlier build, and upstream publishes daily -- so a cached index usually will
+# not match the signature current now. Measured while building this: a real run
+# refused a cached index three days behind, which as a hard failure would have
+# broken every CI run that got a cache hit. So a mismatch refetches the index
+# and checks again, against a freshly fetched InRelease too, in case upstream
+# published between the two. Only the second failure is a failure.
+if ! check_index; then
+    echo "  index   : does not match the current signature - refetching"
+    curl -sL --fail --show-error -o "$PACKAGES_FILE" "$PACKAGES_URL"
+    if ! check_index; then
+        cat >&2 <<EOF
 
-ACTUAL="$( (sha256sum "$PACKAGES_FILE" 2>/dev/null || shasum -a 256 "$PACKAGES_FILE") | cut -d' ' -f1)"
-if [ "$ACTUAL" != "$EXPECTED" ]; then
-    cat >&2 <<EOF
-
-  The package index does not match the signed InRelease.
+  The package index does not match the signed InRelease, after refetching it.
 
       file     $PACKAGES_FILE
       entry    $ENTRY
       got      $ACTUAL
       expected $EXPECTED
 
-  Every digest the download scripts trust comes out of this file. Delete it and
-  run again; if it keeps failing, the mirror is serving an index that upstream
-  did not sign.
+  Every digest the download scripts trust comes out of this file, so it is not
+  used. A freshly downloaded index failing this means the host is serving an
+  index upstream did not sign -- try another with TERMUX_MIRROR.
 EOF
-    rm -f "$PACKAGES_FILE"
-    exit 1
+        rm -f "$PACKAGES_FILE"
+        exit 1
+    fi
 fi
 
 echo "  index   : signed by $PINNED_FPR, $ENTRY matches"

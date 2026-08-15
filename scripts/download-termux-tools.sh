@@ -119,8 +119,14 @@ bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" Packages
 # Store results in a temp file (one line per pkg: "pkgname filename")
 echo ""
 echo "Resolving package URLs..."
-PKG_MAP_FILE="$(mktemp)"
-trap "rm -f '$PKG_MAP_FILE'" EXIT
+# Kept rather than discarded. These three fields are the exact record of what
+# the live index resolved to on this run; it was a mktemp deleted on exit, so
+# nothing afterwards could say which versions a release had actually shipped.
+# write-build-manifest.py reads it. Truncated per run, so a package that goes
+# away upstream leaves no stale line behind -- which reading the .deb directory
+# instead cannot promise, since that accumulates across builds.
+PKG_MAP_FILE="$WORK_DIR/resolved-termux-tools.tsv"
+: > "$PKG_MAP_FILE"
 
 for pkg in "${REQUIRED_PACKAGES[@]}"; do
     # One pass, emitting when the stanza ends: the live index carries duplicate
@@ -156,7 +162,9 @@ get_pkg_sha256() {
 # Everything fetched here executes on user devices (bash, git, ssh) or is
 # loaded into every process (the shared libraries), and it arrives over a
 # third-party mirror. A file that does not match the index's SHA256 -- cached
-# or fresh -- must not be used.
+# or fresh -- must not be used. The index this digest is read from is itself
+# checked against Termux's signature above, so the mirror does not get to pick
+# both.
 verify_pkg_sha256() {
     local file="$1" expected="$2"
     if [ "$expected" = "-" ] || [ -z "$expected" ]; then
