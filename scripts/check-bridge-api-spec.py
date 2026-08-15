@@ -3,14 +3,36 @@
 
     check-bridge-api-spec.py
 
+==============================================================================
+IF YOU ARE DELETING THIS FILE, READ THIS FIRST.
+
+`BridgeApiSpecParityTest` looks like it supersedes this script. It does not. It
+reflects over the compiled class, so it is strictly better at deciding WHICH
+methods exist -- and it compares names and ARITY ONLY.
+
+RETURN TYPES, PARAMETER NAMES, PARAMETER ORDER AND NULLABILITY ARE CHECKED BY
+THIS FILE AND BY NOTHING ELSE. None of them survive into bytecode, so the test
+cannot check them even in principle. Delete this script and those stop being
+checked -- and NOTHING GOES RED. The suite stays green, CI stays green, and the
+spec starts drifting on the axes a caller actually codes against. Measured: on a
+five-way merge carrying a wrong return type in the spec, this script reported the
+mismatch while the test passed at 751 tests, 0 failures.
+
+Neither half is complete. There is no third thing checking that this division is
+still correct, which is why this notice exists in both files rather than in one
+-- so the reason reaches whoever is deleting, not only whoever stays.
+==============================================================================
+
 THIS SCRIPT IS HALF THE GATE. `BridgeApiSpecParityTest` is the other half and is
 the authority on WHICH methods exist, because it asks the compiled class rather
 than the source text. Read its header before trusting a green from here: a
 method whose annotation this file's patterns cannot spell -- `@android.webkit.
 JavascriptInterface`, or an aliased import -- is invisible to BOTH patterns
-below at once, so the counts agree and this script reports ok. That was measured,
-not imagined. Do not treat a pass here as "the spec matches the bridge"; treat it
-as "the parameter names, order and nullability of the methods it could see match".
+below at once, so the counts agree and this script reports ok. Nor does this file
+see a method the bridge INHERITS: its window is one file, and the page can call
+inherited public methods. That was measured, not imagined. Do not treat a pass
+here as "the spec matches the bridge"; treat it as "the parameter names, order,
+nullability and return types of the methods it could see match".
 
 `docs/05-API_SPEC.md` is the contract an extension author writes against, and
 nothing had ever held it to `AndroidBridge.kt`. One pass over both files found
@@ -43,8 +65,8 @@ the bodies. Drawing the line here is the point: a check that claims to cover
 prose would have to be believed about the half it cannot see.
 
 Anchored on `@JavascriptInterface` in both files rather than on `fun`, which
-also matches the ProcessManager sketch in §4.1 and the private helpers in the
-bridge, neither of which is part of this contract.
+also matches the ProcessManager sketch in section 4.1 and the private helpers in
+the bridge, neither of which is part of this contract.
 
 THE TWO COUNTS BELOW ARE NOT INDEPENDENT, and an earlier version of this comment
 claimed they were. Both patterns key on the same literal `@JavascriptInterface`,
@@ -196,7 +218,7 @@ def main() -> int:
         print(f"  FAIL   registered on the bridge, absent from the spec")
         for name in undocumented:
             print(f"           {render(name, code[name])}")
-        print(f"         Document them in {SPEC.relative_to(ROOT)} §2.4. An "
+        print(f"         Document them in {SPEC.relative_to(ROOT)} section 2.4. An "
               f"undocumented method is one nobody can call on purpose.")
         failed = True
 

@@ -10,6 +10,26 @@ import java.lang.reflect.Method
 /**
  * The spec must name exactly the methods the bridge registers, and with the same arity.
  *
+ * ```
+ * ╔════════════════════════════════════════════════════════════════════════════╗
+ * ║ IF YOU ARE DELETING THIS TEST, READ THIS FIRST.                            ║
+ * ║                                                                            ║
+ * ║ It looks redundant beside scripts/check-bridge-api-spec.py, which compares  ║
+ * ║ the same two files and checks MORE axes. It is not redundant.               ║
+ * ║                                                                            ║
+ * ║ WHICH METHODS THE PAGE CAN CALL IS DECIDED HERE AND NOWHERE ELSE. The       ║
+ * ║ script reads source text and its window is one file, so it cannot see a     ║
+ * ║ method whose annotation is spelled `@android.webkit.JavascriptInterface`,   ║
+ * ║ one reached through an aliased import, or one the bridge INHERITS from a    ║
+ * ║ base class in another file. All three are callable from the page. All three ║
+ * ║ were measured green against the script. Delete this test and they stop      ║
+ * ║ being checked -- and NOTHING GOES RED.                                      ║
+ * ║                                                                            ║
+ * ║ Neither half is complete. There is no third thing checking that this        ║
+ * ║ division is still correct, which is why this notice exists in both files.   ║
+ * ╚════════════════════════════════════════════════════════════════════════════╝
+ * ```
+ *
  * `scripts/check-bridge-api-spec.py` compares the same two files and is the richer of the
  * pair -- it sees parameter names, order and nullability, none of which survive into
  * bytecode. What it cannot do is see a method at all when the source does not spell the
