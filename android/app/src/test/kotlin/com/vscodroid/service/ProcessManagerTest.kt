@@ -120,6 +120,52 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `a file sitting where TMPDIR belongs is reported rather than ignored`() {
+        // `exists()` answers "something is here" and the code meant "a usable
+        // directory is here". They agree in every case anyone pictures — the path
+        // is absent, or it is the directory we made last time — and part company
+        // when a file is there, at which point `mkdirs()` cannot succeed and its
+        // false was being discarded.
+        //
+        // Not cosmetic: this path is TMPDIR and TMUX_TMPDIR for the server, so
+        // the consequence arrives later as temporary-file failures with nothing
+        // pointing back here.
+        val warnings = mutableListOf<String>()
+        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
+
+        val blocker = File(tempDir, "tmp")
+        check(blocker.createNewFile()) { "could not create the fixture" }
+        check(blocker.isFile) { "the fixture must be a file, or this proves nothing" }
+
+        assertTrue(
+            startAndAwaitWatchdog(),
+            "a broken TMPDIR must not stop a start; a server with one is far better " +
+                "than no server",
+        )
+        assertTrue(
+            warnings.any { it.contains(blocker.path) },
+            "the failure was discarded rather than reported: $warnings",
+        )
+    }
+
+    @Test
+    fun `a usable TMPDIR is left alone and says nothing`() {
+        // Control for the case above. Without it, code that warned unconditionally
+        // would satisfy it while telling the user their TMPDIR was broken on every
+        // healthy start.
+        val warnings = mutableListOf<String>()
+        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
+
+        check(File(tempDir, "tmp").mkdirs()) { "could not create the fixture" }
+
+        assertTrue(startAndAwaitWatchdog())
+        assertTrue(
+            warnings.none { it.contains("TMPDIR") },
+            "a working TMPDIR must not be reported as broken: $warnings",
+        )
+    }
+
+    @Test
     fun `a restart does not care whether the port is still free`() {
         // Deliberate, and the opposite of what it looks like. A restart used to
         // refuse when something already held the port, on the reasoning that the

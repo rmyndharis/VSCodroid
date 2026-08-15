@@ -208,9 +208,26 @@ class ProcessManager(private val context: Context) {
         // of work rather than a patch.
         Logger.i(tag, "Starting server on port $_port")
 
-        // Ensure TMPDIR exists — Android may clear cache between launches
+        // Ensure TMPDIR is a usable directory — Android may clear cache between
+        // launches.
+        //
+        // `isDirectory` rather than `exists`, and the return value of `mkdirs` is
+        // read rather than discarded. Both halves are the same mistake: the test
+        // asked whether *something* was at that path while the code meant whether
+        // a *directory* was, and they part company exactly when a file sits there
+        // — at which point `mkdirs` cannot succeed and said so to nobody. This
+        // path is TMPDIR and TMUX_TMPDIR for the server (Environment), so the
+        // failure would surface later as temporary-file errors with no visible
+        // connection to it.
+        //
+        // Not fatal to a start. A server with a broken TMPDIR is worse than one
+        // with a working one and far better than none, and the log line is what
+        // makes the eventual symptom traceable.
         val tmpDir = File(context.cacheDir, "tmp")
-        if (!tmpDir.exists()) tmpDir.mkdirs()
+        if (!tmpDir.isDirectory && !tmpDir.mkdirs()) {
+            Logger.w(tag, "Could not create TMPDIR at ${tmpDir.path}; " +
+                "the server may fail on temporary files")
+        }
 
         val nodePath = Environment.getNodePath(context)
         val serverScript = Environment.getServerScript(context)
