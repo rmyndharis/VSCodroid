@@ -1337,15 +1337,40 @@ claude() {
             //
             // Which means the retry rests on that delete succeeding, and the
             // condition it has to succeed in is the condition that caused the
-            // failure. Unlinking normally releases space rather than needing it,
-            // so a full disk should not stop it -- but "should not" is the whole
-            // of the evidence here: this path has never run on a device. If the
-            // delete does fail, the next attempt reads the partial directory as
-            // an install and skips it, exactly as before this branch, so the
-            // outcome is at worst the state we started from. Saying so at error
-            // level is what keeps it diagnosable instead of invisible; there is
-            // no second mechanism, and inventing one against a failure nobody
-            // has observed would be guessing.
+            // failure. Two things could defeat it, and they are not equally
+            // likely -- the obvious one is measured safe and the other is not
+            // the disk at all.
+            //
+            // A full filesystem does not stop it. Measured on ext4: a partial
+            // extraction lookalike, the partition filled to 0 bytes free, a
+            // control write of 64 KB refused with ENOSPC to prove the disk was
+            // genuinely full, and `rm -rf` then returning 0 with the tree gone.
+            // Unlinking releases space rather than needing it. Two limits worth
+            // keeping: that was ext4 on an emulator, f2fs is untested, and it
+            // measures the delete rather than this code, which has never run on
+            // a device.
+            //
+            // What would actually defeat it is `listFiles()` answering null,
+            // because `deleteRecursively` walks with it and returns false having
+            // removed nothing -- measured in a JVM probe: unreadable directory,
+            // null listing, false returned, every file still there. Reachable
+            // here only through hardware failure. The tree is created by
+            // `destDir.mkdirs()` moments earlier in this same run, by this
+            // process, under `filesDir`, and nothing between the two changes its
+            // mode; a plain file at the path is not this case, since the walk
+            // yields it and deletes it. There is no test for it because
+            // producing the state needs an unreadable directory, and a
+            // permission test passes vacuously wherever the suite runs as root.
+            // A guard that reports green when its own setup did not take is
+            // worse than the gap it covers.
+            //
+            // So the error line below is for a state nobody expects rather than
+            // a fallback for one we do. If it fires, the next attempt reads the
+            // partial directory as an install and skips it, exactly as before
+            // this branch -- the fix not applying, not a new defect. Inventing a
+            // second mechanism against that would add unmeasured state to guard
+            // an unmeasured failure, which is the trade this file has spent
+            // several passes undoing.
             val dest = File(extensionsDir, name)
             val existedBefore = dest.exists()
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
