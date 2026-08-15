@@ -1,6 +1,7 @@
 package com.vscodroid.webview
 
 import android.net.Uri
+import android.webkit.ConsoleMessage
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -187,6 +188,43 @@ class ConnectionTokenLoggingTest {
 
         client.onPageStarted(view, url, null)
         client.onPageFinished(view, url)
+
+        assertNothingLeaked()
+    }
+
+    /**
+     * Everything the page prints to its console.
+     *
+     * Not one of ours: `message` is arbitrary text the workbench chose to print
+     * and `sourceId` is the URL of the script that printed it. Both are
+     * interpolated into one line and handed to `Logger`, and the ERROR and
+     * WARNING branches are not gated on a debuggable build — so whatever they
+     * carry ships in release.
+     *
+     * Whether the connection token ever actually reaches here is NOT established,
+     * and this test does not claim it does: it hands the client a message that
+     * contains one and requires that it does not come out the other side. A gap
+     * whose safety rests on the server consuming the token at the redirect is a
+     * gap resting on "should".
+     */
+    @Test
+    fun `a console message carrying the token is not logged with it`() {
+        val client = VSCodroidWebChromeClient()
+
+        listOf(
+            ConsoleMessage.MessageLevel.ERROR,
+            ConsoleMessage.MessageLevel.WARNING,
+            ConsoleMessage.MessageLevel.LOG,
+        ).forEach { level ->
+            val console = mockk<ConsoleMessage>(relaxed = true)
+            every { console.messageLevel() } returns level
+            every { console.lineNumber() } returns 42
+            every { console.sourceId() } returns
+                "http://127.0.0.1:41234/?folder=%2Fhome&tkn=$token"
+            every { console.message() } returns "Failed to fetch /stub?tkn=$token"
+
+            client.onConsoleMessage(console)
+        }
 
         assertNothingLeaked()
     }
