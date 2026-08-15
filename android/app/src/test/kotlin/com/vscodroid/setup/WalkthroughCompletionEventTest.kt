@@ -23,10 +23,18 @@ import java.io.File
  * documented hole the next person forgets. Removing the affordance makes the
  * limit irrelevant instead of permanently true.
  *
- * `onCommand:` is the replacement and it needs no build artifact to be worth
- * trusting: the command it names is the one the step's own button already
- * runs, so the two are edited together or not at all. It is also what the
- * workbench derives by itself for a step that declares no completionEvents.
+ * `onCommand:` is the replacement, and it is worth being exact about what that
+ * buys, because it is not "the name is verified". `workbench.view.extensions`
+ * is as unverifiable from this classpath as the view id it replaced -- both
+ * are workbench names that only the built bundle knows. What changes is that
+ * the name is now written twice, in the step's completionEvent and in the
+ * step's own button, and the second test below compares them. A typo rots one
+ * half and fails; the view id had no second half to disagree with. It is also
+ * what the workbench derives by itself for a step declaring no completionEvents.
+ *
+ * A target in our own `vscodroid.` namespace is the exception: that one IS
+ * fully checkable here, against the manifests' `contributes.commands`, and the
+ * third test does check it.
  *
  * `onSettingChanged:` is untouched and stays allowed -- a setting key is a
  * different kind of name, and VS Code's own Get Started walkthrough completes
@@ -167,9 +175,67 @@ class WalkthroughCompletionEventTest {
         )
     }
 
+    /**
+     * The half that IS verifiable without the workbench bundle.
+     *
+     * A step completing on `vscodroid.something` names a command this repo
+     * contributes, so a typo in it is a local, checkable fact -- unlike
+     * `workbench.view.extensions`, which no test here can confirm exists. The
+     * check above only proves the event and the button agree; two halves can
+     * agree on a name that was never registered, and the step then stays
+     * unfinishable exactly as if it had completed on a bad view id.
+     */
+    @Test
+    fun `a step completing on one of our commands names a command we contribute`() {
+        val contributed = ourManifests().flatMap { manifest ->
+            val commands = JSONObject(manifest.readText())
+                .optJSONObject("contributes")
+                ?.optJSONArray("commands")
+                ?: return@flatMap emptyList<String>()
+            (0 until commands.length()).map { commands.getJSONObject(it).getString("command") }
+        }.toSet()
+
+        val ours = ourSteps().flatMap { step ->
+            step.events
+                .filter { it.startsWith(COMMAND_EVENT) }
+                .map { it.removePrefix(COMMAND_EVENT) }
+                .filter { it.startsWith(OUR_NAMESPACE) }
+                .map { step.where to it }
+        }
+
+        // Reporting success by finding nothing is this check's failure mode too:
+        // if no step completes on a command of ours, the assertion below is
+        // satisfied by an empty list and says so.
+        assertTrue(
+            ours.isNotEmpty(),
+            "no step completes on a command in the $OUR_NAMESPACE namespace, so this check " +
+                "inspected nothing. Read ${contributed.size} contributed commands.",
+        )
+
+        val unregistered = ours
+            .filter { (_, command) -> command !in contributed }
+            .map { (where, command) -> "$where: $command" }
+
+        assertEquals(
+            emptyList<String>(), unregistered,
+            "these steps complete on a command of ours that no bundled manifest contributes, " +
+                "so the event can never fire and the step stays unfinished forever. Contributed: " +
+                contributed.sorted().joinToString(", "),
+        )
+    }
+
     private companion object {
-        /** `[Browse Extensions](command:workbench.view.extensions)` in a step description. */
-        val COMMAND_LINK = Regex("""\(command:([^)?]+)""")
+        /**
+         * `[Browse Extensions](command:workbench.view.extensions)` in a step description.
+         *
+         * Whitespace ends the id as surely as `)` does: markdown allows
+         * `(command:x "title")`, and without `\s` in the class the title came
+         * back as part of the command name -- so the id would never match its
+         * completionEvent and the check would fail on a step that is correct.
+         * The same class kept a runaway match from crossing a newline.
+         */
+        val COMMAND_LINK = Regex("""\(command:([^\s)?]+)""")
         const val COMMAND_EVENT = "onCommand:"
+        const val OUR_NAMESPACE = "vscodroid."
     }
 }

@@ -47,7 +47,10 @@ const DOLLAR_ESCAPE = "${'$'}";
  * it is stale the moment anyone edits the extension.
  *
  * Ordered by parsed version rather than by name, because 1.10.0 sorts below
- * 1.9.0 as text. check-welcome-claims.py picks its directory the same way.
+ * 1.9.0 as text. check-welcome-claims.py sorts its directory by parsed version
+ * for the same reason; the comparison here is not identical to that one -- it
+ * zero-pads a shorter tail where Python's tuple compare would sort it first --
+ * which only shows up between 1.2 and 1.2.0 and does not arise in this tree.
  */
 function bridgeExtension() {
     const version = (name) => {
@@ -151,9 +154,10 @@ Module._load = function (request) {
 /**
  * Every command a bundled extension sends must have a branch in the relay.
  *
- * The severity word is not the only string crossing this boundary: the command
- * names are twelve more, written once in a Kotlin raw string and again in the
- * extensions, with nothing comparing them. A name that matches no branch is not
+ * The severity word is not the only string crossing this boundary. The relay
+ * dispatches twelve command names, written once in a Kotlin raw string; the
+ * bundled extensions send nine of them, written again in JavaScript. Nothing
+ * compared the two sets. A name that matches no branch is not
  * an error anywhere -- the relay's `if/else if` chain simply ends, no reply is
  * posted, and the extension's promise rejects five seconds later with a timeout
  * that says the app might not be running. The cause and the symptom share no
@@ -166,9 +170,9 @@ Module._load = function (request) {
  * The limit worth knowing, because a reader would assume otherwise: both sides
  * are read as LITERALS. A command name built from a variable is absent from the
  * sent set and therefore unchecked -- silently, and in the one direction this
- * exists for. `sent.size > 0` catches total blindness, not a partial miss. All
- * twelve are literals today, which is what makes the check worth having and also
- * what would make the first non-literal invisible.
+ * exists for. `sent.size > 0` catches total blindness, not a partial miss. Every
+ * name on both sides is a literal today, which is what makes the check worth
+ * having and also what would make the first non-literal invisible.
  */
 function checkCommandCoverage(relay) {
     const dispatched = new Set(
@@ -177,8 +181,27 @@ function checkCommandCoverage(relay) {
     const extensionsDir = path.join(ROOT, 'android/app/src/main/assets/extensions');
     const sent = new Set();
     for (const dir of fs.readdirSync(extensionsDir)) {
-        const file = path.join(extensionsDir, dir, 'extension.js');
-        if (!fs.existsSync(file)) continue;
+        // The entry point the manifest names, not a guess at it. Reading
+        // <dir>/extension.js was a guess that happens to be right for every
+        // bundled extension today, and it fails silently: an extension whose
+        // manifest points elsewhere contributes nothing to `sent`, `sent.size > 0`
+        // is already satisfied by its neighbours, and the summary line then claims
+        // every command an extension sends has a branch.
+        const manifestPath = path.join(extensionsDir, dir, 'package.json');
+        if (!fs.existsSync(manifestPath)) continue;
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const entry = manifest.browser || manifest.main;
+        if (!entry) continue;
+        // Resolved the way the extension host resolves it, which is require():
+        // vscode-eslint names "./client/out/extension" and ships extension.js,
+        // and treating the manifest string as a path finds nothing there.
+        const base = path.join(extensionsDir, dir, entry);
+        const file = [base, `${base}.js`, path.join(base, 'index.js')].find(fs.existsSync);
+        assert.ok(
+            file,
+            `${dir}'s manifest names an entry point that resolves to nothing: ${entry}. The ` +
+            'extension cannot load, and this sweep would have skipped it silently.',
+        );
         for (const m of fs.readFileSync(file, 'utf8').matchAll(/sendBridgeCommand\(['"]([A-Za-z0-9_.-]+)['"]/g)) {
             sent.add(m[1]);
         }
@@ -275,18 +298,27 @@ async function main() {
         'the message the user saw is not the one the relay sends. Saw: ' + refused.error[0],
     );
 
-    // Both conditions have to be named, because the bridge answers with a boolean
-    // and cannot say which failed. Naming only the allow-list is wrong for the
-    // other one, and reachably so: mailto is ON that list, so a device with no
-    // mail app would be told its scheme is refused by a sentence listing that
-    // scheme as allowed.
-    for (const clause of ['https, mailto', 'accept the link']) {
+    // The message must not describe a URL policy. This asked for the opposite
+    // until the allow-list was removed: while the bridge refused http on any host
+    // but localhost, a boolean could not say WHICH of the two causes fired, so the
+    // message had to name both. With the filter gone there is one cause left --
+    // nothing on the device claimed the link -- and a message still listing
+    // permitted schemes would send a user hunting for a rule that no longer
+    // exists. Pinned as an absence rather than left to prose, because the wording
+    // and the policy are in different files and only one of them fails a build.
+    for (const stale of ['https, mailto', 'allow', 'localhost', 'scheme']) {
         assert.ok(
-            declined[1].includes(clause),
-            'the decline message dropped "' + clause + '", so it now reads as a diagnosis of ' +
-            'one cause when the bridge cannot tell the causes apart: ' + declined[1],
+            !declined[1].toLowerCase().includes(stale),
+            `the decline message mentions "${stale}", which reads as a URL restriction. There ` +
+            'is none: any URL is handed to the platform, and the only way to get here is that ' +
+            `no installed app took the intent. Message: ${declined[1]}`,
         );
     }
+    assert.ok(
+        /no app|handles that link/i.test(declined[1]),
+        'the decline message no longer names the one cause that can produce it -- that nothing ' +
+        'on the device handles the link: ' + declined[1],
+    );
 
     // An allowed scheme that still fails to open. NOT the ActivityNotFound case:
     // the bridge is stubbed here and ignores the URL, so this run is identical to

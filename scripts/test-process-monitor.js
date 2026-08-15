@@ -118,6 +118,36 @@ function checkPressureContract(tmp) {
     // reads the variable Environment sets -- so the pair that can silently drift
     // is these two Kotlin expressions, and nothing compared them either.
     const environment = fs.readFileSync(ENVIRONMENT, 'utf8');
+
+    // "Every writer" is a claim about the whole tree, and the scan below reads one
+    // file. Checked rather than assumed, in both directions: a caller added in
+    // another source would be outside the comparison while the summary line still
+    // says the contract agrees, and a renamed function would leave the scan
+    // matching nothing and agreeing with everything.
+    //
+    // The lookbehind is what keeps the second case from passing: searching for a
+    // function name finds its own declaration, so `fun applyMemoryPressure(` at
+    // the bottom of MainActivity.kt would satisfy a plain search whether or not
+    // anything still calls it.
+    const callers = [];
+    const walk = (dir) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) walk(full);
+            else if (e.name.endsWith('.kt') &&
+                     /(?<!fun\s)applyMemoryPressure\s*\(/.test(fs.readFileSync(full, 'utf8'))) {
+                callers.push(full);
+            }
+        }
+    };
+    walk(path.join(__dirname, '../android/app/src/main/kotlin'));
+    assert.deepStrictEqual(
+        callers, [MAIN_ACTIVITY],
+        'the set of sources that write the pressure file is not what this check reads. ' +
+        `Found [${callers.join(', ')}], expected only MainActivity.kt. Another writer's ` +
+        'severity words would be outside the comparison; none at all means the function ' +
+        'was renamed and this check is comparing the monitor against nothing.',
+    );
     // All of them, not the first: a second writer aiming somewhere else is exactly
     // the drift this compares for, and match() without /g would never look at it.
     const writerDirs = [...kotlin.matchAll(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/g)]
