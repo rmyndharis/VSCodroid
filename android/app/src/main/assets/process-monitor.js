@@ -20,6 +20,18 @@ const IDLE_KILL_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 // for genuine memory pressure and killed every idle language server.
 const KILL_ON_PRESSURE = new Set(['critical']);
 
+// The file MainActivity.writeMemoryPressure() writes the severity into, and the
+// word it writes there, are two literals on the far side of a language boundary
+// from these. Nothing made them agree: the Kotlin tests compare against the
+// PRESSURE_CRITICAL constant rather than its value, so changing that value to
+// any other word left every one of them green while this set stopped matching
+// and the idle kill stopped firing under real pressure -- a detector that is
+// dead and silent, in an app built around a 32-process limit.
+//
+// Both are exported for scripts/test-process-monitor.js, which reads the Kotlin
+// literals and refuses a disagreement in either direction.
+const PRESSURE_FILENAME = 'vscodroid-memory-pressure';
+
 const LANG_SERVER_PATTERNS = [
     'tsserver', 'typescript-language-server',
     'pylsp', 'pyright', 'python-language-server', 'jedi',
@@ -79,7 +91,7 @@ const lsCpuTracker = new Map();
 function start(serverMainPid, options) {
     const tmpDir = process.env.TMPDIR || '/tmp';
     outputPath = path.join(tmpDir, 'vscodroid-processes.json');
-    pressurePath = path.join(tmpDir, 'vscodroid-memory-pressure');
+    pressurePath = path.join(tmpDir, PRESSURE_FILENAME);
     rootPid = serverMainPid;
     myUid = process.getuid();
     procRoot = (options && options.procRoot) || '/proc';
@@ -328,4 +340,4 @@ function readMemoryPressure() {
     return content.trim();
 }
 
-module.exports = { start, stop };
+module.exports = { start, stop, readMemoryPressure, KILL_ON_PRESSURE, PRESSURE_FILENAME };
