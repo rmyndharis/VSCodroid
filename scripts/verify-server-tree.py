@@ -49,20 +49,43 @@ def check(ok, label, detail=""):
         failed = True
 
 
+def present(path, label):
+    """Path.exists(), reporting instead of raising. None means "could not tell".
+
+    exists() re-raises anything that is not ENOENT/ENOTDIR/EBADF/ELOOP, so an
+    unreadable tree root or an unsearchable parent makes the stat itself throw. Each
+    of these calls used to do that, and the throw came before the walk's onerror
+    could report anything -- so the script exited non-zero having printed no FAIL
+    line at all, while two callers tell the reader "the FAIL line above names which
+    check it did not meet". One helper rather than four try blocks, so the next
+    existence check added here inherits the behaviour instead of reintroducing the
+    bug.
+    """
+    try:
+        return path.exists()
+    except OSError as e:
+        check(False, f"{label} could not be checked", str(e))
+        return None
+
+
 def main(tree):
     for rel in REQUIRED:
-        check((tree / rel).exists(), rel)
+        found = present(tree / rel, rel)
+        if found is not None:
+            check(found, rel)
 
     # Present only in Microsoft's build. Its presence means this is not the tree
     # we think it is, whatever the filename said.
-    check(not (tree / "node_modules/vsda").exists(), "no vsda",
-          "this is not an OSS tree")
+    found = present(tree / "node_modules/vsda", "node_modules/vsda")
+    if found is not None:
+        check(not found, "no vsda", "this is not an OSS tree")
 
     # gulp's node-linux-arm64 task ships a GNU/Linux Node whose interpreter does
     # not exist on Android. Nothing references it; the runtime uses
     # nativeLibraryDir/libnode.so. 92 MiB of dead weight in every APK.
-    check(not (tree / "node").exists(), "no bundled GNU/Linux node",
-          "prune it before packaging")
+    found = present(tree / "node", "node")
+    if found is not None:
+        check(not found, "no bundled GNU/Linux node", "prune it before packaging")
 
     # Every native module is built for the build host, and only node-pty and
     # @parcel/watcher are overlaid for Bionic afterwards. ripgrep is the one that
@@ -85,7 +108,16 @@ def main(tree):
         check(False, f"{err.filename} could not be listed", str(err))
 
     for path in sorted(candidates):
-        if not path.is_file() or path.is_symlink():
+        # is_file() stats, and a directory that is readable but not searchable
+        # (mode 0644) lets os.walk list a name while refusing to stat it -- scandir
+        # succeeds so onerror never fires, and the stat then threw EACCES out of the
+        # loop. Regular files only: this also excludes a FIFO or a device node named
+        # *.node, which would otherwise be opened and block.
+        try:
+            if not path.is_file() or path.is_symlink():
+                continue
+        except OSError as e:
+            check(False, f"{path.relative_to(tree)} could not be examined", str(e))
             continue
         if path.suffix != ".node" and path.name != "rg":
             continue
@@ -145,16 +177,15 @@ def main(tree):
         check(True, f"{checked} native binaries are aarch64")
 
     product_path = tree / "product.json"
-    if product_path.exists():
-        # Same reason as the read above: unparseable is a verdict this script
-        # should state, not an exception it should die of.
-        try:
+    # exists() inside the try as well -- it stats, and product.json sits at the tree
+    # root, so an unreadable root reaches it. Unparseable, unreadable and
+    # unstattable are all verdicts this script should state rather than die of.
+    product = None
+    try:
+        if product_path.exists():
             product = json.loads(product_path.read_text())
-        except (OSError, ValueError) as e:
-            check(False, "product.json is readable JSON", str(e))
-            product = None
-    else:
-        product = None
+    except (OSError, ValueError) as e:
+        check(False, "product.json is readable JSON", str(e))
     if product is not None:
         check(product.get("nameLong") == "VSCodroid", "product.json is branded",
               f"nameLong = {product.get('nameLong')!r}")
@@ -186,16 +217,20 @@ def main(tree):
     # the old one. This runs on both sides — the build before publishing, the
     # fetch before packaging — so either end refuses the stale tree.
     wb_css = tree / "out/vs/code/browser/workbench/workbench.css"
-    if wb_css.exists():
-        try:
+    # exists() is inside the try for the same reason as the REQUIRED loop above: it
+    # stats, and an unsearchable parent makes the stat itself raise. This was the
+    # last unguarded one -- with out/ at mode 000 the earlier fixes reported their
+    # failures and then this line still threw, so the run ended with a traceback
+    # after two correct FAIL lines.
+    css = None
+    try:
+        if wb_css.exists():
             css = wb_css.read_text(errors="replace")
-        except OSError as e:
-            check(False, "workbench.css is readable", str(e))
-            css = None
-    else:
-        css = None
-        check(False, "out/vs/code/browser/workbench/workbench.css exists",
-              "the packaged web client is missing")
+        else:
+            check(False, "out/vs/code/browser/workbench/workbench.css exists",
+                  "the packaged web client is missing")
+    except OSError as e:
+        check(False, "workbench.css is readable", str(e))
     if css is not None:
         check("VSCodroid: Mobile-friendly" in css,
               "workbench.css carries the mobile menu overrides",

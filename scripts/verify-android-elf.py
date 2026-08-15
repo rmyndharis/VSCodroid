@@ -20,6 +20,7 @@ cannot drift apart in what they consider acceptable.
 
 import argparse
 import pathlib
+import stat
 import struct
 import sys
 
@@ -41,6 +42,14 @@ class NotAnElf(Exception):
 
 
 def read_elf(path: pathlib.Path):
+    # Regular files only, checked before opening. read_bytes() on a FIFO blocks
+    # forever waiting for a writer, and on a character device reads without end --
+    # measured: a named pipe called x.so hung the sweep with no output and no
+    # timeout. --dir globs whatever is in the directory, so this is reachable in a
+    # way the single-file callers never were: they pass a path they just created.
+    st = path.stat()
+    if not stat.S_ISREG(st.st_mode):
+        raise NotAnElf(f"{path.name} is not a regular file")
     data = path.read_bytes()
     if data[:4] != ELF_MAGIC:
         raise NotAnElf(f"{path.name} is not an ELF file")
@@ -107,10 +116,15 @@ def resolvable_names(lib_dirs: list):
     """
     names = set()
     for d in lib_dirs:
-        if not d.exists():
-            print(f"  note   --lib-dir {d} does not exist; nothing resolves from it")
-            continue
+        # exists() is inside the try, not above it. pathlib swallows only
+        # ENOENT/ENOTDIR/EBADF/ELOOP and re-raises the rest, so an unsearchable
+        # PARENT directory made exists() itself throw EACCES past the guard below
+        # -- a traceback from a function whose whole purpose is to report the
+        # problem instead of one.
         try:
+            if not d.exists():
+                print(f"  note   --lib-dir {d} does not exist; nothing resolves from it")
+                continue
             names |= {p.name for p in d.iterdir()}
         except OSError as e:
             print(f"  FAIL   --lib-dir {d} could not be read  {e}")
