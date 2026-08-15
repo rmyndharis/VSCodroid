@@ -112,6 +112,9 @@ jobs:
       - name: Check the documented build steps match the workflows
         run: python3 scripts/check-build-steps.py
 
+      - name: Check the bridge API spec matches the registered signatures
+        run: python3 scripts/check-bridge-api-spec.py
+
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 

@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Keep the documented bridge signatures in agreement with the registered ones.
+
+    check-bridge-api-spec.py
+
+`docs/05-API_SPEC.md` is the contract an extension author writes against, and
+nothing has ever held it to `AndroidBridge.kt`. One pass over both files found
+fourteen disagreements across twenty-eight methods -- a measured failure rate,
+not a hypothetical one -- and half of them were invisible to a comparison of
+method names, because the name matched and only the shape was wrong:
+
+  * `generateSshKey`'s second argument was documented as `keyType`, "ed25519
+    (default) or rsa". The algorithm is not selectable and that argument is the
+    key's comment. Asking for RSA got you an ed25519 key with "rsa" written into
+    its comment field, and nothing reported a problem. A wrong document that
+    errors is a nuisance; one that succeeds differently ships a key someone
+    believes is something else.
+  * `openRecentFolder` was documented as returning `Boolean`, "true if URI is
+    still valid and accessible". It returns Unit. The document invited a caller
+    to branch on whether a lapsed SAF grant still works; there is no value to
+    branch on, and the failure surfaces later, inside the sync.
+  * `cancelToolchainInstall(authToken)` -- the documented form does not compile.
+
+So this compares the three axes a caller can get wrong: the set of methods, each
+parameter list, and each return type. Both directions, because a method the
+document invents costs as much as one it omits.
+
+What it deliberately does NOT check is the prose -- what a method does, what it
+returns on refusal, what its JSON keys are. That part is still a person reading
+the bodies. Drawing the line here is the point: a check that claims to cover
+prose would have to be believed about the half it cannot see.
+
+Anchored on `@JavascriptInterface` in both files rather than on `fun`, which
+also matches the ProcessManager sketch in section 6 and the private helpers in
+the bridge, neither of which is part of this contract.
+"""
+
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+BRIDGE = ROOT / "android/app/src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt"
+SPEC = ROOT / "docs/05-API_SPEC.md"
+
+ANNOTATION = "@JavascriptInterface"
+
+# Counted on its own line, not anywhere in the text. The spec discusses the
+# annotation in prose as well as using it -- "all 28 `@JavascriptInterface`
+# methods take the token" -- and counting those mentions would inflate the
+# expectation and fail a file that is correct.
+ANNOTATION_LINE = re.compile(r"^[ \t]*" + ANNOTATION + r"[ \t]*$", re.M)
+
+# The Kotlin source ends a signature with `{`; the fenced blocks in the spec end
+# it with a newline, sometimes after a trailing `//` note. One pattern covers
+# all three. The parameter list is matched with [^)] so a signature broken
+# across lines still resolves -- none are today, and a reformat should not be
+# what makes this check stop seeing a method.
+SIGNATURE = re.compile(
+    ANNOTATION + r"[ \t]*\n"
+    r"\s*fun\s+(?P<name>\w+)\s*"
+    r"\((?P<params>[^)]*)\)"
+    r"(?:[ \t]*:[ \t]*(?P<returns>[^\n{/]+?))?"
+    r"[ \t]*(?://[^\n]*)?"
+    r"[ \t]*(?:\{|\n)"
+)
+
+
+def signatures(path):
+    """Every annotated signature in a file, plus how many should have been found.
+
+    The second number is the whole point. A regex that silently stops matching
+    reports an empty set, and an empty set compares clean against anything --
+    which is the shape of a check that cannot fail reading exactly like a check
+    that passed. Counting the annotations is independent of parsing them, so the
+    two disagreeing says the pattern broke rather than that the code changed.
+    """
+    text = path.read_text()
+    found = {}
+    for m in SIGNATURE.finditer(text):
+        found[m.group("name")] = (
+            re.sub(r"\s+", " ", m.group("params")).strip(),
+            (m.group("returns") or "Unit").strip(),
+        )
+    return found, len(ANNOTATION_LINE.findall(text))
+
+
+def render(name, sig):
+    params, returns = sig
+    tail = "" if returns == "Unit" else f": {returns}"
+    return f"fun {name}({params}){tail}"
+
+
+def main() -> int:
+    for path in (BRIDGE, SPEC):
+        if not path.is_file():
+            print(f"  FAIL   missing {path.relative_to(ROOT)}")
+            return 1
+
+    code, code_expected = signatures(BRIDGE)
+    doc, doc_expected = signatures(SPEC)
+
+    # Fail closed on the extraction itself, before comparing anything. Either
+    # side coming back empty, or short of its own annotation count, means this
+    # script lost its grip on the files rather than that they agree.
+    for label, path, found, expected in (
+        ("AndroidBridge.kt", BRIDGE, code, code_expected),
+        ("05-API_SPEC.md", SPEC, doc, doc_expected),
+    ):
+        if not found:
+            print(f"  FAIL   parsed no signatures out of {label}; the pattern "
+                  f"stopped matching")
+            return 1
+        if len(found) != expected:
+            print(f"  FAIL   {label} has {expected} {ANNOTATION} annotations but "
+                  f"{len(found)} signatures parsed")
+            print(f"         The pattern matched some and not others, so a "
+                  f"clean result here would mean nothing.")
+            return 1
+
+    failed = False
+
+    undocumented = sorted(set(code) - set(doc))
+    if undocumented:
+        print(f"  FAIL   registered on the bridge, absent from the spec")
+        for name in undocumented:
+            print(f"           {render(name, code[name])}")
+        print(f"         Document them in {SPEC.relative_to(ROOT)} §2.4. An "
+              f"undocumented method is one nobody can call on purpose.")
+        failed = True
+
+    invented = sorted(set(doc) - set(code))
+    if invented:
+        print(f"  FAIL   documented in the spec, not registered on the bridge")
+        for name in invented:
+            print(f"           {render(name, doc[name])}")
+        print(f"         Remove them from {SPEC.relative_to(ROOT)}, or add them "
+              f"to AndroidBridge.kt. Calling one of these fails at runtime.")
+        failed = True
+
+    for name in sorted(set(code) & set(doc)):
+        axes = []
+        if code[name][0] != doc[name][0]:
+            axes.append("parameters")
+        if code[name][1] != doc[name][1]:
+            axes.append("return type")
+        if axes:
+            print(f"  FAIL   {name}: spec and code disagree on {' and '.join(axes)}")
+            print(f"           code: {render(name, code[name])}")
+            print(f"           spec: {render(name, doc[name])}")
+            failed = True
+
+    if not failed:
+        print(f"  ok      all {len(code)} bridge methods match the spec on "
+              f"name, parameters and return type")
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
