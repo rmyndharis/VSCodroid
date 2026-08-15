@@ -22,7 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session token is what is checked. The same block of the plan asked someone to "restrict cleartext
   HTTP to localhost only", which is the reverse of what shipped and for a reason worth keeping: the
   network security config matches domains by hostname and understands neither CIDR nor ranges, so a
-  LAN dev server has no spelling there. Six unchecked boxes had it reading as outstanding work.
+  LAN dev server has no spelling there. Six unchecked boxes had it reading as outstanding work. The
+  same list now records the one CSP change this project actually makes: `'unsafe-inline'` is added to
+  `script-src` because that directive pins the workbench's inline script by sha256 and patching the
+  script changes its digest, which the build does not recompute. `default-src` stays `'none'`. It is
+  a deliberate widening and the security list is where a reader would go looking for it.
 - The contributor documentation describes both toolchain delivery paths, not just one. It introduced
   `ToolchainManager.kt` as "Play Asset Delivery", and every install that did not come from Play --
   sideload, debug, adb -- takes an HTTP path instead, downloading ZIPs from `releases/latest`. That
