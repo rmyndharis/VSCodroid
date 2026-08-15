@@ -138,14 +138,32 @@ class ConnectionTokenLoggingTest {
     /**
      * The resource branch that proxies through our own server, which is the other
      * caller of `withToken`.
+     *
+     * The scheme has to be one the interceptor does not handle itself. This case
+     * was written with `vscode-remote+authority`, which takes the
+     * `file || vscode-remote` branch instead: with no published roots the request
+     * resolves to `Refused` and returns before `withToken` or the proxy is ever
+     * reached. It passed, on the refusal's own log line — and
+     * [assertNothingLeaked]'s "something was logged" control could not tell,
+     * because something *was*.
+     *
+     * So the control here names the branch rather than counting lines. Only the
+     * proxy path builds a `remote-resource:` tag, so finding it in the log is
+     * proof the tokened URL was actually constructed.
      */
     @Test
     fun `the resource proxy does not log the token`() {
         val deadPort = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
 
         VSCodroidWebViewClient.interceptCdnRequest(
-            cdnRequest("vscode-remote+authority.vscode-resource.vscode-cdn.net", "/some/asset.css"),
+            cdnRequest("custom+authority.vscode-resource.vscode-cdn.net", "/some/asset.css"),
             deadPort, token, emptyList(), emptyList(), { null },
+        )
+
+        assertTrue(
+            logged.any { it.contains("remote-resource:") },
+            "the request never reached the branch that appends the token, so this case " +
+                "proves nothing. Logged instead:\n" + logged.joinToString("\n") { "  $it" },
         )
         assertNothingLeaked()
     }
