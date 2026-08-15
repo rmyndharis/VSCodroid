@@ -94,9 +94,15 @@ def read_elf(path: pathlib.Path):
 
 def verify(path: pathlib.Path, lib_dirs: list) -> bool:
     """Check one binary. Prints a line per property; returns True if all hold."""
+    # OSError covers the states --dir can hand this that a single-file caller never
+    # could: a dangling symlink, a directory whose name ends in .so, a file the
+    # build cannot read. Without it the loop dies on the first one, every later
+    # binary goes unexamined, and no FAIL line is printed at all -- so a caller
+    # that tells its reader "the FAIL line above names the file" would be lying.
+    # Caught per file so the sweep finishes and still fails.
     try:
         machine, needed, aligns = read_elf(path)
-    except (NotAnElf, IndexError, struct.error) as e:
+    except (NotAnElf, IndexError, struct.error, OSError) as e:
         print(f"  FAIL   {e}")
         return False
 
