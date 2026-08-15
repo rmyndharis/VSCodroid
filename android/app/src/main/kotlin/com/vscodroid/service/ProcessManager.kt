@@ -10,8 +10,6 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
-import java.net.InetAddress
-import java.net.ServerSocket
 import java.net.URL
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -144,7 +142,7 @@ class ProcessManager(private val context: Context) {
         // see PortFinder.getOrAllocatePort.
         if (_port == 0) {
             _port = PortFinder.getOrAllocatePort(context)
-        } else if (!isLoopbackPortFree(_port)) {
+        } else if (!PortFinder.isPortAvailable(_port)) {
             // A restart, and something is already listening on our port.
             //
             // Only the cold path checked this. `getOrAllocatePort` tests the
@@ -389,28 +387,6 @@ class ProcessManager(private val context: Context) {
     /** Returns `true` if the server process is alive. */
     fun isRunning(): Boolean = serverProcess?.isAlive == true
 
-    /**
-     * Whether [port] can still be bound on the loopback address.
-     *
-     * Deliberately not [PortFinder.isPortAvailable], which binds the wildcard
-     * address. The server is launched with `--host=127.0.0.1`, so the question
-     * worth asking is whether *that* address is free — and the two answers differ.
-     * On BSD-derived systems `SO_REUSEADDR`, which Java sets on a `ServerSocket`
-     * by default, lets a wildcard bind succeed while a specific address is held,
-     * so the wildcard test reports a held port as free. That is measured, not
-     * inferred: on darwin it answered "free" for a port a stub server was
-     * listening on throughout, which is the whole failure this check exists to
-     * catch.
-     *
-     * A port left in `TIME_WAIT` by our own just-dead server is deliberately
-     * still "free" here. `SO_REUSEADDR` covers exactly that case, and refusing a
-     * restart over it would turn every clean stop into a failed start.
-     */
-    private fun isLoopbackPortFree(port: Int): Boolean = try {
-        ServerSocket(port, 0, InetAddress.getByName("127.0.0.1")).use { true }
-    } catch (e: Exception) {
-        false
-    }
 
     /**
      * Whether the server has answered a health check and has not stopped since.

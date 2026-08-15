@@ -1,6 +1,7 @@
 package com.vscodroid.util
 
 import android.content.Context
+import java.net.InetAddress
 import java.net.ServerSocket
 
 object PortFinder {
@@ -78,7 +79,13 @@ object PortFinder {
             if (isPortAvailable(port)) return port
         }
         return try {
-            ServerSocket(0).use { socket ->
+            // Loopback here too, for the reason [isPortAvailable] gives. Asking
+            // the OS for a port free on the wildcard address would leave this one
+            // function using two different notions of "free": the scan above
+            // rejects a port held on 127.0.0.1, and this would then hand back
+            // exactly such a port on any system where a wildcard bind can succeed
+            // beside a specific one.
+            ServerSocket(0, 0, LOOPBACK).use { socket ->
                 socket.localPort
             }
         } catch (e: Exception) {
@@ -87,11 +94,40 @@ object PortFinder {
         }
     }
 
+    /**
+     * Whether [port] can be bound on the address the server will actually use.
+     *
+     * Loopback, not the wildcard address, and the difference is not academic.
+     * `ProcessManager` launches the server with `--host=127.0.0.1`, so the only
+     * useful question is whether *that* address is free. `ServerSocket(port)`
+     * binds `0.0.0.0` and asks a different one — and the two answers disagree:
+     * Java sets `SO_REUSEADDR` on a `ServerSocket` by default, and on
+     * BSD-derived systems that lets a wildcard bind succeed while a specific
+     * address is held. Measured here: with a holder on `127.0.0.1:53194`, a
+     * wildcard bind of 53194 succeeded and a loopback bind failed with
+     * `EADDRINUSE`. So the wildcard form reported a held port as free.
+     *
+     * Linux is believed to refuse the wildcard bind in that situation, which
+     * would make the old form accidentally right on device. That belief is not
+     * what this rests on, and deliberately so — nobody has measured it on
+     * Android, and a check that happens to agree with the server on one platform
+     * is a check that disagrees with it on another.
+     */
     fun isPortAvailable(port: Int): Boolean {
         return try {
-            ServerSocket(port).use { true }
+            ServerSocket(port, 0, LOOPBACK).use { true }
         } catch (e: Exception) {
             false
         }
     }
+
+    /**
+     * The address the server binds, resolved once.
+     *
+     * A literal rather than `InetAddress.getLoopbackAddress()`, which follows the
+     * `java.net.preferIPv6Addresses` system property and can answer `::1`. The
+     * server is told `127.0.0.1`, so this has to be the same thing and not
+     * whichever loopback the JVM prefers.
+     */
+    private val LOOPBACK: InetAddress = InetAddress.getByName("127.0.0.1")
 }
