@@ -202,8 +202,9 @@ jobs:
 
       # Before the native addons on purpose: build-native-addons.sh pairs its
       # headers against the runtime this step installs, and fails closed when
-      # nothing is there to pair against. Review found the old order (addons
-      # first) meant that gate could never fire in CI.
+      # nothing is there to pair against. With the addons built first that gate
+      # can never fire in CI: there is no runtime to compare the headers to yet,
+      # so the pairing it exists to enforce is skipped rather than checked.
       - name: Fetch Node runtime
         run: bash scripts/download-node.sh
       - name: Build native addons

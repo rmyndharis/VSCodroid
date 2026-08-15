@@ -315,8 +315,8 @@ for pkg in "${LIB_PACKAGES[@]}"; do
             cp -L "$src" "$ASSETS_DIR/usr/lib/$soname"
             echo "  $soname ($(du -sh "$ASSETS_DIR/usr/lib/$soname" | cut -f1))"
         else
-            # Fatal, not a warning -- the same call this made in
-            # download-termux-tools.sh:402 until review caught it there. A
+            # Fatal, not a warning -- the same call download-termux-tools.sh
+            # makes at the same point, and for the same reason. A
             # library missing here ships an APK where an extension module dies
             # at dlopen on a user's device: no _ctypes without libffi, no
             # sqlite3, no bz2. The import error names the module, never the

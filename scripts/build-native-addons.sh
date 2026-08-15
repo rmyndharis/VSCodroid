@@ -123,9 +123,9 @@ fi
 # --- Build -----------------------------------------------------------------
 
 # The comment on NODE_VERSION above promises a check comparing these headers
-# against the runtime actually shipped; this is that check. Review found the
-# first version never ran in CI - both workflows built addons before fetching
-# the runtime, and the missing-binary branch was a warning - so this one fails
+# against the runtime actually shipped; this is that check. An earlier form of
+# it never ran in CI at all - both workflows built addons before fetching the
+# runtime, and the missing-binary branch was a warning - so this one fails
 # closed and reads the version marker download-node.sh writes next to the
 # binary (the binary itself is gitignored). The comparison is major-only on
 # purpose: NODE_MODULE_VERSION, which is what actually breaks addon loading,

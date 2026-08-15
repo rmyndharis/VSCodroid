@@ -422,8 +422,9 @@ for pkg in "${LIB_PACKAGES[@]}"; do
         else
             # Fatal, not a warning: a library missing here ships an APK where
             # bash or git dies at dlopen on a user's device - the exact class
-            # of quiet breakage the ELF verification exists to prevent. This
-            # printed WARNING and exited 0 until review caught it.
+            # of quiet breakage the ELF verification exists to prevent. It
+            # printed WARNING and exited 0 before, which let exactly that
+            # through.
             echo "  ERROR: $soname not found in $pkg (looked in $pkg_lib_dir)" >&2
             [ -d "$pkg_lib_dir" ] && ls "$pkg_lib_dir"/*.so* 2>/dev/null | head -5 || true
             exit 1
