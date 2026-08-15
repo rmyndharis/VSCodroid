@@ -56,8 +56,10 @@ class ProcessManagerTest {
         // Mock Logger to avoid android.util.Log crashes in JVM tests
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
-        // The two-argument overloads are separate members and an unstubbed one
-        // calls through to android.util.Log, which is not mocked and throws.
+        // `Logger.w` and `Logger.e` take a defaulted throwable rather than having
+        // a two-argument overload, and mockk matches on the arity of the call.
+        // A two-argument call left unstubbed reaches android.util.Log, which is
+        // not mocked and throws, so both arities are stubbed.
         every { Logger.w(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs

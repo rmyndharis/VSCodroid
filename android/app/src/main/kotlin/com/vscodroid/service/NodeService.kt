@@ -75,13 +75,27 @@ class NodeService : Service() {
      * a value below the current one, and adding an increment to [onStartCommand]
      * would fence out nothing while making the identity mean two things.
      *
-     * Also what [reportOncePerRun] throttles on, since a run is the unit that
-     * deserves one message.
+     * Fences a stale retry chain and nothing else. It was briefly also the key
+     * the failure message throttled on, and that was wrong for the reason this
+     * doc gives above: a run ends only where it says it ends, and a server coming
+     * up is not one of those places. A message deserves one FAILURE EPISODE, and
+     * an episode ends on readiness too. See [failureRaised].
      */
     private var runId = 0
 
-    /** The run whose start failure has already been reported. See [reportOncePerRun]. */
-    private var noticedRun = -1
+    /**
+     * Whether this failure episode has already been raised to a bound client.
+     *
+     * An episode, not a run, and the difference is what the previous version of
+     * this got wrong. It keyed on [runId], which changes only when a run ENDS —
+     * and a run does not end when a server finally comes up. So after any
+     * successful start, every later failure in that run was silent, and a run can
+     * last days.
+     *
+     * Cleared by [endFailureEpisode], at each of the three points an episode is
+     * over: the server became ready, the user stopped it, or the budget ran out.
+     */
+    private var failureRaised = false
 
     private var startupNotice: String? = null
 
@@ -299,10 +313,10 @@ class NodeService : Service() {
         // fenced off instead: it compares the run it belongs to against this one
         // when it wakes, and leaves.
         runId++
-        // And the next run starts with a full budget. Without this, stopping
-        // during a crash loop and starting again gave whatever was left of the
-        // previous run's allowance.
-        restartCount = 0
+        // And the next run starts with a full budget and its own first message.
+        // Without this, stopping during a crash loop and starting again gave
+        // whatever was left of the previous run's allowance.
+        endFailureEpisode()
         processManager.stopServer()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -356,12 +370,22 @@ class NodeService : Service() {
      * will open as soon as the server is ready. Nothing would be asking.
      *
      * Every route in is closed today, but by bookkeeping that belongs to a
-     * different concern and does not know it is load-bearing here:
-     * [onStartCommand] guards on [isServiceRunning], [handleServerCrash] returns
-     * early and reaches this only with the process dead, and [shutdown] and
-     * [onDestroy] both kill it first. A "restart the server" action added later
-     * that calls this directly would satisfy none of them, break nothing that
-     * compiles or tests, and make that sentence false.
+     * different concern and does not know it is load-bearing here. There are two,
+     * and this paragraph listed only the first until [retryOrGiveUp] became the
+     * live one:
+     *
+     *  - [onStartCommand], which guards on [isServiceRunning];
+     *  - [retryOrGiveUp], reached either from [handleServerCrash] — which the
+     *    watchdog raises only after the process has exited — or from the launch
+     *    path's own `spawnedNothing` branch, which by construction spawned no
+     *    process at all. It also calls `cancelLaunch()` before its backoff, so no
+     *    earlier attempt is still in flight when it arrives here.
+     *
+     * [shutdown] and [onDestroy] kill the process rather than reaching this.
+     *
+     * A "restart the server" action added later that calls this directly would
+     * satisfy none of it, break nothing that compiles or tests, and make that
+     * sentence false.
      *
      * So: stop the process before calling this, or add the guard here rather
      * than relying on the caller having read this paragraph.
@@ -384,7 +408,7 @@ class NodeService : Service() {
             when (outcome) {
                 LaunchOutcome.NOT_STARTED -> {
                     Logger.e(tag, "Failed to start server process")
-                    reportOncePerRun(getString(R.string.error_server_start))
+                    reportFailure(getString(R.string.error_server_start))
                 }
 
                 LaunchOutcome.READY -> announceReady()
@@ -404,7 +428,7 @@ class NodeService : Service() {
                     // failure pair and were treated unevenly -- one throttled, one
                     // not -- which is a difference nothing could justify from the
                     // user's side, since both mean the same thing to them.
-                    reportOncePerRun(getString(R.string.error_server_timeout))
+                    reportFailure(getString(R.string.error_server_timeout))
                 }
 
                 LaunchOutcome.STILL_COMING_UP -> {
@@ -489,8 +513,10 @@ class NodeService : Service() {
 
     /** Records a ready server and tells whoever is listening. */
     private fun announceReady() {
-        // Recovery succeeded; future crashes should get a fresh retry budget.
-        restartCount = 0
+        // Recovery succeeded. Future crashes get a fresh retry budget, and a
+        // failure after this point is a new episode that has to be heard even
+        // though an earlier one in the same run already spoke.
+        endFailureEpisode()
         startupNotice = null
         Logger.i(tag, "Server is ready on port ${processManager.port}")
         onServerReady?.invoke(processManager.port)
@@ -571,29 +597,47 @@ class NodeService : Service() {
      * which on a start that outlives its activity is the only one there is. See
      * [lastStartupNotice] for why neither is called a failure.
      */
-    private fun reportOncePerRun(message: String) {
-        // Keyed on the run, because the thing being throttled is per-run and
-        // nothing else in scope counts runs. The first version of this gate keyed
-        // on `restartCount == 0` and looked equivalent -- a fresh run does start
-        // with a count of zero. It is not equivalent after a crash:
-        // [announceReady] resets the count, then [retryOrGiveUp] increments it
-        // *before* calling [launchServer], so every failure reached through the
-        // retry chain arrives with a count of at least one. The gate never opened,
-        // and a whole run of failures went by without a word -- 62 seconds of
-        // backoff in front of a dead editor, with `startupNotice` cleared at the
-        // top of each attempt so a client binding in that window read nothing
-        // either.
+    private fun reportFailure(message: String) {
+        // The record is NOT throttled. Only the callback is, and separating them
+        // is the whole of this function.
         //
-        // A count is not a run. Two things that agree on the first tick of a
-        // process and disagree ever afterwards are exactly the pair to get wrong.
-        if (noticedRun == runId) return
-        noticedRun = runId
-        reportStartupNotice(message)
+        // They are two different audiences. `onServerError` reaches a client that
+        // is bound right now, and `MainActivity` answers it with a long toast, so
+        // repeating it turns one failure into a queue of six. [startupNotice] is
+        // read on demand by a client that binds LATER -- that is the only reason
+        // the field exists, as [lastStartupNotice] says -- and nobody sees it
+        // twice, so throttling it buys nothing and costs the thing it was for.
+        //
+        // Throttling both is what the previous version did, and [launchServer]
+        // nulls the field at the top of every attempt, so from the second attempt
+        // onward the gate returned before restoring it. `lastStartupNotice()`
+        // answered null for the rest of the episode: a client binding into that
+        // window sat on the placeholder with nothing said, which is the harm the
+        // throttle was added to prevent, moved rather than removed.
+        startupNotice = message
+        if (failureRaised) return
+        failureRaised = true
+        onServerError?.invoke(message)
     }
 
     private fun reportStartupNotice(message: String) {
         startupNotice = message
         onServerError?.invoke(message)
+    }
+
+    /**
+     * Ends the current failure episode: the next one gets a full retry budget and
+     * its own first message.
+     *
+     * The two always move together, which is why they are one function rather
+     * than a pair repeated three times. Every place that refreshes the budget is
+     * also a place a fresh failure deserves to be heard — the server came up, the
+     * user stopped it, or the budget ran out — and the previous version refreshed
+     * the budget at all three and the message key at none of them.
+     */
+    private fun endFailureEpisode() {
+        restartCount = 0
+        failureRaised = false
     }
 
     /**
@@ -723,12 +767,12 @@ class NodeService : Service() {
         isServiceRunning = false
         // This run is over too, for the same reason [shutdown] says so.
         runId++
-        // A fresh budget for whoever starts it next. [announceReady] was the only
-        // reset, so a run that ended without ever becoming ready left its count
-        // standing: a user who relaunched after five crashes got one retry rather
-        // than five, and nothing on screen said why. This is the end of a run, and
-        // the next one is not a continuation of it.
-        restartCount = 0
+        // A fresh budget and a fresh first message for whoever starts it next.
+        // Readiness was once the only reset, so a run that ended without ever
+        // becoming ready left its count standing: a user who relaunched after five
+        // crashes got one retry rather than five, and nothing on screen said why.
+        // This is the end of a run, and the next one is not a continuation of it.
+        endFailureEpisode()
         ServiceCompat.startForeground(
             this,
             VSCodroidApp.NOTIFICATION_ID,

@@ -21,7 +21,16 @@ import java.net.ServerSocket
 import kotlin.concurrent.thread
 
 /**
- * That the server's connection token never reaches logcat.
+ * That the webview layer never puts the server's connection token into logcat.
+ *
+ * Scoped to this layer on purpose, because a wider claim would be false. The
+ * bridge exposes `logToNative`, which hands page-chosen text straight to
+ * `Logger` at every level and redacts nothing — so a page that logs a URL of its
+ * own carrying the token still reaches logcat by that route. It is
+ * pre-existing, it is session-token gated, and it is outside these files; what
+ * would not be acceptable is a class comment here implying it does not exist.
+ * These cases cover the paths this layer owns: the CDN interception, the proxy,
+ * the page callbacks, and the console relay.
  *
  * The token is the whole of the server's authentication: it is required on every
  * route but `/version`, `/delay-shutdown` and `/callback`, so anything holding it

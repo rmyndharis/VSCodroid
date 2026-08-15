@@ -375,25 +375,32 @@ class RestartOwnershipTest {
 }
 
 /**
- * That the once-per-run failure notice is keyed on the run and not on a count.
+ * That only the callback is throttled, and that the throttle is keyed on the
+ * failure episode.
  *
- * The defect this exists for is a substitution that looks like an identity. The
- * gate was `restartCount == 0`, which is true on the first attempt of a fresh
- * process and therefore looked like "the first failure of this run". It is not.
- * `announceReady` resets the count, and `retryOrGiveUp` increments it *before*
- * calling the launch path — so every failure reached through the retry chain
- * arrives with a count of at least one, and after a crash the gate never opened
- * at all. A whole run of failures passed without a word: 62 seconds of backoff in
- * front of a dead editor, with `startupNotice` cleared at the top of each attempt
- * so a client binding in that window read nothing either.
+ * Two substitutions, each of which looked like an identity when it was made.
  *
- * A count and a run agree on the first tick of a process and disagree ever
- * afterwards, which is exactly the pair to get wrong.
+ * The first was the KEY. `restartCount == 0` looked like "the first failure of
+ * this run" and is "the first attempt of a fresh process"; then `runId` looked
+ * like "this failure episode" and is "this run" — and a run does not end when a
+ * server finally comes up, so after any success every later failure in that run
+ * was silent, for as long as the run lasted. A count is not a run, and a run is
+ * not an episode. Each fix moved the substitution up one level rather than
+ * removing it.
  *
- * Source-reading, and the weak layer, and there is no strong one available here:
- * the gate is a private method on a `Service`, and this suite can build neither a
- * `Service` nor a main dispatcher. What it can do is refuse the substitution —
- * the logic `a != b` is not what breaks, the choice of `a` is.
+ * The second was the SUBJECT, and it is the one this file now pins hardest.
+ * `reportStartupNotice` does two things for two audiences: it raises
+ * `onServerError`, which reaches whoever is bound right now and which
+ * `MainActivity` answers with a long toast, and it records `startupNotice`,
+ * which a client binding LATER reads on demand. Only the first is noisy. The
+ * throttle covered both — and since `launchServer` nulls the field at the top of
+ * every attempt, from the second attempt onward the gate returned before
+ * restoring it, so `lastStartupNotice()` answered null for the rest of the
+ * episode. The harm the throttle was added to prevent was moved, not removed.
+ *
+ * Source-reading, and the weak layer, and there is no strong one here: these are
+ * private methods on a `Service`, and this suite can build neither a `Service`
+ * nor a main dispatcher. What it can do is refuse both substitutions.
  */
 class NoticeGateKeyTest {
 
@@ -405,43 +412,78 @@ class NoticeGateKeyTest {
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
 
+    private fun report(hits: List<IndexedValue<String>>) =
+        hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+
     @Test
-    fun `the notice gate is keyed on the run and both failures go through it`() {
+    fun `the record is written before the throttle can return`() {
+        // The subject substitution. Both statements live in reportFailure, and
+        // the whole correctness of it is that the assignment comes FIRST: a
+        // client that binds late reads the field, and launchServer nulls it at
+        // the top of every attempt, so a throttle that returns before restoring
+        // it leaves that client with nothing for the rest of the episode.
         check(nodeService.isFile) {
             "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
                 "otherwise pass by looking at nothing"
         }
         val lines = codeLines()
-        val report = { hits: List<IndexedValue<String>> ->
-            hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
-        }
 
-        // Control first: without it, a file that had lost the gate entirely would
-        // satisfy every assertion below by having nothing to find.
-        val gate = lines.filter { (_, l) -> l.contains("noticedRun") }
+        val record = lines.filter { (_, l) -> l.contains("startupNotice = message") }
+        val throttle = lines.filter { (_, l) -> l.contains("if (failureRaised) return") }
+        assertEquals(1, throttle.size, "expected one throttle:\n" + report(throttle))
         assertTrue(
-            gate.size >= 2,
-            "expected the gate to both read and write the run it has already spoken " +
-                "for; found:\n" + report(gate),
+            record.isNotEmpty(),
+            "nothing records the notice at all, so no client could ever read one",
         )
 
-        val throttled = lines.filter { (_, l) -> l.contains("reportOncePerRun(") }
+        // Positioned rather than merely present. `reportStartupNotice` writes the
+        // same expression, so a bare "one of them comes first" would be satisfied
+        // by that unrelated one; the record this is about is the statement
+        // immediately above the throttle, in the same function.
+        val t = throttle.single().index
+        assertTrue(
+            record.any { it.index in (t - 6) until t },
+            "the throttle returns before the notice is recorded, so from the second " +
+                "attempt on there is nothing for a late-binding client to read. " +
+                "Throttle at ${t + 1}, records at ${record.map { it.index + 1 }}",
+        )
+    }
+
+    @Test
+    fun `an episode ends everywhere the retry budget is refreshed`() {
+        // The key substitution, pinned as the invariant that makes the key right
+        // rather than as the name of a field. Every point that hands out a fresh
+        // budget is a point a fresh failure deserves to be heard: the server came
+        // up, the user stopped it, or the budget ran out. Keying on runId missed
+        // the first of those, because a run does not end when a server comes up.
+        val lines = codeLines()
+
+        val budget = lines.filter { (_, l) ->
+            l.contains("restartCount = 0") && !l.contains("var ")
+        }
         assertEquals(
-            3, throttled.size,
+            1, budget.size,
+            "the budget must be refreshed in exactly one place, so it cannot be " +
+                "refreshed without also ending the episode:\n" + report(budget),
+        )
+
+        val ends = lines.filter { (_, l) -> l.contains("endFailureEpisode()") }
+        assertEquals(
+            4, ends.size,
+            "expected the declaration plus its three callers -- readiness, stop, and " +
+                "the terminal state:\n" + report(ends),
+        )
+    }
+
+    @Test
+    fun `both failure outcomes report through the throttle`() {
+        val lines = codeLines()
+        val reported = lines.filter { (_, l) -> l.contains("reportFailure(") }
+        assertEquals(
+            3, reported.size,
             "expected the declaration plus both failure outcomes -- a failure that " +
                 "speaks on every attempt is the defect, and so is one that never " +
-                "speaks. Found:\n" + report(throttled),
-        )
-
-        // The substitution itself. restartCount is a perfectly good field; it is
-        // just not a run, and re-keying on it reads as a simplification.
-        val miskeyed = lines.filter { (i, l) ->
-            l.contains("restartCount") && gate.any { (g, _) -> kotlin.math.abs(g - i) <= 3 }
-        }
-        assertEquals(
-            emptyList<String>(), miskeyed.map { (i, l) -> "NodeService.kt:${i + 1}: ${l.trim()}" },
-            "the notice gate must not be keyed on the restart count: it is already " +
-                "non-zero by the time any retried launch runs, so the gate would never open",
+                "speaks:\n" + report(reported),
         )
     }
 }
