@@ -129,18 +129,30 @@ def texts(directory):
 
 
 def prose(directory):
-    """Every line of walkthrough title and description text."""
+    """Every line of title and description text, from the walkthrough and its steps.
+
+    The walkthrough carries a title and a description of its own, and they are
+    the first two lines a user reads -- they head the page the four steps sit
+    under. This read only the steps, so those two fields were the one place on
+    the screen where a version number or a "coming soon" was checked by nothing.
+    """
     manifest = directory / "package.json"
     if not manifest.is_file():
         return
     data = json.loads(manifest.read_text())
+
+    def lines(where, node):
+        for field in ("title", "description"):
+            for line in node.get(field, "").split("\n"):
+                if line.strip():
+                    yield where, line.strip()
+
     for walkthrough in data.get("contributes", {}).get("walkthroughs", []):
+        yield from lines(
+            f"{manifest.name} walkthrough '{walkthrough.get('id', '?')}'", walkthrough
+        )
         for step in walkthrough.get("steps", []):
-            where = f"{manifest.name} step '{step.get('id', '?')}'"
-            for field in ("title", "description"):
-                for line in step.get(field, "").split("\n"):
-                    if line.strip():
-                        yield where, line.strip()
+            yield from lines(f"{manifest.name} step '{step.get('id', '?')}'", step)
 
 
 def main():
