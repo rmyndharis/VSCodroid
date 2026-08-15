@@ -252,6 +252,26 @@ class ExtensionsManifestWriteTest {
     }
 
     /**
+     * A manifest that cannot be READ is a different event from a write that
+     * failed, and only the second aborts.
+     *
+     * Both surface as IOException from inside reconcile's one try -- readText
+     * throws it when the path is not a readable file. Rethrowing every
+     * IOException would abort the whole setup over something this method has
+     * always logged and survived, so the write throws its own type. The rule is
+     * not "IO failures abort"; it is "a record must not outlive the write it
+     * describes", and only the write leaves a record.
+     */
+    @Test
+    fun `a manifest that cannot be read does not abort the setup`() {
+        manifestFile.delete()
+        assertTrue(manifestFile.mkdirs(), "could not stage an unreadable manifest path")
+
+        // Must not throw.
+        extractBundledExtensions()
+    }
+
+    /**
      * A version bump with the manifest write blocked, then unblocked.
      *
      * The superseded sweep deletes the old directory before the manifest is

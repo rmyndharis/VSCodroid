@@ -209,6 +209,45 @@ class BashrcAtomicityTest {
         assertTrue(String(after).contains("toolchain-env.sh"), "the sourcing line was not appended")
     }
 
+    /**
+     * The third writer on this file, and the one that runs most often.
+     *
+     * The two appends carry the user's bytes through untouched; this one
+     * rewrites the whole file, and it fires from SplashActivity on every launch
+     * whenever the current marker is absent -- which is every device's first
+     * launch after a PROMPT_VERSION bump. Decoding as UTF-8 to do the surgery
+     * would replace any byte that is not valid UTF-8, so the same Latin-1 accent
+     * the append preserves would be destroyed by the rewrite instead.
+     */
+    @Test
+    fun `the prompt rewrite leaves bytes it does not own exactly as they were`() {
+        val tail = "# caf".toByteArray() +
+            byteArrayOf(0xE9.toByte()) +
+            " -- written by hand\nalias l='ls'\n".toByteArray()
+        bashrc.writeBytes(legacyBashrc.toByteArray() + tail)
+
+        FirstRunSetup(context).ensurePromptFix()
+
+        // Latin-1 makes a byte-subsequence search into a string search, since
+        // every byte maps to exactly one character.
+        val after = String(bashrc.readBytes(), Charsets.ISO_8859_1)
+        assertTrue(after.contains(currentMarker), "the prompt block was not brought up to date")
+        assertTrue(
+            after.contains(String(tail, Charsets.ISO_8859_1)),
+            "the bytes after the prompt block were re-encoded by the rewrite",
+        )
+        // EF BF BD is U+FFFD encoded as UTF-8, which is what a lossy decode
+        // leaves behind. Spelled as bytes so this file stays ASCII.
+        val replacementChar = String(
+            byteArrayOf(0xEF.toByte(), 0xBF.toByte(), 0xBD.toByte()),
+            Charsets.ISO_8859_1,
+        )
+        assertFalse(
+            after.contains(replacementChar),
+            "a byte was replaced with U+FFFD, so the rewrite decoded what it should have copied",
+        )
+    }
+
     @Test
     fun `appends the npm and claude functions`() {
         bundleNpm()

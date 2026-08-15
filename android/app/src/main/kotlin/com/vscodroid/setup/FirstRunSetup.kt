@@ -188,9 +188,19 @@ class FirstRunSetup(private val context: Context) {
      * @return false if any file under [assetPath] was present in the APK and
      *   could not be written. An asset that is simply absent is not a failure --
      *   several are, in builds that skip a download script -- so it answers
-     *   true. Most callers ignore this; [extractBundledExtensions] does not,
-     *   because for it a silently skipped copy means the device keeps running
-     *   the previous release's code.
+     *   true.
+     *
+     * Only [extractBundledExtensions] acts on this today, and an earlier version
+     * of this line justified that by saying the other callers lose less. They do
+     * not, and the sentence is worth correcting rather than deleting: the server
+     * tree, the four bootstrap scripts and `usr/` all pass through here too, and
+     * a file missing from any of them leaves a server that cannot start rather
+     * than an extension that is merely stale. They are unchecked because
+     * checking them is a larger change than this one -- a single lost file would
+     * abort a 390 MB unpack that the retry then redoes from the beginning, on
+     * exactly the low-storage devices the abort is meant to protect -- not
+     * because the loss is smaller. Nothing on device verifies those trees are
+     * complete; `verify-server-tree.py` checks the build, not the install.
      */
     private fun extractAssetDir(assetPath: String, destPath: String): Boolean {
         val destDir = File(context.filesDir, destPath)
@@ -777,7 +787,7 @@ class FirstRunSetup(private val context: Context) {
             // replaced appendText, which never read the file at all, and
             // carrying the bytes through is what keeps that property.
             val existing = bashrc.readBytes()
-            val content = String(existing)
+            val content = String(existing, Charsets.ISO_8859_1)
             val additions = StringBuilder()
             val added = mutableListOf<String>()
             if (!content.contains("npm()")) {
@@ -830,7 +840,7 @@ class FirstRunSetup(private val context: Context) {
             // Bytes through unchanged, decoded only to search. See
             // [createNpmWrappers] for why the round trip would be lossy.
             val existing = bashrc.readBytes()
-            val content = String(existing)
+            val content = String(existing, Charsets.ISO_8859_1)
             if (!content.contains("toolchain-env.sh")) {
                 // Rewritten whole through a temporary file rather than appended
                 // in place. The guard above reads the filename, which appears
@@ -869,7 +879,19 @@ class FirstRunSetup(private val context: Context) {
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (!bashrc.exists()) return
 
-        val content = bashrc.readText()
+        // Latin-1, not UTF-8, and the choice is load-bearing twice over. It maps
+        // every one of the 256 byte values to exactly one character and back, so
+        // the round trip is lossless for any file the user has -- readText would
+        // turn a byte that is not valid UTF-8 into U+FFFD and this method
+        // rewrites the whole file, so a single Latin-1 accent in a comment or an
+        // alias would be destroyed on the first launch after a PROMPT_VERSION
+        // bump. And because the mapping is one byte to one character, the string
+        // offsets computed below are byte offsets, which is what lets the two
+        // halves be copied through as bytes while the new block goes in as UTF-8.
+        // Every anchor searched for here is ASCII, so the decoding cannot change
+        // what matches.
+        val bytes = bashrc.readBytes()
+        val content = String(bytes, Charsets.ISO_8859_1)
         if (content.contains(PROMPT_MARKER_CURRENT)) return
 
         // Earliest anchor wins, so the old explanatory comment is swallowed too
@@ -898,8 +920,14 @@ class FirstRunSetup(private val context: Context) {
         // opened on a syntax error that nothing would ever repair. Nothing
         // appears under the real name now until all of it has been written, so
         // the marker cannot certify a file that was never finished.
-        val updated = content.substring(0, start) + PROMPT_BLOCK + content.substring(end)
-        if (!writeAtomically(bashrc) { it.write(updated.toByteArray()) }) {
+        // The two surviving halves go out as the bytes they came in as; only the
+        // block this method owns is encoded. PROMPT_BLOCK is not pure ASCII, so
+        // it cannot ride the Latin-1 mapping out with them.
+        if (!writeAtomically(bashrc) {
+                it.write(bytes, 0, start)
+                it.write(PROMPT_BLOCK.toByteArray())
+                it.write(bytes, end, bytes.size - end)
+            }) {
             Logger.w(tag, "Could not rewrite the .bashrc prompt block; it keeps the shape it had")
             return
         }
@@ -1288,7 +1316,28 @@ claude() {
             // in place, which is the exact defect this loop was rewritten to
             // fix, one layer further down. Throwing puts it in front of
             // runSetupLocked's catch, upstream of markSetupComplete().
+            // Throwing is not enough on its own, and this is the half that was
+            // missing. extractAssetDir creates the destination before copying
+            // anything into it, so a copy that fails partway leaves a directory
+            // holding some of the files. The retry then reads that directory as
+            // proof the extension is installed -- [bundledDirsToExtract] keeps a
+            // fetched one only while it is absent -- drops it from the list,
+            // runs an empty loop, throws nothing, and lets markSetupComplete()
+            // certify a half-unpacked extension. The manifest lists it from the
+            // package.json that did land, so it appears installed and fails to
+            // activate on every launch, permanently.
+            //
+            // Removing what this attempt created restores the absence the retry
+            // needs. Only what it created: a directory that was already there
+            // belongs to the previous release, and its files were each replaced
+            // atomically, so what survives is whole even if it is mixed. Ours
+            // are re-unpacked unconditionally, so a mixed one heals next run;
+            // a fetched one is only ever in this list because it was absent, so
+            // this branch is what makes its retry work at all.
+            val dest = File(extensionsDir, name)
+            val existedBefore = dest.exists()
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
+                if (!existedBefore) dest.deleteRecursively()
                 throw IOException("could not unpack bundled extension $name")
             }
         }
@@ -1494,7 +1543,7 @@ claude() {
                 // is read as an empty extension list, so every bundled
                 // extension disappears rather than the write visibly failing.
                 if (!writeAtomically(manifestFile) { it.write(kept.toString(2).toByteArray()) }) {
-                    throw IOException("could not rewrite $manifestFile")
+                    throw ManifestWriteFailed("could not rewrite $manifestFile")
                 }
                 Logger.i(tag, "Reconciled extensions.json: $dropped stale dropped, $added bundled added")
             }
@@ -1512,12 +1561,15 @@ claude() {
             // Unconditional is still right. With nothing to write the manifest
             // on disk already matches this set, so the record is accurate.
             rememberBundledIds(bundledEntries.map { it.first })
-        } catch (e: IOException) {
-            // Only the write throws this, and it must not be swallowed by the
-            // catch below: that one exists for a manifest this code cannot
-            // parse, which is a different event with a different answer.
-            // Reaching runSetupLocked's catch is the point -- markSetupComplete
-            // is downstream of it.
+        } catch (e: ManifestWriteFailed) {
+            // Its own type, because IOException is too wide to mean "the write
+            // failed" here. `manifestFile.readText()` above is inside this same
+            // try and throws IOException too -- if the file is replaced by a
+            // directory, or removed between the exists() check and the read --
+            // and catching that would abort the whole setup over something the
+            // catch below has always handled and survived. Only the write has
+            // to reach runSetupLocked, because only the write leaves a record
+            // that outlives the process.
             throw e
         } catch (e: Exception) {
             // A manifest this code cannot parse is one the server wrote in a
@@ -1890,6 +1942,17 @@ internal const val OWN_EXTENSION_PREFIX = "vscodroid."
  */
 internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>): List<String> =
     bundled.filter { it.startsWith(OWN_EXTENSION_PREFIX) || it !in present }
+
+/**
+ * The manifest rewrite failed, as distinct from the manifest being unreadable.
+ *
+ * [FirstRunSetup.reconcileExtensionsManifest] answers those two differently: an
+ * unparseable manifest is left alone and setup carries on, while a failed write
+ * has to abort so the identifier record is not persisted ahead of a file that
+ * does not contain it. Both arrive as `IOException` from inside one try, so the
+ * distinction needs a type rather than a catch clause.
+ */
+private class ManifestWriteFailed(message: String) : IOException(message)
 
 /**
  * Whether [file] is itself a symbolic link.

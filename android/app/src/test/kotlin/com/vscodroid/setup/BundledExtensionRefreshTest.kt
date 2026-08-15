@@ -11,6 +11,7 @@ import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -18,6 +19,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.lang.reflect.InvocationTargetException
 
 /**
@@ -227,6 +230,61 @@ class BundledExtensionRefreshTest {
             installedSource,
             File(installed, "extension.js").readText(),
             "the previous file should be intact -- the atomic write leaves it alone on failure",
+        )
+    }
+
+    /**
+     * The retry has to actually retry, and for a fetched extension it did not.
+     *
+     * The test above drives one of ours, which is re-unpacked unconditionally --
+     * so the throw survives into the next attempt there no matter what state the
+     * directory is left in. That is the case that cannot fail. A fetched
+     * extension is kept only while its directory is ABSENT, and extractAssetDir
+     * creates the directory before copying into it, so a copy that failed
+     * partway left exactly the evidence that removes it from the next attempt's
+     * list: the loop then had nothing to do, threw nothing, and setup completed
+     * with an extension half on disk. The manifest lists it from the
+     * package.json that did land, so it reads as installed and fails to activate
+     * on every launch until its version string changes.
+     *
+     * The stream here opens cleanly and fails on first read, which is the shape
+     * a full disk has -- not an absent asset, which is a different answer.
+     */
+    @Test
+    fun `a fetched extension whose unpack failed is retried, not skipped`() {
+        val fetched = "PKief.material-icon-theme-5.37.0"
+        val fetchedManifest = """{"publisher":"PKief","name":"material-icon-theme","version":"5.37.0"}"""
+        every { assets.list("extensions") } returns arrayOf(fetched)
+        every { assets.list("extensions/$fetched") } returns arrayOf("package.json", "extension.js")
+        every { assets.list("extensions/$fetched/package.json") } returns emptyArray()
+        every { assets.list("extensions/$fetched/extension.js") } returns emptyArray()
+        every { assets.open("extensions/$fetched/package.json") } answers
+            { ByteArrayInputStream(fetchedManifest.toByteArray()) }
+        var outOfSpace = true
+        every { assets.open("extensions/$fetched/extension.js") } answers {
+            if (outOfSpace) {
+                object : InputStream() {
+                    override fun read(): Int = throw IOException("no space left on device")
+                }
+            } else {
+                ByteArrayInputStream(shippedSource.toByteArray())
+            }
+        }
+
+        assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+        assertFalse(
+            File(extensionsDir, fetched).exists(),
+            "the half-unpacked directory survived the failure, and its presence is exactly " +
+                "what makes the next attempt skip it",
+        )
+
+        outOfSpace = false
+        extractBundledExtensions()
+
+        assertEquals(
+            shippedSource,
+            File(extensionsDir, "$fetched/extension.js").readText(),
+            "the retry did not re-attempt the extension whose unpack had failed",
         )
     }
 
