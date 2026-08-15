@@ -264,6 +264,26 @@ class FirstRunSetup(private val context: Context) {
         val version = PYTHON_RUNTIME_NAME.find(runtime)?.groupValues?.get(1) ?: return
         val libDir = File(context.filesDir, "usr/lib")
 
+        // Reclaim before extracting, for the reason runPreExtractionMigrations
+        // gives for its own ordering: what frees disk has to run ahead of what
+        // needs disk. Behind the extraction it was gated by the storage check
+        // that it is the cure for -- on a device short of space the branch
+        // below returned, the ~29 MB of a Python nothing can load stayed where
+        // it was, and every later launch measured the same shortfall and made
+        // the same decision. The one condition under which that tree is worth
+        // reclaiming was the one condition under which it was kept.
+        //
+        // Safe this early because supersededPythonEntries names only entries
+        // belonging to a version this APK does not carry, which is true whether
+        // or not the current runtime has been extracted yet, and the extraction
+        // below writes the current version only. An unreadable listing means no
+        // candidates rather than no extraction, so it no longer returns.
+        val present = libDir.listFiles()?.map { it.name } ?: emptyList()
+        for (name in supersededPythonEntries(present, runtime)) {
+            Logger.i(tag, "Removing superseded Python $name")
+            File(libDir, name).deleteRecursively()
+        }
+
         if (!File(libDir, runtime).exists()) {
             // extractAssetFile catches an IOException and leaves whatever it had
             // already written. A copy that runs out of disk therefore produces a
@@ -302,12 +322,6 @@ class FirstRunSetup(private val context: Context) {
             if (!File(libDir, runtime).exists()) {
                 Logger.w(tag, "Python runtime $runtime still missing after extraction; the APK assets look incomplete")
             }
-        }
-
-        val present = libDir.listFiles()?.map { it.name } ?: return
-        for (name in supersededPythonEntries(present, runtime)) {
-            Logger.i(tag, "Removing superseded Python $name")
-            File(libDir, name).deleteRecursively()
         }
     }
 
