@@ -2313,8 +2313,12 @@ android/app/src/main/kotlin/com/vscodroid/
 4. Confirm Android app sandbox isolation (no world-readable files)
 5. Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns) — not what shipped;
    the allowlist was removed rather than relaxed, and no destination filter replaced it
-6. Fix: restrict cleartext HTTP to localhost only (`network_security_config.xml`)
-7. Fix: use `Uri.parse()` for exact localhost host matching (prevents domain spoofing)
+6. Fix: restrict cleartext HTTP to localhost only (`network_security_config.xml`) — reversed
+   deliberately. The shipped config is `<base-config cleartextTrafficPermitted="true" />`: the format
+   matches `<domain>` entries by hostname and understands neither CIDR nor ranges, so "any private
+   address" cannot be written, and the addresses change with the network the device joins
+7. Fix: use `Uri.parse()` for exact localhost host matching (prevents domain spoofing) — shipped, and
+   still in force. It decides which URLs the WebView keeps rather than gating an allow-list
 8. Fix: owner-only execute permissions on extracted binaries
 
 **Acceptance criteria**:
@@ -2324,8 +2328,9 @@ android/app/src/main/kotlin/com/vscodroid/
 - [x] No URL allowlist in `SecurityManager` — there are no entries to validate. A development
       environment has to reach a LAN dev server, a private registry and a staging host, so the
       destination is deliberately unjudged; the session token is what is checked
-- [ ] Cleartext HTTP restricted to localhost only
-- [ ] Localhost matching uses Uri.parse() for exact host comparison
+- [x] Cleartext HTTP is permitted app-wide, not restricted to localhost — a dev server is served over
+      plain HTTP at the device's own address, and this file cannot express an address range
+- [x] Localhost matching uses `Uri.parse()` for exact host comparison
 - [ ] Extracted binaries have owner-only execute permissions
 
 ---

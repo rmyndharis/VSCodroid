@@ -213,7 +213,7 @@ VSCodroid/
 | `service/NodeService.kt` | Foreground Service (specialUse) to keep Node.js alive |
 | `service/ProcessManager.kt` | Node.js process lifecycle, health check, auto-restart |
 | `setup/FirstRunSetup.kt` | Asset extraction, symlink creation, settings, .bashrc |
-| `setup/ToolchainManager.kt` | Play Asset Delivery: install, uninstall, env vars |
+| `setup/ToolchainManager.kt` | Toolchain install, uninstall and env vars over **two** delivery paths chosen at runtime by install source: Play Asset Delivery, and `downloadViaHttp()` fetching ZIPs from `releases/latest` for every non-Play install. Both converge on `installFromDirectory()`. Work only the Play path and you break sideload users, who are the ones testing |
 | `util/Environment.kt` | PATH, HOME, LD_LIBRARY_PATH, all env vars for Node.js process |
 | `webview/VSCodroidWebViewClient.kt` | CDN URL interception, vscode-resource serving, crash recovery |
 
