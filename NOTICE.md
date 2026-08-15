@@ -28,8 +28,11 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 Licences here are Termux's own `TERMUX_PKG_LICENSE` for the package each binary
 comes from, and the "Linked by" column is read out of the shipped ELF headers
 rather than written by hand. `scripts/check-library-attribution.py` fails the build
-when a shipped binary is missing from this set or a copyleft component is missing
-from the source offer in `docs/LEGAL_NOTICES.md`.
+when a shipped binary is missing from this table, when it is missing from the
+matching table in `docs/LEGAL_NOTICES.md`, or when a copyleft component is missing
+from the source offer that file carries. Both documents are read: this one said
+the build was gated on it while only the other was, so the two agreed by habit
+rather than by anything enforcing it.
 
 Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
 glibc's soname but are built from this repository's own source.

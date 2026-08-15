@@ -27,12 +27,18 @@ set -euo pipefail
 #
 # Everything unpacked is verified before it is usable, because the failures that
 # matter here are quiet: an x86-64 ripgrep installs fine and then returns no
-# search results, and a tree from before a branding change ships Microsoft's
-# product.json.
+# search results, a tree from before a branding change ships Microsoft's
+# product.json, and a tree built from a commit the pin no longer names is
+# indistinguishable from the right one until someone tries to reproduce a bug.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 VSCODE_VERSION="${VSCODE_VERSION:-$(cat "$ROOT_DIR/VSCODE_VERSION")}"
+# Both halves of the pin, because both are compared below. VSCODE_COMMIT was
+# enforced only inside build-vscode-oss.sh -- a workflow run by hand once per
+# version bump -- so on the side that actually produces an APK it was a file
+# nothing read.
+VSCODE_COMMIT="${VSCODE_COMMIT:-$(cat "$ROOT_DIR/VSCODE_COMMIT")}"
 ARCH="${ARCH:-arm64}"
 REPO="${REPO:-rmyndharis/VSCodroid}"
 
@@ -217,6 +223,69 @@ mkdir -p "$DEST"
 tar -xzf "$TARBALL" -C "$DEST"
 echo "  into    : $DEST"
 du -sh "$DEST" | awk '{print "  size    : "$1}'
+
+echo
+echo "=== Pin ==="
+# The tree answers this itself: the build stamps the source commit and version
+# it was made from into product.json, and both pin files sit beside this script.
+#
+# Nothing on this side compared them. The version half was guarded by accident,
+# through the tarball's filename -- and not even that under VSCODE_OSS_URL,
+# which names any file it likes. The commit half was guarded nowhere: it is
+# checked in build-vscode-oss.sh, which runs on workflow_dispatch, and appears
+# in build.yml and release.yml only as part of a cache key.
+#
+# What that let through: move VSCODE_COMMIT to a fix commit without re-running
+# the "Build Code - OSS server" workflow. The cache key changes, so the fetch
+# runs again -- and downloads the same server-<version> release, built from the
+# old source. Every gate downstream stays green, correctly: the tree is intact,
+# correctly shaped and carries every patch fingerprint. It is simply not the
+# source the pin names. write-build-manifest.py then copies the pin file into
+# build-manifest.txt and release.yml attaches it, so the one record that ties a
+# shipped APK back to its source names a commit that did not build it.
+#
+# Reported by this script rather than by verify-server-tree.py, which runs in
+# three places including inside the build container, where only /scripts,
+# /patches and /branding are mounted and the pin files are not readable at all.
+if ! python3 - "$DEST/product.json" "$VSCODE_COMMIT" "$VSCODE_VERSION" <<'PIN'; then
+import json
+import sys
+
+path, want_commit, want_version = sys.argv[1:4]
+try:
+    product = json.loads(open(path, encoding="utf-8").read())
+except (OSError, ValueError) as exc:
+    print(f"  FAIL    product.json could not be read  {exc}")
+    sys.exit(1)
+
+bad = False
+for label, got, want in (("commit", product.get("commit"), want_commit),
+                         ("version", product.get("version"), want_version)):
+    if got == want:
+        print(f"  ok      {label}  {got}")
+    else:
+        print(f"  FAIL    {label}  tree says {got!r}, pin says {want!r}")
+        bad = True
+sys.exit(1 if bad else 0)
+PIN
+    cat >&2 <<EOF
+
+  This server tree was not built from the commit this checkout pins.
+
+  The tarball is named after VSCODE_VERSION alone, so a release that was built
+  before the pin moved has the right name, the right digest and the right patch
+  fingerprints. Only product.json records which source it came from.
+
+  Either the pin moved and the server was not rebuilt -- run the "Build Code -
+  OSS server" workflow and then remove
+
+      $TARBALL
+
+  so the new release is fetched instead of this cache -- or VSCODE_COMMIT and
+  VSCODE_VERSION disagree with each other, in which case fix the files.
+EOF
+    exit 1
+fi
 
 echo
 echo "=== Verify ==="

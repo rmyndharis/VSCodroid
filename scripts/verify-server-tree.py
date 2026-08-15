@@ -30,7 +30,14 @@ REQUIRED = [
     "node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg",
     # Code - OSS is MIT and this tree is redistributed inside every APK, so the
     # copyright notice has to travel with it. product.json names it too.
+    # Presence is not enough here -- the contents are read further down.
     "LICENSE.txt",
+    # The other half of the same obligation, and it was required by nothing.
+    # build-vscode-oss.sh copies it under `if [ -f ]`, so an upstream rename
+    # skips the copy without a word, while NOTICE.md and README.md both tell the
+    # reader it ships inside the server tree. Without it the APK redistributes
+    # every dependency Code - OSS vendors with none of their notices.
+    "ThirdPartyNotices.txt",
     # What patch 0010 exists to keep: upstream's .moduleignore strips the SDK
     # entry the extension's own exports map points at, and on device that
     # surfaces as chat submit dying in ChatSessionsService. The android-arm64
@@ -205,6 +212,50 @@ def main(tree):
         gallery = product.get("extensionsGallery", {}).get("serviceUrl", "")
         check("marketplace.visualstudio.com" not in gallery,
               "no Microsoft marketplace URL", f"serviceUrl = {gallery!r}")
+
+    # LICENSE.txt was required to exist and then never opened, which made it the
+    # one gate that could not see the thing it was added for. The pivot away from
+    # Microsoft's pre-built server happened because that artifact carries
+    # MICROSOFT PRE-RELEASE SOFTWARE LICENSE TERMS -- 13 KB where MIT is 1.1 KB --
+    # under this exact filename, so a tree built from it satisfied the check by
+    # having the name. An empty file satisfied it too.
+    #
+    # Two assertions, one per failure direction, the same shape as the
+    # workbench.css pair below: the MIT grant has to be there, and Microsoft's
+    # terms must not. Matched on the operative sentence rather than on the "MIT
+    # License" title line, because a title is the cheapest thing for a wrong file
+    # to carry and says nothing about what follows it.
+    #
+    # Not covered, deliberately: whose copyright the notice names. Code - OSS's
+    # own LICENSE.txt is Microsoft's copyright under MIT, which is correct and
+    # has to stay -- MIT is what requires it to travel with the copy.
+    licence = None
+    lic_path = tree / "LICENSE.txt"
+    try:
+        if lic_path.exists():
+            licence = lic_path.read_text(errors="replace")
+    except OSError as e:
+        check(False, "LICENSE.txt is readable", str(e))
+    if licence is not None:
+        check("Permission is hereby granted, free of charge" in licence,
+              "LICENSE.txt carries the MIT grant",
+              f"{len(licence)} bytes and none of them are the MIT permission notice")
+        check("PRE-RELEASE SOFTWARE LICENSE TERMS" not in licence.upper(),
+              "LICENSE.txt is not Microsoft's pre-release licence",
+              "this is the update-CDN artifact; it cannot be redistributed here")
+
+    # Presence is checked in REQUIRED; this is the same not-enough that LICENSE.txt
+    # had. A zero-byte notices file is what a truncated copy leaves behind, and it
+    # discharges nothing. The contents are not otherwise inspected -- upstream
+    # rewrites this file every release and there is no stable sentence in it.
+    tpn = tree / "ThirdPartyNotices.txt"
+    try:
+        size = tpn.stat().st_size if tpn.exists() else None
+    except OSError as e:
+        check(False, "ThirdPartyNotices.txt is readable", str(e))
+        size = None
+    if size is not None:
+        check(size > 0, "ThirdPartyNotices.txt is not empty", "0 bytes")
 
     # The Mobile CSS block is appended to the packaged workbench.css at server
     # build time, and on 2026-08-15 its content changed — the Accounts/Manage

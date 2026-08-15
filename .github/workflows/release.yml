@@ -235,6 +235,9 @@ jobs:
       # DB shipped under AGPL-3.0 for every release before this check existed,
       # having arrived as a transitive Kerberos dependency that no step looked
       # at.
+      #
+      # This run covers the base APK only. The toolchain packs do not exist yet
+      # -- they are downloaded further down -- so it runs again after them.
       - name: Check every shipped library is attributed
         run: python3 scripts/check-library-attribution.py
 
@@ -294,6 +297,19 @@ jobs:
           bash scripts/download-go.sh
           bash scripts/download-ruby.sh
           bash scripts/download-java.sh
+
+      # The same gate as above, and this is the run that can see the toolchains.
+      # Their manifests are written by the step immediately above and are
+      # gitignored, so the earlier run reported "0 toolchain libraries" on a tag
+      # that was about to attach three packs to the release -- and a new
+      # transitive dependency in any of them would have shipped unattributed with
+      # a green log. That is how libdb-18.1.so arrived in the first place: as a
+      # transitive dependency nobody was asked about.
+      #
+      # Before the ZIPs are packaged, so an unattributed library stops the
+      # release rather than being caught after the artifacts exist.
+      - name: Check every shipped toolchain library is attributed
+        run: python3 scripts/check-library-attribution.py
 
       # Last step that can see what this build resolved, so it runs here rather
       # than in the release job, which only ever sees the artifacts.

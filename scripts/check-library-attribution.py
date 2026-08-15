@@ -22,13 +22,24 @@ Three checks, in the order a new library trips them:
 
   1. Every shipped file maps to a known component. A library nobody has
      classified fails here, which is the moment to look up its licence.
-  2. Every component is named in docs/LEGAL_NOTICES.md.
+  2. Every component is named in BOTH attribution documents: docs/LEGAL_NOTICES.md
+     and NOTICE.md. Only the first was read for a long time, while NOTICE.md told
+     its own readers this script fails the build when a shipped binary is missing
+     from its table -- so the file that claimed to be guarded was the one that was
+     not, and the two agreed only by coincidence.
   3. Every component whose licence is GPL/LGPL/AGPL is additionally named in
-     that file's source-availability section. Attribution alone does not
-     discharge a copyleft obligation.
+     LEGAL_NOTICES.md's source-availability section. Attribution alone does not
+     discharge a copyleft obligation. Only that file, because only that file has
+     the section; NOTICE.md points at it rather than repeating it.
 
 The map below is the licence record. Its source is Termux's own
 `TERMUX_PKG_LICENSE`, which is what these packages are actually built from.
+
+Toolchain packs are covered too, but only where they exist. Their payloads are
+downloaded, not committed, so this has to run AFTER the download step to see
+them -- in release.yml it runs twice for that reason. The count of manifests
+read is printed, because "0 toolchain libraries" from a tree that has no packs
+and from a tree whose packs were never recorded print the same otherwise.
 """
 
 import json
@@ -39,7 +50,11 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 USR_LIB = ROOT / "android/app/src/main/assets/usr/lib"
 JNILIBS = ROOT / "android/app/src/main/jniLibs/arm64-v8a"
-NOTICES = ROOT / "docs/LEGAL_NOTICES.md"
+LEGAL_NOTICES = ROOT / "docs/LEGAL_NOTICES.md"
+# The second attribution document, and the one that says out loud that this
+# script guards it. Both are read for attribution; the copyleft source offer
+# lives in LEGAL_NOTICES alone.
+NOTICE = ROOT / "NOTICE.md"
 TOOLCHAINS = ROOT / "android"
 
 # Licences carrying a source obligation. Matched case-insensitively as a
@@ -156,21 +171,43 @@ TOOLCHAIN_LIBRARIES = {
 
 
 def toolchain_libs():
-    """Every library the shipped toolchain manifests declare, by file name.
+    """Libraries the toolchain manifests declare, which manifests were read, and
+    which packs were built here without one.
 
-    Read from the manifests rather than from disk: the packs are built by CI and
-    are not present in a working tree, so a disk scan would find nothing and
-    report success. The manifests are committed, so this answers the same on any
-    machine.
+    Read from the manifests rather than from disk, because a `.so` inside a pack
+    is one file among thousands and the manifest is the list the app itself
+    installs from.
+
+    The manifests are NOT committed -- .gitignore excludes all three, and
+    toolchain_ruby.json is in git only because it was added before that line was,
+    which ignoring does not undo. So what this sees is decided by which download
+    scripts have run on this machine: a fresh checkout shows one frozen snapshot
+    of Ruby and nothing of Go or Java, and a CI runner shows nothing at all until
+    the download step has run. The docstring here claimed the opposite until the
+    manifests were checked against `git ls-files`.
+
+    That makes the empty answer ambiguous, and the third return value resolves
+    it. A pack whose `usr/` payload is on disk was downloaded here and is about
+    to be zipped and attached to the release; if its manifest is absent, the
+    libraries are real and the record of what they are is missing, which is the
+    one case that must not pass as "nothing to attribute".
     """
-    out = []
-    for manifest in sorted(TOOLCHAINS.glob("toolchain_*/src/main/assets/*.json")):
-        try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise SystemExit(f"FAIL cannot read {manifest}: {exc}")
-        out.extend(data.get("libs", []))
-    return sorted(set(out))
+    libs, read, unrecorded = [], [], []
+    for module in sorted(TOOLCHAINS.glob("toolchain_*")):
+        assets = module / "src/main/assets"
+        manifests = sorted(assets.glob("*.json"))
+        if not manifests:
+            if (assets / "usr").is_dir():
+                unrecorded.append(module.name)
+            continue
+        for manifest in manifests:
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"FAIL cannot read {manifest}: {exc}")
+            libs.extend(data.get("libs", []))
+            read.append(manifest.name)
+    return sorted(set(libs)), read, unrecorded
 
 
 def shipped():
@@ -188,6 +225,33 @@ def shipped():
     return out
 
 
+def attributed_in(text):
+    """The set of component names a notices document actually attributes,
+    matched whole rather than as substrings.
+
+    Two narrowings, each because the looser version was satisfied by something
+    that attributes nothing. A search over the whole document passes on any
+    passing mention -- "Git" appears on sixteen lines in LEGAL_NOTICES.md.
+    Narrowing to table rows is not enough: libiconv's "Linked by" cell says "Bash
+    and every Git executable". Narrowing to the first cell is still not enough:
+    the heading "### @github/copilot (GitHub Copilot CLI)" contains "Git" inside
+    "GitHub", so deleting Git's own row and heading left the check green.
+    """
+    names = set()
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            names.add(stripped.lstrip("#").strip())
+        elif stripped.startswith("|"):
+            cells = stripped.split("|")
+            if len(cells) > 1:
+                cell = cells[1].strip()
+                # `[GMP](https://gmplib.org)` -> `GMP`
+                link = re.match(r"^\[([^\]]+)\]\(", cell)
+                names.add(link.group(1) if link else cell)
+    return names
+
+
 def main():
     names = shipped()
     if not names:
@@ -196,33 +260,20 @@ def main():
         print("skip -- no built assets present (run the download scripts first)")
         return 0
 
-    notices = NOTICES.read_text(encoding="utf-8") if NOTICES.is_file() else ""
+    notices = LEGAL_NOTICES.read_text(encoding="utf-8") if LEGAL_NOTICES.is_file() else ""
     if not notices:
-        print(f"FAIL {NOTICES} is missing", file=sys.stderr)
+        print(f"FAIL {LEGAL_NOTICES} is missing", file=sys.stderr)
         return 1
 
-    # The set of names this document actually attributes, matched whole rather
-    # than as substrings.
-    #
-    # Two narrowings, each because the looser version was satisfied by something
-    # that attributes nothing. A search over the whole document passes on any
-    # passing mention -- "Git" appears on sixteen lines here. Narrowing to table
-    # rows is not enough: libiconv's "Linked by" cell says "Bash and every Git
-    # executable". Narrowing to the first cell is still not enough: the heading
-    # "### @github/copilot (GitHub Copilot CLI)" contains "Git" inside "GitHub",
-    # so deleting Git's own row and heading left the check green.
-    attributed = set()
-    for line in notices.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("#"):
-            attributed.add(stripped.lstrip("#").strip())
-        elif stripped.startswith("|"):
-            cells = stripped.split("|")
-            if len(cells) > 1:
-                cell = cells[1].strip()
-                # `[GMP](https://gmplib.org)` -> `GMP`
-                link = re.match(r"^\[([^\]]+)\]\(", cell)
-                attributed.add(link.group(1) if link else cell)
+    # Both documents, because both are published as this project's attribution
+    # and a component has to be in each. Keyed by name so a failure can say which
+    # file is short of it rather than just that something is.
+    docs = {LEGAL_NOTICES.name: attributed_in(notices)}
+    notice = NOTICE.read_text(encoding="utf-8") if NOTICE.is_file() else ""
+    if not notice:
+        print(f"FAIL {NOTICE} is missing", file=sys.stderr)
+        return 1
+    docs[NOTICE.name] = attributed_in(notice)
 
     # The source-availability section, isolated so a component merely mentioned
     # elsewhere in the file cannot satisfy the copyleft check.
@@ -238,8 +289,20 @@ def main():
     # Toolchain payloads are checked alongside the base tree. They ship to fewer
     # devices, not to none, and the obligations do not scale with audience.
     for_check = [(n, LIBRARIES.get(n)) for n in names]
-    tc = toolchain_libs()
+    tc, manifests, unrecorded = toolchain_libs()
     for_check += [(n, TOOLCHAIN_LIBRARIES.get(n)) for n in tc]
+
+    if unrecorded:
+        # The pack was downloaded on this machine and is about to be zipped, so
+        # its libraries are real; without the manifest there is nothing to check
+        # them against and the run would otherwise report them as absent.
+        print(f"FAIL {len(unrecorded)} toolchain pack(s) built here carry no manifest:",
+              file=sys.stderr)
+        for module in unrecorded:
+            print(f"  {module}", file=sys.stderr)
+        print("  -> its download script writes the manifest beside usr/; without it"
+              " nothing knows what the pack ships", file=sys.stderr)
+        return 1
 
     for name, entry in for_check:
         if entry is None:
@@ -252,8 +315,9 @@ def main():
             # An empty licence answers the copyleft question with "no" for free,
             # which is the one answer nobody should get without deciding it.
             unlicensed.append(f"{name} ({component})")
-        if component not in attributed:
-            unattributed.append(f"{name} ({component})")
+        short = [doc for doc, known in docs.items() if component not in known]
+        if short:
+            unattributed.append(f"{name} ({component}) -- absent from {', '.join(short)}")
         if any(c in licence.upper() for c in COPYLEFT) and component not in offer:
             unoffered.append(f"{name} ({component}, {licence})")
 
@@ -263,8 +327,8 @@ def main():
          "answers the copyleft question with 'no'"),
         ("not classified", unknown,
          "add it to LIBRARIES with the licence Termux's build.sh declares"),
-        ("not attributed in LEGAL_NOTICES.md", unattributed,
-         "add a section naming the project and its licence"),
+        ("not attributed", unattributed,
+         "add a section naming the project and its licence to each file listed"),
         ("copyleft, absent from the source offer", unoffered,
          "add it under '## GPL Source Code Availability'"),
     ):
@@ -278,8 +342,14 @@ def main():
         return 1
 
     covered = {c for _, (c, _) in ((n, e) for n, e in for_check if e) } - {"VSCodroid"}
-    print(f"ok -- {len(names)} shipped binaries + {len(tc)} toolchain libraries, "
-          f"{len(covered)} components, all attributed")
+    # The manifest count is in the line because the toolchain figure is otherwise
+    # unreadable: "0 toolchain libraries" is what a tree with no packs prints and
+    # also what a run before the download step prints, and those are opposite
+    # facts. Naming the documents for the same reason -- the count of components
+    # says nothing about which files were held to it.
+    print(f"ok -- {len(names)} shipped binaries + {len(tc)} toolchain libraries "
+          f"from {len(manifests)} manifest(s), {len(covered)} components, "
+          f"all attributed in {' and '.join(docs)}")
     # The names, not just the count. A count alone cannot answer the question that
     # actually matters when two trees disagree -- *which* file is missing -- and
     # some of these are found by `dlopen` at run time rather than through

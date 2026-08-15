@@ -3,7 +3,7 @@
 
     check-build-steps.py
 
-Four assertions, all about scripts nobody notices are missing until an app is
+Five assertions, all about scripts nobody notices are missing until an app is
 built without them, or shipped without them having run:
 
   * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
@@ -13,6 +13,10 @@ built without them, or shipped without them having run:
     to a different tree. Scoped to that one job on purpose: other jobs in the
     same workflow run things -- a device test harness, for one -- that
     build-all.sh has no business invoking;
+  * every shell script that job runs is also run by release.yml's build-release
+    job, so the build that gets signed and published is not a thinner version of
+    the one every pull request gets. One direction: the release path runs more,
+    on purpose;
   * every scripts/test-*.js runs in both lint.yml and release.yml, so a
     self-check cannot be added to the tree and then run by nothing;
   * every scripts/check-*.py is invoked by something -- a workflow, a build
@@ -23,13 +27,13 @@ built without them, or shipped without them having run:
     Gradle. The answerable question for this family is whether anything runs
     them at all.
 
-The first two are about `.sh` and say so. The third is deliberately not folded
-into them: those two pair three sources -- the workflow, build-all.sh and
-CONTRIBUTING.md -- and the JavaScript self-checks have no build-all.sh
-equivalent, so widening the shell pattern to reach them would leave two thirds of
-that rule vacuous while the output went on claiming a coverage it was no longer
-performing. A two-set comparison over a glob is the shape of the omission, so it
-is written as one.
+The first three are about `.sh` and say so. The JavaScript rule is deliberately
+not folded into them: those three pair four sources -- build.yml, release.yml,
+build-all.sh and CONTRIBUTING.md -- and the JavaScript self-checks have no
+build-all.sh equivalent, so widening the shell pattern to reach them would leave
+that rule vacuous for them while the output went on claiming a coverage it was no
+longer performing. A two-set comparison over a glob is the shape of the omission,
+so it is written as one.
 
 The lists are read from the files rather than restated here. A hand-maintained
 fourth copy would be one more thing to drift, which is the defect this exists to
@@ -226,6 +230,18 @@ def _main() -> int:
         return 1
     ci_pr = set(IN_WORKFLOW.findall(build_job))
 
+    # Its counterpart on the tag path. The two prepare the same assets and are
+    # maintained by hand as two lists, which is the arrangement that drifts.
+    release_job = job_body(WORKFLOWS / "release.yml", "build-release")
+    if release_job is None:
+        print("  FAIL   no 'build-release' job in release.yml; the job layout changed")
+        return 1
+    ci_release = set(IN_WORKFLOW.findall(release_job))
+    if not ci_release:
+        print("  FAIL   no scripts found in release.yml's build-release job; "
+              "the pattern stopped matching")
+        return 1
+
     # An empty left-hand side would make both assertions below vacuously true,
     # which is the failure this whole script exists to prevent -- a check that
     # cannot fail reads exactly like a check that passed.
@@ -255,6 +271,31 @@ def _main() -> int:
         failed = True
     else:
         print(f"  ok     build-all.sh runs all {len(ci_pr)} scripts the PR build runs")
+
+    # The third consumer of the same list, and nothing paired it with the first
+    # two. Every rule above compares a workflow against a document or against
+    # build-all.sh, so a step present in one workflow and absent from the other
+    # satisfied all of them: measured by deleting the download-python.sh step from
+    # release.yml alone, which left every line green because build.yml still named
+    # the script and CONTRIBUTING.md still documented it. What ships from that is
+    # a signed APK with no Python in it, discovered by the first user who types
+    # python3.
+    #
+    # One direction only, and the asymmetry is real rather than an omission: the
+    # release job legitimately runs more -- the toolchain downloads and the ZIP
+    # packaging have no place on a pull request -- so requiring equality would
+    # need a hand-written exemption list, which is the fourth copy this file
+    # exists to avoid. What escapes: a script that only ever ran on the tag path
+    # being dropped from it. Nothing else names that set, so nothing can tell.
+    unreleased = ci_pr - ci_release
+    if unreleased:
+        report("scripts the PR build runs that the release build does not",
+               unreleased, "release.yml's build-release job",
+               "A tag must not produce a thinner tree than a pull request.")
+        failed = True
+    else:
+        print(f"  ok     the release build runs all {len(ci_pr)} scripts the PR "
+              f"build runs, plus {len(ci_release - ci_pr)} of its own")
 
     # A self-check that nothing runs is indistinguishable from no self-check, and
     # costs more, because its presence in the tree reads as coverage. The glob is
