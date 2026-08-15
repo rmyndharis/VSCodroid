@@ -276,6 +276,82 @@ class BashrcAtomicityTest {
         )
     }
 
+    /**
+     * The repair has to REWRITE, not just clear.
+     *
+     * Both writers of these files live in `runSetupLocked`, which an install
+     * that is already marked complete never re-enters, and every per-launch
+     * repair opens with `if (bashrc.exists())`. So deleting a truncated file
+     * without replacing it turns a bad `.bashrc` into no `.bashrc` -- worse, and
+     * with nothing that would ever put it back. This is the assertion that
+     * catches that, and it caught it: the first version of the repair only
+     * deleted.
+     */
+    @Test
+    fun `an emptied bashrc is cleared and written again, not just cleared`() {
+        bashrc.writeText("")
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(bashrc.isFile, "the repair removed the file and left nothing in its place")
+        val written = bashrc.readText()
+        assertTrue(written.contains("export PROJECTS_DIR"), "the rewritten file is not the one we write")
+        assertTrue(written.contains(currentMarker), "the rewritten file has no prompt block")
+    }
+
+    @Test
+    fun `a bashrc cut off after our header is cleared and written again`() {
+        // The other shape an interrupted write leaves: our first line, and then
+        // nothing that should have followed it.
+        bashrc.writeText("# VSCodroid bash configuration\n# >>> vscodroid prompt")
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(bashrc.readText().contains("export PROJECTS_DIR"), "the truncated file was kept")
+    }
+
+    /**
+     * The line this repair must not cross.
+     *
+     * A file the user wrote themselves is theirs, and a partial file that got
+     * far enough to look plausible cannot be told from one they shortened. Both
+     * are left alone, and that is the deliberate limit of the repair rather
+     * than an oversight -- clearing them would destroy real work to fix a state
+     * we would only be guessing at.
+     */
+    @Test
+    fun `a bashrc the user wrote is never touched`() {
+        val theirs = "# my own shell setup\nalias g='git'\n"
+        bashrc.writeText(theirs)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(theirs, bashrc.readText(), "a file the user wrote was cleared")
+    }
+
+    @Test
+    fun `a plausible-looking partial file is left alone and not guessed at`() {
+        // Has our header AND the export, so nothing here can tell it from a
+        // complete file that the user later trimmed. Left as it is, on purpose.
+        val partial = "# VSCodroid bash configuration\nexport PROJECTS_DIR='/data/projects'\n"
+        bashrc.writeText(partial)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(partial, bashrc.readText(), "a file the repair cannot classify was rewritten anyway")
+    }
+
+    @Test
+    fun `a healthy bashrc is left exactly as it is`() {
+        // The control. Without it every assertion above would also hold for a
+        // repair that had stopped doing anything.
+        val before = bashrc.readText()
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(before, bashrc.readText(), "the repair rewrote a file that was fine")
+    }
+
     private fun createBashrc() {
         FirstRunSetup::class.java
             .getDeclaredMethod("createBashrc")

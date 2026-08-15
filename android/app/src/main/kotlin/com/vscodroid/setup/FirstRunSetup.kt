@@ -67,19 +67,45 @@ class FirstRunSetup(private val context: Context) {
                 runPreExtractionMigrations(previousVersionCode)
             }
 
+            // Each of these is checked, and every one is attempted before the
+            // check, so a failure names all of them rather than the first.
+            //
+            // A file lost from any of these three is worse than a stale
+            // extension, not better: the server tree and the four bootstrap
+            // scripts are what starts the server at all, and `usr/` is the tool
+            // prefix everything on PATH resolves through. Losing one silently
+            // left an install that reached the editor and could never serve it,
+            // with markSetupComplete() certifying the result and isFirstRun()
+            // keyed on versionName, so nothing tried again until the app
+            // updated. Nothing on device checks these trees are complete --
+            // verify-server-tree.py checks the build, not the install.
+            //
+            // Aborting was held back on the argument that a single lost file
+            // would send a low-storage device round a 390 MB unpack for ever.
+            // It does not: the pre-flight above needs 500 MB free, so a device
+            // still short of room returns LOW_STORAGE before extracting
+            // anything and the user gets the storage error instead of a silent
+            // churn. A device that has since found room re-extracts once and
+            // succeeds. That gate is what makes this safe to abort on, and it
+            // is the reason the hold no longer applies.
+            val incomplete = mutableListOf<String>()
+
             // The reh-web download carries the web client inside this same tree,
             // so this one extraction is both the server and the workbench.
             reportProgress("Extracting server files...", 5)
-            extractAssetDir("vscode-reh", "server/vscode-reh")
+            if (!extractAssetDir("vscode-reh", "server/vscode-reh")) incomplete += "vscode-reh"
 
             reportProgress("Extracting server bootstrap...", 60)
-            extractAssetFile("server.js", "server/server.js")
-            extractAssetFile("process-monitor.js", "server/process-monitor.js")
-            extractAssetFile("platform-fix.js", "server/platform-fix.js")
-            extractAssetFile("dns-proxy.js", "server/dns-proxy.js")
+            for (script in listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js")) {
+                if (!extractAssetFile(script, "server/$script")) incomplete += script
+            }
 
             reportProgress("Extracting tools...", 62)
-            extractAssetDir("usr", "usr")
+            if (!extractAssetDir("usr", "usr")) incomplete += "usr"
+
+            if (incomplete.isNotEmpty()) {
+                throw IOException("could not unpack ${incomplete.joinToString(", ")}")
+            }
             // Extraction merges; it never removes. An upgrade that changes the
             // bundled Python therefore writes the new stdlib beside the old one
             // and leaves both. Here the runtime is already in place, so this is
@@ -841,6 +867,76 @@ class FirstRunSetup(private val context: Context) {
     }
 
     /**
+     * Clears a setup file an older release left half-written, so the writers
+     * that skip it because it exists will write it again.
+     *
+     * Every writer of `.bashrc` and `settings.json` decides by asking whether
+     * the file is there. Before those writes were made atomic, one interrupted
+     * by a full disk left a truncated file behind -- and `writeText` creates the
+     * destination before writing a byte, so even a write that failed
+     * immediately left an empty one. Both answer `exists()`, so nothing wrote
+     * them again: the shell came up without PROJECTS_DIR or with an unclosed
+     * function, the editor came up with a fraction of its defaults, and the
+     * only way out was clearing app data. Atomicity stops that happening from
+     * now on; it does nothing for the devices it already happened to.
+     *
+     * WHAT THIS WILL AND WILL NOT REPAIR, because the line matters more than
+     * the repair. A file is only cleared on evidence that cannot be a choice
+     * someone made:
+     *
+     *  - empty. Nobody means to have a zero-byte `.bashrc` or `settings.json`,
+     *    and it is the shape an ENOSPC most often leaves.
+     *  - a `.bashrc` that still opens with the header this app writes but has
+     *    lost the `PROJECTS_DIR` export that always followed it. Someone
+     *    replacing our file writes their own; someone editing it does not
+     *    usually keep our first line and delete our third.
+     *
+     * A partial file that is neither -- one that got far enough to look
+     * plausible -- is left alone, and that is deliberate. It cannot be told
+     * from a file the user shortened themselves, and clearing it would destroy
+     * their work to fix a state we are only guessing at. So this narrows the
+     * damage rather than ending it, and says so.
+     *
+     * Clearing alone would make it worse, and the first draft of this did.
+     * Both writers live in `runSetupLocked`, which an already-complete install
+     * never re-enters, and the every-launch repairs all open with
+     * `if (bashrc.exists())`. Deleting the file would have turned a truncated
+     * one into no file at all, with nothing to write it again. So each clear is
+     * followed immediately by the writer that owns the file, whose own
+     * `!exists()` guard the clear has just satisfied.
+     *
+     * Runs on every launch, and before the appenders, so they extend the file
+     * this has just restored rather than the one it removed.
+     */
+    fun repairTruncatedSetupFiles() {
+        val bashrc = File(context.filesDir, "home/.bashrc")
+        if (bashrc.isFile) {
+            val text = runCatching { bashrc.readText() }.getOrNull()
+            val emptied = text != null && text.isBlank()
+            val headerWithoutBody = text != null &&
+                text.startsWith(BASHRC_HEADER) &&
+                !text.contains("export PROJECTS_DIR")
+            if ((emptied || headerWithoutBody) && bashrc.delete()) {
+                // Its writer throws on failure, which is right inside setup and
+                // wrong here: this runs beside other per-launch repairs and must
+                // not take them down. A failure leaves no .bashrc, which is what
+                // the previous line already produced, and the next launch tries
+                // again.
+                runCatching { createBashrc() }
+                    .onSuccess { Logger.i(tag, "Rewrote a half-written .bashrc") }
+                    .onFailure { Logger.e(tag, "Could not rewrite the half-written .bashrc", it as? Exception) }
+            }
+        }
+
+        val settings = File(Environment.getMachineSettingsPath(context))
+        if (settings.isFile && settings.length() == 0L && settings.delete()) {
+            runCatching { createDefaultSettings() }
+                .onSuccess { Logger.i(tag, "Rewrote an empty settings.json") }
+                .onFailure { Logger.e(tag, "Could not rewrite the empty settings.json", it as? Exception) }
+        }
+    }
+
+    /**
      * Ensures .bashrc sources toolchain-env.sh for on-demand toolchain env vars.
      * Safe to call on every launch — only appends if the sourcing line is missing.
      */
@@ -1110,7 +1206,7 @@ claude() {
             // was never written again -- the prompt half-defined and the
             // PROJECTS_DIR export missing, on a device that had never had a
             // working shell to compare against.
-            val initial = "# VSCodroid bash configuration\n" + PROMPT_BLOCK + "\n\n" + """
+            val initial = BASHRC_HEADER + "\n" + PROMPT_BLOCK + "\n\n" + """
                 export PROJECTS_DIR='$projectsDir'
                 export SAF_MIRRORS_DIR='$safMirrorsDir'
                 alias ls='ls --color=auto'
@@ -1785,6 +1881,16 @@ claude() {
         private const val PIVOT_VERSION_CODE = 11
     }
 }
+
+/**
+ * The first line of every `.bashrc` this app writes.
+ *
+ * One constant so the writer and [FirstRunSetup.repairTruncatedSetupFiles]
+ * cannot drift: the repair decides a file is half-written partly by finding
+ * this line with nothing that should follow it, and if the writer's wording
+ * moved the repair would silently stop recognising its own output.
+ */
+private const val BASHRC_HEADER = "# VSCodroid bash configuration"
 
 /**
  * The prompt block written into `.bashrc`, shared by the first-run write and by

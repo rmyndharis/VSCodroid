@@ -73,6 +73,13 @@ class SplashActivity : AppCompatActivity() {
             setup.setupGitCaBundle()
             setup.setupRipgrepVscodeSymlink()
             setup.setupCopilotAndroidAliases()
+            // Before the three below, all of which extend .bashrc only when it
+            // already exists. An install broken by an older release carries a
+            // truncated one, and every writer skipped it because it was there;
+            // this clears and rewrites it so the appenders have something whole
+            // to append to. It is confined to evidence that cannot be a user's
+            // own edit -- see the method for where that line is drawn.
+            setup.repairTruncatedSetupFiles()
             setup.createNpmWrappers()
             setup.ensureToolchainEnvSourcing()
             setup.ensurePromptFix()
