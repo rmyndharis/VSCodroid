@@ -18,6 +18,11 @@ import org.junit.jupiter.api.Test
  * So most of these pin which side of the line a name falls on, and the two
  * kinds are deliberately given identical shapes -- same layout, same version
  * suffix -- so that nothing but the publisher can be doing the work.
+ *
+ * Every call names its arguments. The function and its two neighbours all take
+ * two `List<String>` in the same order, and a swap between them compiles in
+ * silence; the asymmetric cases below would catch one, but only by failing in a
+ * way that looks like a logic bug rather than a transposition.
  */
 class BundledExtractionSplitTest {
 
@@ -35,7 +40,7 @@ class BundledExtractionSplitTest {
         // because this project edited the code without bumping it.
         assertEquals(
             listOf(ourMonitor),
-            bundledDirsToExtract(listOf(ourMonitor), listOf(ourMonitor)),
+            bundledDirsToExtract(present = listOf(ourMonitor), bundled = listOf(ourMonitor)),
         )
     }
 
@@ -43,7 +48,9 @@ class BundledExtractionSplitTest {
     fun `a fetched extension is left alone once its directory is there`() {
         // Its bytes cannot have changed under a fixed version, and re-copying
         // would overwrite anything it has generated for itself since install.
-        assertTrue(bundledDirsToExtract(listOf(fetchedIcons), listOf(fetchedIcons)).isEmpty())
+        assertTrue(
+            bundledDirsToExtract(present = listOf(fetchedIcons), bundled = listOf(fetchedIcons)).isEmpty()
+        )
     }
 
     @Test
@@ -52,14 +59,17 @@ class BundledExtractionSplitTest {
         // directory name, so it is absent and gets unpacked.
         assertEquals(
             listOf(fetchedIcons),
-            bundledDirsToExtract(listOf(fetchedIcons), listOf("PKief.material-icon-theme-5.36.0")),
+            bundledDirsToExtract(
+                present = listOf("PKief.material-icon-theme-5.36.0"),
+                bundled = listOf(fetchedIcons),
+            ),
         )
     }
 
     @Test
     fun `a clean install unpacks everything`() {
         val bundled = listOf(ourMonitor, fetchedIcons, ourWelcome, fetchedPython)
-        assertEquals(bundled, bundledDirsToExtract(bundled, emptyList()))
+        assertEquals(bundled, bundledDirsToExtract(present = emptyList(), bundled = bundled))
     }
 
     @Test
@@ -69,7 +79,7 @@ class BundledExtractionSplitTest {
         val bundled = listOf(ourMonitor, fetchedIcons, ourWelcome, fetchedPython)
         assertEquals(
             listOf(ourMonitor, ourWelcome),
-            bundledDirsToExtract(bundled, bundled),
+            bundledDirsToExtract(present = bundled, bundled = bundled),
         )
     }
 
@@ -82,7 +92,7 @@ class BundledExtractionSplitTest {
         val theirs = "PKief.material-icon-theme-5.37.0"
         assertEquals(
             listOf(ours),
-            bundledDirsToExtract(listOf(ours, theirs), listOf(ours, theirs)),
+            bundledDirsToExtract(present = listOf(ours, theirs), bundled = listOf(ours, theirs)),
         )
     }
 
@@ -92,7 +102,9 @@ class BundledExtractionSplitTest {
         // called `vscodroidtools` would otherwise be re-copied every upgrade,
         // taking its generated state with it.
         val lookalike = "vscodroidtools.helper-1.0.0"
-        assertTrue(bundledDirsToExtract(listOf(lookalike), listOf(lookalike)).isEmpty())
+        assertTrue(
+            bundledDirsToExtract(present = listOf(lookalike), bundled = listOf(lookalike)).isEmpty()
+        )
     }
 
     @Test
@@ -100,6 +112,18 @@ class BundledExtractionSplitTest {
         // Extraction order is the manifest's order downstream; keeping it
         // stable keeps the generated extensions.json stable.
         val bundled = listOf(fetchedPython, ourWelcome, fetchedIcons, ourMonitor)
-        assertEquals(bundled, bundledDirsToExtract(bundled, emptyList()))
+        assertEquals(bundled, bundledDirsToExtract(present = emptyList(), bundled = bundled))
+    }
+
+    @Test
+    fun `the two listings are not interchangeable`() {
+        // Pins the parameter order itself. With the arguments transposed the
+        // answer changes, so a call site that swaps them is a behaviour change
+        // rather than a no-op -- which is why the neighbours' order is matched
+        // and why every call above names its arguments.
+        val present = listOf(fetchedIcons)
+        val bundled = listOf(fetchedPython)
+        assertEquals(listOf(fetchedPython), bundledDirsToExtract(present = present, bundled = bundled))
+        assertEquals(listOf(fetchedIcons), bundledDirsToExtract(present = bundled, bundled = present))
     }
 }

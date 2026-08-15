@@ -184,25 +184,37 @@ class FirstRunSetup(private val context: Context) {
         return dir.absolutePath
     }
 
-    private fun extractAssetDir(assetPath: String, destPath: String) {
+    /**
+     * @return false if any file under [assetPath] was present in the APK and
+     *   could not be written. An asset that is simply absent is not a failure --
+     *   several are, in builds that skip a download script -- so it answers
+     *   true. Most callers ignore this; [extractBundledExtensions] does not,
+     *   because for it a silently skipped copy means the device keeps running
+     *   the previous release's code.
+     */
+    private fun extractAssetDir(assetPath: String, destPath: String): Boolean {
         val destDir = File(context.filesDir, destPath)
-        try {
-            val assets = context.assets.list(assetPath) ?: return
+        return try {
+            val assets = context.assets.list(assetPath) ?: return true
             if (assets.isEmpty()) {
-                extractAssetFile(assetPath, destPath)
-                return
+                return extractAssetFile(assetPath, destPath)
             }
             destDir.mkdirs()
+            // Every child is attempted even after one fails, so the log names
+            // all of them rather than only the first.
+            var ok = true
             for (asset in assets) {
-                extractAssetDir("$assetPath/$asset", "$destPath/$asset")
+                if (!extractAssetDir("$assetPath/$asset", "$destPath/$asset")) ok = false
             }
+            ok
         } catch (e: IOException) {
             Logger.d(tag, "Treating $assetPath as file (not directory)")
             extractAssetFile(assetPath, destPath)
         }
     }
 
-    private fun extractAssetFile(assetPath: String, destPath: String) {
+    /** @return false only when the asset existed and its copy failed. */
+    private fun extractAssetFile(assetPath: String, destPath: String): Boolean {
         val destFile = File(context.filesDir, destPath)
         destFile.parentFile?.mkdirs()
 
@@ -216,13 +228,14 @@ class FirstRunSetup(private val context: Context) {
                 context.assets.open(assetPath)
             } catch (e: IOException) {
                 Logger.d(tag, "Asset not found: $assetPath (will be available after build)")
-                return
+                return true
             }
 
         val written = input.use { stream -> writeAtomically(destFile) { output -> stream.copyTo(output) } }
         if (!written) {
             Logger.w(tag, "Failed to write $destPath; it keeps whatever it held before")
         }
+        return written
     }
 
     /**
@@ -756,7 +769,15 @@ class FirstRunSetup(private val context: Context) {
         // Append npm/npx functions to .bashrc if not already present
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (bashrc.exists()) {
-            val content = bashrc.readText()
+            // Kept as bytes and written back unchanged. Decoding to search for
+            // the guards is fine -- they are ASCII -- but decoding to REWRITE
+            // is not: readText replaces any byte that is not valid UTF-8 with
+            // U+FFFD, so a Latin-1 accent the user typed into a comment or an
+            // alias would be destroyed by appending an unrelated line. This
+            // replaced appendText, which never read the file at all, and
+            // carrying the bytes through is what keeps that property.
+            val existing = bashrc.readBytes()
+            val content = String(existing)
             val additions = StringBuilder()
             val added = mutableListOf<String>()
             if (!content.contains("npm()")) {
@@ -778,7 +799,7 @@ class FirstRunSetup(private val context: Context) {
             // decisions stay separate; only the write is shared.
             if (additions.isNotEmpty()) {
                 val names = added.joinToString(" and ")
-                if (writeAtomically(bashrc) { it.write((content + additions).toByteArray()) }) {
+                if (writeAtomically(bashrc) { it.write(existing); it.write(additions.toString().toByteArray()) }) {
                     Logger.i(tag, "Appended $names to .bashrc")
                 } else {
                     Logger.w(tag, "Could not append $names; .bashrc is unchanged")
@@ -806,19 +827,22 @@ class FirstRunSetup(private val context: Context) {
     fun ensureToolchainEnvSourcing() {
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (bashrc.exists()) {
-            val content = bashrc.readText()
+            // Bytes through unchanged, decoded only to search. See
+            // [createNpmWrappers] for why the round trip would be lossy.
+            val existing = bashrc.readBytes()
+            val content = String(existing)
             if (!content.contains("toolchain-env.sh")) {
                 // Rewritten whole through a temporary file rather than appended
                 // in place. The guard above reads the filename, which appears
                 // in the comment this block opens with, so an append cut short
                 // by process death satisfied the check that would have finished
                 // it and left a truncated `[ -f ...` line behind for good.
-                val updated = content + """
+                val block = """
 
 # On-demand toolchain env vars (Go, Ruby, Java, etc.)
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
 """
-                if (writeAtomically(bashrc) { it.write(updated.toByteArray()) }) {
+                if (writeAtomically(bashrc) { it.write(existing); it.write(block.toByteArray()) }) {
                     Logger.i(tag, "Appended toolchain-env.sh sourcing to .bashrc")
                 } else {
                     Logger.w(tag, "Could not append toolchain-env.sh sourcing; .bashrc is unchanged")
@@ -1248,14 +1272,25 @@ claude() {
         // one the superseded sweep below needs, and it must see what extraction
         // just created.
         val installed = extensionsDir.list()?.toList() ?: emptyList()
-        val toExtract = bundledDirsToExtract(bundled.toList(), installed)
+        val toExtract = bundledDirsToExtract(installed, bundled.toList())
         for (name in toExtract) {
             // Merges rather than emptying the directory first. That leaves a
             // file this build no longer ships behind, which is inert because
             // `package.json` does not name it, and it is the better of the two
             // failures: clearing first would leave no extension at all if the
             // copy were interrupted.
-            extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")
+            //
+            // The result is checked, and this is the one place on this path
+            // that has to. extractAssetFile logs a failed copy and carries on,
+            // which is right for the server tree -- one missing file there is
+            // not worth abandoning a 390 MB unpack -- and wrong here: a copy
+            // that silently does not happen leaves the previous release's code
+            // in place, which is the exact defect this loop was rewritten to
+            // fix, one layer further down. Throwing puts it in front of
+            // runSetupLocked's catch, upstream of markSetupComplete().
+            if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
+                throw IOException("could not unpack bundled extension $name")
+            }
         }
 
         val present = extensionsDir.list()?.toList() ?: emptyList()
@@ -1298,16 +1333,8 @@ claude() {
             reconcileExtensionsManifest(manifestFile, extensionsDir, bundled)
         }
 
-        // Says what this build carries, not what landed. extractAssetFile
-        // swallows its own IOException and logs a warning per file, so a run
-        // where every copy failed would still reach this line -- and the
-        // counter this replaced was incremented next to the call rather than
-        // after checking it, so it never measured an outcome either. Claiming
-        // "N extracted" would be the one reading nobody can verify from here.
-        // Reports the decision, not the outcome. extractAssetFile swallows its
-        // own IOException and logs a warning per file, so a run where every
-        // copy failed would still reach this line; "N extracted" would be the
-        // one reading nobody can check from here.
+        // Reports the decision. Reaching this line now also means every one of
+        // those unpacks succeeded, since the loop above throws otherwise.
         Logger.i(tag, "Bundled extensions: ${toExtract.size} of ${bundled.size} needed unpacking, " +
             "${superseded.size} superseded removed")
     }
@@ -1462,21 +1489,36 @@ claude() {
                 added++
             }
 
-            // Written whatever happened above, and after the decision rather
-            // than before it: this is the record that lets the next upgrade tell
-            // an extension the user removed from one this app has never shipped.
-            rememberBundledIds(bundledEntries.map { it.first })
-
             if (dropped > 0 || added > 0) {
                 // Same exposure as settings.json above: a truncated manifest
                 // is read as an empty extension list, so every bundled
                 // extension disappears rather than the write visibly failing.
                 if (!writeAtomically(manifestFile) { it.write(kept.toString(2).toByteArray()) }) {
-                    Logger.w(tag, "Could not rewrite the extensions manifest; it is unchanged")
-                    return
+                    throw IOException("could not rewrite $manifestFile")
                 }
                 Logger.i(tag, "Reconciled extensions.json: $dropped stale dropped, $added bundled added")
             }
+
+            // Below the write, not above it. An earlier version sat above and
+            // reasoned only about ordering against the DECISION -- correct as
+            // far as it went, and the write six lines further down never
+            // entered the frame. Recording a set the manifest does not contain
+            // is the same defect [generateExtensionsManifest] throws to avoid,
+            // and this is the half that runs on upgrades rather than fresh
+            // installs: an identifier in the record with no entry beside it
+            // reads as one the user removed, so it is never listed again, and
+            // every later reconcile writes the bad set back over itself.
+            //
+            // Unconditional is still right. With nothing to write the manifest
+            // on disk already matches this set, so the record is accurate.
+            rememberBundledIds(bundledEntries.map { it.first })
+        } catch (e: IOException) {
+            // Only the write throws this, and it must not be swallowed by the
+            // catch below: that one exists for a manifest this code cannot
+            // parse, which is a different event with a different answer.
+            // Reaching runSetupLocked's catch is the point -- markSetupComplete
+            // is downstream of it.
+            throw e
         } catch (e: Exception) {
             // A manifest this code cannot parse is one the server wrote in a
             // shape it understands; leave it alone rather than risk the user's
@@ -1841,9 +1883,12 @@ internal const val OWN_EXTENSION_PREFIX = "vscodroid."
  * re-copy would silently revert it.
  *
  * Pure, and takes the two listings rather than a directory, so the decision is
- * testable without a Context or a tree.
+ * testable without a Context or a tree. `(present, bundled)` in that order, the
+ * same as [supersededExtensionDirs] and [retiredOwnExtensionDirs]: all three
+ * take two `List<String>` and a swap between them compiles in silence, so the
+ * only protection is that there is nothing to remember.
  */
-internal fun bundledDirsToExtract(bundled: List<String>, present: List<String>): List<String> =
+internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>): List<String> =
     bundled.filter { it.startsWith(OWN_EXTENSION_PREFIX) || it !in present }
 
 /**

@@ -11,12 +11,14 @@ import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.lang.reflect.InvocationTargetException
 
 /**
  * Tests that a bundled extension reaches a device that already has a directory
@@ -195,6 +197,37 @@ class BundledExtensionRefreshTest {
         extractBundledExtensions()
 
         assertEquals(shippedSource, File(extensionsDir, "$fetched/extension.js").readText())
+    }
+
+    /**
+     * The delivery guarantee has to hold all the way down, not just at the
+     * decision.
+     *
+     * Deciding to re-unpack our own extension buys nothing if the unpack then
+     * fails quietly: extractAssetFile logs a warning and carries on, which is
+     * right for the 390 MB server tree and wrong here, because what survives is
+     * the previous release's code -- the exact thing the split exists to
+     * replace. The failure has to reach runSetupLocked's catch, which is
+     * upstream of markSetupComplete(), or setup certifies an install that is
+     * still running the old extension.
+     */
+    @Test
+    fun `an unpack that fails stops the setup rather than leaving the old code`() {
+        installed.mkdirs()
+        File(installed, "extension.js").writeText(installedSource)
+        File(installed, "package.json").writeText(shippedManifest)
+        // Occupy the temp path the atomic write derives for extension.js.
+        val blocker = File(installed, "extension.js.tmp~")
+        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
+        File(blocker, "occupied").writeText("x")
+
+        assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+
+        assertEquals(
+            installedSource,
+            File(installed, "extension.js").readText(),
+            "the previous file should be intact -- the atomic write leaves it alone on failure",
+        )
     }
 
     /**

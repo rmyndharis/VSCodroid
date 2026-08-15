@@ -208,4 +208,83 @@ class ExtensionsManifestWriteTest {
         assertTrue(manifestFile.isFile, "the manifest was not written; the harness is wrong")
         verify { editor.putStringSet(any(), any()) }
     }
+
+    /**
+     * A manifest that already exists, with an entry whose directory is gone.
+     * That is what an upgrade looks like, and it sends extractBundledExtensions
+     * down the reconcile branch rather than the generate branch.
+     */
+    private fun stageUpgrade() {
+        manifestFile.writeText(
+            """[{"identifier":{"id":"vscodroid.gone"},"relativeLocation":"vscodroid.gone-1.0.0"}]"""
+        )
+    }
+
+    /**
+     * The twin of the generate-path rule, on the half that runs far more often.
+     *
+     * generateExtensionsManifest is the fresh-install writer; reconcile is the
+     * one every upgrade goes through. Recording the bundled identifier set when
+     * the manifest write did not happen is the same defect on both, and it is
+     * worse here for being reachable on every device rather than only on new
+     * ones: an identifier in the record with no entry beside it reads as one
+     * the user uninstalled, so it is never listed again, and each later
+     * reconcile writes the bad set back over itself.
+     */
+    @Test
+    fun `a failed reconcile records no bundled ids`() {
+        stageUpgrade()
+        blockTheWrite()
+
+        assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+
+        verify(exactly = 0) { editor.putStringSet(any(), any()) }
+    }
+
+    /** The control: the same upgrade, unobstructed, does record. */
+    @Test
+    fun `a successful reconcile records the bundled ids`() {
+        stageUpgrade()
+
+        extractBundledExtensions()
+
+        verify { editor.putStringSet(any(), any()) }
+    }
+
+    /**
+     * A version bump with the manifest write blocked, then unblocked.
+     *
+     * The superseded sweep deletes the old directory before the manifest is
+     * rewritten, so a failed write leaves the two disagreeing: the directory is
+     * gone and the manifest still names it, which lists nothing loadable. This
+     * checks the disagreement is transient rather than assuming the throw made
+     * it so -- the next run has to reconcile the manifest onto the directory
+     * that is actually there.
+     */
+    @Test
+    fun `a version bump recovers its manifest after a failed write`() {
+        val bumped = "vscodroid.vscodroid-welcome-1.2.1"
+        val bumpedPkg = """{"publisher":"vscodroid","name":"vscodroid-welcome","version":"1.2.1"}"""
+        every { assets.list("extensions") } returns arrayOf(bumped)
+        every { assets.list("extensions/$bumped") } returns arrayOf("package.json")
+        every { assets.list("extensions/$bumped/package.json") } returns emptyArray()
+        every { assets.open("extensions/$bumped/package.json") } answers
+            { ByteArrayInputStream(bumpedPkg.toByteArray()) }
+        // The manifest still describes the version already installed by setUp.
+        manifestFile.writeText(
+            """[{"identifier":{"id":"$expectedId"},"relativeLocation":"$dirName"}]"""
+        )
+
+        blockTheWrite()
+        assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+
+        File(extensionsDir, "${manifestFile.name}.tmp~").deleteRecursively()
+        extractBundledExtensions()
+
+        val text = manifestFile.readText()
+        assertTrue(text.contains(bumped), "the manifest never named the version on disk: $text")
+        assertFalse(text.contains(dirName), "the manifest still names the deleted directory: $text")
+        assertFalse(File(extensionsDir, dirName).exists(), "the superseded directory survived")
+        assertTrue(File(extensionsDir, bumped).isDirectory, "the new version was not unpacked")
+    }
 }

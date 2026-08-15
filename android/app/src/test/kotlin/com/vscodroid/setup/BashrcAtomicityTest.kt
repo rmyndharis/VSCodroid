@@ -10,6 +10,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -169,6 +170,43 @@ class BashrcAtomicityTest {
             "a partial append survived; `toolchain-env.sh` near its start is this writer's " +
                 "own guard, so the half-written line would never be completed",
         )
+    }
+
+    /**
+     * An append must not rewrite what it appends to.
+     *
+     * These two writers used `appendText`, which never read the file. Routing
+     * them through an atomic write turned each into a read-modify-write, and
+     * `File.readText` decodes UTF-8 with CodingErrorAction.REPLACE -- so any
+     * byte in the user's `.bashrc` that is not valid UTF-8 comes back as U+FFFD
+     * and is written out as EF BF BD. A single-byte Latin-1 accent in a comment
+     * or an alias, which a terminal editor will happily put there, is silently
+     * replaced by adding an unrelated line to the end of the file.
+     *
+     * Atomicity was worth having; this was not part of the trade. The bytes are
+     * carried through untouched now and only the new block is encoded.
+     */
+    @Test
+    fun `an append leaves bytes the file already held exactly as they were`() {
+        // 0xE9 is Latin-1 'e' with an acute accent and is not valid UTF-8 on
+        // its own. Spelled as a byte rather than as a source literal, so the
+        // test does not depend on how this file is encoded.
+        val original = "# caf".toByteArray() +
+            byteArrayOf(0xE9.toByte()) +
+            " -- written by hand\nalias l='ls'\n".toByteArray()
+        bashrc.writeBytes(original)
+
+        FirstRunSetup(context).ensureToolchainEnvSourcing()
+
+        val after = bashrc.readBytes()
+        assertTrue(after.size > original.size, "nothing was appended; the harness is wrong")
+        assertArrayEquals(
+            original,
+            after.copyOf(original.size),
+            "the existing bytes were re-encoded by the append; a byte that is not valid " +
+                "UTF-8 came back as U+FFFD",
+        )
+        assertTrue(String(after).contains("toolchain-env.sh"), "the sourcing line was not appended")
     }
 
     @Test
