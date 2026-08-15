@@ -224,7 +224,7 @@ class ProcessManager(private val context: Context) {
         } else {
             PortFinder.isPortAvailable(_port)
         }
-        if (!portIsFree && portHeldByOurEditorServer()) {
+        if (!portIsFree && portHeldByOurEditorServer() && recordedServerIsServing()) {
             // A server of ours is already on the port. Serve it instead of
             // spawning a second one that cannot bind.
             //
@@ -250,6 +250,13 @@ class ProcessManager(private val context: Context) {
             // process is still alive and still that server. A holder we have no
             // note for falls through and is spawned over, which fails the way it
             // always did rather than the way a refusal would.
+            //
+            // Ownership is only half of it, and the note cannot supply the other
+            // half: it is written at the fork, so it names a process that was
+            // asked to bind the port rather than one that did.
+            // [recordedServerIsServing] asks the port itself before this branch is
+            // taken -- see there for what a note alone lets through, and why the
+            // two questions are not interchangeable.
             Logger.i(tag, "Port $_port already served by a server of ours; adopting it")
             // Said out loud because nothing else in the app can see it, and the
             // symptom it produces points nowhere near here. `assets/dns-proxy.js`
@@ -544,12 +551,16 @@ class ProcessManager(private val context: Context) {
      * What it does NOT establish is that the recorded process is the one holding
      * the socket — that would need /proc/net/tcp, which SELinux denies an app
      * outright (measured: untrusted_app against proc_net_tcp_udp returns an empty
-     * mask). It is a much narrower gap than it sounds: reaching here means the
-     * port is taken, and a live editor server of ours that we started on this port
-     * is overwhelmingly the thing that took it. The gap it leaves is a stranger
-     * squatting the port while our own server also happens to be alive — which
-     * costs an adopted session that never answers, caught by [startAdoptionWatch],
-     * rather than a leaked credential.
+     * mask). Nor does it establish that the recorded process ever held it: the
+     * note is written at the fork, before the child has had the chance to listen
+     * and whether or not it ever will.
+     *
+     * So this answers one question of the two, and [recordedServerIsServing]
+     * answers the other before [startServer] adopts anything. This doc used to
+     * end by calling the gap narrow and saying [startAdoptionWatch] caught what
+     * fell through it; the watch does notice, and noticing is not catching —
+     * it reports the server lost, the restart adopts the same note again, and the
+     * budget is spent on a loop. Neither question is sufficient alone.
      */
     fun portHeldByOurEditorServer(): Boolean {
         val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
@@ -589,6 +600,49 @@ class ProcessManager(private val context: Context) {
             Logger.w(tag, "Pid $pid is no longer an editor server; not adopting port $_port")
         }
         return isOurServer
+    }
+
+    /**
+     * Whether the port is answering right now.
+     *
+     * The second half of the adoption test, and it is not a restatement of the
+     * first. [portHeldByOurEditorServer] proves the recorded process is alive and
+     * is still an editor server of ours; nothing in the note says it ever bound
+     * the port, because `assets/server.js` writes it at the fork.
+     *
+     * That gap has a process that fits it exactly. A server spawned onto a port
+     * something else holds prints `EADDRINUSE` and then does not exit — measured
+     * on an API 36 emulator, same pids at 0, 5, 15, 30 and 60 seconds — so a
+     * bootstrap SIGKILLed by the OOM killer or the phantom-process limit, which
+     * is the case adoption exists for, can leave behind a child that is alive,
+     * is an editor server, matches the note, and has never held the port. Adopting
+     * it produces a session that never answers: [startAdoptionWatch] calls it lost
+     * after two missed probes, the restart reads the same note and adopts the same
+     * process, and five rounds later the app is in the terminal state having never
+     * attempted the spawn that would have worked. Nothing clears that note, so it
+     * survives cold starts too, for as long as the orphan does.
+     *
+     * Asking the port is safe in the way the ownership test that preceded it was
+     * not: `/version` is answered before the connection-token check, so the probe
+     * carries no token and discloses nothing to whoever is on the other end. What
+     * it establishes is only that the port serves — attributing that answer to the
+     * recorded pid would need the /proc/net/tcp read SELinux refuses — which is
+     * why both halves are required and neither is sufficient.
+     *
+     * Refusing here is not final and deletes nothing, so a recorded server that
+     * was merely slow to answer is adopted by a later attempt. Being wrong in this
+     * direction costs one spawn that cannot bind, which is what a start onto a
+     * held port did before adoption existed; being wrong in the other costs the
+     * session.
+     */
+    private fun recordedServerIsServing(): Boolean = isServerHealthy().also { serving ->
+        if (!serving) {
+            Logger.w(
+                tag,
+                "An editor server of ours is recorded on port $_port but nothing is " +
+                    "answering there; spawning rather than adopting it",
+            )
+        }
     }
 
     fun isServerHealthy(): Boolean {

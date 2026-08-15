@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -1009,11 +1010,17 @@ class AdoptionTest {
 
     @Test
     fun `a live editor server of ours on the port is adopted rather than spawned over`() {
-        // The stub holds the port and answers nothing at all. That is deliberate:
-        // ownership is decided from the note this app wrote, so the holder is
-        // never asked, and a test that let it answer could not tell the two
-        // mechanisms apart.
-        val holder = holdingPortSilently()
+        // Two things have to be true before a start hands the user someone else's
+        // process: the note says the holder is an editor server of ours, and the
+        // port answers. This fixture supplies both.
+        //
+        // The ownership half is still decided from the note and never by asking
+        // the holder -- `the ownership test never sends the connection token to
+        // the port holder` pins that at the socket. What the start adds is a
+        // liveness question, and the assertions below pin exactly what it may ask:
+        // /version, which the server answers before it checks the token, and
+        // nothing else.
+        val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
 
         assertTrue(manager.startServer(), "adopting is a successful start")
@@ -1022,6 +1029,64 @@ class AdoptionTest {
             manager.serverProcessField,
             "adoption must not spawn a second server onto a port the first still holds",
         )
+        val asked = holder.lastRequestLine()
+        assertEquals(
+            "GET /version", asked?.substringBeforeLast(' '),
+            "adoption may ask the port whether it serves, on the one route that is " +
+                "answered before the token check, and ask nothing else",
+        )
+        assertFalse(
+            asked!!.contains("tkn"),
+            "the liveness probe must not carry the connection token: $asked",
+        )
+    }
+
+    @Test
+    fun `a recorded server that is not answering on the port is not adopted`() {
+        // The note is written at the fork, so it names a process that was asked to
+        // bind the port rather than one that did. A server spawned onto a port
+        // something else holds prints EADDRINUSE and then does not exit, so a
+        // bootstrap killed by the OOM killer or the phantom-process limit can
+        // leave behind a child that is alive, is an editor server, and matches the
+        // note perfectly while having never held the port.
+        //
+        // Adopting it is a session that never answers: the adoption watch calls it
+        // lost after two missed probes, the restart reads the same note and adopts
+        // the same process, and the budget runs out with the terminal state
+        // reached and no real spawn ever attempted. Nothing clears that note, so
+        // the next cold start does it again.
+        //
+        // The holder here accepts connections and answers nothing, which is what
+        // the port looks like when the recorded process is not the one on it.
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(
+            manager.portHeldByOurEditorServer(),
+            "the note has to pass the ownership test, or the refusal below proves nothing",
+        )
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "declining to adopt still has to start something")
+
+        // Before the latch, deliberately. An adopted start spawns nothing, so the
+        // watchdog never fires and the latch below times out -- which would report
+        // this as a stuck watchdog and send the reader to the wrong file. The two
+        // assertions that name the defect go first.
+        assertFalse(
+            manager.isAdopted(),
+            "a recorded server that is not serving on the port is not ours to serve",
+        )
+        assertNotNull(
+            manager.serverProcessField,
+            "declining to adopt has to fall through to a spawn; the alternative is a " +
+                "start that neither adopts nor spawns",
+        )
+
+        // Awaited for the reason ProcessManagerTest's helper gives: /bin/echo exits
+        // at once, and a watchdog thread outliving the test logs through a Logger
+        // mock that unmockkAll() has already torn down.
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
     }
 
     @Test
@@ -1126,7 +1191,9 @@ class AdoptionTest {
         // and Logger.w is not gated on a debuggable build.
         val warnings = mutableListOf<String>()
         every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
-        val holder = holdingPortSilently()
+        // Serving, because a port that answers nothing is not adopted at all now
+        // and the warning belongs to the adoption branch.
+        val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
 
         assertTrue(manager.startServer())

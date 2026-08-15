@@ -389,6 +389,44 @@ class CannotBindCleanupTest {
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
 
+    /**
+     * The lines of the branch that opens at [start], delimited by its own braces.
+     *
+     * Not a count of anything, which is the point. A fixed eight-line window stood
+     * here, and its comment said it counted statements while it counted
+     * non-comment lines — a distinction with no consequence until the branch
+     * grows. It had exactly one line of slack: a statement added anywhere above
+     * the last assertion still fitted, and a second one pushed `reportFailure(`
+     * past the end of the window, at which point this test reports a missing call
+     * that is sitting two lines below where it stopped looking. A guard that
+     * accuses correct code is worse than no guard, because the first thing the
+     * reader does is change the code.
+     *
+     * Braces cannot drift that way: the window is whatever the branch is, however
+     * long it becomes. What they cannot survive is an unbalanced brace inside a
+     * string literal on a code line — `"{"` and nothing to close it — which
+     * nothing in this branch has today; the failure would be a window running to
+     * the end of the file, which the error below names rather than hides.
+     */
+    private fun branchBody(
+        lines: List<IndexedValue<String>>,
+        start: Int,
+    ): List<IndexedValue<String>> {
+        val body = mutableListOf<IndexedValue<String>>()
+        var depth = 0
+        var opened = false
+        for (entry in lines.drop(start)) {
+            if (opened) body += entry
+            depth += entry.value.count { it == '{' } - entry.value.count { it == '}' }
+            if (depth > 0) opened = true
+            if (opened && depth == 0) return body
+        }
+        error(
+            "the branch opening at NodeService.kt:${lines[start].index + 1} is never closed; " +
+                "its braces do not balance, so no window over it would mean anything"
+        )
+    }
+
     @Test
     fun `the doomed pair is stopped where it is diagnosed`() {
         check(nodeService.isFile) {
@@ -405,16 +443,16 @@ class CannotBindCleanupTest {
                 "that can never bind is watched for the life of the app"
         }
 
-        // Counted in statements rather than in file lines, because the branch is
-        // mostly comment and a window measured in lines would fall short of the
-        // code it is looking for -- and report the absence as a defect.
-        val body = lines.drop(branch + 1).take(8)
+        // The whole branch, found by its braces. The branch is mostly comment and
+        // grows whenever anything is added to it, so any window with a size in it
+        // is a window that will one day stop containing the code it is looking for.
+        val body = branchBody(lines, branch)
         val shown = body.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
 
         assertTrue(
             body.any { (_, l) -> l.contains("processManager.stopServer()") },
             "the branch must stop the process it is giving up on, or the retries it " +
-                "hands the run to are all refused as 'already running'. Statements " +
+                "hands the run to are all refused as 'already running'. Lines " +
                 "found in the branch:\n$shown",
         )
         assertTrue(
