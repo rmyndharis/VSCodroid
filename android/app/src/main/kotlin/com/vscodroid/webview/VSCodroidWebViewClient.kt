@@ -231,11 +231,15 @@ private val TOKEN_PARAMETER = Regex("""tkn=[^&\s"']*""", RegexOption.IGNORE_CASE
  * are not gated on a debuggable build, so they shipped in release.
  *
  * Keyed on the parameter rather than on the token's value, because most of the
- * call sites below are in a companion object that never receives it. The ceiling
- * that leaves is worth naming: a statement that prints the bare token, in no
- * `tkn=` at all, would pass straight through. Nothing does today, and
- * `ConnectionTokenLoggingTest` drives the real call sites rather than this
- * function, so such a statement fails there rather than here.
+ * call sites below are in a companion object that never receives it. Two
+ * ceilings follow from that and are worth naming, since a comment claiming
+ * containment is worth nothing unless it also says where the containment stops:
+ * a statement printing the bare token, in no `tkn=` at all, passes straight
+ * through, and so does one that has been encoded again — `tkn%3D<value>` nested
+ * inside another parameter is not the pattern below. Neither shape is produced
+ * by any call site today, and `ConnectionTokenLoggingTest` drives the real call
+ * sites rather than this function, so a statement that started producing one
+ * fails there rather than here.
  *
  * Null becomes `"null"` so that redacting a nullable URL prints what string
  * interpolation already printed for it.
