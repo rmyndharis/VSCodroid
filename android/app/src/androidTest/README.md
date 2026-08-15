@@ -85,9 +85,10 @@ That accounted for 21 tests and roughly 52 s of test time. This paragraph claime
 three minutes for a long time; the recorded run says otherwise, which is what
 reading the XML is for.
 
-**At HEAD there are 23 tests across six classes**, counted from the sources rather
+**At HEAD there are 27 tests across seven classes**, counted from the sources rather
 than from any run: `SafWatchWiringTest` arrived with the per-directory watch work
-and adds five, and the classes have moved since besides. No recorded run covers
+and adds five, `ExtractionOnDeviceTest` arrived with the first-run setup work and
+adds four, and the classes have moved since besides. No recorded run covers
 this set, so there is no honest wall-clock figure to quote for it — the 52 s above
 measured a different suite and is kept only as the reason not to say "three
 minutes". Read the times out of your own run's XML.
