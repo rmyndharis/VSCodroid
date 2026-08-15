@@ -218,6 +218,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor server's connection token no longer reaches the Android system log. That token is what authenticates the editor to its own server, and the system log can be read by other software on the device, so a value that gates the whole editor was leaving the app's private storage as a side effect of ordinary use. Nothing changes in day-to-day use: the token is still generated on first start, still kept in private storage, and still supplied for you
 
 ### Fixed
+- Running out of storage can no longer leave `npm install` permanently broken. The
+  small settings file that tells npm which shell to use was the one setup file
+  written by emptying it first and filling it afterwards, so a write interrupted by
+  a full disk left it empty — and empty means npm falls back to a shell Android
+  does not have, so any package that runs a script on install fails, with nothing
+  on screen connecting that to storage. Nor did it recover: the app repairs a
+  half-written shell profile and settings file, but an empty one of these cannot be
+  told from one you emptied yourself. It is now written the way the others already
+  were — completely, or not at all, leaving the previous version in place
 - The app no longer hangs for ever when something else is holding the port it
   uses. It would sit on the loading screen, tell you after two minutes that the
   server was slow to start, and then say nothing again — with a server process

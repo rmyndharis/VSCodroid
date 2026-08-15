@@ -277,6 +277,60 @@ class BashrcAtomicityTest {
     }
 
     /**
+     * `.npmrc` is written by the same call and matters for a different reason.
+     *
+     * It carries `script-shell`, which points npm at the bundled bash. Without
+     * that line npm falls back to `/bin/sh`, which Android does not have, so every
+     * package with a lifecycle script fails to install — and nothing on screen
+     * connects that to storage.
+     *
+     * The file also sits outside every repair: `repairTruncatedSetupFiles` covers
+     * `.bashrc` and `settings.json`, and an emptied `.npmrc` cannot be told from
+     * one a user emptied deliberately. The rewrite here only runs when the content
+     * differs, which an empty file does — but only on a launch with room to write,
+     * which is not the launch that emptied it.
+     */
+    @Test
+    fun `a failed npmrc write leaves the previous file rather than emptying it`() {
+        bundleNpm()
+        val npmrc = File(filesDir, "home/.npmrc").apply { writeText("script-shell=/old/bash\n") }
+        blockTheNpmrcWrite()
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertEquals(
+            "script-shell=/old/bash\n",
+            npmrc.readText(),
+            "the previous .npmrc was destroyed by a write that could not finish; an empty " +
+                "one means no script-shell, and npm then hands lifecycle scripts to a " +
+                "/bin/sh that does not exist on Android",
+        )
+    }
+
+    @Test
+    fun `the npmrc write is what the failure case is withholding`() {
+        // Control. Without it, a createNpmWrappers that stopped writing .npmrc at
+        // all would satisfy the case above.
+        bundleNpm()
+        val npmrc = File(filesDir, "home/.npmrc").apply { writeText("script-shell=/old/bash\n") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(
+            npmrc.readText().contains("libbash.so"),
+            "the unblocked write did not point script-shell at the bundled bash: " +
+                npmrc.readText(),
+        )
+    }
+
+    /** Blocks only `.npmrc`, so the `.bashrc` append ahead of it still succeeds. */
+    private fun blockTheNpmrcWrite(): File =
+        File(filesDir, "home/.npmrc.tmp~").also {
+            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
+            File(it, "occupied").writeText("x")
+        }
+
+    /**
      * The repair has to REWRITE, not just clear.
      *
      * Both writers of these files live in `runSetupLocked`, which an install

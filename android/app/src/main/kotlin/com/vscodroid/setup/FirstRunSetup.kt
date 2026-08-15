@@ -888,8 +888,26 @@ class FirstRunSetup(private val context: Context) {
         // @rollup/rollup-android-arm64 get installed alongside linux fallbacks
         val expectedContent = "script-shell=$bashPath\nos[]=linux\nos[]=android\n"
         if (!npmrc.exists() || npmrc.readText() != expectedContent) {
-            npmrc.writeText(expectedContent)
-            Logger.d(tag, "Updated .npmrc")
+            // Atomically, like every other setup file this class writes. This one
+            // was the exception, and it is a bad one to be: `writeText` truncates
+            // before it writes, so a write that runs out of disk leaves an empty
+            // `.npmrc` rather than the previous one. Empty means no
+            // `script-shell`, and npm then hands every lifecycle script to
+            // `/bin/sh`, which Android does not have -- so `npm install` fails on
+            // any package with a postinstall, for a reason nothing on screen
+            // connects to storage.
+            //
+            // Nothing repairs it either: repairTruncatedSetupFiles covers
+            // `.bashrc` and `settings.json`, and an empty `.npmrc` is
+            // indistinguishable from one a user emptied on purpose. The rewrite
+            // above is reached only when the content differs, and an empty file
+            // does differ -- but only on a launch that has room, which is the
+            // launch that would not have broken it.
+            if (writeAtomically(npmrc) { it.write(expectedContent.toByteArray()) }) {
+                Logger.d(tag, "Updated .npmrc")
+            } else {
+                Logger.w(tag, "Could not update .npmrc; it keeps whatever it held before")
+            }
         }
     }
 
