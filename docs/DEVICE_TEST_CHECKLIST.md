@@ -205,10 +205,10 @@ as a known outcome keeps an unchecked box meaning "not tested" rather than
 | Background/Foreground | 6 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
-| Toolchains | 5 | | | |
+| Toolchains | 6 | | | |
 | Terminal & Tools | 10 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **81** | | | |
+| **Total** | **82** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

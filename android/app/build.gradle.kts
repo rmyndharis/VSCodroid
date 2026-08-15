@@ -78,7 +78,7 @@ android {
     assetPacks += listOf(":toolchain_go", ":toolchain_ruby", ":toolchain_java")
 
     lint {
-        // The baseline is what makes this affordable: the 92 issues recorded in
+        // The baseline is what makes this affordable: the 59 issues recorded in
         // lint-baseline.xml are filtered out of every report, so what remains is
         // what arrived after it was taken.
         //

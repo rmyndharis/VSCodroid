@@ -3,11 +3,23 @@
 
     check-bridge-api-spec.py
 
+THIS SCRIPT IS HALF THE GATE. `BridgeApiSpecParityTest` is the other half and is
+the authority on WHICH methods exist, because it asks the compiled class rather
+than the source text. Read its header before trusting a green from here: a
+method whose annotation this file's patterns cannot spell -- `@android.webkit.
+JavascriptInterface`, or an aliased import -- is invisible to BOTH patterns
+below at once, so the counts agree and this script reports ok. That was measured,
+not imagined. Do not treat a pass here as "the spec matches the bridge"; treat it
+as "the parameter names, order and nullability of the methods it could see match".
+
 `docs/05-API_SPEC.md` is the contract an extension author writes against, and
-nothing has ever held it to `AndroidBridge.kt`. One pass over both files found
+nothing had ever held it to `AndroidBridge.kt`. One pass over both files found
 fourteen disagreements across twenty-eight methods -- a measured failure rate,
-not a hypothetical one -- and half of them were invisible to a comparison of
-method names, because the name matched and only the shape was wrong:
+not a hypothetical one. Four of the fourteen were invisible to a comparison of
+method names, because the name matched and only the shape was wrong; the other
+ten were a method missing from one side or invented on the other, which a name
+comparison does catch. (This said "half" for a while, which overstated the
+shape-only share by about seventy-five per cent.) The four:
 
   * `generateSshKey`'s second argument was documented as `keyType`, "ed25519
     (default) or rsa". The algorithm is not selectable and that argument is the
@@ -31,14 +43,24 @@ the bodies. Drawing the line here is the point: a check that claims to cover
 prose would have to be believed about the half it cannot see.
 
 Anchored on `@JavascriptInterface` in both files rather than on `fun`, which
-also matches the ProcessManager sketch in section 6 and the private helpers in
-the bridge, neither of which is part of this contract.
+also matches the ProcessManager sketch in §4.1 and the private helpers in the
+bridge, neither of which is part of this contract.
 
-The two directions do NOT fail the same way, and assuming they do is how the
-one-line-annotation hole survived a review. A method the spec omits is caught by
-the count; a method the *spec* declares in a shape this cannot parse is caught as
-"registered on the bridge, absent from the spec", loudly. Only the code side ever
-had a way to fail open, and only for the shape now covered above.
+THE TWO COUNTS BELOW ARE NOT INDEPENDENT, and an earlier version of this comment
+claimed they were. Both patterns key on the same literal `@JavascriptInterface`,
+so any spelling that changes that literal defeats both at once, the counts agree,
+and the guard is satisfied while a method goes unchecked. Widening one pattern
+fixes one spelling; it cannot fix the class. The genuinely independent check is
+`BridgeApiSpecParityTest`, which reads the compiled class -- reflection sees an
+annotation by identity, so qualification and aliasing stop existing as a category.
+What the count below still buys is narrower and worth keeping: it catches a
+signature this script parsed *partly*, which is a different failure from one it
+never saw.
+
+The two directions do NOT fail the same way. A method the spec omits is caught;
+a method the *spec* declares in a shape this cannot parse is caught as
+"registered on the bridge, absent from the spec", loudly. Only the code side can
+fail open.
 
 If you are mutating the sources to check this still fires: COMMIT FIRST. A
 mutation harness restores with `git checkout -- <file>`, which is
@@ -57,8 +79,15 @@ pattern for them would add surface for a hypothetical benefit:
     return type read as `Boolean = g(t)`, so a correctly documented `Boolean`
     reports a mismatch. If one ever appears, fix the METHOD or this pattern; do
     not "correct" a right document to match the garbage.
-  * An annotated method inside a `/* */` block is counted and parsed as real, and
-    reported as undocumented. Commented-out code will ask to be documented.
+  * An annotated method inside a `/* */` block is counted and parsed as real.
+    Which way that fails depends on what the commenter did to the spec, and the
+    likelier half is the silent one -- this comment used to name only the loud
+    one. Comment out the code AND delete its doc entry, and it accuses: the spec
+    is "missing" a method that no longer exists. Comment out the code and leave
+    the doc entry, which is what someone disabling a method in a hurry does, and
+    both sides still list it, the comparison is clean, and the spec goes on
+    describing a method the page can no longer call. `BridgeApiSpecParityTest`
+    has neither problem: commented-out code does not compile, so it is not there.
 """
 
 import pathlib

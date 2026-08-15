@@ -36,8 +36,9 @@ mechanism -- there is no origin-based control, and there cannot be one on this t
 compare.
 
 1. **Per-session token**: `SecurityManager` generates 32 random bytes at construction
-   (`SecurityManager.kt:51-55`). `MainActivity.injectBridgeToken()` writes it to
-   `window.__vscodroid.authToken` after the page loads (`MainActivity.kt:564-569`).
+   (`SecurityManager.generateToken`, in `bridge/`, not a `security/` package).
+   `MainActivity.injectBridgeToken()` writes it to `window.__vscodroid.authToken`
+   after the page loads.
 2. **Every method, not a chosen subset**: all 28 `@JavascriptInterface` methods take the
    token and validate it before doing anything, returning without acting on refusal
    (§2.4 records the one method whose refusal value is not an empty one).
@@ -54,7 +55,12 @@ compare.
    Read the signature before calling; the position is not a convention you can rely on.
 3. **Scheme allowlist**: `openExternalUrl()` accepts `https://`, `mailto:`, and `http://`
    to `localhost` or `127.0.0.1` (the last for dev-server preview). Everything else is
-   refused and logged, including unparseable URLs (`SecurityManager.kt:21-49`).
+   refused and logged, including unparseable URLs (`SecurityManager.isAllowedUrl`).
+
+   Citations in this section name symbols rather than line numbers on purpose. All
+   three used to carry ranges and all three had rotted — one of them pointed into a
+   file that is not even at the path it named. `file:line` does not survive a day in
+   this repository; a symbol you can grep for does.
 
 ### 2.3 Kotlin → JavaScript Methods
 
@@ -62,21 +68,23 @@ These methods are called from Kotlin via `evaluateJavascript()`:
 
 #### Key Injection
 
-```typescript
-// Injected function: dispatch keyboard event to VS Code
-interface KeyEvent {
-  key: string; // "Tab", "Escape", "ArrowLeft", etc.
-  code: string; // "Tab", "Escape", "ArrowLeft", etc.
-  keyCode: number; // Legacy keyCode
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-}
+There is no `window.__vscodroid.injectKey`, and this block described one until it
+was checked. The page is not asked to inject anything: `KeyInjector.injectKey` is
+Kotlin, and it evaluates a script that builds a `KeyboardEvent` and dispatches it
+straight at the focused element. Nothing needs to be defined on the page for that
+to work, and defining a hook by that name — which is what following the old text
+led to — leaves a function nothing ever calls.
 
-// Usage from Kotlin:
-// webView.evaluateJavascript("window.__vscodroid.injectKey(${keyJson})", null)
+```javascript
+// What Kotlin evaluates, in outline. KeyInjector.kt is the source of truth.
+var target = document.activeElement || document.body;
+target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
 ```
+
+`eventInit` carries the fields a `KeyboardEvent` takes — `key`, `code`,
+`keyCode`, and the `ctrlKey`/`altKey`/`shiftKey`/`metaKey` modifiers. They are
+the DOM's own names, not an interface this project defines.
 
 #### Memory Pressure Notification
 
@@ -427,10 +435,16 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 
 | Endpoint                  | Method | Description                                  |
 | ------------------------- | ------ | -------------------------------------------- |
-| `/`                       | GET    | Serve vscode-web index.html                  |
+| `/`                       | GET    | Serve vscode-web index.html. Answers **403** until the connection token is supplied |
 | `/static/**`              | GET    | Serve static assets (JS, CSS, fonts, images) |
-| `/healthz`                | GET    | Health check (returns 200 when server ready) |
+| `/version`                | GET    | Answered before the token check — which is what makes it the readiness probe |
 | `/vscode-remote-resource` | GET    | Serve workspace files to web client          |
+
+**There is no `/healthz` on the server this app runs.** This table listed one for a
+long time. The only thing that has ever served it is the fallback stub in
+`assets/server.js`, which runs *instead of* VS Code when `vscode-reh/out/server-main.js`
+is missing — a tree that was never built. On any real install that path is not taken,
+and a probe of `/healthz` gets whatever the REH server does with an unknown route.
 
 ### 3.2 WebSocket Connection
 
@@ -468,6 +482,12 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 
 ### 4.1 Node.js Process Lifecycle
 
+> **Sketch, not the shipped signatures.** `startServer`, `waitForReady`, `stopServer`
+> and `getServerPid` exist on `ProcessManager`; `killServer` does not, and the
+> parameter lists below were written before the code. `isServerHealthy` is corrected
+> in place because it is the readiness probe and getting it wrong has cost this
+> project a release. Read `ProcessManager` for the rest — nothing gates this block.
+
 ```kotlin
 interface ProcessManager {
 
@@ -487,8 +507,9 @@ interface ProcessManager {
         pollIntervalMs: Long = 200
     ): Boolean
 
-    // Health check
-    fun isServerHealthy(port: Int): Boolean
+    // Health check. Takes NO port -- it reads the port ProcessManager allocated,
+    // because the port is allocated once and reused across every restart.
+    fun isServerHealthy(): Boolean
 
     // Graceful shutdown
     fun stopServer(process: Process, timeoutMs: Long = 5_000)
@@ -504,11 +525,21 @@ interface ProcessManager {
 ### 4.2 Health Check
 
 ```
-GET http://localhost:PORT/healthz
+GET http://127.0.0.1:PORT/version
 
-Response 200: Server is ready
-Response timeout/error: Server not ready or crashed
+Response 200        : ready — and ONLY 200
+Anything else       : not ready. 403 in particular means the server is up and
+                      demanding its connection token, which is not readiness
+Response timeout/err: not ready or crashed
 ```
+
+Two details that are the whole reason this endpoint and not another. `/version` is
+answered **before** the token check, so it stays a pure liveness probe and needs no
+token. And the accepted set is exactly `200`: it was once "anything below 500",
+which was correct while every route answered 200 and became wrong the moment the
+server began requiring a token — `/` then answers 403, and a readiness check
+counting 403 as healthy reports a successful start for a server that will serve the
+user nothing but Forbidden.
 
 **Polling strategy**:
 
@@ -597,6 +628,11 @@ flowchart TD
 
 ### 6.1 Internal API
 
+> **Sketch, not the shipped API.** None of these five methods exists in this form —
+> the real one is `ToolchainManager` in Kotlin, and `ToolchainRegistry.available` is
+> what lists the toolchains. Kept as a record of the intended shape; do not write
+> against it.
+
 ```typescript
 interface ToolchainManager {
   // List available toolchains
@@ -619,7 +655,9 @@ interface ToolchainManager {
 }
 
 interface Toolchain {
-  id: string; // "go", "rust", "java"
+  id: string; // "go", "ruby", "java" -- those three. Rust has no module, no
+              // asset pack and no ToolchainRegistry entry; it was planned and
+              // deferred, and naming it here read as a shipped option
   name: string; // "Go"
   version: string; // "1.22"
   sizeMb: number; // 60
