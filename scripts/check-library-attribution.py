@@ -197,6 +197,13 @@ def main():
 
     covered = {LIBRARIES[n][0] for n in names} - {"VSCodroid"}
     print(f"ok -- {len(names)} shipped binaries, {len(covered)} components, all attributed")
+    # The names, not just the count. A count alone cannot answer the question that
+    # actually matters when two trees disagree -- *which* file is missing -- and
+    # some of these are found by `dlopen` at run time rather than through
+    # DT_NEEDED, so the ELF gate cannot see their absence either. That is the shape
+    # of the bug that left five Python modules dead on shipped builds. Printing the
+    # list costs a line of log and makes any two builds directly comparable.
+    print("   " + " ".join(sorted(names)))
     return 0
 
 
