@@ -43,23 +43,43 @@ EXTENSIONS=(
 
 OPENVSX_API="https://open-vsx.org/api"
 
-# Every entry must name a version, checked before anything below reads the list.
+# One invariant governs this whole file: the directory name the sweep computes for
+# an entry must equal the directory name the download loop extracts it into. The
+# sweep builds "<id>-<pin>" from the entry text; the loop builds
+# "${EXT_ID}-${VERSION}" from the entry text and the API response. When they
+# disagree the extracted tree is not in the managed set, is not tracked by git,
+# and the sweep deletes it on every single run -- taking with it the verified tree
+# the offline path at the bottom of the loop falls back on, which turns "Open VSX
+# unreachable" from a note into a failed build.
 #
-# The sweep further down derives a directory name with "${entry%@*}-${entry##*@}",
-# and neither strip does anything to an entry containing no "@" -- foo.bar becomes
-# foo.bar-foo.bar, which matches nothing that is ever extracted. The tree such an
-# entry really produces, foo.bar-<resolved version>, is therefore absent from the
-# managed set and untracked by git, so the sweep deletes it on every single run.
-# That also destroys the tree the offline path at the bottom of the loop falls
-# back on, turning "Open VSX unreachable" from a note into a failed build.
+# The shape half is checked here, before anything reads or deletes a directory.
+# Both computations split on "@", so an entry with none, with an empty version, or
+# with more than one "@" makes them disagree:
+#     foo.bar        -> sweep "foo.bar-foo.bar"    (neither strip does anything)
+#     foo.bar@       -> sweep "foo.bar-"           (trailing hyphen, matches nothing)
+#     foo.bar@1.0@2  -> sweep "foo.bar@1.0-2"      (the strips cut in different places)
+# none of which any extraction ever produces.
 #
 # Refused rather than skipped, because the header above already requires pins for
 # an independent reason: unpinned resolves to whatever is newest on the day of the
 # build, and an extension whose engines.vscode outruns the server is registered,
-# never activates, and logs nothing. An entry with no version has no correct
-# handling to fall back on, so there is nothing for a skip to do but hide it.
+# never activates, and logs nothing. An entry naming no usable version has no
+# correct handling to fall back on, so there is nothing for a skip to do but hide it.
+#
+# The shape check cannot cover the other half -- an alias like "@latest" is a
+# well-formed pin that Open VSX resolves to a different string -- so that is
+# asserted on the resolved value further down, where it can be measured instead
+# of guessed at.
 for entry in "${EXTENSIONS[@]}"; do
     case "$entry" in
+        *@*@*)
+            echo "  FAIL   $entry has more than one '@'." >&2
+            echo "         Pin it as publisher.name@version, exactly one '@'." >&2
+            exit 1 ;;
+        *@)
+            echo "  FAIL   $entry names an empty version." >&2
+            echo "         Pin it as publisher.name@version." >&2
+            exit 1 ;;
         *@*) ;;
         *)
             echo "  FAIL   $entry names no version." >&2
@@ -88,7 +108,12 @@ mkdir -p "$ASSETS_DIR"
 if git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     managed=""
     for entry in "${EXTENSIONS[@]}"; do
-        managed="$managed ${entry%@*}-${entry##*@}"
+        # The same two expansions the download loop uses for EXT_ID and
+        # PINNED_VERSION, deliberately -- %%@* and #*@, not %@* and ##*@. The
+        # guard above rules out the inputs where the two pairs differ, so either
+        # spelling would compute the same string today; using the loop's makes
+        # the agreement structural rather than something a reader has to re-derive.
+        managed="$managed ${entry%%@*}-${entry#*@}"
     done
     for dir in "$ASSETS_DIR"/*/; do
         [ -d "$dir" ] || continue
@@ -107,9 +132,9 @@ fi
 mkdir -p "$WORK_DIR"
 
 for EXT_SPEC in "${EXTENSIONS[@]}"; do
-    # publisher.name@version. The unpinned form is refused above, so both halves
-    # are always present here and neither branch that handled their absence
-    # survives -- an entry with no version can no longer reach this loop.
+    # publisher.name@version. The guard above refuses no "@", an empty version and
+    # more than one "@", so both halves are non-empty here and the branches that
+    # handled their absence are gone.
     EXT_ID="${EXT_SPEC%%@*}"
     PINNED_VERSION="${EXT_SPEC#*@}"
 
@@ -144,6 +169,30 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
 
     # Extract version and download URL
     VERSION=$(python3 -c "import json; print(json.load(open('$METADATA_FILE'))['version'])")
+
+    # The other half of the invariant the guard at the top of the file can only
+    # half-check, asserted where it can be measured rather than guessed at. The
+    # sweep derives this extension's directory name from the PIN while the
+    # extraction below uses the RESOLVED version, so the two must be the same
+    # string. A pin is not required to be one: "@latest" is well-formed, passes
+    # every shape test, and resolves to a number -- after which the sweep looks
+    # for "<id>-latest", does not find it, and deletes "<id>-<number>" on every
+    # run. Comparing the resolved value catches that and anything else Open VSX
+    # may resolve differently in future, which no pattern over the entry text can.
+    #
+    # One residual, stated rather than hidden: the sweep runs before this point,
+    # because this needs the API response and the sweep needs none. So an entry
+    # that trips this has already had its tree deleted once. That is a bounded
+    # cost -- the build stops here naming the cause, and a corrected pin
+    # re-extracts on the next run -- against the previous behaviour, which was to
+    # delete and re-download silently on every run, forever, with the build green.
+    if [ "$VERSION" != "$PINNED_VERSION" ]; then
+        echo "  FAIL   $EXT_ID: pinned '$PINNED_VERSION', Open VSX resolved '$VERSION'." >&2
+        echo "         The cleanup sweep names this extension's directory from the pin and" >&2
+        echo "         the extraction names it from the resolved version, so a difference" >&2
+        echo "         makes the sweep delete the tree on every run. Pin the exact version." >&2
+        exit 1
+    fi
     DOWNLOAD_URL=$(python3 -c "import json; d=json.load(open('$METADATA_FILE')); print(d['files']['download'])")
 
     DIR_NAME="${EXT_ID}-${VERSION}"
