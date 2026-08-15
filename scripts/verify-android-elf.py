@@ -128,7 +128,14 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     # Caught per file so the sweep finishes and still fails.
     try:
         machine, needed, aligns = read_elf(path)
-    except (NotAnElf, IndexError, struct.error, OSError) as e:
+    # ValueError covers the two that read_elf can raise out of a corrupt dynamic
+    # string table: bytes.index() when a DT_NEEDED offset has no NUL after it, and
+    # .decode() on a non-UTF-8 name (UnicodeDecodeError is a ValueError). Those
+    # raise sites are older than this branch, but --dir is not: in a sweep an
+    # escape does not just fail one file, it abandons every binary after it and
+    # prints no count -- which is the exact failure the per-file catch exists to
+    # prevent. Measured on a binary with DT_STRSZ patched to 0.
+    except (NotAnElf, IndexError, struct.error, OSError, ValueError) as e:
         # Named here rather than left to the caller. NotAnElf and OSError carry the
         # path in their own text but IndexError and struct.error do not, so a
         # truncated binary reported "unpack_from requires a buffer of at least 40

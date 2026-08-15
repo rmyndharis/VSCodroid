@@ -228,9 +228,15 @@ python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libldmusl.so"
 # The digest goes through a variable rather than straight into printf's argument
 # list. A command substitution that fails inside an argument does not set the
 # surrounding command's status, so set -e would not fire and printf would happily
-# write a two-field line; in an assignment the substitution's status IS the
-# command's, so a host with neither sha256sum nor shasum stops here instead of
-# recording a version with no digest beside it.
+# write a two-field line; in an assignment the substitution's status is what set -e
+# tests.
+#
+# What actually makes that status non-zero here is `set -o pipefail` on line 2, not
+# the assignment on its own -- the substitution wraps a PIPELINE, and a pipeline's
+# status is its rightmost command's, which is `cut`, and cut exits 0 on empty
+# input. Measured on a host with neither hasher: with `set -euo pipefail` the run
+# stops, rc=127; with plain `set -eu` it writes `musl<TAB>1.2.5-r3<TAB>` and carries
+# on. Both lines are load-bearing, so do not "simplify" pipefail away.
 MUSL_SHA="$( (sha256sum "$JNI_DIR/libldmusl.so" 2>/dev/null \
               || shasum -a 256 "$JNI_DIR/libldmusl.so") | cut -d' ' -f1)"
 printf '%s\t%s\t%s\n' musl "$MUSL_VERSION" "$MUSL_SHA" \
