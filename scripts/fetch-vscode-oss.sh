@@ -269,9 +269,7 @@ echo "=== ripgrep ==="
 # without it Search returns nothing and nothing else fails.
 JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNILIBS_DIR"
-cp "$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg" "$JNILIBS_DIR/libripgrep.so"
-chmod +x "$JNILIBS_DIR/libripgrep.so"
-echo "  rg -> libripgrep.so ($(du -h "$JNILIBS_DIR/libripgrep.so" | cut -f1))"
+RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
 
 # The same gate every other binary in jniLibs already gets, and this was the one
 # without it. verify-server-tree.py above reads rg's e_machine and stops there:
@@ -283,4 +281,17 @@ echo "  rg -> libripgrep.so ($(du -h "$JNILIBS_DIR/libripgrep.so" | cut -f1))"
 # This file is also the only bundled ELF whose properties no step here decided:
 # every other one is produced by a download script that checks it, while this is
 # a plain cp out of a tarball built in another workflow on another machine.
-python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$JNILIBS_DIR/libripgrep.so"
+#
+# Checked at the source, BEFORE the copy, so a rejected rg never becomes
+# libripgrep.so at all. The sibling scripts all install first and verify after,
+# which leaves the rejected binary sitting in the packaging directory when they
+# fail; CI is unharmed because the job dies and actions/cache declares
+# post-if: success(), but a developer whose fetch failed here and who then runs
+# ./gradlew assembleDebug directly would package the very binary this refused --
+# and no later gate would notice, because verify-server-tree.py reads e_machine
+# and that is not what is wrong with it.
+python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$RG_SRC"
+
+cp "$RG_SRC" "$JNILIBS_DIR/libripgrep.so"
+chmod +x "$JNILIBS_DIR/libripgrep.so"
+echo "  rg -> libripgrep.so ($(du -h "$JNILIBS_DIR/libripgrep.so" | cut -f1))"
