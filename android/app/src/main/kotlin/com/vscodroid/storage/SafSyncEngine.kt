@@ -65,6 +65,21 @@ class SafSyncEngine(private val context: Context) {
      */
     private val docIdCache = ConcurrentHashMap<String, String>()
 
+    /**
+     * Directories that have just left the mirror and may be the first half of a rename.
+     *
+     * inotify reports a rename as MOVED_FROM on the old name and MOVED_TO on the new one
+     * and pairs the two with a cookie, which [FileObserver] does not expose — so the
+     * halves arrive here as an unrelated delete and create. This is what carries the
+     * first half across to the second: [renameSourceFor] decides whether a MOVED_TO may
+     * claim one, and a claim turns the create into a rename of the device's own document.
+     *
+     * Entries expire on their own ([RENAME_PAIR_WINDOW_MS]); nothing acts when one does.
+     * An unclaimed entry therefore costs the behaviour that would have happened anyway.
+     */
+    private val vanishedDirectories = mutableListOf<VanishedDirectory>()
+    private val vanishedLock = Any()
+
     // -- Initial Sync --
 
     /**
@@ -430,6 +445,12 @@ class SafSyncEngine(private val context: Context) {
         // docIdCache is deliberately not cleared here. A drain that outlived the wait
         // still needs the mappings of the folder it is finishing, and [initialSync]
         // clears the cache itself before anything reads it for the next one.
+        //
+        // The half-renames are cleared, and the difference is that nothing consumes them
+        // after this point: a MOVED_TO of the next folder must not be able to claim a
+        // directory that left the previous one, which would rename a document in a folder
+        // the user has closed.
+        synchronized(vanishedLock) { vanishedDirectories.clear() }
         Logger.i(tag, "File watcher stopped")
     }
 
@@ -649,12 +670,12 @@ class SafSyncEngine(private val context: Context) {
         if (localFile.isDirectory) {
             // A directory that just appeared brings whatever is inside it; without
             // this it landed on the device empty and its files stayed in the mirror.
-            // A rename is the usual way to get here — inotify reports one as a delete
-            // of the old name and a create of the new, with nothing tying them
-            // together — and this half is why the other half is now declined in
-            // [handleMirrorEvent]: what can be put under the new name stops at
-            // [MAX_UPLOAD_ENTRIES] and excludes whatever [SKIP_DIRECTORIES] kept out
-            // of the mirror, so it cannot stand in for the old name's copy.
+            // What it cannot do is stand in for a copy that already exists on the
+            // device: it stops at [MAX_UPLOAD_ENTRIES] and excludes whatever
+            // [SKIP_DIRECTORIES] kept out of the mirror. That is why a rename does not
+            // come through here at all when [handleMirrorEvent] can pair its two halves
+            // — it renames the device's document instead — and why the old name is
+            // never deleted when it cannot.
             createChildrenInSaf(localFile, docUri, treeUri)
         }
     }
@@ -784,6 +805,25 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
+     * Gives an existing device document a new display name, in place.
+     *
+     * The whole point is what it does *not* touch: the provider moves the document itself,
+     * so everything beneath it travels along — including the `.git` and `node_modules` the
+     * mirror never held and the files past [MAX_UPLOAD_ENTRIES] it could not have re-sent.
+     * Nothing else here can move a subtree that the mirror does not fully contain.
+     *
+     * @return whether the device now holds the document under [newName]. False covers a
+     *   provider that does not support renaming at all, one that refuses this document,
+     *   and one that no longer has it.
+     */
+    private fun renameInSaf(safDocUri: Uri, newName: String): Boolean = try {
+        DocumentsContract.renameDocument(context.contentResolver, safDocUri, newName) != null
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not rename a document to $newName: ${e.message}")
+        false
+    }
+
+    /**
      * Deletes a document from the SAF tree.
      */
     private fun deleteFromSaf(safDocUri: Uri) {
@@ -826,6 +866,31 @@ class SafSyncEngine(private val context: Context) {
             SyncType.DELETE -> {
                 if (job.safDocUri != null) {
                     deleteFromSaf(job.safDocUri)
+                }
+            }
+            SyncType.RENAME -> {
+                // safDocUri is the document under the *old* name here, and localPath the
+                // new one. Falling back to a create when the provider will not rename is
+                // not a nicety: without it a provider lacking FLAG_SUPPORTS_RENAME would
+                // leave the new name absent from the device entirely, which is worse than
+                // the duplicate this job exists to avoid.
+                //
+                // A rename that succeeds does not re-upload anything, and it should not:
+                // the watcher has been writing every change in that subtree back as it
+                // happened, so re-sending it would be a file-by-file rewrite of a copy
+                // that is already correct — 1500 provider writes for a renamed `src/`,
+                // with every save queued behind them. What that rewrite would also have
+                // done is push mirror files that never reached the device because their
+                // directory fell past [MAX_WATCHED_DIRECTORIES] and no observer ever
+                // reported them. Those stay mirror-only. They were mirror-only before the
+                // rename too — this does not lose them, it just stops incidentally
+                // rescuing them.
+                val localFile = File(job.localPath)
+                val renamed = job.safDocUri != null && renameInSaf(job.safDocUri, localFile.name)
+                if (!renamed && localFile.exists() &&
+                    job.safParentUri != null && job.safTreeUri != null
+                ) {
+                    createInSaf(localFile, job.safParentUri, job.safTreeUri)
                 }
             }
         }
@@ -890,29 +955,40 @@ class SafSyncEngine(private val context: Context) {
 
         if (!shouldWriteBack(relativePath, isDirectory)) return
 
+        val now = System.currentTimeMillis()
+
         // A directory that moved away is one half of a rename, and the device holds the
         // only complete copy of it. Android does not expose inotify's cookie, so the
-        // MOVED_FROM and the MOVED_TO cannot be paired and this half arrives as a plain
-        // delete — which on a directory document is `deleteDocument` taking everything
-        // beneath it on the device. What the other half gives back is the mirror's copy,
-        // and the mirror is not all of it: [createChildrenInSaf] stops at
-        // [MAX_UPLOAD_ENTRIES], and the mirror never held the `.git` or `node_modules`
-        // that [SKIP_DIRECTORIES] kept out of it, so those go and never return. Renaming
-        // a folder of 3000 files therefore left 1000 of them nowhere but the mirror,
-        // which is reclaimed as soon as the folder's permission lapses.
+        // MOVED_FROM and the MOVED_TO cannot be paired by the kernel's own identifier and
+        // this half arrives as a plain delete — which on a directory document is
+        // `deleteDocument` taking everything beneath it on the device. What the other half
+        // gives back is the mirror's copy, and the mirror is not all of it:
+        // [createChildrenInSaf] stops at [MAX_UPLOAD_ENTRIES], and the mirror never held
+        // the `.git` or `node_modules` that [SKIP_DIRECTORIES] kept out of it, so those go
+        // and never return. Renaming a folder of 3000 files therefore left 1000 of them
+        // nowhere but the mirror, which is reclaimed as soon as the folder's permission
+        // lapses.
         //
-        // Declining costs a stale copy under the old name. It stays in the device
-        // folder, and reopening the folder copies it back down, so the old name
-        // reappears in the editor beside the new one — untidy, visible, and removable,
-        // which the delete was none of. Removing it there propagates: an outright
-        // delete arrives as DELETE and is still acted on, so this does not reach a real
-        // deletion. What it does now leave behind is a directory the editor moved to a
-        // trash location outside the mirror.
+        // So the delete is never propagated — it is held instead, for the MOVED_TO that a
+        // rename sends a moment later. That one renames the device's *own* document into
+        // the new name, which carries the subtree the mirror could not because the
+        // provider moves it in place, and leaves nothing under the old name.
+        //
+        // When nothing claims it the record expires and the device keeps a stale copy
+        // under the old name — and that copy is durable, not merely untidy: reopening the
+        // folder copies it back down, so the old name reappears in the editor beside the
+        // new one, and an unclaimed move leaves one more of them every time. Deleting it
+        // in the editor propagates, because an outright delete arrives as DELETE and is
+        // still acted on; nothing removes it on the user's behalf.
         if (isDirectory && (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_FROM) {
+            synchronized(vanishedLock) {
+                vanishedDirectories.removeAll { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
+                vanishedDirectories.add(VanishedDirectory(relativePath, now))
+            }
             Logger.i(
                 tag,
-                "Directory moved away; keeping the device copy of $relativePath, which is " +
-                    "the complete one"
+                "Directory moved away; keeping the device copy of $relativePath until a " +
+                    "rename claims it"
             )
             return
         }
@@ -924,16 +1000,65 @@ class SafSyncEngine(private val context: Context) {
             File(relativePath).parent ?: ""
         )
 
+        // The other half. Claiming is refused unless the device has nothing under the new
+        // name (`safDocUri == null`): `renameDocument` handed a name the folder already
+        // holds is the same trap as `createDocument`, and providers answer it by inventing
+        // "util (1)" — which would leave the user two directories again, one of them
+        // named nonsense. A swap — `mv dist dist.old; mv dist.new dist` — is refused by
+        // the same test, because the first rename is still in the queue when the second
+        // pair arrives and the device still answers for `dist`. Its second half falls back
+        // to being created from the mirror, which is what it did before; its first half
+        // still moves in one piece.
+        val renamedFrom =
+            if (isDirectory &&
+                (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_TO &&
+                safDocUri == null
+            ) claimVanishedDirectory(relativePath, now) else null
+        // Resolved after the claim rather than when the directory vanished, so that the
+        // provider is only asked on the events that turn out to be renames. Null means
+        // the device has no document under the old name — there is nothing to rename and
+        // nothing to duplicate, so this falls back to creating the new name outright.
+        val renamedFromUri = renamedFrom?.let { resolveDocumentUri(safTreeUri, it) }
+        if (renamedFrom != null && renamedFromUri != null) forgetCachedSubtree(renamedFrom)
+
         writeBackQueue.offer(
             SyncJob(
-                type = type,
+                type = if (renamedFromUri != null) SyncType.RENAME else type,
                 localPath = localFile.absolutePath,
-                safDocUri = safDocUri,
+                safDocUri = renamedFromUri ?: safDocUri,
                 safParentUri = safParentUri,
                 safTreeUri = safTreeUri,
-                timestamp = System.currentTimeMillis()
+                timestamp = now
             )
         )
+    }
+
+    /**
+     * Takes the vanished directory a MOVED_TO on [newRelativePath] may be the other half
+     * of, or null when none of them can be claimed. A claimed entry is consumed.
+     */
+    private fun claimVanishedDirectory(newRelativePath: String, now: Long): String? =
+        synchronized(vanishedLock) {
+            val source = renameSourceFor(vanishedDirectories, newRelativePath, now)
+            if (source != null) vanishedDirectories.removeAll { it.relativePath == source }
+            source
+        }
+
+    /**
+     * Drops [relativePath] and everything under it from [docIdCache].
+     *
+     * Called when the device document behind that path has been renamed, which is the one
+     * event that invalidates a whole branch of the cache at once. Two things go wrong
+     * without it, and both are quiet: on a provider whose document IDs are paths, every
+     * cached ID under the old name now names a document that does not exist; and on a
+     * provider whose IDs survive a rename, [createOneInSaf]'s reverse lookup can find the
+     * *old* path for the renamed document and file new children under a relative path the
+     * mirror no longer has. Dropping them costs a tree walk on the next lookup of a path
+     * below the new name, which is the slow path that already exists for new files.
+     */
+    private fun forgetCachedSubtree(relativePath: String) {
+        val prefix = "$relativePath/"
+        docIdCache.keys.removeAll { it == relativePath || it.startsWith(prefix) }
     }
 
     /**
@@ -1006,6 +1131,61 @@ class SafSyncEngine(private val context: Context) {
          * to read the event type at all.
          */
         private const val IN_ISDIR = 0x40000000
+
+        /**
+         * How long a directory that left the mirror stays claimable as a rename source.
+         *
+         * A rename(2) emits MOVED_FROM and MOVED_TO back to back and `FileObserver`
+         * delivers them from one thread in that order, so the true pair is milliseconds
+         * apart; this is slack for a busy observer thread, not a guess at how long a user
+         * might take. Widening it does not make pairing more likely to succeed — it makes
+         * a mis-pair more likely, because it is the only thing bounding how far apart two
+         * *unrelated* moves can be and still be joined.
+         */
+        internal const val RENAME_PAIR_WINDOW_MS = 1_000L
+
+        /**
+         * Which vanished directory a MOVED_TO on [newRelativePath] is the other half of,
+         * or null when the question cannot be answered.
+         *
+         * inotify's cookie is what would answer it; `FileObserver` does not expose it, so
+         * this is a heuristic and it declines rather than guesses. **When it is wrong:**
+         * one directory leaves the mirror for good (`mv dir ~/elsewhere`, a build tool
+         * swapping trees) and, within [RENAME_PAIR_WINDOW_MS], an unrelated directory
+         * arrives in the same parent. The two are then joined, and the device ends up with
+         * the departed directory's subtree under the arriving one's name while the
+         * arriving one's own contents stay in the mirror. Nothing is deleted in that
+         * case — reopening the folder brings the misplaced subtree back down where it can
+         * be seen and moved — which is why the pairing is allowed to be a heuristic at
+         * all, and why a rule that cannot be sure says no:
+         *
+         * - **Exactly one candidate.** Two directories in flight at once cannot be told
+         *   apart by arrival order alone once their events interleave, and pairing the
+         *   wrong two would put each subtree under the other's name.
+         * - **Same parent.** A move between directories is not a rename;
+         *   `renameDocument` cannot express one, and it is `moveDocument` — a different
+         *   call, with its own provider flag — that would. Such a move falls back to the
+         *   old behaviour rather than being half-performed.
+         * - **Recent.** See [RENAME_PAIR_WINDOW_MS].
+         *
+         * Declining costs exactly what the code did before there was any pairing: the
+         * device keeps the copy under the old name.
+         */
+        internal fun renameSourceFor(
+            vanished: List<VanishedDirectory>,
+            newRelativePath: String,
+            now: Long
+        ): String? {
+            val candidate = vanished
+                .filter { now - it.atMillis <= RENAME_PAIR_WINDOW_MS }
+                .singleOrNull() ?: return null
+            if (parentPathOf(candidate.relativePath) != parentPathOf(newRelativePath)) return null
+            return candidate.relativePath
+        }
+
+        /** The directory part of a mirror-relative path; empty for a top-level entry. */
+        private fun parentPathOf(relativePath: String): String =
+            File(relativePath).parent ?: ""
 
         /**
          * Ceiling on watched directories.
@@ -1152,19 +1332,15 @@ class SafSyncEngine(private val context: Context) {
          * Everything under [root] that has to be created on the device when [root]
          * itself is created, parents before children.
          *
-         * Renaming a directory is what makes this necessary. inotify reports it as a
-         * MOVED_FROM on the old name and a MOVED_TO on the new one, with no way for
-         * `FileObserver` to pair them -- Android does not expose inotify's cookie -- so
-         * the two arrive as an unrelated delete and create. Without this walk the create
-         * put an empty directory on the device under the new name and the files stayed
-         * in the local mirror, which is reclaimed as soon as the permission lapses. It
-         * does the same for the plain "a directory appeared" case, which was equally
-         * unhandled.
+         * A directory that simply appears in the mirror is the case this serves: without
+         * the walk the create put an empty directory on the device and the files stayed
+         * in the local mirror, which is reclaimed as soon as the permission lapses.
          *
-         * What it cannot do is stand in for the copy under the old name: the cap bounds
-         * it, and [SKIP_DIRECTORIES] excludes directories the mirror never held a copy
-         * of in the first place. That is why [handleMirrorEvent] leaves the old name on
-         * the device rather than deleting it and rebuilding from here.
+         * What it cannot do is stand in for a copy the device already has: the cap bounds
+         * it, and [SKIP_DIRECTORIES] excludes directories the mirror never held a copy of
+         * in the first place. That is why a rename [handleMirrorEvent] could pair goes to
+         * `renameDocument` instead of coming through here, and why an unpaired one leaves
+         * the old name on the device rather than deleting it and rebuilding from here.
          *
          * Breadth-first so the cap, when it bites, spends the budget on the shallow
          * entries a person is likelier to be looking at. Parents precede children by
@@ -1321,5 +1497,16 @@ internal data class SyncJob(
 )
 
 internal enum class SyncType {
-    MODIFY, CREATE, DELETE
+    MODIFY, CREATE, DELETE, RENAME
 }
+
+/**
+ * A directory that left the mirror and has not been accounted for yet.
+ *
+ * [relativePath] is where it was, which is all a later MOVED_TO needs to find the
+ * document still standing under that name on the device.
+ */
+internal data class VanishedDirectory(
+    val relativePath: String,
+    val atMillis: Long
+)
