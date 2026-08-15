@@ -206,7 +206,7 @@ VSCodroid/
 | `SplashActivity.kt` | First-run asset extraction, progress UI, Language Picker |
 | `VSCodroidApp.kt` | Application class, WebView pre-warm, CrashReporter init |
 | `bridge/AndroidBridge.kt` | JS interface: clipboard, file picker, OAuth, SSH, storage, toolchains |
-| `bridge/SecurityManager.kt` | URL allowlist for WebView navigation (localhost only) |
+| `bridge/SecurityManager.kt` | The bridge session token: issues it, and validates it on every `@JavascriptInterface` call. It judges the caller, never the destination — there is no URL allow-list, and WebView navigation is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading` |
 | `keyboard/ExtraKeyRow.kt` | Multi-page key bar with ViewPager2 and dot indicators |
 | `keyboard/GestureTrackpad.kt` | 3-speed drag-to-cursor-navigate widget |
 | `keyboard/KeyInjector.kt` | Injects KeyboardEvent into WebView via JS |
