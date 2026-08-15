@@ -1,6 +1,7 @@
 package com.vscodroid.service
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
@@ -86,8 +87,9 @@ class NodeService : Service() {
     /**
      * Whether this failure episode has already been raised to a bound client.
      *
-     * An episode, not a run, and the difference is what the previous version of
-     * this got wrong. It keyed on [runId], which changes only when a run ENDS —
+     * An episode, not a run, and the difference is what an earlier shape of this
+     * got wrong while it was being built — no release ever carried either shape.
+     * It keyed on [runId], which changes only when a run ENDS —
      * and a run does not end when a server finally comes up. So after any
      * successful start, every later failure in that run was silent, and a run can
      * last days.
@@ -165,6 +167,14 @@ class NodeService : Service() {
         // is how the next reader learns the wrong order.
         serviceScope.cancel()
         processManager.stopServer()
+        // Deliberately does NOT call [removeNotification]. Reaching here after
+        // [shutdown] there is nothing left to remove, and reaching here any other
+        // way means the system destroyed a service that was in the terminal state
+        // — where the detached card is the only place that state is visible once
+        // the activity is gone, which is the whole reason it was detached rather
+        // than removed. Its Stop action starts the process again and clears it,
+        // which is measured to work; taking the card down here would remove the
+        // trace and the lever together.
         super.onDestroy()
     }
 
@@ -319,6 +329,7 @@ class NodeService : Service() {
         endFailureEpisode()
         processManager.stopServer()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        removeNotification()
         stopSelf()
         onServerStopped?.invoke()
     }
@@ -349,6 +360,32 @@ class NodeService : Service() {
     private fun cancelLaunch() {
         launchJob?.cancel()
         launchJob = null
+    }
+
+    /**
+     * Takes the notification down, whatever state it is in.
+     *
+     * `stopForeground(STOP_FOREGROUND_REMOVE)` is not enough on its own and this
+     * is not belt-and-braces. [stopServingRecoverably] detaches the card, and a
+     * detached card is no longer the service's foreground notification, so
+     * `stopForeground` has nothing to act on. Measured on an API 36 emulator: with
+     * the terminal card up, tapping Stop ran this whole method and the
+     * NotificationRecord was still posted afterwards — and tapping it a second
+     * time did the same again. Without an explicit cancel it is a permanent
+     * button on a card nothing can clear.
+     *
+     * Called AFTER `stopForeground`, not before, and the order matters in the
+     * other direction: while the service is still in the foreground the system
+     * owns that notification, and cancelling it there is not reliable.
+     * `stopForeground` handles the ordinary case, and this handles the detached
+     * one. Each is a no-op where the other applies.
+     *
+     * The first `NotificationManager.cancel` in this app — until now the manager
+     * was used only to create the channel, in `VSCodroidApp`.
+     */
+    private fun removeNotification() {
+        getSystemService(NotificationManager::class.java)
+            ?.cancel(VSCodroidApp.NOTIFICATION_ID)
     }
 
     /**
@@ -608,7 +645,7 @@ class NodeService : Service() {
         // the field exists, as [lastStartupNotice] says -- and nobody sees it
         // twice, so throttling it buys nothing and costs the thing it was for.
         //
-        // Throttling both is what the previous version did, and [launchServer]
+        // Throttling both is what an earlier draft of this did, and [launchServer]
         // nulls the field at the top of every attempt, so from the second attempt
         // onward the gate returned before restoring it. `lastStartupNotice()`
         // answered null for the rest of the episode: a client binding into that
@@ -632,8 +669,8 @@ class NodeService : Service() {
      * The two always move together, which is why they are one function rather
      * than a pair repeated three times. Every place that refreshes the budget is
      * also a place a fresh failure deserves to be heard — the server came up, the
-     * user stopped it, or the budget ran out — and the previous version refreshed
-     * the budget at all three and the message key at none of them.
+     * user stopped it, or the budget ran out — and an earlier draft refreshed the
+     * budget at all three and the message key at none of them.
      */
     private fun endFailureEpisode() {
         restartCount = 0
@@ -791,17 +828,32 @@ class NodeService : Service() {
      * [serverRunning] cleared and its own wording — the one left behind after it
      * has stopped for good.
      *
-     * Always tapping through to [MainActivity]. The Stop action, which sends
-     * [ACTION_STOP] here, appears only while there is a server to stop, and both
-     * of the things [serverRunning] governs follow from that same fact rather
-     * than happening to agree: an ongoing notification is one the user cannot
-     * dismiss, which is only fair while something is still running behind it.
+     * Always tapping through to [MainActivity], and always carrying the Stop
+     * action. [serverRunning] governs only whether the notification is ongoing —
+     * one the user cannot dismiss, which is only fair while something is still
+     * running behind it.
      *
-     * Withholding the action is also what keeps the terminal notification safe to
-     * outlive this service. It is a `PendingIntent.getService`, and sending one
-     * at a service that is gone is a background service start — from a
-     * notification that, being detached, can still be on screen after the process
-     * it belonged to has been reclaimed.
+     * The action used to be withheld from the stopped card, on the reasoning that
+     * it is a `PendingIntent.getService` and sending one at a service whose
+     * process has been reclaimed is a background service start. **Measured on an
+     * API 36 emulator, that is not what happens.** With the process confirmed gone
+     * by both `ps` and `pidof`, tapping the action from the shade created the
+     * process for the service and ran the stop:
+     *
+     *     ActivityManager: Start proc 7532:com.vscodroid.debug for service .../NodeService
+     *     NodeService: Service created
+     *     NodeService: Stop requested from the notification
+     *
+     * No ForegroundServiceStartNotAllowedException, no
+     * BackgroundServiceStartNotAllowedException, nothing refused. A notification
+     * action is a user-initiated send and is exempted.
+     *
+     * Withholding it was therefore not protection, it was the only lever removed.
+     * `MainActivity` is `singleTask` and re-issues the service start only from
+     * `onCreate`, so while that activity lives nothing else can restart the
+     * service — the launcher tap reaches `onNewIntent`, which handles the OAuth
+     * relay and nothing else. With no Stop on the card there was no way back at
+     * all short of force-stopping the app.
      */
     private fun createNotification(
         title: String = getString(R.string.notification_title),
@@ -840,15 +892,16 @@ class NodeService : Service() {
             // a sound, this governs whether it waits.
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
-        if (serverRunning) {
-            val stopIntent = Intent(this, NodeService::class.java).apply {
-                action = ACTION_STOP
-            }
-            val pendingStop = PendingIntent.getService(
-                this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE
-            )
-            builder.addAction(0, getString(R.string.action_stop), pendingStop)
+        // On both cards. On the stopped one it is the only route back: see the
+        // KDoc above for what was measured about sending it at a reclaimed
+        // process, and why withholding it left no way out at all.
+        val stopIntent = Intent(this, NodeService::class.java).apply {
+            action = ACTION_STOP
         }
+        val pendingStop = PendingIntent.getService(
+            this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+        builder.addAction(0, getString(R.string.action_stop), pendingStop)
 
         return builder.build()
     }
