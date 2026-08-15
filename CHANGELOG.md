@@ -219,6 +219,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor server's connection token no longer reaches the Android system log. That token is what authenticates the editor to its own server, and the system log can be read by other software on the device, so a value that gates the whole editor was leaving the app's private storage as a side effect of ordinary use. Nothing changes in day-to-day use: the token is still generated on first start, still kept in private storage, and still supplied for you
 
 ### Fixed
+- Updating the app no longer asks for room the install already occupies. The
+  space check was written for a first install, which unpacks the whole editor, and
+  applied unchanged to an update, which overwrites it a file at a time and needs
+  room for one file rather than a second copy of everything. On this release the
+  difference is hidden, because updating from the previous version clears the old
+  editor first — but the release after it would have demanded around 874 MB free
+  on a device already holding 810 MB of app, and refused to start on the loading
+  screen with no way through. What is already unpacked is now measured and
+  credited, so an update asks for roughly 334 MB instead
+- A setup interrupted partway can now be retried. If unpacking ran out of space,
+  what it had already written stayed on the device — and the retry then asked for
+  the full amount again, most of which was that partial copy, so the same refusal
+  repeated for ever. The retry now counts what is already there. It re-copies the
+  whole editor rather than resuming, so it costs time, but it can finish
+- Renaming a folder inside a device folder no longer leaves a second copy behind.
+  The old name used to stay on the device — deleting it was not an option, because
+  that takes the whole subtree there and the local copy cannot put back what it
+  never held — and reopening the folder copied that leftover back down, so the old
+  name reappeared beside the new one and one more copy accumulated per rename. The
+  two halves of a rename are now joined where they can be, and the device's own
+  folder is moved to the new name, which carries everything under it. Where they
+  cannot be joined — a folder moved out of the workspace, a move into a different
+  parent, or a provider that does not support renaming — the old copy still stays,
+  because losing it would cost files that exist nowhere else
+- The editor no longer adopts a server that is not answering. When the app restarts
+  after its own server process was killed, it can reuse a surviving server rather
+  than start a second one — but the record it consults is written when that server
+  is launched, not when it starts listening, so a server that failed to take the
+  port was still vouched for. The app would reuse it, find it silent, restart, and
+  reuse it again until it gave up, without ever attempting a real start. It now
+  asks the port whether anything is answering before reusing what the record names
+- A release can no longer be published with one of its files missing. The upload
+  and publish steps both defaulted to warning rather than failing when a file was
+  not where they expected, so an APK or bundle that stopped being produced —
+  after a build-tool upgrade moves an output path, say — would have gone out as a
+  release with a gap in it, discovered by whoever tried to download it. Every
+  artifact is now named and required before anything is published
+- Crash reports from a release build can be read again. Release builds are
+  minified, which renames every class and method, and the file that reverses that
+  renaming was produced during the build and then discarded — so a stack trace
+  someone sent in read as `a.b.c` and nothing could turn it back. It is now kept
+  with the release it belongs to, for as long as the release exists. It names the
+  app's own classes, which are already public in this repository
+- Several documents described things the app no longer does: that the editor is a
+  fork of another project rather than built from the MIT source, that Rust and
+  C/C++ toolchains are available, that toolchains arrive only through Play, and a
+  release-asset list that omitted the toolchain downloads sideloaded installs
+  depend on. Where a document records a decision as it was made, it now says so at
+  the top rather than being rewritten; where it defines what something is today —
+  the glossary — it has been corrected
 - Running out of storage can no longer leave `npm install` permanently broken. The
   small settings file that tells npm which shell to use was the one setup file
   written by emptying it first and filling it afterwards, so a write interrupted by
