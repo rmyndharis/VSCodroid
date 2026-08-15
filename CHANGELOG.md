@@ -107,6 +107,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- Installed toolchains can be run. Ruby and Java installed, reported success and
+  then refused to start: typing `ruby -v` gave `Permission denied` and exit 126.
+  Nothing was wrong with the download or the file. Android refuses to execute
+  *any* file stored in an app's own data directory, whatever its permissions, and
+  that is where a downloaded toolchain necessarily lives — the directory the
+  bundled tools run from is written by the package installer and cannot be added
+  to. Measured on device: the same binary is refused through a symlink too,
+  because the refusal follows the file rather than the path, which is why setting
+  the execute bit could never have helped. Each toolchain command is now handed to
+  the system loader, which is permitted to run it — arguments, quoting and exit
+  codes all come back intact.
+  **Go is still limited to what it can do without compiling.** `go` itself runs,
+  but `go build` starts its own compiler and linker directly, and those starts are
+  refused for the same reason with nothing in between to redirect them. That is a
+  platform limit rather than something left undone
 - **Serve on Network** now appears for people upgrading, not only on a clean
   install. An extension bundled for the first time had no entry in the manifest
   the workbench scans, and the reconcile that repairs that manifest could not

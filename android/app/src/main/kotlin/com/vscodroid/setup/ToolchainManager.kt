@@ -1044,6 +1044,27 @@ class ToolchainManager(private val context: Context) {
     fun regenerateEnvFile() = synchronized(stateLock) { regenerateEnvFileLocked() }
 
     /**
+     * Path to the system dynamic linker, which is the only way a toolchain
+     * binary runs at all.
+     *
+     * SELinux denies `execute_no_trans` on `app_data_file`, so the kernel
+     * refuses to `execve` anything whose inode is under `filesDir` -- which is
+     * every byte a downloaded toolchain consists of. Measured on an API 37
+     * emulator, `user` build, SELinux enforcing, from inside the app's own
+     * process: a valid ELF copied there with mode 0755 fails with EACCES, and
+     * it fails identically when reached through a symlink, because the check is
+     * on the resolved inode's label rather than on the path. `chmod` cannot
+     * reach it.
+     *
+     * Handing the same file to a loader that lives somewhere the app *may*
+     * execute from does run it: `/system/bin/linker64 <binary>` returned 0 and
+     * the program's own output, arguments and quoting survived, a non-zero exit
+     * code came back intact, and `$0` was the binary's path rather than the
+     * loader's. It is the shape the bundled Claude Code CLI already relies on.
+     */
+    private val systemLoader = "/system/bin/linker64"
+
+    /**
      * Caller must hold [stateLock]. This file is derived from `toolchains.json`,
      * so regenerating it from a state another instance is midway through
      * changing produces an environment for a set of toolchains that never
@@ -1076,6 +1097,36 @@ class ToolchainManager(private val context: Context) {
                 sb.appendLine("export $key=\"$value\"")
             }
             sb.appendLine()
+
+            // Binary wrappers. Nothing under filesDir can be execve'd, so every
+            // name PATH would resolve to is shadowed by a shell function that
+            // hands the file to the system loader instead. Functions rather than
+            // scripts for the same reason npm and npx are functions: a shebang
+            // file under filesDir cannot be executed either.
+            //
+            // Only ELF objects are wrapped here. A manifest's `binaries` list
+            // also carries interpreter scripts -- Ruby's `gem` and `rake` are
+            // Ruby source -- and those are handled by scriptWrappers below,
+            // which routes them through their interpreter. That interpreter is
+            // itself one of these functions, so the two layers compose.
+            val scriptNames = tc.optJSONObject("scriptWrappers")
+                ?.optJSONObject("scripts")?.keys()?.asSequence()?.toSet().orEmpty()
+            val binaries = tc.optJSONArray("binaries")
+            if (binaries != null) {
+                val lines = mutableListOf<String>()
+                for (i in 0 until binaries.length()) {
+                    val relPath = binaries.getString(i)
+                    val command = relPath.substringAfterLast('/')
+                    if (command.isEmpty() || command in scriptNames) continue
+                    if (!isElf(File(context.filesDir, relPath))) continue
+                    lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" \"\$@\"; }")
+                }
+                if (lines.isNotEmpty()) {
+                    sb.appendLine("# $name binaries (SELinux blocks exec under filesDir)")
+                    lines.forEach(sb::appendLine)
+                    sb.appendLine()
+                }
+            }
 
             // Script wrappers — bash functions for scripts that can't execute directly
             // on Android: SELinux denies execute_no_trans under filesDir, so a shebang
