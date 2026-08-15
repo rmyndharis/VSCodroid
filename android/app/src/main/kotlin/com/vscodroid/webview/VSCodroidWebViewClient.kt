@@ -313,10 +313,15 @@ class VSCodroidWebViewClient(
      */
     override fun onPageFinished(view: WebView, url: String?) {
         // Redacted for the log only. [onPageLoaded] gets the URL as it arrived,
-        // because MainActivity derives the open workspace folder from it and
-        // nothing else does -- a redacted copy would lose the folder on every
-        // load. This log statement is at `Logger.i`, which is not gated on a
-        // debuggable build, so it was the leak that shipped.
+        // because `MainActivity` reads the open workspace folder out of it. It
+        // has another source for that folder -- it sets it directly when it is
+        // the one driving the navigation -- but not for the case this callback
+        // exists to cover: the workbench switches folders by navigating itself,
+        // without going through Kotlin, and then the URL is the only notice
+        // there is. A redacted copy would lose the folder on exactly those loads.
+        //
+        // This log statement is at `Logger.i`, which is not gated on a debuggable
+        // build, so it was the leak that shipped.
         Logger.i(tag, "Page loaded: ${redactToken(url)}")
         onPageLoaded(url)
     }
@@ -587,8 +592,10 @@ class VSCodroidWebViewClient(
                 )
             } catch (e: Exception) {
                 connection?.disconnect()
-                // `logTag` never carries the token -- every caller builds it from
-                // the host and path only. `e.message` is the reason this is
+                // `logTag` never carries the token: all three callers build it
+                // from a host or authority and a path, and none of them includes
+                // a query string, which is the only place the token ever sits.
+                // `e.message` is the reason this is
                 // redacted anyway: a connection failure names the socket and not
                 // the URL, which is measured rather than assumed, but
                 // `MalformedURLException` from `URL(url)` above reports the spec it
