@@ -92,7 +92,7 @@ class WebviewResourceResolutionTest {
      */
     @Test
     fun `an installed extension's own media is served`() {
-        val path = "$FILES/home/.vscodroid/extensions/vscodroid.vscodroid-welcome-1.2.0/media/logo.png"
+        val path = "$FILES/home/.vscodroid/extensions/vscodroid.vscodroid-welcome-1.2.1/media/logo.png"
         assertEquals(canonical(path), resolveWebviewResource(path, ROOTS)?.path)
     }
 
