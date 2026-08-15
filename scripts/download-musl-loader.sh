@@ -38,8 +38,17 @@ MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
 echo "=== musl loader ==="
 mkdir -p "$WORK_DIR" "$JNI_DIR"
 
-# Truncated at the start of the run, the way every resolved-*.tsv in the Termux
-# scripts is, and for a sharper reason here: the loader is installed well before
+# Truncated at the start of the run, as five of the six other resolved-*.tsv
+# writers do -- download-python.sh, download-termux-tools.sh and the three
+# toolchain scripts. Check rather than take it on trust, since it is one grep:
+#     grep -n ': > "$PKG_MAP_FILE"' scripts/download-*.sh
+# download-node.sh is the exception, and not a harmless one: it writes its record
+# before the digest of what it resolved has been checked, so a run that fails
+# there leaves a record naming a version that never reached jniLibs. That is the
+# failure this line exists to avoid, which is why the count matters more than the
+# generalisation this comment used to make.
+#
+# Sharper reason here than in any of them: the loader is installed well before
 # the record is written, so a run that copies a new loader over the old one and
 # then fails -- the ELF gate, an interrupt -- would otherwise leave the PREVIOUS
 # run's record on disk naming a version that is no longer the file in jniLibs.

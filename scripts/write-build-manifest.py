@@ -68,8 +68,15 @@ def resolved_entries() -> list[tuple[str, str, str]]:
     Deliberately not a scan of the .deb directory. That directory accumulates
     across builds -- measured: it held two versions of zlib, 1.3.1-1 and 1.3.2 --
     so it answers "what has ever been downloaded here", not "what did this build
-    resolve". Each script truncates its own record at the start of a run, so
+    resolve". Most scripts truncate their own record at the start of a run, so
     these files answer the second question.
+
+    "Most", not "each", and the exception is worth knowing when reading a
+    manifest: download-node.sh writes resolved-node.tsv before it has checked the
+    digest of what it resolved, so a run that fails at that check leaves a record
+    naming a version that never reached jniLibs. A manifest line can therefore be
+    ahead of the tree it describes. One grep settles which scripts are which:
+        grep -n ': > "$PKG_MAP_FILE"' scripts/download-*.sh
     """
     work = ROOT / "toolchains" / "termux-packages"
     # Cleared per call rather than appended to: collect() may be called more than

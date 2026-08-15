@@ -313,9 +313,12 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
 // change, and so the others are findable rather than folklore:
 //     grep -n 'lt 1000' .github/workflows/*.yml
 //     grep -rn "printf '.x7fELF'" .github/workflows/
-// If a workflow ever raises its placeholder past this, the gate below starts
-// running in those jobs and fails on a file never meant to be a binary. Loud, not
-// silent -- but the fix is there, not here.
+// The gate below skips only while EVERY jniLibs entry is under this. Raising a
+// workflow's placeholder past it would arm the gate in that job -- but so would
+// any real binary landing beside the placeholder, and that is the trigger that
+// actually governs, since the guard stopped keying on libnode.so alone. Loud
+// either way rather than silent, and in both cases the fix is in the tree that
+// produced the mixture, not here.
 val jniLibsStubCeiling = 1000L
 
 // Every binary in jniLibs, checked where it is packaged rather than only where
@@ -366,6 +369,17 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     // fetch-vscode-oss.sh installs while download-node.sh installs the runtime, so
     // keying on Node would skip a tree that had a fetched-but-bad ripgrep and no
     // Node in it.
+    //
+    // The ceiling this rests on has one blind spot, measured rather than reasoned:
+    // a jniLibs in which EVERY .so is under it is taken for a placeholder tree and
+    // skipped, so a directory holding nothing but a 20-byte truncated binary is not
+    // examined. One real binary beside it and the sweep runs and catches it --
+    // verified, all three states. The blind case cannot yield a working APK and is
+    // caught on the CI path anyway, by build.yml's "Verify assets" step erroring
+    // when libnode.so is under the same 1000 bytes. Tightening it further would
+    // mean distinguishing a truncated binary from the placeholder by content
+    // rather than size, and that trade is not worth failing the three jobs that
+    // legitimately write a placeholder.
     onlyIf {
         jniDir.listFiles()?.any {
             it.name.endsWith(".so") && it.length() >= jniLibsStubCeiling
