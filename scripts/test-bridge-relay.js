@@ -111,8 +111,59 @@ Module._load = function (request) {
     return realLoad.apply(this, arguments);
 };
 
+/**
+ * Every command a bundled extension sends must have a branch in the relay.
+ *
+ * The severity word is not the only string crossing this boundary: the command
+ * names are twelve more, written once in a Kotlin raw string and again in the
+ * extensions, with nothing comparing them. A name that matches no branch is not
+ * an error anywhere -- the relay's `if/else if` chain simply ends, no reply is
+ * posted, and the extension's promise rejects five seconds later with a timeout
+ * that says the app might not be running. The cause and the symptom share no
+ * words.
+ *
+ * Only this direction is asserted. Branches with no sender are dead code, not a
+ * user-visible failure, and there are some; they are reported rather than
+ * refused so removing one stays a deliberate decision.
+ */
+function checkCommandCoverage(relay) {
+    const dispatched = new Set(
+        [...relay.matchAll(/d\.cmd === '([A-Za-z0-9_]+)'/g)].map((m) => m[1]),
+    );
+    const extensionsDir = path.join(ROOT, 'android/app/src/main/assets/extensions');
+    const sent = new Set();
+    for (const dir of fs.readdirSync(extensionsDir)) {
+        const file = path.join(extensionsDir, dir, 'extension.js');
+        if (!fs.existsSync(file)) continue;
+        for (const m of fs.readFileSync(file, 'utf8').matchAll(/sendBridgeCommand\('([A-Za-z0-9_]+)'/g)) {
+            sent.add(m[1]);
+        }
+    }
+
+    // Both sides report success by finding nothing, so both are asserted to
+    // have found something before anything is concluded from the comparison.
+    assert.ok(dispatched.size > 0, 'no dispatch branches were read from the relay');
+    assert.ok(sent.size > 0, 'no bridge commands were read from any bundled extension');
+
+    const unhandled = [...sent].filter((c) => !dispatched.has(c)).sort();
+    assert.deepStrictEqual(
+        unhandled, [],
+        `these commands are sent by a bundled extension and have no branch in the relay, so ` +
+        `they post no reply and fail five seconds later as "Bridge timeout — is the app ` +
+        `running on Android?", which names neither the command nor the real cause: ` +
+        `${unhandled.join(', ')}`,
+    );
+
+    return {
+        dispatched: dispatched.size,
+        sent: sent.size,
+        unused: [...dispatched].filter((c) => !sent.has(c)).sort(),
+    };
+}
+
 async function main() {
     const relay = extractRelay();
+    const coverage = checkCommandCoverage(relay);
     vm.runInNewContext(relay, {
         AndroidBridge,
         BroadcastChannel,
@@ -164,7 +215,13 @@ async function main() {
         assert.strictEqual(inert.error.length, 0, `${label} input surfaced an error`);
     }
 
-    console.log(`ok -- a declined URL surfaces "${refused.error[0]}", an opened one stays silent`);
+    const unused = coverage.unused.length
+        ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
+        : '';
+    console.log(
+        `ok -- a declined URL surfaces "${refused.error[0]}", an opened one stays silent; ` +
+        `all ${coverage.sent} commands sent by an extension have a relay branch${unused}`,
+    );
 }
 
 // Exit explicitly. The relay opens a BroadcastChannel inside the VM context and
