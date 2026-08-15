@@ -2324,14 +2324,21 @@ android/app/src/main/kotlin/com/vscodroid/
 **Acceptance criteria**:
 
 - [ ] Security review completed (no exposed secrets, sandbox intact)
-- [ ] WebView CSP headers properly configured
+- [x] WebView CSP headers — not ours to configure. The workbench ships its own policy and nothing in
+      this app's Kotlin or assets sets one. What this project does do is **widen** it: patch 0005
+      adds `'unsafe-inline'` to `script-src` because `script-src` pins the document's inline script
+      by sha256, patching that script changes its digest, and the build does not recompute the hash.
+      `default-src` stays `'none'` and `frame-src` stays `'self'`. Recorded here because it is a
+      deliberate relaxation and this list is where someone would look for it
 - [x] No URL allowlist in `SecurityManager` — there are no entries to validate. A development
       environment has to reach a LAN dev server, a private registry and a staging host, so the
       destination is deliberately unjudged; the session token is what is checked
 - [x] Cleartext HTTP is permitted app-wide, not restricted to localhost — a dev server is served over
       plain HTTP at the device's own address, and this file cannot express an address range
 - [x] Localhost matching uses `Uri.parse()` for exact host comparison
-- [ ] Extracted binaries have owner-only execute permissions
+- [x] Extracted binaries have owner-only execute permissions — all three sites that grant execute
+      (`FirstRunSetup` git-core, `ToolchainManager` install and its repair pass) call
+      `setExecutable(true, true)`; there is no plain `setExecutable(true)` anywhere in the tree
 
 ---
 
