@@ -761,27 +761,54 @@ Mapping to VS Code version:
 <!-- AndroidManifest.xml -->
 <application
     android:allowBackup="true"
-    android:fullBackupContent="@xml/backup_rules">
+    android:fullBackupContent="@xml/backup_rules"
+    android:dataExtractionRules="@xml/data_extraction_rules">
 ```
 
-**Backup rules** (`res/xml/backup_rules.xml`):
+Two files, because the platform reads two. `android:fullBackupContent` is consulted
+up to Android 11 (API 30) and `android:dataExtractionRules` from Android 12 (API 31)
+onwards. `minSdk` is 33, so **every supported device reads
+`data_extraction_rules.xml` and ignores `backup_rules.xml`**. The older file is kept
+deliberately rather than deleted: it is the floor that stops a future `minSdk`
+reduction from silently turning on unrestricted full backup. Keep the two in step —
+the header comment in each file carries the full reasoning.
+
+**Live rules** (`res/xml/data_extraction_rules.xml`):
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
-    <!-- Include user settings -->
-    <include domain="file" path="home/.vscodroid/User" />
-    <!-- Exclude sensitive data -->
-    <exclude domain="file" path="home/.ssh" />
-    <exclude domain="file" path="home/.gitconfig" />
-    <exclude domain="file" path="home/.vscodroid/logs" />
-    <!-- Exclude large/regenerable data -->
-    <exclude domain="file" path="server" />
-    <exclude domain="file" path="usr" />
-    <exclude domain="file" path="workspace" />
-    <exclude domain="external" path="." />
-    <exclude domain="database" path="." />
-</full-backup-content>
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="home/.vscodroid/data/Machine" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="home/.vscodroid/data/Machine" />
+    </device-transfer>
+</data-extraction-rules>
 ```
 
-**Rationale**: Allow backup of user VS Code settings (themes, keybindings, preferences) but exclude SSH keys, git credentials, extracted binaries, and workspace files (too large, user-managed).
+`backup_rules.xml` holds the same single `<include>` in `<full-backup-content>` form.
+
+**Rationale**: this is an **allowlist with no exclusions**, and the absence of
+`<exclude>` is the design rather than an omission. Under `<include>` semantics
+anything not named is already out, so exclusions would only restate paths that were
+never in scope — which is what lint reported, once per line.
+
+Fail-closed is the point. The app's private storage holds a passphrase-less SSH key
+(`Environment.getSshDir`) and the server's connection token
+(`Environment.getConnectionTokenPath`), and the token sits inside `data/`, one
+directory away from the settings that *are* backed up. A denylist protects exactly
+the secrets someone remembered to list; naming only what may leave keeps the next
+credential file out by default.
+
+What is included is `data/Machine` — where the workbench reads its settings from on
+this side, which is not the `User/` path it looks like it should be; see
+`Environment.getMachineSettingsPath`. Restoring it is worth doing because
+`FirstRunSetup.createDefaultSettings()` writes only when the file is absent, so a
+restored copy survives the new device's first run.
+
+Notably excluded by omission, and least obvious: `sharedpref`.
+`FirstRunSetup.isFirstRun()` answers from `setup_version` in those preferences, so
+restoring them onto a device with an empty `filesDir` would make the app conclude
+setup had already run, skip extraction entirely, and start a server that is not
+there.

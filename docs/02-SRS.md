@@ -146,7 +146,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-MUX-07 | System SHALL support portrait and landscape orientations | P1 | M2 |
 | FR-MUX-08 | System SHALL support split-screen / multi-window mode | P2 | M2 |
 | FR-MUX-09 | System SHALL disable WebView zoom (prevent accidental pinch-zoom) | P0 | M2 |
-| FR-MUX-10 | System SHALL register intent filter for common code file types (limited to app-private storage in M2; full external storage via SAF in M4) | P1 | M2 |
+| FR-MUX-10 | ~~System SHALL register intent filter for common code file types~~ **Withdrawn.** The filters were implemented and removed: they advertised the app for about twenty extensions and opened none of them, because the handler called `window.__vscodroid.onFileOpen`, which never had a consumer. Re-implementing is blocked on a deeper constraint, not on wiring — a `content://` URI has no POSIX path, the server only ever sees POSIX paths, so the file has to be materialised locally and saving would then write to a copy. `AndroidManifest.xml` records this where the filters used to be. Folders still open through SAF, which has the sync engine that makes write-back work | — | M2 |
 
 ### 3.7 Dev Environment (FR-DEV)
 
