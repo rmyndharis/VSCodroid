@@ -916,9 +916,11 @@ class MainActivity : AppCompatActivity() {
             // that showed why the rest have to be: it builds an AlertDialog and
             // calls show() on this thread, then the progress callbacks reach the
             // same dialog from the main thread, and ViewRootImpl.checkThread
-            // kills the app. It went unnoticed because the command was
-            // unreachable until the extension moved from "main" to "browser" --
-            // in the same window this review covers.
+            // kills the app. It stayed invisible for as long as the command was
+            // unreachable: the bundled extension declared "main", so it ran in
+            // the Node extension host and its BroadcastChannel never reached the
+            // relay that calls in here. Moving it to "browser" made the command
+            // reachable and the missing hop reachable with it.
             onOpenFolderPicker = { runOnUiThread { openFolderPicker() } },
             onOpenRecentFolder = { uri -> runOnUiThread { openRecentSafFolder(uri) } },
             onShowAbout = { runOnUiThread { showAboutDialog() } },

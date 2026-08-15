@@ -82,11 +82,38 @@ class BridgeCallbackThreadHopTest {
         }
         assertTrue(end > open) { "Unbalanced parentheses in the AndroidBridge construction." }
 
+        // Each assignment runs to the start of the next one, not to the end of its
+        // line, and comments come out of the value before it is searched. Both
+        // halves matter, and each was wrong in one direction: reading to
+        // end-of-line accused a correct callback whose body had been wrapped
+        // across three lines, while leaving comments in let a trailing
+        // "no hop needed" satisfy the search on a callback that had none.
+        //
+        // Comments are stripped from the extracted VALUES, not from the whole
+        // file: the brace matching above counts parentheses, and a "//" inside a
+        // string literal elsewhere in this activity would take its closing
+        // parenthesis with it.
         val body = source.substring(open + 1, end)
-        return Regex("""\bon([A-Za-z]+)\s*=\s*([^\n]*)""")
-            .findAll(body)
-            .associate { "on" + it.groupValues[1] to it.groupValues[2] }
+        val heads = Regex("""\bon([A-Za-z]+)\s*=""").findAll(body).toList()
+        return heads.mapIndexed { i, m ->
+            val to = heads.getOrNull(i + 1)?.range?.first ?: body.length
+            "on" + m.groupValues[1] to withoutComments(body.substring(m.range.last + 1, to))
+        }.toMap()
     }
+
+    /**
+     * Line comments removed.
+     *
+     * The file this reads discusses `runOnUiThread` at length in prose, so a
+     * sentence about the rule must not be able to satisfy a search for the rule.
+     * Line comments only: no callback value in this construction contains a block
+     * comment, and a stripper that handled them would have to handle strings too.
+     */
+    private fun withoutComments(value: String): String =
+        value.lines().joinToString("\n") { line ->
+            val marker = line.indexOf("//")
+            if (marker >= 0) line.substring(0, marker) else line
+        }
 
     @Test
     fun `every UI-touching bridge callback hops to the UI thread`() {
