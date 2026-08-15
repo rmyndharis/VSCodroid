@@ -24,9 +24,23 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     var keyInjector: KeyInjector? = null
 
-    private var ctrlActive = false
-    private var altActive = false
-    private var shiftActive = false
+    // The modifiers are not stored here. These read and write the adapter's
+    // toggle map, which is also what a (re)bound button is painted from, so the
+    // value handed to KeyInjector and the value on screen are one value rather
+    // than two kept equal by hand. Writing one repaints the live button too, so
+    // no site has to remember a second call -- forgetting that is what left this
+    // row believing Ctrl was held while the map it paints from said otherwise.
+    private var ctrlActive: Boolean
+        get() = adapter.isToggleActive("Ctrl")
+        set(value) { adapter.setToggleState("Ctrl", value) }
+
+    private var altActive: Boolean
+        get() = adapter.isToggleActive("Alt")
+        set(value) { adapter.setToggleState("Alt", value) }
+
+    private var shiftActive: Boolean
+        get() = adapter.isToggleActive("Shift")
+        set(value) { adapter.setToggleState("Shift", value) }
 
     private val viewPager: ViewPager2
     private val dotContainer: LinearLayout
@@ -43,17 +57,14 @@ class ExtraKeyRow @JvmOverloads constructor(
             keyInjector?.queryModifierState { jsCtrl, jsAlt, jsShift ->
                 if (ctrlActive && !jsCtrl) {
                     ctrlActive = false
-                    adapter.setToggleState("Ctrl", false)
                     Logger.d(tag, "Ctrl consumed by soft keyboard")
                 }
                 if (altActive && !jsAlt) {
                     altActive = false
-                    adapter.setToggleState("Alt", false)
                     Logger.d(tag, "Alt consumed by soft keyboard")
                 }
                 if (shiftActive && !jsShift) {
                     shiftActive = false
-                    adapter.setToggleState("Shift", false)
                     Logger.d(tag, "Shift consumed by soft keyboard")
                 }
                 if (ctrlActive || altActive || shiftActive) {
@@ -236,18 +247,12 @@ class ExtraKeyRow @JvmOverloads constructor(
     }
 
     private fun resetModifiersIfNeeded() {
-        if (ctrlActive) {
-            ctrlActive = false
-            adapter.setToggleState("Ctrl", false)
-        }
-        if (altActive) {
-            altActive = false
-            adapter.setToggleState("Alt", false)
-        }
-        if (shiftActive) {
-            shiftActive = false
-            adapter.setToggleState("Shift", false)
-        }
+        // Guarded rather than assigned unconditionally: a write repaints the
+        // button, and this runs after every ordinary key press, so clearing three
+        // already-idle modifiers would rebuild three backgrounds per keystroke.
+        if (ctrlActive) ctrlActive = false
+        if (altActive) altActive = false
+        if (shiftActive) shiftActive = false
         syncModifierState()
         removeCallbacks(modifierSyncRunnable)
     }
