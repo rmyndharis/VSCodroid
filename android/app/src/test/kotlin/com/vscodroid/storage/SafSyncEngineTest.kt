@@ -44,22 +44,22 @@ class SafSyncEngineTest {
         }
 
         @Test
-        fun `does not skip build directory - Q3 fix`() {
-            // Q3: "build" was removed from SKIP_DIRECTORIES because it can contain
+        fun `does not skip build directory`() {
+            // "build" is deliberately not in SKIP_DIRECTORIES: it can contain
             // legitimate source files (e.g., Gradle build scripts, C build outputs)
             assertFalse(
                 SafSyncEngine.shouldSkip("build", isDir = true),
-                "build/ should NOT be skipped (Q3 review fix)"
+                "build/ should NOT be skipped"
             )
         }
 
         @Test
-        fun `does not skip vscode directory - Q3 fix`() {
-            // Q3: ".vscode" was removed because it contains workspace settings
-            // that users want synced (launch.json, settings.json, extensions.json)
+        fun `does not skip vscode directory`() {
+            // ".vscode" is deliberately not in SKIP_DIRECTORIES: it contains workspace
+            // settings that users want synced (launch.json, settings.json, extensions.json)
             assertFalse(
                 SafSyncEngine.shouldSkip(".vscode", isDir = true),
-                ".vscode/ should NOT be skipped (Q3 review fix)"
+                ".vscode/ should NOT be skipped"
             )
         }
 
@@ -308,10 +308,11 @@ class SafSyncEngineTest {
         }
 
         @Test
-        fun `SKIP_DIRECTORIES does not contain Q3 removed entries`() {
-            // Regression: these were removed in the Q3 review fix
-            assertFalse("build" in SafSyncEngine.SKIP_DIRECTORIES, "build was removed in Q3")
-            assertFalse(".vscode" in SafSyncEngine.SKIP_DIRECTORIES, ".vscode was removed in Q3")
+        fun `SKIP_DIRECTORIES contains neither build nor vscode`() {
+            // Regression: both hold files users expect to reach the device, so
+            // adding either to the skip set breaks sync silently
+            assertFalse("build" in SafSyncEngine.SKIP_DIRECTORIES, "build must stay syncable")
+            assertFalse(".vscode" in SafSyncEngine.SKIP_DIRECTORIES, ".vscode must stay syncable")
         }
     }
 }
