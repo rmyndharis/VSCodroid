@@ -1198,10 +1198,17 @@ class MainActivity : AppCompatActivity() {
                             // caller could act on, which is why they post ok:true flatly.
                             // Posting ok:true for this one turned a blocked URL into a
                             // resolved promise, and the caller's error handler never ran.
+                            //
+                            // Both conditions are named and neither is claimed as the
+                            // cause, because a boolean cannot tell them apart and naming
+                            // only the allow-list is wrong for the other one: mailto is on
+                            // that list, so a device with no mail app would be told its
+                            // scheme is refused by a sentence listing that scheme as
+                            // allowed.
                             result = AndroidBridge.openExternalUrl(d.url, token);
                             ch.postMessage(result
                                 ? {id: d.id, ok: true}
-                                : {id: d.id, ok: false, error: 'VSCodroid did not open it. Allowed: https, mailto, and http on localhost'});
+                                : {id: d.id, ok: false, error: 'VSCodroid did not open it. It opens https, mailto, and http on localhost, and something on the device has to accept the link.'});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});

@@ -118,7 +118,11 @@ function checkPressureContract(tmp) {
     // reads the variable Environment sets -- so the pair that can silently drift
     // is these two Kotlin expressions, and nothing compared them either.
     const environment = fs.readFileSync(ENVIRONMENT, 'utf8');
-    const writerDir = kotlin.match(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/);
+    // All of them, not the first: a second writer aiming somewhere else is exactly
+    // the drift this compares for, and match() without /g would never look at it.
+    const writerDirs = [...kotlin.matchAll(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/g)]
+        .map((m) => m[1]);
+    const writerDir = writerDirs.length ? [writerDirs[0]] : null;
     const envDir = environment.match(/val tmpDir = "\$cacheDir\/([^"]+)"/);
     assert.ok(
         writerDir,
@@ -130,9 +134,14 @@ function checkPressureContract(tmp) {
         'could not find the directory Environment exports as TMPDIR, so the comparison below ' +
         'would be against nothing',
     );
+    assert.deepStrictEqual(
+        [...new Set(writerDirs)], writerDirs.slice(0, 1),
+        'MainActivity writes the pressure file into more than one directory (' +
+        writerDirs.join(', ') + '), so at most one of them can be the one the monitor opens',
+    );
     assert.strictEqual(
-        writerDir[1], envDir[1],
-        `MainActivity writes the pressure file into cacheDir/${writerDir[1]} while TMPDIR -- ` +
+        writerDir[0], envDir[1],
+        `MainActivity writes the pressure file into cacheDir/${writerDir[0]} while TMPDIR -- ` +
         `which is the directory the monitor opens -- is cacheDir/${envDir[1]}. The severity is ` +
         'written where nothing looks for it, and the filenames agreeing hides it.',
     );

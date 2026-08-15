@@ -14,6 +14,7 @@ import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -58,6 +59,16 @@ class OpenExternalUrlRefusalTest {
     private lateinit var context: Context
     private lateinit var bridge: AndroidBridge
 
+    /**
+     * What [AuthTabWindow] held before this class ran.
+     *
+     * It is an object, this suite runs in one JVM, and one test here writes to
+     * it. Restoring means whatever runs next reads what it would have read had
+     * this class not existed -- mockk's own cleanup covers mocks, not the state
+     * a test wrote through a real API.
+     */
+    private var authWindowBefore = 0L
+
     private companion object {
         /** Named so a failure says the launch was attempted, not that something broke. */
         const val UNREACHABLE = "a browser launch is not reachable from a JVM test"
@@ -70,8 +81,14 @@ class OpenExternalUrlRefusalTest {
         const val REMOTE = "https://github.com/login/oauth/authorize"
     }
 
+    @AfterEach
+    fun restoreAuthWindow() {
+        AuthTabWindow.disarm(authWindowBefore)
+    }
+
     @BeforeEach
     fun setUp() {
+        authWindowBefore = AuthTabWindow.openedAt()
         mockkObject(Logger)
         every { Logger.w(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
@@ -131,11 +148,12 @@ class OpenExternalUrlRefusalTest {
      * every legitimate open -- depends on this `true` alone.
      *
      * Reaching it costs two more stubs. `Uri.parse` has to answer instead of
-     * throwing, and the `Intent` constructor has to be intercepted, because
-     * android.jar's stub throws from it the same way. Nothing about the
-     * decision is stubbed: the allow-list and the token are still the real
-     * ones, and what is faked is only the platform's launch machinery, which
-     * does not exist in a JVM.
+     * throwing, and the `Intent` has to be intercepted -- not because its
+     * constructor throws, which under AGP's mockable android.jar it does not,
+     * but because `addFlags` returns the stub's default and the chain built on
+     * it does not survive. Nothing about the decision is stubbed: the allow-list
+     * and the token are still the real ones, and what is faked is only the
+     * platform's launch machinery, which does not exist in a JVM.
      */
     @Test
     fun `an allowed address that launches reports success`() {
@@ -191,10 +209,24 @@ class OpenExternalUrlRefusalTest {
         every { remote.scheme } returns "https"
         every { Uri.parse(REMOTE) } returns remote
 
+        // The control this test needed and did not have. Every assertion below is
+        // also satisfied by a run where the window was never armed at all, which
+        // is what happens the moment the clock stub stops applying -- the clock is
+        // read as the argument to opened(), so a throw lands before the write and
+        // leaves the value this test just set. Proving the stub answers, and that
+        // the arming line reached it, is what separates "rolled back" from
+        // "never happened".
+        assertEquals(
+            armedAt, SystemClock.elapsedRealtime(),
+            "the clock stub is not in force, so nothing below can tell a rollback from a " +
+                "launch that never armed the window",
+        )
+
         assertFalse(
             bridge.openExternalUrl(REMOTE, security.getSessionToken()),
             "no Custom Tab can be launched from a JVM test, so this must report failure",
         )
+        verify(atLeast = 1) { SystemClock.elapsedRealtime() }
         assertEquals(
             before, AuthTabWindow.openedAt(),
             "a launch that threw left the callback window armed. For the next ten minutes any " +

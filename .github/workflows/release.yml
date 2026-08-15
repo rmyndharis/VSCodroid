@@ -128,6 +128,7 @@ jobs:
           node scripts/test-platform-fix.js
           node scripts/test-server-bootstrap.js
           node scripts/test-process-monitor-extension.js
+          node scripts/test-bridge-relay.js
 
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops

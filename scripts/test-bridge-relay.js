@@ -32,10 +32,41 @@ const ROOT = path.join(__dirname, '..');
 const MAIN_ACTIVITY = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
 );
-const EXTENSION = path.join(
-    ROOT,
-    'android/app/src/main/assets/extensions/vscodroid.vscodroid-saf-bridge-1.3.0/extension.js',
-);
+const EXTENSIONS_DIR = path.join(ROOT, 'android/app/src/main/assets/extensions');
+
+/** How a literal dollar is written inside a Kotlin raw string. */
+const DOLLAR_ESCAPE = "${'$'}";
+
+/**
+ * The bundled bridge extension, whatever version it is at.
+ *
+ * Not a hardcoded directory. Bumping the version of a bundled extension is
+ * mandatory here whenever its contents change -- a device only re-extracts a
+ * directory whose name it does not already have -- so a path pinned to one
+ * version is a path that breaks on the next correct change, and the version in
+ * it is stale the moment anyone edits the extension.
+ *
+ * Ordered by parsed version rather than by name, because 1.10.0 sorts below
+ * 1.9.0 as text. check-welcome-claims.py picks its directory the same way.
+ */
+function bridgeExtension() {
+    const version = (name) => {
+        const tail = name.slice(name.lastIndexOf('-') + 1);
+        const parts = tail.split('.').map(Number);
+        return parts.some(Number.isNaN) ? [] : parts;
+    };
+    const dirs = fs.readdirSync(EXTENSIONS_DIR)
+        .filter((d) => d.startsWith('vscodroid.vscodroid-saf-bridge-'))
+        .sort((a, b) => {
+            const x = version(a), y = version(b);
+            for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+                if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+            }
+            return 0;
+        });
+    assert.ok(dirs.length, `no vscodroid.vscodroid-saf-bridge-* under ${EXTENSIONS_DIR}`);
+    return path.join(EXTENSIONS_DIR, dirs[dirs.length - 1], 'extension.js');
+}
 
 /**
  * The body of the raw string in `injectBridgeRelay()`, with the indentation
@@ -61,16 +92,22 @@ function extractRelay() {
     );
     const js = body.map((l) => (l.trim() ? l.slice(indent) : '')).join('\n');
 
-    // Kotlin would interpolate a bare $ before this ever reached the WebView,
-    // and the result is not the script anyone wrote. Cheap to check, silent if not.
+    // A bare $ is interpolated by Kotlin before the WebView ever sees the string,
+    // so the injected script would not be the one written here. The escape for a
+    // literal dollar is itself spelled with one, so valid escapes are removed
+    // before looking -- checking the raw text would reject exactly the form this
+    // message tells the reader to use.
+    const withoutEscapes = js.split(DOLLAR_ESCAPE).join('');
     assert.ok(
-        !js.includes('$'),
-        'the relay contains a $, which Kotlin interpolates into the raw string before the ' +
-        'WebView sees it. Escape it as ${\'$\'} or the injected script is not what is written here.',
+        !withoutEscapes.includes('$'),
+        'the relay contains a bare $, which Kotlin interpolates into the raw string before the ' +
+        'WebView sees it. Escape it, or the injected script is not what is written here.',
     );
     assert.ok(js.includes('openExternalUrl'),
         'the extracted text does not mention openExternalUrl, so the wrong block was extracted');
-    return js;
+
+    // Resolve the escapes the way Kotlin does, so what runs below is what runs there.
+    return js.split(DOLLAR_ESCAPE).join('$');
 }
 
 // ---- the Android side, stubbed -------------------------------------------
@@ -128,14 +165,14 @@ Module._load = function (request) {
  */
 function checkCommandCoverage(relay) {
     const dispatched = new Set(
-        [...relay.matchAll(/d\.cmd === '([A-Za-z0-9_]+)'/g)].map((m) => m[1]),
+        [...relay.matchAll(/d\.cmd === ['"]([A-Za-z0-9_.-]+)['"]/g)].map((m) => m[1]),
     );
     const extensionsDir = path.join(ROOT, 'android/app/src/main/assets/extensions');
     const sent = new Set();
     for (const dir of fs.readdirSync(extensionsDir)) {
         const file = path.join(extensionsDir, dir, 'extension.js');
         if (!fs.existsSync(file)) continue;
-        for (const m of fs.readFileSync(file, 'utf8').matchAll(/sendBridgeCommand\('([A-Za-z0-9_]+)'/g)) {
+        for (const m of fs.readFileSync(file, 'utf8').matchAll(/sendBridgeCommand\(['"]([A-Za-z0-9_.-]+)['"]/g)) {
             sent.add(m[1]);
         }
     }
@@ -172,7 +209,7 @@ async function main() {
     });
 
     const context = { subscriptions: [] };
-    require(EXTENSION).activate(context);
+    require(bridgeExtension()).activate(context);
 
     const openInBrowser = commands.get('vscodroid.openInBrowser');
     assert.ok(openInBrowser, 'the bundled extension no longer registers vscodroid.openInBrowser');
@@ -197,6 +234,42 @@ async function main() {
     );
     assert.ok(!refused.error[0].includes('undefined'),
         'the surfaced message leaked an undefined: ' + refused.error[0]);
+
+    // The relay's own text has to be the text that arrives. Asserting only that
+    // SOME message appeared accepts the failure this check exists to catch: a
+    // relay that answers nothing leaves the extension to reject on its own
+    // five-second timeout, which is also exactly one message, and says the app
+    // may not be running.
+    const declined = relay.match(/error: '([^']+)'/);
+    assert.ok(declined, 'no decline message found in the relay; its shape changed');
+    assert.ok(
+        refused.error[0].includes(declined[1]),
+        'the message the user saw is not the one the relay sends. Saw: ' + refused.error[0],
+    );
+
+    // Both conditions have to be named, because the bridge answers with a boolean
+    // and cannot say which failed. Naming only the allow-list is wrong for the
+    // other one, and reachably so: mailto is ON that list, so a device with no
+    // mail app would be told its scheme is refused by a sentence listing that
+    // scheme as allowed.
+    for (const clause of ['https, mailto', 'accept the link']) {
+        assert.ok(
+            declined[1].includes(clause),
+            'the decline message dropped "' + clause + '", so it now reads as a diagnosis of ' +
+            'one cause when the bridge cannot tell the causes apart: ' + declined[1],
+        );
+    }
+
+    // An allowed scheme that still fails to open -- the ActivityNotFound case.
+    // Same message, and that is the point: it must not tell this user their
+    // scheme was the problem when the message itself lists it as allowed.
+    const allowedButUnopened = await run('mailto:someone@example.com', false);
+    assert.strictEqual(allowedButUnopened.error.length, 1,
+        'an allowed URL that failed to open must still reach the user');
+    assert.ok(
+        allowedButUnopened.error[0].includes(declined[1]),
+        'the mailto case surfaced a different message: ' + allowedButUnopened.error[0],
+    );
 
     // The control. Without it, a relay that reported failure unconditionally
     // would satisfy the assertion above and put an error in front of every
