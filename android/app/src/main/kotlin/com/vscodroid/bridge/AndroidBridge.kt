@@ -124,10 +124,28 @@ class AndroidBridge(
         return clipboard.hasClipboardText()
     }
 
+    /**
+     * Opens a URL outside the editor. Any URL.
+     *
+     * There is no allow-list, and its absence is the product decision rather than
+     * an omission. VSCodroid is a development environment: a link can point at a
+     * LAN dev server on plain http, a private registry, a staging host, or a
+     * scheme belonging to another tool on the device. A list of permitted shapes
+     * refuses the work this app exists for, and it did — `http://192.168.1.50:5173`
+     * was refused here while the same URL followed as a link opened, because the
+     * two routes had different rules and the workbench chooses the route: VS Code
+     * sends "Open in Browser" through `window.open`, which `MainActivity` relays
+     * to this method, while an ordinary link navigation reaches
+     * `VSCodroidWebViewClient.shouldOverrideUrlLoading` and has never been
+     * filtered. Same click, same URL, two outcomes, one of them silent.
+     *
+     * The session token above still gates the call, and that is a different
+     * question: it asks whether the caller is our own page, not whether the
+     * destination is one somebody approved.
+     */
     @JavascriptInterface
     fun openExternalUrl(url: String, authToken: String) {
         if (!security.validateToken(authToken)) return
-        if (!security.isAllowedUrl(url)) return
         try {
             val uri = Uri.parse(url)
             val isLocalhost = uri.host == "127.0.0.1" || uri.host == "localhost"

@@ -112,33 +112,8 @@ class SecurityManagerTest {
         }
     }
 
-    // ── URL Allowlist ────────────────────────────────────────────────────
-
-    @Nested
-    inner class UrlAllowlistTest {
-
-        @ParameterizedTest(name = "should allow URL: {0}")
-        @ValueSource(strings = [
-            "https://github.com",
-            "https://open-vsx.org/extension/...",
-            "https://example.com/path?query=1",
-            "mailto:user@example.com"
-        ])
-        fun `allows https and mailto URLs`(url: String) {
-            assertTrue(manager.isAllowedUrl(url), "URL should be allowed: $url")
-        }
-
-        @ParameterizedTest(name = "should block URL: {0}")
-        @ValueSource(strings = [
-            "http://example.com",
-            "javascript:alert(1)",
-            "file:///etc/passwd",
-            "ftp://server/file",
-            "data:text/html,<h1>hi</h1>",
-            "intent://scan/#Intent;scheme=zxing;end"
-        ])
-        fun `blocks non-https non-mailto URLs`(url: String) {
-            assertFalse(manager.isAllowedUrl(url), "URL should be blocked: $url")
-        }
-    }
+    // The URL allow-list that stood here is gone, deliberately, and so are its
+    // cases. `SecurityManager` no longer decides anything about destinations —
+    // see the note where the method was, and `ExternalUrlHandoffTest` for what
+    // the app does with a URL now.
 }
