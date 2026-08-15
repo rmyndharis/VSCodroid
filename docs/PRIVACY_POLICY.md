@@ -5,7 +5,9 @@
 
 ## Summary
 
-VSCodroid is a fully offline code editor for Android. It does not collect, transmit, or store any personal data. Your code, files, and settings never leave your device unless you explicitly choose to share them (for example, by pushing code to a remote Git repository).
+VSCodroid is a fully offline code editor for Android. **We** do not collect, transmit, or store any personal data — there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
+
+Two exceptions to "nothing leaves the device", both under your control and neither involving us: Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below), and anything you ask the app to fetch — an extension, a toolchain, an `npm install` — is a request you initiated (see **Network Access**).
 
 ---
 
@@ -60,6 +62,19 @@ If you use the bundled SSH client to connect to remote servers, those connection
 
 The VS Code editor UI communicates with the local server process over `localhost` (127.0.0.1). This traffic never leaves your device. The server listens on the loopback interface only, so nothing on your network can reach it, and almost every route requires a token held in the app’s private storage before it will answer a request.
 
+## Android Backup (On by Default)
+
+VSCodroid allows Android's own backup service, so **one directory does leave the device** if you have backup enabled in your Android settings: `~/.vscodroid/data/Machine`, which holds your editor settings — theme, keybindings, preferences. Android uploads it to your Google account, not to us. We never see it.
+
+This is written as an allowlist, so everything not named above is excluded rather than the other way round. In particular these are **not** backed up:
+
+- your SSH keys (`~/.ssh`) and the local server's connection token
+- your projects and any folder you opened from device storage
+- the bundled runtimes and any language toolchains you installed
+- app preferences, deliberately — restoring those onto a device with empty storage would make the app believe setup had already run
+
+To turn it off entirely, use Android's own control: **Settings → Google → Backup**, or the per-app backup setting your device provides. It is Android's switch, not ours.
+
 ## What We Do NOT Do
 
 - We do **not** collect analytics or usage statistics
@@ -69,13 +84,14 @@ The VS Code editor UI communicates with the local server process over `localhost
 - We do **not** collect device identifiers, IP addresses, or location data
 - We do **not** use cookies for tracking purposes
 - We do **not** share any data with third parties
-- We do **not** use Microsoft telemetry (all Microsoft telemetry code has been removed from the VS Code source)
+- We do **not** send Microsoft telemetry. To be exact about how, because the earlier wording here said the telemetry code "has been removed from the VS Code source" and that is not what was done: the code is still in the editor build, and it is switched off and given nowhere to report to. `telemetryOptIn` is false in the product configuration applied at build time, both `telemetryOptIn` and `enableTelemetry` are set false again at every start, and the built `product.json` carries no telemetry endpoint for it to reach. Disabled and unaddressed, rather than deleted
 
 ## Data Stored on Your Device
 
 The following data is stored locally on your device within the app's private sandbox:
 
 - **Your project files**: Stored in the app's internal storage or in locations you grant access to
+- **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. So a second copy of that folder exists inside the app for as long as it stays open to you, and it is removed when you uninstall or clear app data along with everything else. Nothing about the copy leaves the device — it is excluded from backup — but you should know it is made
 - **Editor settings and preferences**: Stored locally as JSON configuration files
 - **Installed extensions**: Downloaded from Open VSX and stored locally
 - **SSH keys**: If you generate SSH keys using the built-in tool, they are stored in the app's private `~/.ssh/` directory. They never leave your device unless you explicitly copy or use them
