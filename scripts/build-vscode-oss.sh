@@ -421,20 +421,19 @@ for f in LICENSE.txt ThirdPartyNotices.txt; do
 done
 
 step "Mobile CSS"
-# Touch overrides for the hamburger menu, and the Accounts/Manage hide that the
-# activity bar sizing patch (0008) assumes. The pre-pivot build appended these to
+# Touch overrides for the hamburger menu. The pre-pivot build appended these to
 # the packaged workbench.css; the mutation lost its home when the download
 # script was deleted, so menus have been desktop-sized on device since. An
 # append rather than a patch because it is additive CSS against a generated
 # file - there is no source context to drift. Guarded idempotent so a reused
 # work volume does not accumulate copies.
 #
-# Two known ceilings, both parity with the pre-pivot CSS rather than new: the
-# :has() selector needs Chrome 105, which is exactly the project's minimum
-# WebView - correct by target, but with no margin; and [aria-label="Manage"]
-# matches the English UI only, so on a localized workbench the Manage section
-# reappears instead of hiding. Structural selectors would fix the latter if it
-# ever matters.
+# This block also used to hide the Accounts/Manage section of the activity bar
+# (parity with the pre-pivot CSS). Removed 2026-08-15 on the owner's call: the
+# gear is the only on-screen route to Settings and the Command Palette for a
+# touch user, and Accounts is where auth sessions live. Patch 0008 measures the
+# room the bar's siblings actually leave, so it adapts to the section being
+# visible without changes.
 WORKBENCH_CSS="$OUT/out/vs/code/browser/workbench/workbench.css"
 if [ ! -f "$WORKBENCH_CSS" ]; then
     echo "  ERROR: $WORKBENCH_CSS not in the package" >&2
@@ -450,9 +449,6 @@ if ! grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS"; then
 .monaco-menu .submenu-indicator { font-size: 16px !important; }
 .monaco-menu .keybinding { font-size: 12px !important; }
 .monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; }
-/* VSCodroid: Hide Accounts/Manage section in Activity Bar */
-.activitybar .content > div:has(.actions-container[aria-label="Manage"]) { display: none !important; }
-.activitybar .content > .composite-bar { flex-grow: 1 !important; }
 CSSEOF
 fi
 grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS" || { echo "  ERROR: append did not land" >&2; exit 1; }

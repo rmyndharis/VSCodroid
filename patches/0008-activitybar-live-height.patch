@@ -1,10 +1,12 @@
 Size the activity bar overflow from the room its siblings leave.
 
-The mobile stylesheet hides the Manage section, which frees vertical space that
-this.dimension was measured before. The overflow calculation then moves icons
-into the "..." menu while the room for them is visibly there -- on a phone that
-is every view: Explorer, Search, Source Control, Run and Debug and Extensions
-all end up behind the menu.
+Written when the mobile stylesheet hid the Manage section, which freed vertical
+space that this.dimension was measured before. The overflow calculation then
+moved icons into the "..." menu while the room for them was visibly there -- on
+a phone that was every view: Explorer, Search, Source Control, Run and Debug and
+Extensions all ended up behind the menu. The hide was removed on 2026-08-15,
+and the fix holds either way: it reads the room the siblings actually leave,
+whatever is or is not shown around the bar.
 
 Reading the bar's own clientHeight does not fix it and makes it worse. That
 height is the RESULT of how many icons fit, so once they overflow the element

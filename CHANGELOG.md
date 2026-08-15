@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The Accounts and Manage (gear) icons are back at the bottom of the activity
+  bar. A stylesheet appended at server-build time had hidden them since before
+  the Code - OSS pivot -- parity carried forward release after release -- which
+  left a touch user with no on-screen route to Settings, the Command Palette
+  menu, or their sign-in sessions. The activity bar's overflow calculation
+  already measures the room its neighbours actually leave, so it adapts to the
+  section being visible without further change
 - The terminal step now shows what a command and its output look like, in the step text itself. The examples were only ever in the illustration beside it, and that illustration is hidden on any phone dense enough to put the editor under 950 CSS pixels wide — which is every 480 dpi device, in both orientations. The picture was not wrong; nobody with such a screen could see it
 - The Get Started screen told you to pick **Toolchains** after touching and holding the app icon. The launcher shows the shortcut's long label there, so what is on screen reads **Manage toolchains** — and on a phone it truncates to "Manage toolchai…", cutting off before the word you were told to look for. It now names the label you see
 - Removed an origin check on the Android bridge that nothing called. It compared a caller's origin against the local server's, but the bridge Android exposes to the page does not carry the caller's origin at all, so there was no way to supply the value it wanted and no production code ever tried. What actually gates that surface is the session token, which every bridge method now validates. The six tests covering the removed method go with it, and the port it needed is no longer passed in
