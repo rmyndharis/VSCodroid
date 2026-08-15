@@ -166,13 +166,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - You can now preview your own dev server at the device's network address from inside the editor, not only at `localhost` — the same thing a laptop does when you check how a page looks from another machine on the same Wi-Fi
 - **GitHub Copilot Chat now works on device**: the bundled extension's platform packages are aliased under the name Android resolves, its SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic so model selection completes end to end
 - **Claude Code extension support**: the marketplace serves its musl build, the CLI starts through the bundled musl loader, and a loopback DNS proxy gives musl binaries working name resolution
-- A glibc compatibility shim: prebuilt glibc-only native addons (spdlog, sqlite3 and friends) now load against Bionic through versioned forwarder stubs instead of dying at `dlopen`. It supplies what Bionic has no equivalent for — the `__isoc99_` scanf family, the `tolower`/`toupper` character tables, and `copy_file_range` on devices below Android 14 — and translates what the two libraries number differently, so `getaddrinfo` and `getnameinfo` answer the question the addon actually asked instead of a differently-numbered one
+- A glibc compatibility shim: prebuilt glibc-only native addons now load against Bionic through versioned forwarder stubs instead of dying at `dlopen`. It supplies what Bionic has no equivalent for — the `__isoc99_` scanf family, the `tolower`/`toupper` character tables, and `copy_file_range` on devices below Android 14 — and translates what the two libraries number differently, so `getaddrinfo` and `getnameinfo` answer the question the addon actually asked instead of a differently-numbered one. What it reaches are the addons whose missing pieces are C-library ones: the file watcher's helper, and the native parts the editor's own agent host loads. It cannot reach an addon that wants the C++ standard library, which Bionic does not ship at all — those are either rebuilt for Android or replaced, and the two entries below are each of those cases
 - On-demand toolchain downloads, the server tarball, npm, extensions and every bundled tool are now verified against the strongest digest their source publishes, and a missing or wrong digest fails the build instead of shipping unverified bytes
 - Every release now carries a manifest of what it was built from — the editor version and source commit, and the exact version and checksum of each bundled tool. Those versions are resolved from a live index while the release is being built, and until now nothing recorded the answer, so a report of a problem in a particular release could not be tied to the components that release actually contained. It records rather than pins, because upstream removes superseded packages and a pin would break the build on every routine update
 - The privacy policy now describes Android's backup, which is on by default and does copy one directory off the device. `~/.vscodroid/data/Machine` — your theme, keybindings and editor preferences — goes to your own Google account when Android backup is enabled. Neither policy mentioned backup at all, while both said data does not leave the device unless you choose to share it. The rules are an allowlist, so your SSH keys, the local server's token, your projects, any folder you opened from device storage, and the installed toolchains are all excluded; the policies now say that, and point at Android's own setting for turning it off
 - Two checks now hold the bridge API documentation to the code it describes, so a method that is added, renamed, given a different argument or given a different return type cannot silently leave the documentation behind. One reads the compiled class and settles which methods exist; the other reads the source and settles their parameter names, order, nullability and return types. Neither alone is complete and each says so in its own header
 
 ### Security
+- The address the editor is opened at is now redacted by the same routine as
+  everywhere else before it reaches the system log. That address carries the
+  connection token, and the code kept a second, token-free copy of it purely to
+  have something safe to print — a hand-maintained twin that stays correct only
+  until someone adds a parameter to the real one. Both now go through the shared
+  redactor, so the safe version cannot drift from the real one
 - Deciding whether the editor server already running on the port is this app's own
   no longer involves handing that server the connection token. When the app
   restarts after its server was killed — routine on a phone, where the system
@@ -212,6 +218,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor server's connection token no longer reaches the Android system log. That token is what authenticates the editor to its own server, and the system log can be read by other software on the device, so a value that gates the whole editor was leaving the app's private storage as a side effect of ordinary use. Nothing changes in day-to-day use: the token is still generated on first start, still kept in private storage, and still supplied for you
 
 ### Fixed
+- The app no longer hangs for ever when something else is holding the port it
+  uses. It would sit on the loading screen, tell you after two minutes that the
+  server was slow to start, and then say nothing again — with a server process
+  running that could never answer, and no way out but force-stopping the app. The
+  single line explaining why was written at a level release builds discard, so
+  there was nothing to find. A start that cannot bind is now detected and reported,
+  and the pair of processes behind it is shut down instead of being left running
+- Opening a device folder no longer leaves a file watcher and a background thread
+  running after the screen they belong to is gone. Rotating the screen, or changing
+  the theme or font size, during a folder sync cancelled the work — and the
+  cancellation was treated as a sync failure, which restarted the very watcher the
+  screen had just shut down. Nothing was left that could stop it again
+- HTTPS connections made through the app's name-resolution proxy no longer get an
+  error page spliced into them. If the far end dropped after the connection was
+  established, the proxy wrote a plain-HTTP error into what was by then an
+  encrypted stream, which the client reads as corruption rather than as a
+  disconnection. It now closes the connection, which is what a dropped tunnel is
+- The editor writes its log files again. Server, terminal-host and extension-host
+  logs land under `~/.vscodroid/data/logs`; until now none of them were written at
+  all. The logger the editor ships is a native component built against a C++
+  library Android does not have, so loading it failed — and it failed quietly:
+  no file appeared, and every message the editor logged was instead held in memory
+  for as long as the process ran. So the one thing you would reach for to explain
+  a problem was the thing missing, and a long session slowly gave up memory to
+  messages nobody could read. A JavaScript logger now takes its place, writing
+  each line as it happens and rotating the files so they cannot grow without bound
+- The cache clear no longer deletes files outside the cache. The temporary
+  directory it empties is the one your terminal and build tools use, so a shortcut
+  left there pointing at a project folder — an ordinary thing to create — was
+  followed out of the cache, and the project's contents were deleted and counted
+  as space reclaimed. Shortcuts are now removed without being followed, and the
+  storage breakdown stops counting the same files repeatedly through them: it was
+  reporting several hundred megabytes of tools that are not in your storage at all
+- Renaming a folder inside a device folder no longer loses its contents. Android
+  reports a rename as a deletion followed by a creation with nothing linking the
+  two, and the deletion was passed straight through — removing the folder and
+  everything beneath it on the device, while what got recreated came from the
+  local copy, which never held the files excluded from syncing and stops at a size
+  limit. A folder of three thousand files could come back as two thousand. The
+  deletion half of a rename is now declined; deleting a folder outright still
+  works. The cost is a copy left behind under the old name, which is visible and
+  can be deleted
+- Installing a toolchain now reports failure when its record cannot be written.
+  The install would finish, the UI would say it succeeded, and the file listing
+  what is installed would not mention it — so the toolchain was on disk, absent
+  from the picker, and its files were not cleaned up either
 - First run now asks for as much free space as unpacking actually needs. The
   figure it checked was 500 MB and had been since the editor it unpacked was a
   much smaller one; what ships now is over 800 MB. A device holding somewhere
@@ -406,13 +458,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundled tools run from is written by the package installer and cannot be added
   to. Measured on device: the same binary is refused through a symlink too,
   because the refusal follows the file rather than the path, which is why setting
-  the execute bit could never have helped. Each toolchain command is now handed to
-  the system loader, which is permitted to run it — arguments, quoting and exit
-  codes all come back intact.
-  **Go is still limited to what it can do without compiling.** `go` itself runs,
-  but `go build` starts its own compiler and linker directly, and those starts are
-  refused for the same reason with nothing in between to redirect them. That is a
-  platform limit rather than something left undone
+  the execute bit could never have helped. Toolchain commands typed at the
+  terminal are now handed to the system loader, which is permitted to run them —
+  arguments, quoting and exit codes all come back intact.
+  **What redirects them is a set of shell functions, so the reach is the shell's
+  reach.** They are written into a file your `.bashrc` loads, which covers the
+  terminal you type in and any login shell. It does not cover a program starting
+  another program: `make` (which uses `/bin/sh`), a task or launch configuration
+  that runs `bash -c`, a script run as `bash script.sh`, and anything an extension
+  spawns all reach the toolchain binary directly and are refused. So `go` and
+  `ruby` work when you type them, and a Makefile calling the same commands does
+  not.
+  **Go is additionally limited to what it can do without compiling**, even in the
+  terminal: `go` itself runs, but `go build` starts its own compiler and linker
+  directly, and those starts are refused with nothing in between to redirect them.
+  Both are platform limits rather than something left undone
 - **Serve on Network** now appears for people upgrading, not only on a clean
   install. An extension bundled for the first time had no entry in the manifest
   the workbench scans, and the reconcile that repairs that manifest could not
