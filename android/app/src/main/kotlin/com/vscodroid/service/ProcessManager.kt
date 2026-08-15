@@ -186,6 +186,28 @@ class ProcessManager(private val context: Context) {
         //  - and the restart budget is refilled by the survivor answering, so the
         //    children that can never bind respawn without bound.
         //
+        // And the process spawned here never becomes the server. Measured on an
+        // API 36 emulator, killing the parent and leaving the child: the survivor
+        // was still LISTENING on the port after sixty seconds, reparented to init;
+        // the child of the newly spawned parent printed
+        // `code: 'EADDRINUSE', syscall: 'listen'` and then did NOT exit. Same pids
+        // at 0, 5, 15, 30 and 60 seconds -- no churn, no respawn -- and the
+        // workbench on screen was never reloaded, which its hour-old unsent chat
+        // text proved better than any log could.
+        //
+        // So the steady state is two servers with the roles swapped. The one this
+        // class manages is alive, watched, and serving nothing, forever. The one
+        // serving the user is untracked. `stopServer` can only reach the first,
+        // which makes the second unkillable by any route the app has, and the
+        // first immortal. The watchdog watches a process whose death would mean
+        // nothing and cannot see the one whose death would take the editor away.
+        //
+        // Worth knowing before designing the fix: the app already SEES this
+        // happen. `startOutputReader` receives that EADDRINUSE line, and
+        // [onServerOutput] is a seam it is forwarded to -- with no production
+        // consumer, so the line reaches `Logger.d` and stops, which in a release
+        // build is nowhere at all.
+        //
         // Those are the defects worth fixing, and none of them is fixed by
         // refusing to start. Do not read the list as an argument for putting the
         // refusal back: refusing produced a state the user could not reach the
