@@ -22,7 +22,7 @@ Versions are given only where this repository actually pins one. Most bundled to
 
 - **Project**: https://github.com/microsoft/vscode
 - **License**: MIT License
-- **Copyright**: Copyright (c) 2015-2024 Microsoft Corporation
+- **Copyright**: Copyright (c) 2015 - present Microsoft Corporation
 
 ```
 MIT License

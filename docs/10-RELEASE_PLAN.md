@@ -197,39 +197,51 @@ echo $KEYSTORE_BASE64 | base64 -d > keystore.jks
 | Field | Value |
 |-------|-------|
 | App name | VSCodroid |
-| Short description | Full VS Code IDE on Android. Code anywhere. |
+| Short description | A full desktop-class code editor on Android. Code anywhere. |
 | Category | Tools > Developer Tools |
 | Content rating | Everyone |
 | Target audience | Developers, CS students |
 
 ### 5.2 Store Description (Draft)
 
+The listing must not lead with a Microsoft trademark, and must carry the project's
+four-line disclaimer in full. The wording below is the one in `README.md` §Legal and
+in the app's own `legal_disclaimer` string; keep all four lines together and change
+them in all three places at once.
+
 ```
-VSCodroid brings the full power of Visual Studio Code to your Android device.
+VSCodroid is a full desktop-class code editor that runs entirely on your Android device.
 
 Features:
-• Full VS Code editor with syntax highlighting, IntelliSense, and multi-cursor
-• Extension support — install themes, linters, language packs from Open VSX
-• Integrated terminal with Node.js, Python, and Git pre-installed
-• Extra Key Row for Ctrl, Alt, Tab, Esc, and arrow keys
+• A real editor — syntax highlighting, IntelliSense, multi-cursor
+• Extension support — install themes, linters and language packs from Open VSX
+• Integrated terminal with Node.js, Python and Git pre-installed
+• Extra Key Row for Ctrl, Alt, Tab, Esc and arrow keys
 • Offline-first — code without internet
-• Open projects from your file manager
-• Portrait, landscape, and split-screen support
+• Open folders from your device storage, including SD cards and cloud providers
+• Portrait, landscape and split-screen support
 
-Built for developers who code on-the-go. Whether you're on a train, in a coffee shop, or just prefer your tablet — VSCodroid gives you a real IDE experience.
+Built for developers who code on-the-go. Whether you're on a train, in a coffee shop, or just prefer your tablet — VSCodroid gives you a real development environment.
 
-Built from the MIT-licensed Code-OSS source code.
+VSCodroid is built from the MIT-licensed Code - OSS source code.
 Not affiliated with or endorsed by Microsoft Corporation.
-Uses Open VSX extension registry.
+"Visual Studio Code" and "VS Code" are trademarks of Microsoft.
+Uses Open VSX extension registry, not Microsoft Marketplace.
 ```
+
+Two feature lines are worded the way they are on purpose. "Open folders from your
+device storage" is SAF, and the app deliberately offers no "Open with" entry for
+individual files — advertising file opening would describe a capability that was
+removed. And the editor is never named as the trademarked product; it is built from
+Code - OSS, which is what the disclaimer says.
 
 ### 5.3 Policy Compliance
 
 | Policy | Compliance |
 |--------|-----------|
-| Binary execution | All binaries delivered via Play Store. Core tools (Node.js, Python, Git, bash, tmux) bundled as .so in base APK. Additional toolchains (Go, Rust, Java, C/C++, Ruby) delivered as on-demand asset packs — user selects via Language Picker, Play Store handles download. Pre-compiled development tools for educational/developer use. |
+| Binary execution | On a Play install, every binary is delivered by Play. Core tools (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) ship as `.so` in the base APK's `jniLibs`. The optional toolchains — **Go, Ruby and Java 17; those three and no others** — are never in the APK and arrive as on-demand asset packs, selected by the user and fetched by Play. Note that the app has a second delivery path outside Play's scope: an install whose installing package is not `com.android.vending` (sideload, debug build, `adb install`) downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases. Pre-compiled development tools for developer use. |
 | Foreground Service (specialUse) | Local development server powering the code editor. Must run persistently to serve the IDE UI and handle file operations. |
-| Permissions | Required: INTERNET (extension marketplace), FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE (dev server), POST_NOTIFICATIONS (service notification). Optional: WAKE_LOCK (long operations), MANAGE_EXTERNAL_STORAGE (external projects, M4). No camera/mic/location/contacts. |
+| Permissions | The manifest declares four, and nothing else: INTERNET (extension marketplace, toolchain downloads), FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE (dev server), POST_NOTIFICATIONS (service notification). **No WAKE_LOCK and no MANAGE_EXTERNAL_STORAGE** — this row claimed both as "optional" and neither was ever declared; MANAGE_EXTERNAL_STORAGE would pull in a Play declaration process the app has no need of. External folders are reached through SAF, which is a user grant per folder and not a permission. No camera/mic/location/contacts. Check against `AndroidManifest.xml` before submitting, not against this row. |
 | Privacy | No telemetry collected. No personal data transmitted. All data stays on device. Privacy policy available at [URL]. |
 | Content rating | No user-generated content, no social features, no violence, no mature content. |
 
