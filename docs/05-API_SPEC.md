@@ -80,7 +80,10 @@ compare.
    Read the signature before calling; the position is not a convention you can rely on.
 3. **Scheme allowlist**: `openExternalUrl()` accepts `https://`, `mailto:`, and `http://`
    to `localhost` or `127.0.0.1` (the last for dev-server preview). Everything else is
-   refused and logged, including unparseable URLs (`SecurityManager.isAllowedUrl`).
+   refused, logged, **and reported to the caller** as `false`, including unparseable
+   URLs (`SecurityManager.isAllowedUrl`). The report is the recent half: the method
+   returned Unit until it was given a Boolean, so a refusal used to be
+   indistinguishable from a launch.
 
    Citations in this section name symbols rather than line numbers on purpose. All
    three used to carry ranges and all three had rotted — one of them pointed into a
@@ -179,9 +182,22 @@ fun hasClipboardText(authToken: String): Boolean
 
 ```kotlin
 @JavascriptInterface
-fun openExternalUrl(url: String, authToken: String)
-// Opens URL in system browser via Intent
-// Used by: VS Code "Open in Browser" actions
+fun openExternalUrl(url: String, authToken: String): Boolean  // note: token LAST
+// Hands the URL to a browser: a Chrome Custom Tab for https, and a plain VIEW
+// intent for the rest, which is what the localhost dev-server preview needs.
+// Used by: VS Code "Open in Browser" actions.
+//
+// Returns whether it was opened. THREE different things return false and the
+// caller cannot tell them apart: the token was rejected, the scheme allowlist
+// in §2.2 refused the URL, or no activity took the intent. Only the middle one
+// is a policy decision -- http to a LAN address is refused there, which is the
+// common case a user meets.
+//
+// It returned Unit until the fix that gave it this signature, so a refusal was
+// indistinguishable from a launch. The relay reported ok:true because there was
+// nothing else it could report, and "Open in Browser" closed its input box and
+// did nothing for every LAN address pasted into it, with the extension's own
+// error handler unreachable behind a promise that always resolved.
 
 @JavascriptInterface
 fun onBackPressed(authToken: String): Boolean
