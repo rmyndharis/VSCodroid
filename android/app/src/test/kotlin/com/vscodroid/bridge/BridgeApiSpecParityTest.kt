@@ -63,6 +63,12 @@ import java.lang.reflect.Method
  *  - `documented()` counts parameters by splitting on commas, so a documented generic
  *    like `Map<String, Int>`, or a default value containing a comma, inflates the count
  *    and fails a correct document. Also loud, also absent today.
+ *  - `documented()` builds its map with `associate`, which keeps the LAST entry for a
+ *    repeated key. A method documented TWICE — two blocks, two arities — collapses to
+ *    whichever came last, and the first is never compared against anything. This is the
+ *    one limit in this list that is silent rather than loud, so it is the one worth
+ *    re-reading if the spec ever grows a second entry for a name. No name appears twice
+ *    today; `check-bridge-api-spec.py` has the same shape and the same exposure.
  *
  * So the pair is deliberate rather than redundant, and BOTH halves are load-bearing and
  * NEITHER is complete: reflection settles the set of callable methods, text settles their
