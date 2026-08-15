@@ -28,9 +28,10 @@ import java.io.File
 /**
  * That [AndroidBridge.openExternalUrl] answers whether it opened anything.
  *
- * [UrlAllowlistWiringTest] pins the decision; nothing pinned what the caller is
- * told about it. The method returned Unit, so a refusal and a launch were the
- * same event from outside: the relay in `MainActivity.injectBridgeRelay` posted
+ * Which URLs may be opened is a separate question, pinned separately and being
+ * settled elsewhere; nothing pinned what the caller is TOLD about the outcome.
+ * The method returned Unit, so a refusal and a launch were the same event from
+ * outside: the relay in `MainActivity.injectBridgeRelay` posted
  * `ok: true` either way, and the bundled extension's "Open in Browser" resolved
  * its promise with no browser and no message. That is the same shape this
  * project keeps hitting -- the predicate is covered, the wiring is not -- and
@@ -62,9 +63,10 @@ import java.io.File
 class OpenExternalUrlRefusalTest {
 
     /**
-     * The real one, not a mock. Its allow-list is the decision under test and
-     * its token is the one the bridge will accept, so nothing about the outcome
-     * is stubbed into existence.
+     * The real one, not a mock: its token is the one the bridge will accept, so
+     * nothing about the outcome is stubbed into existence. Deliberately says
+     * nothing about which URLs it permits -- that policy is not this class's
+     * subject, and every case here is chosen to hold whatever it is.
      */
     private val security = SecurityManager()
 
@@ -85,8 +87,6 @@ class OpenExternalUrlRefusalTest {
         /** Named so a failure says the launch was attempted, not that something broke. */
         const val UNREACHABLE = "a browser launch is not reachable from a JVM test"
 
-        /** A dev server on the LAN: exactly what "Serve on Network" hands a user. */
-        const val LAN = "http://192.168.1.5:3000"
         const val LOCAL = "http://localhost:3000"
 
         /** An https URL, which is the branch that arms the auth callback window. */
@@ -123,26 +123,12 @@ class OpenExternalUrlRefusalTest {
     }
 
     @Test
-    fun `a LAN dev server is refused, and the refusal is reported to the caller`() {
-        assertFalse(
-            bridge.openExternalUrl(LAN, security.getSessionToken()),
-            "$LAN is not on the allow-list, and the caller has to be told so -- returning " +
-                "Unit here is what let the relay answer ok:true for a URL nothing opened",
-        )
-        verify(exactly = 0) {
-            Uri.parse(any())
-        }
-    }
-
-    @Test
-    fun `an allowed address gets past both guards`() {
-        // The positive control, and the only reason the assertions above mean
-        // anything. It still returns false -- the launch cannot complete here --
-        // so the load-bearing assertion is the verify, not the assertFalse.
-        assertTrue(
-            security.isAllowedUrl(LOCAL),
-            "sanity: $LOCAL must be on the allow-list, or the test below proves nothing",
-        )
+    fun `a URL with a good token reaches the launch, rather than being turned away`() {
+        // The counterpart to the token case at the bottom, and the reason that
+        // one means anything. Both return false -- no browser can be launched
+        // from a JVM test -- so the load-bearing assertion in each is the verify,
+        // not the assertFalse: reaching Uri.parse is what separates "tried and
+        // could not" from "turned away at the door".
         assertFalse(
             bridge.openExternalUrl(LOCAL, security.getSessionToken()),
             "no browser can be launched from a JVM test, so this is false for a reason " +
@@ -163,8 +149,8 @@ class OpenExternalUrlRefusalTest {
      * throwing, and the `Intent` has to be intercepted -- not because its
      * constructor throws, which under AGP's mockable android.jar it does not,
      * but because `addFlags` returns the stub's default and the chain built on
-     * it does not survive. Nothing about the decision is stubbed: the allow-list
-     * and the token are still the real ones, and what is faked is only the
+     * it does not survive. Nothing about the decision is stubbed: the real
+     * SecurityManager and its real token are used, and what is faked is only the
      * platform's launch machinery, which does not exist in a JVM.
      */
     @Test
@@ -318,7 +304,7 @@ class OpenExternalUrlRefusalTest {
     fun `a rejected token is refused before the URL is even looked at`() {
         assertFalse(
             bridge.openExternalUrl(LOCAL, "not the session token"),
-            "an allowed URL with a bad token must still be refused",
+            "a URL that would otherwise open must still be refused with a bad token",
         )
         verify(exactly = 0) {
             Uri.parse(any())

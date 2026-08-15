@@ -1207,15 +1207,15 @@ class MainActivity : AppCompatActivity() {
                             // resolved promise, and the caller's error handler never ran.
                             //
                             // Both conditions are named and neither is claimed as the
-                            // cause, because a boolean cannot tell them apart and naming
-                            // only the allow-list is wrong for the other one: mailto is on
-                            // that list, so a device with no mail app would be told its
-                            // scheme is refused by a sentence listing that scheme as
-                            // allowed.
+                            // cause. With the URL allow-list gone there is only one
+                            // cause left worth naming: nothing on the device claimed the
+                            // link. Saying so points at the fix -- install an app that
+                            // handles the scheme -- instead of at a rule that no longer
+                            // exists.
                             result = AndroidBridge.openExternalUrl(d.url, token);
                             ch.postMessage(result
                                 ? {id: d.id, ok: true}
-                                : {id: d.id, ok: false, error: 'VSCodroid did not open it. It opens https, mailto, and http on localhost, and something on the device has to accept the link.'});
+                                : {id: d.id, ok: false, error: 'VSCodroid did not open it. No app on this device handles that link.'});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
