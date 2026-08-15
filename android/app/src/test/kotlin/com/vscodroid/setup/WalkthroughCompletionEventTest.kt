@@ -105,7 +105,7 @@ class WalkthroughCompletionEventTest {
             found.isNotEmpty(),
             "no completionEvents were read from any bundled manifest, so this test is checking " +
                 "nothing. Either the manifests stopped declaring them, or they moved somewhere " +
-                "declaredEvents() no longer walks.",
+                "ourSteps() no longer walks.",
         )
 
         val onView = found.filter { (_, event) -> event.startsWith("onView:") }

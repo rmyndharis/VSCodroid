@@ -3,7 +3,9 @@ package com.vscodroid.bridge
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -14,6 +16,7 @@ import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.verify
+import io.mockk.verifyOrder
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -33,19 +36,28 @@ import java.io.File
  * project keeps hitting -- the predicate is covered, the wiring is not -- and
  * the wiring here is the report itself.
  *
- * ## Why every case below asserts false
+ * ## Why most cases here assert false, and what makes that mean anything
  *
- * A completed launch cannot be reached in a JVM test. The android.jar stubs are
- * not configured with `returnDefaultValues`, so `Uri.parse` and the `Intent`
- * constructor throw rather than answer, and the catch turns that into false. So
- * `false` alone cannot tell "refused at the guard" from "tried and could not".
+ * A launch cannot complete on this classpath unless it is faked: the android.jar
+ * stubs are not configured with `returnDefaultValues`, so `Uri.parse` and the
+ * `Intent` methods throw rather than answer, and the catch turns that into
+ * false. So `false` alone cannot tell "refused at the guard" from "tried and
+ * could not".
  *
- * `Uri.parse` is therefore stubbed to throw a named exception, which makes
- * *whether it was called at all* the discriminator. A URL refused by the
- * allow-list returns before the try and never reaches it; an allowed one gets
- * past both guards and does. That is the positive control: without it, a method
- * rewritten to `return false` unconditionally would satisfy every assertFalse
- * here and the suite would still be green.
+ * Each test therefore carries a discriminator rather than resting on the return:
+ *
+ *  - `Uri.parse` is stubbed to throw, so *whether it was called at all* separates
+ *    a guard refusal from a failed launch
+ *  - the success case fakes the Intent work far enough to reach `startActivity`,
+ *    and asserts true -- the half every assertFalse is blind to
+ *  - the rollback case spies on `AuthTabWindow` and asserts the two calls in
+ *    order, because the final reading is identical whether the window was armed
+ *    and rolled back or never armed at all
+ *
+ * That last one took three attempts. A control asserting the clock stub answered,
+ * and then a `verify` on the clock, were both satisfied without the production
+ * code doing anything -- the second because it counted this test's own call.
+ * Deleting the arming line left the class green both times.
  */
 class OpenExternalUrlRefusalTest {
 
@@ -209,24 +221,28 @@ class OpenExternalUrlRefusalTest {
         every { remote.scheme } returns "https"
         every { Uri.parse(REMOTE) } returns remote
 
-        // The control this test needed and did not have. Every assertion below is
-        // also satisfied by a run where the window was never armed at all, which
-        // is what happens the moment the clock stub stops applying -- the clock is
-        // read as the argument to opened(), so a throw lands before the write and
-        // leaves the value this test just set. Proving the stub answers, and that
-        // the arming line reached it, is what separates "rolled back" from
-        // "never happened".
-        assertEquals(
-            armedAt, SystemClock.elapsedRealtime(),
-            "the clock stub is not in force, so nothing below can tell a rollback from a " +
-                "launch that never armed the window",
-        )
+        // Watched, not inferred. The final reading cannot tell "armed then rolled
+        // back" from "never armed": both leave the value this test just wrote.
+        // Two earlier attempts at a control here were satisfied without the
+        // production code doing anything -- the first because the real clock
+        // throws before the arming it was meant to observe, the second because
+        // `verify { SystemClock.elapsedRealtime() }` counted this test's OWN call
+        // to it. Deleting the arming line outright left this test green both
+        // times; only a neighbouring source-order test noticed.
+        //
+        // A spy on the object records the calls themselves, so neither substitute
+        // is needed and neither failure mode returns. Real behaviour still runs.
+        mockkObject(AuthTabWindow)
 
         assertFalse(
             bridge.openExternalUrl(REMOTE, security.getSessionToken()),
             "no Custom Tab can be launched from a JVM test, so this must report failure",
         )
-        verify(atLeast = 1) { SystemClock.elapsedRealtime() }
+
+        verifyOrder {
+            AuthTabWindow.opened(armedAt)
+            AuthTabWindow.disarm(before)
+        }
         assertEquals(
             before, AuthTabWindow.openedAt(),
             "a launch that threw left the callback window armed. For the next ten minutes any " +
@@ -234,6 +250,20 @@ class OpenExternalUrlRefusalTest {
                 "with no sign-in in flight to justify it.",
         )
     }
+
+    /*
+     * NOT TESTED HERE, and the limit is worth stating rather than leaving as an
+     * absence: that a launch which SUCCEEDS leaves the window armed.
+     *
+     * The https branch reaches CustomTabsIntent, whose Builder calls Intent
+     * methods the mockable android.jar refuses -- addFlags, then putExtra, then
+     * more behind those. Faking enough of androidx to make the launch succeed
+     * would be testing the fakes. What the two tests around this DO pin is the
+     * decomposition: `verifyOrder` above shows the arming happens before the
+     * launch and is rolled back only when the launch throws, and the source-order
+     * test below shows the arming still precedes the launch at all. The success
+     * case is covered on a device or not at all.
+     */
 
     /**
      * That the window is still armed *before* the launch, which no behavioural
