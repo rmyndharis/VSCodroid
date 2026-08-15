@@ -757,17 +757,32 @@ class FirstRunSetup(private val context: Context) {
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (bashrc.exists()) {
             val content = bashrc.readText()
+            val additions = StringBuilder()
+            val added = mutableListOf<String>()
             if (!content.contains("npm()")) {
-                bashrc.appendText(npmBashFunctions())
-                Logger.i(tag, "Appended npm/npx functions to .bashrc")
+                additions.append(npmBashFunctions())
+                added += "npm/npx"
             }
             // Guarded separately from the npm block rather than added to it: an
             // install that predates this already has npm(), so a shared guard
             // would skip the new function forever, and a widened one would append
             // npm() a second time.
             if (!content.contains("claude()")) {
-                bashrc.appendText(claudeBashFunction())
-                Logger.i(tag, "Appended claude function to .bashrc")
+                additions.append(claudeBashFunction())
+                added += "claude"
+            }
+            // One rewrite through a temporary file rather than an append per
+            // block. Each guard above reads a string its own block opens with,
+            // so an append killed partway certified itself: `npm()` was there,
+            // its body was not, and no later launch would add the rest. The two
+            // decisions stay separate; only the write is shared.
+            if (additions.isNotEmpty()) {
+                val names = added.joinToString(" and ")
+                if (writeAtomically(bashrc) { it.write((content + additions).toByteArray()) }) {
+                    Logger.i(tag, "Appended $names to .bashrc")
+                } else {
+                    Logger.w(tag, "Could not append $names; .bashrc is unchanged")
+                }
             }
         }
 
@@ -793,12 +808,21 @@ class FirstRunSetup(private val context: Context) {
         if (bashrc.exists()) {
             val content = bashrc.readText()
             if (!content.contains("toolchain-env.sh")) {
-                bashrc.appendText("""
+                // Rewritten whole through a temporary file rather than appended
+                // in place. The guard above reads the filename, which appears
+                // in the comment this block opens with, so an append cut short
+                // by process death satisfied the check that would have finished
+                // it and left a truncated `[ -f ...` line behind for good.
+                val updated = content + """
 
 # On-demand toolchain env vars (Go, Ruby, Java, etc.)
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
-""")
-                Logger.i(tag, "Appended toolchain-env.sh sourcing to .bashrc")
+"""
+                if (writeAtomically(bashrc) { it.write(updated.toByteArray()) }) {
+                    Logger.i(tag, "Appended toolchain-env.sh sourcing to .bashrc")
+                } else {
+                    Logger.w(tag, "Could not append toolchain-env.sh sourcing; .bashrc is unchanged")
+                }
             }
         }
     }
@@ -840,7 +864,21 @@ class FirstRunSetup(private val context: Context) {
             legacy + PROMPT_ANCHOR_END.length
         }
 
-        bashrc.writeText(content.substring(0, start) + PROMPT_BLOCK + content.substring(end))
+        // Through a temporary file, and that is what makes the marker safe to
+        // put first. `writeText` truncates and then writes, so a rewrite killed
+        // partway left a .bashrc that opened with [PROMPT_MARKER_CURRENT] --
+        // the very string the early return above reads -- and ended wherever
+        // the write stopped: an unclosed `__vscodroid_prompt()` body, no
+        // PROJECTS_DIR, no cd into the workspace. Every later launch read the
+        // marker, concluded the block was current and returned, so the terminal
+        // opened on a syntax error that nothing would ever repair. Nothing
+        // appears under the real name now until all of it has been written, so
+        // the marker cannot certify a file that was never finished.
+        val updated = content.substring(0, start) + PROMPT_BLOCK + content.substring(end)
+        if (!writeAtomically(bashrc) { it.write(updated.toByteArray()) }) {
+            Logger.w(tag, "Could not rewrite the .bashrc prompt block; it keeps the shape it had")
+            return
+        }
         Logger.i(tag, "Rewrote the .bashrc prompt block ($PROMPT_VERSION)")
     }
 
@@ -940,7 +978,20 @@ claude() {
         if (current.exists() || !legacy.exists()) return
 
         current.parentFile?.mkdirs()
-        if (legacy.copyTo(current, overwrite = false).exists() && legacy.delete()) {
+        // Through a temporary file, because the guard above turns any partial
+        // arrival into a permanent one. A byte copy interrupted by a full disk
+        // or by process death leaves what it managed to write under the
+        // destination name; `exists()` accepts that on every later launch and
+        // returns, so the truncated file becomes the user's settings for good
+        // while the intact original sits beside it, never read and never
+        // deleted. The workbench does not report a short settings.json as an
+        // error either -- it reads it as the settings -- so the loss is silent.
+        // Failing outright instead leaves the original in place and lets the
+        // next launch, with room, finish the move.
+        val copied = legacy.inputStream().use { source ->
+            writeAtomically(current) { source.copyTo(it) }
+        }
+        if (copied && legacy.delete()) {
             Logger.i(tag, "Moved settings.json to the path the workbench reads")
         } else {
             Logger.e(tag, "Could not move settings.json to ${current.absolutePath}")
@@ -991,7 +1042,13 @@ claude() {
         val safMirrorsDir = Environment.getSafMirrorsDir(context)
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (!bashrc.exists()) {
-            bashrc.writeText("# VSCodroid bash configuration\n" + PROMPT_BLOCK + "\n\n" + """
+            // Atomic for the reason the rewrite in ensurePromptFix() is: this
+            // writer's guard is the file's own existence, so a first-run write
+            // that stopped partway left a .bashrc that answered `exists()` and
+            // was never written again -- the prompt half-defined and the
+            // PROJECTS_DIR export missing, on a device that had never had a
+            // working shell to compare against.
+            val initial = "# VSCodroid bash configuration\n" + PROMPT_BLOCK + "\n\n" + """
                 export PROJECTS_DIR='$projectsDir'
                 export SAF_MIRRORS_DIR='$safMirrorsDir'
                 alias ls='ls --color=auto'
@@ -1008,7 +1065,10 @@ claude() {
                 else
                     cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
                 fi
-            """.trimIndent() + "\n")
+            """.trimIndent() + "\n"
+            if (!writeAtomically(bashrc) { it.write(initial.toByteArray()) }) {
+                Logger.e(tag, "Could not write .bashrc; the terminal will start without it")
+            }
         }
     }
 
@@ -1066,7 +1126,13 @@ claude() {
             // everything written here went to a file the workbench never read, so
             // no default profile was selected and terminals took the $SHELL
             // fallback for an unrelated reason.
-            settingsFile.writeText("""
+            // Atomic like the migration and the refresh, and for the same
+            // reason: the guard is the file's own existence, so a first-run
+            // write that stopped partway would leave a truncated settings.json
+            // that `exists()` accepts forever. The workbench reads a short file
+            // as the settings rather than as an error, so the user would come
+            // up with an arbitrary subset of the defaults and no way to tell.
+            val defaults = """
                 {
                     "workbench.startupEditor": "none",
                     "workbench.colorTheme": "Default Dark Modern",
@@ -1125,7 +1191,10 @@ claude() {
                         ]
                     }
                 }
-            """.trimIndent())
+            """.trimIndent()
+            if (!writeAtomically(settingsFile) { it.write(defaults.toByteArray()) }) {
+                Logger.e(tag, "Could not write the default settings.json")
+            }
         }
     }
 
