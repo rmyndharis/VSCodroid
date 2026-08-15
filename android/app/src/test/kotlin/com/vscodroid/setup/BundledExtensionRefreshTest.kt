@@ -327,6 +327,32 @@ class BundledExtensionRefreshTest {
     }
 
     /**
+     * The stopped-shipping sweep is actually wired into the run.
+     *
+     * [retiredFetchedExtensionDirs] is tested on its own, and a pure function
+     * nobody calls is the same nothing as no function at all -- this project has
+     * spent several passes on guards that were correct and never reached. So
+     * this drives the real method and asserts the directory is gone from disk.
+     */
+    @Test
+    fun `an extension this build stopped shipping is removed from the device`() {
+        val gitlens = File(extensionsDir, "eamodio.gitlens-2026.2.1114")
+        assertTrue(File(gitlens, "dist").mkdirs())
+        File(gitlens, "package.json").writeText("""{"publisher":"eamodio","name":"gitlens"}""")
+        File(gitlens, "dist/gitlens.js").writeText("// 22 MB in real life")
+
+        extractBundledExtensions()
+
+        assertFalse(
+            gitlens.exists(),
+            "the extension this build no longer bundles is still on disk; no sweep reaches it, " +
+                "so it would stay for the life of the install",
+        )
+        // The control: the sweep must not take the extension that IS bundled.
+        assertTrue(installed.isDirectory, "the bundled extension was removed too")
+    }
+
+    /**
      * Extraction merges over what is there and never deletes, so a file that an
      * earlier release wrote into the directory survives. That is deliberate and
      * cheap to live with -- nothing loads a file `package.json` does not name --

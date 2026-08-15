@@ -1419,6 +1419,19 @@ claude() {
             }
         }
 
+        // And the case neither of those reaches: an extension this project
+        // FETCHED and then stopped shipping. Its publisher is not ours, so
+        // retirement cannot see it, and no version of its id is bundled any
+        // more, so supersession cannot either. Nothing removed it and nothing
+        // ever would. Ordered before the manifest work below on purpose --
+        // reconcileExtensionsManifest drops any entry whose directory is gone,
+        // so removing the directory here is also what unlists it.
+        for (name in retiredFetchedExtensionDirs(present)) {
+            if (File(extensionsDir, name).deleteRecursively()) {
+                Logger.i(tag, "Removed a bundled extension this build no longer ships: $name")
+            }
+        }
+
         // The server manages this file for marketplace installs, so it is never
         // regenerated wholesale. But it is the default profile's manifest — the
         // scanner shows only what is listed in it — and bundled extensions
@@ -1957,6 +1970,47 @@ internal fun retiredOwnExtensionDirs(present: List<String>, bundled: List<String
 }
 
 /**
+ * Extension identifiers this project used to bundle and has stopped bundling.
+ *
+ * GitLens is here because it was bundled, it no longer is, and what earlier
+ * releases unpacked is still on those devices -- roughly 22 MB that nothing
+ * else will ever remove. `b73f558` stopped the BUNDLE, which is a different
+ * thing from clearing what the bundle already installed.
+ */
+private val RETIRED_FETCHED_IDS = listOf("eamodio.gitlens")
+
+/**
+ * The third retirement case: an extension fetched from the marketplace that
+ * this build no longer bundles, at whatever version it happens to be.
+ *
+ * Four sweeps now read the same directory and a reader has to know which one
+ * claims a given name, so state it once:
+ *
+ *   [bundledDirsToExtract]      what to unpack -- ours always, theirs if absent
+ *   [supersededExtensionDirs]   older versions of an id STILL bundled
+ *   [retiredOwnExtensionDirs]   our own publisher, id no longer bundled
+ *   this one                    a fetched id no longer bundled at all
+ *
+ * The first three all derive their answer from what IS bundled. This one
+ * cannot: nothing in the current build mentions the extension, which is exactly
+ * what makes it invisible to the other two, so the identifier is carried
+ * explicitly.
+ *
+ * Matched on the identifier, not the version, so it does not matter which
+ * release a device installed -- and the pin moved four times before removal, so
+ * keying on a version would have cleared some devices and not others. The
+ * directory is `id-version`, so the test is the id itself or the id followed by
+ * a hyphen; a bare prefix would also claim a different extension whose name
+ * merely begins the same way.
+ */
+internal fun retiredFetchedExtensionDirs(
+    present: List<String>,
+    retiredIds: List<String> = RETIRED_FETCHED_IDS,
+): List<String> = present.filter { name ->
+    retiredIds.any { id -> name == id || name.startsWith("$id-") }
+}
+
+/**
  * The publisher this project ships extensions under.
  *
  * Shared by the two decisions that turn on authorship so they cannot drift
@@ -2096,23 +2150,45 @@ internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
  * for strays would cost a directory walk on every extraction to reclaim a file
  * that the retry reclaims anyway, so there is no sweep.
  *
+ * That deterministic name is also why the body is serialised. Two threads can
+ * reach here at once: `runSetupLocked` runs on Dispatchers.IO while
+ * SplashActivity's per-launch repairs run on the main thread under no lock, and
+ * both write `.bashrc` and `settings.json`. Sharing one temp path they open the
+ * same file, interleave into it, and the first to finish renames it onto the
+ * destination -- after which the loser is still writing through a descriptor
+ * that now points AT the destination, and its own rename fails, so it reports
+ * "unchanged" having just corrupted the file it claims not to have touched.
+ * Writing straight to the destination, which is what this replaced, raced too;
+ * what this shape adds is the ability to report success while doing it.
+ *
  * @return true if [dest] now holds what [write] produced. On false, [dest] is
  *   untouched -- it keeps its previous contents, or stays absent.
  */
-internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boolean {
-    val tmp = File(dest.parentFile, "${dest.name}.tmp~")
-    try {
-        FileOutputStream(tmp).use(write)
-    } catch (e: IOException) {
-        tmp.delete()
-        return false
+internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boolean =
+    synchronized(ATOMIC_WRITE_LOCK) {
+        val tmp = File(dest.parentFile, "${dest.name}.tmp~")
+        try {
+            FileOutputStream(tmp).use(write)
+        } catch (e: IOException) {
+            tmp.delete()
+            return@synchronized false
+        }
+        if (!tmp.renameTo(dest)) {
+            tmp.delete()
+            return@synchronized false
+        }
+        true
     }
-    if (!tmp.renameTo(dest)) {
-        tmp.delete()
-        return false
-    }
-    return true
-}
+
+/**
+ * One lock for every atomic write, not one per destination.
+ *
+ * Concurrent writes to *different* destinations do not happen here -- the
+ * contending pair is two threads racing for the same two files -- so per-path
+ * locks would buy nothing and cost a map that grows by an entry for each of the
+ * 3787 files an extraction writes.
+ */
+private val ATOMIC_WRITE_LOCK = Any()
 
 /**
  * Names the entries in `usr/lib` that belong to a Python the APK no longer
