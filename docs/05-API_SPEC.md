@@ -39,8 +39,9 @@ compare.
    (`SecurityManager.kt:51-55`). `MainActivity.injectBridgeToken()` writes it to
    `window.__vscodroid.authToken` after the page loads (`MainActivity.kt:564-569`).
 2. **Every method, not a chosen subset**: all 28 `@JavascriptInterface` methods take the
-   token and validate it before doing anything, returning the method's empty value on
-   refusal. `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
+   token and validate it before doing anything, returning without acting on refusal
+   (§2.4 records the one method whose refusal value is not an empty one).
+   `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
    if one is added without the check, and a second test asserts a refused call touches
    nothing -- so the rule holds for the class, not for a list that was correct when it was
    written. Note what that test checks: it calls each method with a token that will be
@@ -97,8 +98,11 @@ The OAuth pair described a flow this app does not implement — see §2.5.
 Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
-with a token that does not match is refused and returns the method's empty value
-(`false`, `null`, `""`, `"{}"`, `"[]"`, `0`, or nothing). Read it from
+with a token that does not match is refused before the method acts. Twenty-seven of
+the twenty-eight then return an empty value — `false`, `null`, `""`, `"{}"`, `"[]"`,
+`0`, or nothing. **`generateSshKey` is the exception**: it returns
+`{"success":false,"error":"unauthorized"}`, a truthy string, so a caller testing
+`if (!result)` reads a refusal as success. Test its `success` field. Read the token from
 `window.__vscodroid.authToken`, which MainActivity sets once the bridge is installed.
 `BridgeTokenUniformityTest` enumerates the methods by reflection and fails if one is
 added without the check, so this holds for the class rather than for the list below.
@@ -217,19 +221,25 @@ fun getAvailableStorage(authToken: String): Long
 ```kotlin
 @JavascriptInterface
 fun getDeviceInfo(authToken: String): String
-// Returns JSON string:
+// Returns JSON string. These nine keys and no others -- there is no ram_mb,
+// no storage_free_mb and no webview_version, though this block listed all
+// three with plausible values for a long time. For free space call
+// getAvailableStorage().
 // {
 //   "model": "Pixel 8",
-//   "android": 16,
+//   "android": 36,
 //   "api": 36,
-//   "ram_mb": 8192,
-//   "storage_free_mb": 25600,
-//   "webview_version": "131.0.6778.39",
+//   "manufacturer": "Google",
 //   "vscodroid_version": "1.0.0",
 //   "screen_width": 1080,
 //   "screen_height": 2400,
+//   "screen_density": 2.625,
 //   "orientation": "portrait"
 // }
+// `android` and `api` are the SAME value -- both are Build.VERSION.SDK_INT.
+// This block used to show 16 and 36, which reads as a release number beside an
+// API level; there is no release number here. `orientation` is the string
+// "landscape" or "portrait".
 
 @JavascriptInterface
 fun getThemeMode(authToken: String): String
@@ -330,8 +340,12 @@ fun generateSshKey(authToken: String, comment: String): String
 // which is the right trade against typing one on a phone keyboard.
 // Never overwrites an existing key; if one is there, returns it unchanged.
 // Returns a JSON OBJECT string, not a bare key:
-//   {"success": true,  "publicKey": "ssh-ed25519 AAAA... comment"}
+//   {"success": true,  "publicKey": "ssh-ed25519 AAAA..."}                  <- newly generated
+//   {"success": true,  "publicKey": "ssh-ed25519 AAAA...", "existed": true} <- already there
 //   {"success": false, "error": "..."}
+// `existed` appears ONLY on the reuse path -- absent, not false, on a fresh
+// generation. It is the only way to tell "a key was made for you, upload it"
+// from "you already had one": publicKey looks identical either way.
 
 @JavascriptInterface
 fun getSshPublicKey(authToken: String): String

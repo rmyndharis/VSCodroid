@@ -33,6 +33,23 @@ prose would have to be believed about the half it cannot see.
 Anchored on `@JavascriptInterface` in both files rather than on `fun`, which
 also matches the ProcessManager sketch in section 6 and the private helpers in
 the bridge, neither of which is part of this contract.
+
+The two directions do NOT fail the same way, and assuming they do is how the
+one-line-annotation hole survived a review. A method the spec omits is caught by
+the count; a method the *spec* declares in a shape this cannot parse is caught as
+"registered on the bridge, absent from the spec", loudly. Only the code side ever
+had a way to fail open, and only for the shape now covered above.
+
+Known limits, left unfixed on purpose. Both are wrong in the accusing direction
+rather than the missing one, and neither shape exists in the tree; widening the
+pattern for them would add surface for a hypothetical benefit:
+
+  * An expression-bodied method --  `fun f(t: String): Boolean = g(t)` -- has its
+    return type read as `Boolean = g(t)`, so a correctly documented `Boolean`
+    reports a mismatch. If one ever appears, fix the METHOD or this pattern; do
+    not "correct" a right document to match the garbage.
+  * An annotated method inside a `/* */` block is counted and parsed as real, and
+    reported as undocumented. Commented-out code will ask to be documented.
 """
 
 import pathlib
@@ -45,11 +62,27 @@ SPEC = ROOT / "docs/05-API_SPEC.md"
 
 ANNOTATION = "@JavascriptInterface"
 
-# Counted on its own line, not anywhere in the text. The spec discusses the
-# annotation in prose as well as using it -- "all 28 `@JavascriptInterface`
-# methods take the token" -- and counting those mentions would inflate the
-# expectation and fail a file that is correct.
-ANNOTATION_LINE = re.compile(r"^[ \t]*" + ANNOTATION + r"[ \t]*$", re.M)
+# Counted where a line STARTS with the annotation, not anywhere in the text. The
+# spec discusses the annotation in prose as well as using it -- "all 28
+# `@JavascriptInterface` methods take the token" -- and counting those mentions
+# would inflate the expectation and fail a file that is correct. Prose mentions
+# are mid-sentence or backticked, so anchoring the start is enough to exclude
+# them.
+#
+# Deliberately NOT anchored at the end, and that is the whole reason this
+# expression is worth a comment. It was `[ \t]*$`, which made the two counts
+# below stop being independent: Kotlin permits
+#
+#     @JavascriptInterface fun sameLine(authToken: String): Boolean = true
+#
+# and against that shape ANNOTATION_LINE did not count it (nothing follows the
+# annotation on its own line) *and* SIGNATURE did not parse it (it requires a
+# newline after the annotation). Both missed, in the same direction, so the
+# counts agreed and the guard was satisfied -- measured: twenty-nine methods
+# present, "ok, all 28 match", exit 0. A redundancy that fails together is one
+# check wearing two hats. Unanchored, the annotation is counted while the
+# signature still is not, the counts disagree, and the guard fires.
+ANNOTATION_LINE = re.compile(r"^[ \t]*" + ANNOTATION + r"\b", re.M)
 
 # The Kotlin source ends a signature with `{`; the fenced blocks in the spec end
 # it with a newline, sometimes after a trailing `//` note. One pattern covers
