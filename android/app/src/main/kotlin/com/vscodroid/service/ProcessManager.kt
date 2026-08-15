@@ -239,7 +239,10 @@ class ProcessManager(private val context: Context) {
      * @param pollIntervalMs  Interval between health check attempts.
      * @return `true` if the server became ready within the timeout.
      */
-    suspend fun waitForReady(timeoutMs: Long = 30_000, pollIntervalMs: Long = 200): Boolean {
+    suspend fun waitForReady(
+        timeoutMs: Long = READY_POLL_TIMEOUT_MS,
+        pollIntervalMs: Long = 200,
+    ): Boolean {
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             if (probeReadiness()) {
@@ -536,6 +539,21 @@ internal fun signalName(signum: Int): String = when (signum) {
  * Stop action calls it on the main thread. See [ProcessManager.stopServer].
  */
 internal const val GRACEFUL_STOP_TIMEOUT_MS = 1_000L
+
+/**
+ * How long [ProcessManager.waitForReady] polls before giving up.
+ *
+ * A named constant rather than a literal default because two other numbers are
+ * measured against it and could not previously say so: `LATE_READY_NOTICE_MS`
+ * documents itself as "the other half of that sum", and the restart backoff has
+ * to be shorter than this or a launch attempt outlives the crash path that
+ * superseded it.
+ *
+ * Note the poll runs to the end whatever the process does -- it asks the port,
+ * not the process -- so a server that dies one second in is still polled for the
+ * remaining twenty-nine.
+ */
+internal const val READY_POLL_TIMEOUT_MS = 30_000L
 
 /** What every device ran before the ceiling was derived, and the fallback. */
 internal const val HEAP_CEILING_DEFAULT_MB = 512

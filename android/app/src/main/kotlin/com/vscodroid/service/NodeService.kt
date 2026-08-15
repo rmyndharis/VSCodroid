@@ -522,6 +522,27 @@ class NodeService : Service() {
         }
 
         restartCount++
+        // The superseded attempt ends here, not when its own poll expires.
+        //
+        // [ProcessManager.waitForReady] asks the port and never the process, so it
+        // runs its whole READY_POLL_TIMEOUT_MS budget even though the process it
+        // is waiting for has just died -- that is the crash being handled. Left
+        // alone it concludes DIED_BEFORE_ANSWERING and calls
+        // [stopServingRecoverably], which clears [isServiceRunning]. The check on
+        // the far side of the pause below then reads that as the user having
+        // stopped the server, and returns without restarting.
+        //
+        // [launchServer] normally prevents this by cancelling the previous job as
+        // its first act, but that only helps while the backoff is shorter than
+        // what remains of the poll. It is not, at the attempts that matter: the
+        // last backoff alone exceeds the entire poll, so there the stale attempt
+        // always concludes first, and the restart it silently swallows is the last
+        // one the budget had. Cancelling here rather than at the far end is what
+        // makes the ownership transfer immediate.
+        //
+        // Free of charge, it also stops half a minute of HTTP probes against a
+        // port whose process is known to be gone.
+        cancelLaunch()
         delay(restartBackoffMs(restartCount))
         // Checked again on the far side of the pause, which is measured in
         // seconds and grows: Stop can land while it elapses, and restarting the

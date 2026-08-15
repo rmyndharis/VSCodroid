@@ -301,6 +301,68 @@ class RecoverableStopCallSiteTest {
 }
 
 /**
+ * That a restart takes ownership of the recovery before it waits, not after.
+ *
+ * The defect: `waitForReady` asks the port and never the process, so a launch
+ * attempt polls out its full budget even though the process it is waiting for
+ * has already died. That attempt then concludes DIED_BEFORE_ANSWERING and clears
+ * the service flag — and `handleServerCrash`, resuming from its backoff, reads
+ * the cleared flag as the user having stopped the server and returns without
+ * restarting. The restart is swallowed with nothing said.
+ *
+ * `launchServer` cancels the previous job as its first act, which normally
+ * prevents exactly this, but that only helps while the backoff is shorter than
+ * what remains of the poll. `RestartBackoffTest` measures where it is not: the
+ * last backoff exceeds the whole poll on its own, so there the stale attempt
+ * always wins and the restart it eats is the last one in the budget.
+ *
+ * So the cancel has to happen when the crash is accepted, not when the next
+ * launch begins. This pins that ordering.
+ *
+ * Source-reading, and the weaker of the two layers as always: it sees the order
+ * of two statements and not whether they run. Nothing stronger is available —
+ * the method is private on a `Service`, and this suite can build neither a
+ * `Service` nor a main dispatcher.
+ */
+class RestartOwnershipTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `the restart cancels the superseded attempt before it backs off`() {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+
+        val bumped = lines.singleOrNull { (_, l) -> l.contains("restartCount++") }
+        val backedOff = lines.singleOrNull { (_, l) -> l.contains("delay(restartBackoffMs(") }
+        // Both are preconditions rather than assertions about the fix. If either
+        // moved or gained a twin, the window below stops meaning what it says and
+        // this test would quietly measure the wrong span.
+        checkNotNull(bumped) { "expected exactly one restartCount++ in the file" }
+        checkNotNull(backedOff) { "expected exactly one delay(restartBackoffMs( in the file" }
+
+        val between = lines.filter { (i, _) -> i > bumped.index && i < backedOff.index }
+        val shown = between.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+
+        assertTrue(
+            between.any { (_, l) -> l.contains("cancelLaunch()") },
+            "the superseded launch attempt must be cancelled between accepting the crash " +
+                "and waiting out the backoff, or it outlives the wait and clears the service " +
+                "state from under the restart. Statements found in that span:\n$shown",
+        )
+    }
+}
+
+/**
  * What a crash report gets: nothing, another attempt, or the end.
  */
 class CrashActionTest {
@@ -460,6 +522,45 @@ class RestartBackoffTest {
         val capped = restartBackoffMs(MAX_BACKOFF_SHIFT + 1)
         assertEquals(capped, restartBackoffMs(65))
         assertEquals(capped, restartBackoffMs(Int.MAX_VALUE))
+    }
+
+    @Test
+    fun `the later backoffs outlive a readiness poll, which is why a restart cancels it`() {
+        // Measurement, not a requirement, and it is here because the numbers are
+        // here. ProcessManager.waitForReady asks the port and never the process,
+        // so it runs its full budget even when the server died a second in. A
+        // launch attempt therefore concludes at READY_POLL_TIMEOUT_MS after it
+        // started, whatever happened to the process.
+        //
+        // Meanwhile the crash for that same process starts a backoff. Whichever
+        // of the two lands second decides the service state, and if it is the
+        // stale launch it writes "nothing is running" over a restart that was
+        // already in flight -- which handleServerCrash then reads as a reason to
+        // return without restarting.
+        //
+        // The last attempt is the unconditional case: its backoff exceeds the
+        // whole poll, so the stale launch always concludes first no matter when
+        // the crash happened.
+        assertTrue(
+            restartBackoffMs(MAX_RESTARTS) > READY_POLL_TIMEOUT_MS,
+            "attempt $MAX_RESTARTS waits ${restartBackoffMs(MAX_RESTARTS)}ms against a " +
+                "${READY_POLL_TIMEOUT_MS}ms poll",
+        )
+        // And the earlier ones are reachable too, on a narrowing window: a crash
+        // at t leaves the launch to conclude first whenever t + backoff exceeds
+        // the poll. Printed as the latest crash time that is still safe, so the
+        // shape is visible rather than asserted away.
+        val windows = (1..MAX_RESTARTS).map { attempt ->
+            attempt to (READY_POLL_TIMEOUT_MS - restartBackoffMs(attempt))
+        }
+        assertTrue(
+            windows.any { (_, safeUntil) -> safeUntil <= 0 },
+            "no attempt reaches the unconditional case: $windows",
+        )
+        assertTrue(
+            windows.all { (_, safeUntil) -> safeUntil < READY_POLL_TIMEOUT_MS },
+            "every attempt has some exposed window: $windows",
+        )
     }
 
     @Test
