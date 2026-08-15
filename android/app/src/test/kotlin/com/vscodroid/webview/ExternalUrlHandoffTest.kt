@@ -30,15 +30,12 @@ import org.junit.jupiter.api.Test
  * The method had no test at all until now, which is why the decision had never
  * been written down anywhere and read as an oversight.
  *
- * It differs from `SecurityManager.isAllowedUrl`, reached through the bridge's
- * `openUrl`, which permits `https:`, `mailto:` and `http:` to localhost only —
- * and `UrlAllowlistWiringTest` pins `intent://scan/#Intent;scheme=zxing;end`
- * among what must never reach a browser from there. The two are not inconsistent,
- * they answer different questions:
- *
- *  - here the USER followed a link, and opening it is what a browser does;
- *  - there the PAGE called a native method, which is an app capability handed to
- *    JavaScript rather than an action anyone took, so it is allow-listed.
+ * The app's other exit, `AndroidBridge.openExternalUrl`, now agrees with it. It
+ * used to disagree: an allow-list there permitted `https:`, `mailto:` and `http:`
+ * to localhost only, so the same click on the same URL opened or silently did
+ * nothing depending on whether VS Code routed it as a navigation or through
+ * `window.open`. The list is gone — see `UrlAllowlistWiringTest`, which now pins
+ * its absence — and the two exits answer the same way.
  *
  * Change the rule here and the cases below invert; that is the point of them
  * being written down rather than assumed.
@@ -111,14 +108,13 @@ class ExternalUrlHandoffTest {
     }
 
     /**
-     * A plain-http LAN address, which the bridge's allow-list refuses and this
-     * path allows on purpose.
+     * A plain-http LAN address.
      *
-     * This is the case that decides the policy rather than illustrating it. A dev
-     * server on the LAN is the ordinary thing a user of this app opens, so
-     * applying `isAllowedUrl` here would refuse the workflow the product exists
-     * for. Anyone tempted to align the two should fail this test first and then
-     * ask whether they meant to.
+     * This is the case that decided the policy rather than illustrating it. A dev
+     * server on the LAN is the ordinary thing a user of this app opens, and it is
+     * the URL that was refused on the other exit while opening on this one.
+     * Anyone adding a filter here should fail this test first and then ask
+     * whether they meant to.
      */
     @Test
     fun `a LAN address the bridge refuses is handed to an activity here`() {

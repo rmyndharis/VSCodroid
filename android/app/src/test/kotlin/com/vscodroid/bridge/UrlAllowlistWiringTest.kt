@@ -1,129 +1,149 @@
 package com.vscodroid.bridge
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
+import io.mockk.mockk
+import io.mockk.mockkConstructor
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 
 /**
- * The `http://` branch of [SecurityManager.isAllowedUrl] — the one the method exists for,
- * and the only part of it that is a trust decision — never ran in a test. `Uri.parse`
- * throws on the JVM, the bare `catch` swallowed that, and the method fell through to
- * `return false`. Every "blocks X" case was passing through the catch, so the host
- * comparison could be rewritten to allow `http://evil.com` with the whole suite green.
+ * That the bridge opens whatever URL it is given.
  *
- * The other half of the gap: nothing asserted that `http://localhost:PORT` **is**
- * allowed. A change that rejected everything would also have passed — and quietly broken
- * previewing a dev server, which is what the branch is for.
+ * This file used to pin the opposite. `SecurityManager.isAllowedUrl` permitted
+ * https, mailto, and http only to localhost, and the cases here were a
+ * host-confusion suite — `http://evil.com`, `http://localhost.evil.com`,
+ * `http://127.0.0.1.evil.com`, `http://localhost@evil.com` — written to stop a
+ * lookalike host slipping past. That was careful work against the wrong
+ * requirement.
  *
- * These tests run the real parser. Both directions are covered: what must be let
- * through, and what must not.
+ * VSCodroid is a development environment and everything has to be reachable. The
+ * list refused the work the app exists for, and it did so asymmetrically, which
+ * is how it was found: `http://192.168.1.50:5173` opened when followed as a link,
+ * because `VSCodroidWebViewClient.shouldOverrideUrlLoading` has never filtered
+ * anything, and was silently dropped when VS Code sent the same click through
+ * `window.open`, which `MainActivity` relays to `openExternalUrl`. Same gesture,
+ * same URL, two outcomes, one of them saying nothing at all.
+ *
+ * So the allow-list is gone rather than widened — a dead one is what somebody
+ * re-wires later — and these cases pin its absence, including for the shapes it
+ * used to refuse most confidently. If a destination filter is ever wanted again
+ * it needs a product decision, and these tests are what will fail first to say
+ * there was not one.
+ *
+ * What is still checked is the session token, which asks a different question:
+ * whether the caller is our own page. `BridgeTokenUniformityTest` covers that
+ * across every bridge method; the last case here pins it for this one, so that
+ * "opens anything" cannot quietly become "opens anything for anyone".
  */
 class UrlAllowlistWiringTest {
 
-    private val manager = SecurityManager()
+    private lateinit var context: Context
+    private lateinit var security: SecurityManager
+    private lateinit var bridge: AndroidBridge
 
     @BeforeEach
-    fun silenceLogger() {
-        // Same reason as SecurityManagerTest: android.util.Log is a stub on the JVM.
+    fun setUp() {
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
-    }
+        every { Logger.e(any(), any(), any()) } just Runs
 
-    /** mockkObject replaces the singleton process-wide; see BridgeTokenUniformityTest.tearDown. */
-    @AfterEach
-    fun tearDown() = unmockkAll()
+        // Uri is a stub on the JVM. Parsed for real would be better; what matters
+        // to these cases is which branch of openExternalUrl runs, and that turns
+        // on scheme and host, so both are answered explicitly per URL.
+        mockkStatic(Uri::class)
 
-    // ── must be allowed ──────────────────────────────────────────────────
+        // Intent is a stub too, and openExternalUrl builds one inside a try/catch:
+        // without this the constructor throws, the catch swallows it, and
+        // startActivity is never reached — which reads exactly like a URL being
+        // refused. The first run of these cases failed that way, on a fixture
+        // fault rather than on the code.
+        mockkConstructor(Intent::class)
+        every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
 
-    @ParameterizedTest(name = "allows {0}")
-    @ValueSource(strings = [
-        "http://localhost:3000",
-        "http://localhost:5173/path?query=1",
-        "http://127.0.0.1:8080",
-        "http://localhost",
-        "http://127.0.0.1",
-    ])
-    fun `local dev servers are allowed over plain http`(url: String) {
-        assertTrue(
-            manager.isAllowedUrl(url),
-            "$url is a local dev server; rejecting it breaks previewing your own app"
+        context = mockk(relaxed = true)
+        security = mockk(relaxed = true)
+        every { security.validateToken(any()) } returns true
+
+        bridge = AndroidBridge(
+            context = context,
+            security = security,
+            clipboard = mockk(relaxed = true),
+            onBackPressed = { false },
+            onMinimize = { },
         )
     }
 
-    @Test
-    fun `https and mailto stay allowed`() {
-        assertTrue(manager.isAllowedUrl("https://github.com"))
-        assertTrue(manager.isAllowedUrl("mailto:someone@example.com"))
+    @AfterEach
+    fun tearDown() = unmockkAll()
+
+    private fun stubUri(url: String, scheme: String, host: String?) {
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.scheme } returns scheme
+        every { uri.host } returns host
+        every { Uri.parse(url) } returns uri
     }
 
-    // ── must not be allowed ──────────────────────────────────────────────
+    /**
+     * The case the removal exists for. Plain http to a LAN address is what a dev
+     * server looks like, and it was the shape most confidently refused.
+     */
+    @Test
+    fun `a plain-http LAN dev server is opened`() {
+        stubUri("http://192.168.1.50:5173", "http", "192.168.1.50")
 
-    @ParameterizedTest(name = "blocks {0}")
+        bridge.openExternalUrl("http://192.168.1.50:5173", "ok")
+
+        verify(exactly = 1) { context.startActivity(any()) }
+    }
+
+    /**
+     * The shapes the old suite refused hardest. They are listed by name rather
+     * than as "anything", because a reader who finds this file needs to see that
+     * their removal was deliberate and not an oversight in a rewrite.
+     */
+    @ParameterizedTest(name = "opens {0}")
     @ValueSource(strings = [
+        "http://example.com",
         "http://evil.com",
-        "http://evil.com/localhost",
-        // Suffix and prefix tricks: the comparison has to be on the whole host.
         "http://localhost.evil.com",
-        "http://notlocalhost",
         "http://127.0.0.1.evil.com",
-        // Credentials put the real destination after the @.
-        "http://localhost@evil.com",
-        // Not http at all.
-        "javascript:alert(1)",
-        "file:///etc/passwd",
-        "content://com.android.externalstorage/document",
-        "intent://scan/#Intent;scheme=zxing;end",
+        "ftp://server/file",
     ])
-    fun `everything else is blocked`(url: String) {
-        assertFalse(manager.isAllowedUrl(url), "$url must not reach the browser")
+    fun `a URL the old allow-list refused is opened`(url: String) {
+        stubUri(url, url.substringBefore(':'), "host.example")
+
+        bridge.openExternalUrl(url, "ok")
+
+        verify(exactly = 1) { context.startActivity(any()) }
     }
 
+    /**
+     * The one check that remains, and the reason "no allow-list" is not the same
+     * sentence as "no gate". Without this, a later change that dropped the token
+     * check too would pass everything above.
+     */
     @Test
-    fun `a malformed url is rejected rather than thrown out of`() {
-        assertFalse(manager.isAllowedUrl("http://[not a url"))
-        assertFalse(manager.isAllowedUrl(""))
-        assertFalse(manager.isAllowedUrl("http://"))
-    }
+    fun `a rejected session token opens nothing`() {
+        every { security.validateToken(any()) } returns false
+        stubUri("https://github.com", "https", "github.com")
 
-    @Test
-    fun `a url whose host the parser cannot read is refused`() {
-        // `%61` is `a`, so this spells localhost — and the parser returns a null host
-        // for it without throwing. The check asks whether the host IS allowed, so null
-        // fails to match. Phrased as "reject if there is a host and it is not allowed",
-        // this would be let through.
-        assertFalse(manager.isAllowedUrl("http://loc%61lhost:3000"))
-    }
+        bridge.openExternalUrl("https://github.com", "wrong")
 
-    @Test
-    fun `a url with no scheme is refused even when the host looks local`() {
-        assertFalse(manager.isAllowedUrl("//localhost:3000"))
-    }
-
-    @Test
-    fun `ipv6 loopback is refused because the allow-list names two hosts`() {
-        // Documented rather than fixed: the parser yields `[::1]` with brackets, and
-        // the allow-list is two literal names. This is the behaviour before and after
-        // the change; the test exists so a future edit to the list is a deliberate one.
-        assertFalse(manager.isAllowedUrl("http://[::1]:3000"))
-    }
-
-    @Test
-    fun `the host comparison is what decides, not the scheme prefix`() {
-        // Guards the mutation that made the issue visible: replacing the host test with
-        // one that is true for everything leaves the suite green unless something
-        // asserts a non-local http host is refused.
-        assertFalse(manager.isAllowedUrl("http://example.com"))
-        assertTrue(manager.isAllowedUrl("http://localhost:1234"))
+        verify(exactly = 0) { context.startActivity(any()) }
     }
 }

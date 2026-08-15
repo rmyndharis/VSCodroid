@@ -1,6 +1,5 @@
 package com.vscodroid.bridge
 
-import java.net.URI
 import com.vscodroid.util.Logger
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -43,35 +42,21 @@ class SecurityManager {
         return valid
     }
 
-    fun isAllowedUrl(url: String): Boolean {
-        if (url.startsWith("https://") || url.startsWith("mailto:")) {
-            return true
-        }
-        // Allow http:// only for exact localhost/127.0.0.1 hosts (dev servers).
-        //
-        // Parsed with java.net.URI rather than android.net.Uri so this decision runs in
-        // tests. It is not a stand-in for the Android parser: it is stricter, and the
-        // cases it refuses to parse end as an exception or a null host rather than as a
-        // host it read differently — which for an allow-list is the safe direction.
-        //
-        // The shape matters: this asks whether the host IS one of the two allowed
-        // values. A null host — which `http://loc%61lhost:3000` produces without
-        // throwing — therefore fails to match and is refused. Phrasing it as "reject if
-        // there is a host and it is not allowed" would let that through.
-        val allowed = try {
-            val uri = URI(url)
-            uri.scheme == "http" && (uri.host == "127.0.0.1" || uri.host == "localhost")
-        } catch (e: Exception) {
-            // Anything unparseable is refused, but not silently: the previous empty
-            // catch is what hid the fact that this branch never ran at all.
-            Logger.w(tag, "Unparseable URL refused: $url (${e.javaClass.simpleName})")
-            false
-        }
-        if (!allowed) {
-            Logger.w(tag, "Blocked URL: $url")
-        }
-        return allowed
-    }
+    // There is deliberately no URL allow-list here.
+    //
+    // `isAllowedUrl` stood at this point and permitted https, mailto, and http
+    // only to localhost. It was removed rather than relaxed, because a dead
+    // allow-list is the thing somebody re-wires later. VSCodroid is a development
+    // environment and everything has to be reachable: a LAN dev server on plain
+    // http, a private registry, a staging host, a scheme belonging to another
+    // tool on the device. The list refused the work the app exists for — the same
+    // `http://192.168.1.50:5173` opened when followed as a link and was silently
+    // dropped when the workbench chose to send it through `window.open`.
+    //
+    // What remains is [validateToken], and it answers a different question: it
+    // asks whether the caller is our own page, not whether the destination is one
+    // somebody approved. Do not put a destination filter back here without a
+    // product decision that says so; there is none today.
 
     private fun generateToken(): String {
         val bytes = ByteArray(32)
