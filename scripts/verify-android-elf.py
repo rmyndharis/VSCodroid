@@ -92,7 +92,33 @@ def read_elf(path: pathlib.Path):
     return machine, needed, [a for *_, a in loads]
 
 
-def verify(path: pathlib.Path, lib_dirs: list) -> bool:
+def resolvable_names(lib_dirs: list):
+    """Library names the shipped directories provide, or None if one is unusable.
+
+    Read once for the whole run rather than per file: with --dir this was walking
+    every --lib-dir again for each binary, and an unreadable one raised out of the
+    loop with a traceback -- the same class the per-file catch below closes, one
+    line further up.
+
+    A directory that does not exist is reported and skipped rather than refused.
+    Nine callers pass --lib-dir paths that are legitimately absent at the point
+    they run, so failing here would break builds that are correct; but skipping it
+    narrows what can resolve, and that is worth a line rather than silence.
+    """
+    names = set()
+    for d in lib_dirs:
+        if not d.exists():
+            print(f"  note   --lib-dir {d} does not exist; nothing resolves from it")
+            continue
+        try:
+            names |= {p.name for p in d.iterdir()}
+        except OSError as e:
+            print(f"  FAIL   --lib-dir {d} could not be read  {e}")
+            return None
+    return names
+
+
+def verify(path: pathlib.Path, bundled: set) -> bool:
     """Check one binary. Prints a line per property; returns True if all hold."""
     # OSError covers the states --dir can hand this that a single-file caller never
     # could: a dangling symlink, a directory whose name ends in .so, a file the
@@ -103,7 +129,13 @@ def verify(path: pathlib.Path, lib_dirs: list) -> bool:
     try:
         machine, needed, aligns = read_elf(path)
     except (NotAnElf, IndexError, struct.error, OSError) as e:
-        print(f"  FAIL   {e}")
+        # Named here rather than left to the caller. NotAnElf and OSError carry the
+        # path in their own text but IndexError and struct.error do not, so a
+        # truncated binary reported "unpack_from requires a buffer of at least 40
+        # bytes" and nothing else -- fine in a sweep that prints a header per file,
+        # useless in a directory holding exactly one, which is precisely the tree
+        # the packaging gate was widened to reach.
+        print(f"  FAIL   {path.name}: {e}")
         return False
 
     failed = False
@@ -115,7 +147,6 @@ def verify(path: pathlib.Path, lib_dirs: list) -> bool:
 
     check(machine == EM_AARCH64, "aarch64", f"e_machine = {machine:#x}")
 
-    bundled = {p.name for d in lib_dirs if d.is_dir() for p in d.iterdir()}
     missing = [lib for lib in needed if lib not in BIONIC and lib not in bundled]
     check(not missing, f"{len(needed)} linked libraries resolvable",
           "not provided by Bionic and not bundled: " + ", ".join(missing))
@@ -158,13 +189,24 @@ def main() -> int:
     else:
         ap.error("give a file, or --dir to check a whole directory")
 
+    bundled = resolvable_names(args.lib_dir)
+    if bundled is None:
+        return 1
+
+    # Keyed on "is this a sweep", not on how many files the sweep happened to
+    # find. Both lines used to be suppressed at len(targets) == 1, so a directory
+    # holding a single bad binary printed neither its name nor a count -- and one
+    # binary in jniLibs is not a corner case, it is the state the packaging gate
+    # was widened to cover.
+    sweep = args.dir is not None
     ok = True
     for target in targets:
-        if len(targets) > 1:
+        if sweep:
             print(f"  {target.name}")
-        ok = verify(target, args.lib_dir) and ok
-    if len(targets) > 1:
-        print(f"  {len(targets)} binaries checked")
+        ok = verify(target, bundled) and ok
+    if sweep:
+        n = len(targets)
+        print(f"  {n} binar{'y' if n == 1 else 'ies'} checked")
     return 0 if ok else 1
 
 
