@@ -107,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- The Tailwind CSS language server is visible to the process monitor again, so it
+  can be reclaimed when memory runs short and appears under its own name rather
+  than as an unknown process. It had been recognised by the extension's folder
+  name, and recognition moved to the program's own name without the entry for it
+  being updated — leaving one of the bundled language servers outside the only
+  mechanism that reclaims them
 - A folder re-granted while the app is tidying up is no longer wiped. On launch
   the app reclaims the local copies of folders whose permission you have since
   withdrawn, and it decided what to reclaim from a single reading taken before it

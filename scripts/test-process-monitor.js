@@ -45,6 +45,9 @@ function writeProc(root, pid, argv, { uid = UID, ppid = 1 } = {}) {
 
 const NODE = '/data/data/com.vscodroid/lib/arm64/libnode.so';
 const REH = '/data/user/0/com.vscodroid/files/server/vscode-reh';
+// Marketplace and bundled-by-us extensions are extracted here, which is a
+// different tree from the editor's own extensions under REH.
+const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
 
 function main() {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-monitor-'));
@@ -65,6 +68,15 @@ function main() {
         [1006, [NODE, '/data/user/0/com.vscodroid/files/usr/share/reporter/index.js'], 'unknown'],
         [1007, [NODE, `${REH}/out/bootstrap-fork.js`, '--type=fileWatcher'], 'fileWatcher'],
         [1008, [NODE, '/data/user/0/com.vscodroid/files/saf-mirrors/a1b2c3/sync.js'], 'safSync'],
+        // A marketplace language server, not one of the three bundled with the
+        // editor, and the reason it is here: check-langserver-patterns.py globs
+        // *ServerMain.js under vscode-reh/extensions and cannot see this file at
+        // all. The pattern for it matched the extension's directory name until
+        // classification moved to argument basenames, and nothing noticed.
+        [1009, [NODE, `${EXT}/bradlc.vscode-tailwindcss-0.16.0/dist/tailwindServer.js`,
+            '--node-ipc', '--clientProcessId=1'], 'langserver'],
+        [1010, [NODE, `${EXT}/bradlc.vscode-tailwindcss-0.16.0/dist/tailwindModeServer.js`,
+            '--node-ipc'], 'langserver'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
