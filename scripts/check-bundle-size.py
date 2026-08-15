@@ -71,7 +71,18 @@ def main(argv) -> int:
         print(f"  FAIL   {aab} is not a file", file=sys.stderr)
         return 1
 
-    sizes = module_sizes(aab)
+    # A bundle that cannot be opened is a verdict this gate should state, not an
+    # exception it dies of. Without this a truncated or half-copied artifact ends
+    # the run in a BadZipFile traceback: still non-zero, so the release does stop,
+    # but with no FAIL line naming the artifact -- and every other gate here
+    # promises the line above names what failed. verify-server-tree.py was given
+    # the same treatment for the same reason; two readers of the same kind of
+    # bytes should agree on what a damaged one looks like.
+    try:
+        sizes = module_sizes(aab)
+    except (zipfile.BadZipFile, OSError) as exc:
+        print(f"  FAIL   {aab.name} could not be read as a bundle: {exc}")
+        return 1
     # An empty result would pass every comparison below. That is the shape this
     # gate exists to remove, so it is fatal rather than a silent success.
     if not sizes:
