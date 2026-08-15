@@ -141,9 +141,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 - The editor server's connection token no longer reaches the Android system log. That token is what authenticates the editor to its own server, and the system log can be read by other software on the device, so a value that gates the whole editor was leaving the app's private storage as a side effect of ordinary use. Nothing changes in day-to-day use: the token is still generated on first start, still kept in private storage, and still supplied for you
 
-### Removed
-- GitLens, which earlier versions bundled, is now cleared from devices that still have it — roughly 22 MB. It stopped being included some releases ago, but the copy already installed was left in place and nothing removed it. Installing GitLens yourself from the marketplace is unaffected.
-
 ### Fixed
 - Stopping the editor server and starting it again no longer leaves the new start unable to finish. A retry left over from before the stop could wake up during the new start, cancel it, and report a failure — leaving a server running that the editor never opened until the app was stopped and started once more
 - When the editor server stopped for good after repeated crashes, its notification said so and offered nothing to do about it, and the app could not be started again until it was swiped from recents or force-stopped. That notification now carries a Stop button that clears it and lets the next launch start the server
@@ -385,6 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A first run that cannot unpack the editor's own files now stops and offers to retry, instead of finishing and reporting success. Previously a file lost during setup left an app that opened but could never start its server, and it would not try again until the next app update. On a device that is still short of storage the retry now reports the storage problem rather than repeating the whole unpack.
 
 - An installation already left broken by an interrupted setup now repairs itself on the next launch. Where a shell or settings file had been left empty or cut off part-way, nothing would replace it, because every writer checked only whether the file existed. Files that were partly written but still plausible are left untouched, so nothing you edited yourself is overwritten.
+- GitLens, which earlier versions bundled, is now cleared from devices that still have it — roughly 22 MB. It stopped being included some releases ago, but the copy already installed was left in place and nothing removed it. Installing GitLens yourself from the marketplace is unaffected.
 
 ## [1.0.0] - 2026-04-21
 
