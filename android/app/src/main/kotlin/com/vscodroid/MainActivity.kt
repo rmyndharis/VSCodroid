@@ -35,7 +35,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.vscodroid.util.Environment
+import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AndroidBridge
+import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.ClipboardBridge
 import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
@@ -249,6 +251,18 @@ class MainActivity : AppCompatActivity() {
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
         if (!isExtensionCallback(uri.scheme, uri.host)) return
+        if (!authCallbackIsExpected(
+                AuthTabWindow.openedAt(),
+                SystemClock.elapsedRealtime(),
+                AUTH_TAB_WINDOW_MILLIS
+            )
+        ) {
+            // Logged without the URI. It is the payload of a sign-in this app
+            // did not start, and the log is readable by anything holding
+            // READ_LOGS on a developer device.
+            Logger.w(tag, "Ignoring a sign-in callback that no sign-in was waiting for")
+            return
+        }
         if (workbenchLoaded) {
             handleExtensionCallback(uri)
             return
@@ -1464,6 +1478,36 @@ internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
  */
 internal fun isExtensionCallback(scheme: String?, host: String?): Boolean =
     scheme == "vscodroid" && host == "callback"
+
+/**
+ * Whether a sign-in callback arriving now is one this app went looking for.
+ *
+ * Shape is all `isExtensionCallback` can judge, and shape is what anything on
+ * the device can produce: the VIEW filter is exported and BROWSABLE. The value
+ * that rides in is written into the workbench's storage under an id the
+ * workbench hands out as a counter from one, so the id an unsolicited caller
+ * would have to name is not a secret and never was. What it cannot supply is a
+ * sign-in this app started, which is the only thing that separates a return from
+ * an invention.
+ *
+ * Timing, not identity, and deliberately so: the legitimate sender is a browser,
+ * so there is no caller identity here that could be checked. This narrows an
+ * always-open door to the minutes after this app opened one itself.
+ *
+ * `openedAt == 0` means no tab has been opened in this process. The lower bound
+ * on the elapsed time is not redundant with it: the caller passes a monotonic
+ * clock, and a negative reading would mean the two came from different boots,
+ * which is not an elapsed time at all.
+ *
+ * Takes its clock readings rather than reading them, for the reason
+ * `isExtensionCallback` takes two strings -- `SystemClock` is not answerable in
+ * a plain JVM test, and the decision here is arithmetic on three numbers.
+ */
+internal fun authCallbackIsExpected(
+    openedAtMillis: Long,
+    nowMillis: Long,
+    windowMillis: Long
+): Boolean = openedAtMillis != 0L && (nowMillis - openedAtMillis) in 0..windowMillis
 
 /**
  * Whether a folder switch that failed should leave the previous folder watched.

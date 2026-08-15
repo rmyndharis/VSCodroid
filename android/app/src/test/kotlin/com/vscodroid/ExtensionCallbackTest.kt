@@ -1,8 +1,10 @@
 package com.vscodroid
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.File
 
 /**
  * The gate on the one exported entry point this app has.
@@ -51,6 +53,147 @@ class ExtensionCallbackTest {
         assertFalse(isExtensionCallback("VSCodroid", "callback"))
         assertFalse(isExtensionCallback("vscodroid", "Callback"))
         assertFalse(isExtensionCallback("vscodroid ", "callback"))
+    }
+}
+
+/**
+ * That the timing gate is reached, and that anything opening a browser arms it.
+ *
+ * `authCallbackIsExpected` can be exactly right and never called, and the two
+ * halves fail in opposite directions: a relay that never asks accepts
+ * everything, and a browser launch that never records leaves the gate shut on a
+ * real sign-in. Neither shows up in a test of the function itself.
+ *
+ * Source reading, which is weaker than the rest of this suite, and here for the
+ * reason `ServerReadinessCallSiteTest` gives: the decision lives inside an
+ * Activity method with no seam, and the mutation is not a value the code
+ * computes but whether a call is present at all.
+ *
+ * What it does not catch: a browser opened from a third file, or the gate
+ * reached through some other spelling. It catches removing either half of what
+ * is here, which is the regression that would actually be made.
+ */
+class AuthCallbackCallSiteTest {
+
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val bridge = File("src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt")
+
+    /** Comments dropped: all of these names are discussed in prose above them. */
+    private fun code(file: File): List<String> =
+        file.readLines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `the relay asks whether a sign-in was in flight`() {
+        check(mainActivity.isFile) {
+            "MainActivity.kt not found at ${mainActivity.absolutePath} — this test " +
+                "would otherwise pass by looking at nothing"
+        }
+
+        // The declaration is in this same file and its first line reads
+        // `fun authCallbackIsExpected(`, so a search for the name alone is
+        // satisfied by the function existing. Measured: deleting the entire
+        // gate from receiveCallbackIntent left all 630 tests green.
+        val calls = code(mainActivity).filterNot { it.contains("fun authCallbackIsExpected") }
+            .count { it.contains("authCallbackIsExpected(") }
+
+        assertTrue(
+            calls >= 1,
+            "the vscodroid://callback relay must refuse a callback no sign-in was " +
+                "waiting for; found $calls call site(s), and without one the " +
+                "exported entry point takes a value from anything on the device " +
+                "at any moment",
+        )
+    }
+
+    @Test
+    fun `every browser launch arms the window it will be judged against`() {
+        // The control for the test above, and the half more likely to rot: a
+        // second launch site added later without recording would leave that
+        // sign-in's return refused, and the symptom is a sign-in that quietly
+        // never completes rather than anything that fails loudly.
+        check(bridge.isFile) { "AndroidBridge.kt not found at ${bridge.absolutePath}" }
+
+        val lines = code(bridge)
+        val launches = lines.count { it.contains("launchUrl(") }
+        val arms = lines.count { it.contains("AuthTabWindow.opened(") }
+
+        assertTrue(launches >= 1, "expected at least one browser launch; found $launches")
+        assertEquals(
+            launches, arms,
+            "each browser launch must record that it happened, or the callback it " +
+                "returns with is refused",
+        )
+    }
+}
+
+/**
+ * The second half of that gate: whether anyone here asked for the callback.
+ *
+ * Shape was the only thing the relay could judge, and shape is exactly what an
+ * unsolicited sender can produce. The id the value is filed under is handed out
+ * by the workbench as a counter from one, so it is not a secret that has to be
+ * guessed either. Identity cannot be checked at all — the legitimate sender is
+ * whichever browser the user has — so what is left is timing: this app either
+ * opened a sign-in tab in the last few minutes or it did not.
+ *
+ * Every case here is arithmetic on three numbers, which is why the function
+ * takes its clock readings instead of asking for them.
+ */
+class AuthCallbackExpectedTest {
+
+    private val window = 10 * 60 * 1000L
+    private val opened = 5_000_000L
+
+    @Test
+    fun `a return from a sign-in this app started is taken`() {
+        // The positive control. Every other case here is a refusal, and a
+        // function that had been mutated to refuse everything would satisfy all
+        // of them while breaking every sign-in in the app.
+        assertTrue(authCallbackIsExpected(opened, opened + 30_000L, window))
+    }
+
+    @Test
+    fun `a callback arriving with no sign-in in flight is refused`() {
+        // The mutation is dropping the `openedAt != 0` guard as implied by the
+        // range check. It is not: zero is the reading before any tab has been
+        // opened, and early in a boot the elapsed clock is small enough that
+        // `now - 0` falls inside the window on its own. That is the whole
+        // attack -- a callback nobody asked for, accepted because the numbers
+        // happened to line up.
+        assertFalse(authCallbackIsExpected(0L, 1_000L, window))
+        assertFalse(authCallbackIsExpected(0L, window, window))
+    }
+
+    @Test
+    fun `a callback long after the tab was opened is refused`() {
+        // The mutation is dropping the upper bound, which turns one sign-in into
+        // a door that stays open for the rest of the process's life.
+        assertFalse(authCallbackIsExpected(opened, opened + window + 1, window))
+        assertFalse(authCallbackIsExpected(opened, opened + 24 * 60 * 60 * 1000L, window))
+    }
+
+    @Test
+    fun `a reading from before the tab was opened is refused`() {
+        // The mutation is dropping the lower bound as unreachable. The caller
+        // passes a monotonic clock, so a negative elapsed time means the two
+        // readings came from different boots and the difference is not an
+        // elapsed time at all -- and it compares as comfortably under the
+        // window, so a one-sided check accepts it.
+        assertFalse(authCallbackIsExpected(opened, opened - 1, window))
+        assertFalse(authCallbackIsExpected(opened, 0L, window))
+    }
+
+    @Test
+    fun `the window is inclusive at its edge and closed one past it`() {
+        // The mutation is `until` for `..`. It costs a millisecond of a
+        // ten-minute window, so no sign-in would ever fail because of it and
+        // nothing would ever say the boundary had moved. Pinned so the range is
+        // stated rather than inherited.
+        assertTrue(authCallbackIsExpected(opened, opened + window, window))
+        assertFalse(authCallbackIsExpected(opened, opened + window + 1, window))
     }
 }
 

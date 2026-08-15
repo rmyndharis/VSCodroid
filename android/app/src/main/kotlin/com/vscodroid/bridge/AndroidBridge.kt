@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.webkit.JavascriptInterface
 import androidx.browser.customtabs.CustomTabsIntent
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
@@ -39,6 +40,46 @@ private const val KEYGEN_TIMEOUT_SECONDS = 60L
  * would put one straight back.
  */
 private const val DRAIN_JOIN_MILLIS = 1_000L
+
+/**
+ * How long after this app opens an authentication tab a callback is still taken.
+ *
+ * Chosen against the sign-in it has to survive rather than against the attack.
+ * A real one is a person reading a consent screen, fetching a password manager
+ * and possibly a second factor, so a tight window would reject genuine returns —
+ * and a rejected sign-in is a bug report, while the window being ten minutes
+ * instead of one still leaves the relay shut for the rest of the day.
+ */
+internal const val AUTH_TAB_WINDOW_MILLIS = 10 * 60 * 1000L
+
+/**
+ * When this app last handed a URL to a browser for an external sign-in.
+ *
+ * The `vscodroid://callback` relay had nothing to test but the shape of the URI,
+ * and its VIEW filter is exported and BROWSABLE, so the value it writes into the
+ * workbench's storage could be supplied at any moment by anything on the device.
+ * The one fact that separates a real return from an invented one is whether this
+ * app asked for it, and until now nobody was recording that.
+ *
+ * Deliberately process-scoped and not persisted. The ids the workbench waits on
+ * live in an in-memory Set that does not survive the page, so after a restart
+ * there is no pending request a relayed value could satisfy — persisting this
+ * would only widen the window for callbacks that could not be delivered anyway.
+ *
+ * Time is read from the monotonic clock by callers, not from wall time, so that
+ * changing the device clock mid-sign-in neither breaks a real return nor
+ * reopens the window.
+ */
+object AuthTabWindow {
+    @Volatile
+    private var openedAt = 0L
+
+    fun opened(nowMillis: Long) {
+        openedAt = nowMillis
+    }
+
+    fun openedAt(): Long = openedAt
+}
 
 class AndroidBridge(
     private val context: Context,
@@ -81,6 +122,10 @@ class AndroidBridge(
             // Use system browser for localhost URLs (dev server preview needs full browser),
             // Chrome Custom Tabs for https (keeps user in-app, handles OAuth redirects).
             if (uri.scheme == "https" && !isLocalhost) {
+                // Recorded before the launch, not after: launchUrl hands off to
+                // another process, and a browser that answers instantly would
+                // otherwise be able to return before the window it needs is open.
+                AuthTabWindow.opened(SystemClock.elapsedRealtime())
                 val customTabsIntent = CustomTabsIntent.Builder()
                     .setShowTitle(true)
                     .build()
