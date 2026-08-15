@@ -236,10 +236,15 @@ fun getDeviceInfo(authToken: String): String
 //   "screen_density": 2.625,
 //   "orientation": "portrait"
 // }
-// `android` and `api` are the SAME value -- both are Build.VERSION.SDK_INT.
-// This block used to show 16 and 36, which reads as a release number beside an
-// API level; there is no release number here. `orientation` is the string
-// "landscape" or "portrait".
+// `android` and `api` are two names for ONE value: both are
+// Build.VERSION.SDK_INT, so they are always equal and neither is the marketing
+// release. `Android ${info.android}` renders "Android 36", not "Android 16".
+// Not one aliasing the other after a rename -- both arrive in the same commit
+// (2d9d34f) and have been duplicates since the first version. Nothing in the
+// tree reads either key, so which one a caller picks has never mattered.
+// This block used to print 16 beside 36, which reads as a release number next
+// to an API level and is the shape that makes the duplication look deliberate.
+// `orientation` is the string "landscape" or "portrait".
 
 @JavascriptInterface
 fun getThemeMode(authToken: String): String

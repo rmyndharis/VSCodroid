@@ -40,6 +40,15 @@ the count; a method the *spec* declares in a shape this cannot parse is caught a
 "registered on the bridge, absent from the spec", loudly. Only the code side ever
 had a way to fail open, and only for the shape now covered above.
 
+If you are mutating the sources to check this still fires: COMMIT FIRST. A
+mutation harness restores with `git checkout -- <file>`, which is
+indistinguishable from working correctly right up to the moment the file holds
+something uncommitted -- and then it deletes it, reports success, and the loss is
+invisible until a later probe happens to ask. That is not hypothetical: it ate
+three fixes mid-review here, and only a probe returning `0 occurrences` for a
+line just written revealed it. Committing first bounds the worst case to
+restoring a state you chose.
+
 Known limits, left unfixed on purpose. Both are wrong in the accusing direction
 rather than the missing one, and neither shape exists in the tree; widening the
 pattern for them would add surface for a hypothetical benefit:
