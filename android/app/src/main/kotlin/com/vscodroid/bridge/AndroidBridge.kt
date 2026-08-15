@@ -16,6 +16,7 @@ import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
+import com.vscodroid.webview.redactToken
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -189,15 +190,41 @@ class AndroidBridge(
         return if (nightMode == Configuration.UI_MODE_NIGHT_YES) "dark" else "light"
     }
 
+    /**
+     * Relays a line the page chose to print into logcat.
+     *
+     * Redacted, and this is the one sink where the token is the LIKELY case
+     * rather than a theoretical one. Everywhere else the app redacts, the string
+     * was built by its own code and carries a known `tkn=` shape; here the text is
+     * whatever the workbench decided to log, and the workbench holds the
+     * connection token. A page logging its own URL is ordinary behaviour.
+     *
+     * The session-token check above says this call came from our page, not that
+     * what it carries is safe to print. logcat is readable by anything holding
+     * `READ_LOGS`, and `warn` and `error` land on `Logger` methods that are not
+     * gated on a debuggable build, so they ship.
+     *
+     * `tag` goes through it too. It is page-supplied and there is no reason it
+     * could not carry a URL.
+     *
+     * Ceiling, stated because it is wider here than at the other call sites: the
+     * redaction matches the `tkn=` parameter, so a page that prints a bare token,
+     * or one re-encoded as `tkn%3D` inside another parameter, passes through. See
+     * [redactToken]. Closing that would mean redacting by the token's value, which
+     * this class could do and the webview call sites could not — worth knowing
+     * before anyone assumes parity between them.
+     */
     @JavascriptInterface
     fun logToNative(authToken: String, level: String, tag: String, message: String) {
         if (!security.validateToken(authToken)) return
+        val safeTag = redactToken(tag)
+        val safeMessage = redactToken(message)
         when (level) {
-            "debug" -> Logger.d(tag, message)
-            "info" -> Logger.i(tag, message)
-            "warn" -> Logger.w(tag, message)
-            "error" -> Logger.e(tag, message)
-            else -> Logger.d(tag, message)
+            "debug" -> Logger.d(safeTag, safeMessage)
+            "info" -> Logger.i(safeTag, safeMessage)
+            "warn" -> Logger.w(safeTag, safeMessage)
+            "error" -> Logger.e(safeTag, safeMessage)
+            else -> Logger.d(safeTag, safeMessage)
         }
     }
 
