@@ -83,6 +83,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every release now carries a manifest of what it was built from — the editor version and source commit, and the exact version and checksum of each bundled tool. Those versions are resolved from a live index while the release is being built, and until now nothing recorded the answer, so a report of a problem in a particular release could not be tied to the components that release actually contained. It records rather than pins, because upstream removes superseded packages and a pin would break the build on every routine update
 
 ### Security
+- The musl loader is now anchored to Alpine's signing key, and the signed chain
+  is followed all the way to the bytes that ship. It was the last download taken
+  on trust: the index naming its checksum came from the same host as the package,
+  so a host able to serve both could serve a modified loader with a matching
+  index and every check passed. Worse, the checksum an Alpine index carries
+  covers only a package's metadata stream, not its payload — the file this
+  installs is the loader that starts the Claude Code CLI on device, and it landed
+  in the one directory Android permits execution from. The index signature is now
+  verified against a key committed to this repository rather than fetched
+  alongside it, and the signed metadata's own `datahash` is checked against the
+  payload. Confirmed by rebuilding the package with a modified loader and
+  identical signature and metadata streams: the old checksum still matched it,
+  and the new check rejects it
 - The on-device editor server now requires a connection token. The server generates it on first start and keeps it in the app's private storage; the app supplies it automatically, so nothing changes in day-to-day use and servers you run yourself are unaffected. Signing in to an extension still works: that step returns through your browser rather than through the editor, so the route it lands on is answered before the check. Binding to `127.0.0.1` is not access control on Android, so the editor's own loopback socket needed authentication of its own rather than relying on the interface it listens on
 - Startup readiness is now judged by the one endpoint answered before that check. The previous check treated any reply below a server error as healthy, which would have reported a fully successful startup for a server that could only answer "forbidden"
 - The loopback DNS proxy that gives musl binaries working name resolution now requires a per-boot token. Binding to `127.0.0.1` is not access control on Android — loopback is not isolated per app — so any installed app could previously have used it as an open forwarder for arbitrary outbound connections attributed to VSCodroid

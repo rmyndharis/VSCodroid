@@ -38,10 +38,60 @@ MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
 echo "=== musl loader ==="
 mkdir -p "$WORK_DIR" "$JNI_DIR"
 
+# The key Alpine signs this branch's index with, pinned in the repository the
+# same way scripts/termux-repo-key.asc is. Pinned rather than fetched: a key
+# taken from the same host as the index it authenticates proves nothing about
+# that host, which is the whole reason the Termux chain is anchored.
+#
+# Alpine rotating to a different key is a decision for a person, so a signature
+# naming any other key fails loudly instead of falling back.
+# The tar entry name, prefix included: apk-tools names it .SIGN.<algo>.<key>,
+# and the algorithm is part of what is being pinned. A .SIGN.RSA256 entry would
+# be a different signature scheme and must not be verified as RSA-SHA1.
+ALPINE_KEY_NAME=".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+ALPINE_KEY="$SCRIPT_DIR/alpine-devel-616ae350.rsa.pub"
+
 # Resolve the current musl version from the branch index rather than pinning a
 # release, the same way the Python download resolves its version from Termux's.
 echo "--- Resolving musl version from $ALPINE_BRANCH ---"
 curl -sL --fail --show-error -o "$WORK_DIR/APKINDEX.tar.gz" "$MIRROR/APKINDEX.tar.gz"
+
+# Everything below reads digests out of this index, so the index has to be
+# authenticated before any of them mean anything. APKINDEX.tar.gz is two
+# concatenated gzip streams: the first is a tar holding .SIGN.RSA.<key>, an
+# RSA-SHA1 signature; the second is the tar holding APKINDEX, and is what the
+# signature covers.
+echo "--- Verifying the index signature ---"
+if [ ! -f "$ALPINE_KEY" ]; then
+    echo "  ERROR: pinned Alpine key missing at $ALPINE_KEY" >&2
+    exit 1
+fi
+python3 - "$WORK_DIR/APKINDEX.tar.gz" "$WORK_DIR" "$ALPINE_KEY_NAME" <<'PY'
+import io, sys, tarfile, zlib
+
+blob, work, expected_key = sys.argv[1], sys.argv[2], sys.argv[3]
+data = open(blob, "rb").read()
+
+d = zlib.decompressobj(31)
+d.decompress(data)
+split = len(data) - len(d.unused_data)
+if split <= 0 or split >= len(data):
+    sys.exit("the index is not two gzip streams; refusing to guess at its shape")
+
+names = tarfile.open(fileobj=io.BytesIO(data[:split])).getnames()
+if names != [expected_key]:
+    sys.exit(
+        "the index is signed by %s, not the pinned %s -- Alpine may have rotated "
+        "keys, which is a decision for a person" % (names, expected_key)
+    )
+
+sig = tarfile.open(fileobj=io.BytesIO(data[:split])).extractfile(names[0]).read()
+open(work + "/index.sig", "wb").write(sig)
+open(work + "/index.signed", "wb").write(data[split:])
+PY
+openssl dgst -sha1 -verify "$ALPINE_KEY" \
+    -signature "$WORK_DIR/index.sig" "$WORK_DIR/index.signed" > /dev/null
+echo "  signature : verified against the pinned Alpine key"
 # Unpacked to a file rather than piped: the parser stops at the first match, and
 # closing the pipe early makes tar fail the whole script under `set -o pipefail`.
 tar xzf "$WORK_DIR/APKINDEX.tar.gz" -C "$WORK_DIR" APKINDEX
@@ -62,13 +112,26 @@ APK="$WORK_DIR/musl-$MUSL_VERSION.apk"
 if [ ! -f "$APK" ]; then
     curl -sL --fail --show-error -o "$APK" "$MIRROR/musl-$MUSL_VERSION.apk"
 fi
-if [ -n "$MUSL_C1" ]; then
-    # An .apk is three concatenated gzip streams -- signature, control, data --
-    # and C: is the SHA1 of the CONTROL stream alone, not of the file. Hashing
-    # the whole file fails against a perfectly good package.
-    actual=$(python3 - "$APK" <<'PY'
-import base64, hashlib, sys, zlib
-data = open(sys.argv[1], "rb").read()
+if [ -z "$MUSL_C1" ]; then
+    # Fail closed: a missing C: field would otherwise switch verification off,
+    # and the index is now authenticated, so an absent field is an anomaly
+    # rather than an older index format.
+    echo "  ERROR: index carries no checksum for musl" >&2
+    exit 1
+fi
+
+# Two links, and both are needed. An .apk is three concatenated gzip streams --
+# signature, control, data -- and the index's C: is the SHA1 of the CONTROL
+# stream alone. It does not cover the loader bytes at all, so on its own it
+# authenticates the package's metadata while leaving the payload free. The
+# control stream's .PKGINFO carries `datahash`, the SHA-256 of the data stream,
+# which is the link that reaches the file actually extracted below.
+if ! python3 - "$APK" "$MUSL_C1" <<'PY'
+import base64, hashlib, io, sys, tarfile, zlib
+
+apk, expected_c1 = sys.argv[1], sys.argv[2]
+data = open(apk, "rb").read()
+
 bounds, i = [], 0
 for _ in range(3):
     d = zlib.decompressobj(31)
@@ -76,22 +139,38 @@ for _ in range(3):
     end = len(data) - len(d.unused_data)
     bounds.append((i, end))
     i = end
+
 control = data[bounds[0][1]:bounds[1][1]]
-print("Q1" + base64.b64encode(hashlib.sha1(control).digest()).decode())
-PY
+payload = data[bounds[1][1]:bounds[2][1]]
+
+actual_c1 = "Q1" + base64.b64encode(hashlib.sha1(control).digest()).decode()
+if actual_c1 != expected_c1:
+    sys.exit("control stream does not match the index\n  index: %s\n  file : %s"
+             % (expected_c1, actual_c1))
+
+pkginfo = tarfile.open(fileobj=io.BytesIO(control)).extractfile(".PKGINFO").read().decode()
+datahash = next(
+    (line.split("=", 1)[1].strip() for line in pkginfo.splitlines()
+     if line.startswith("datahash")),
+    None,
 )
-    if [ "$actual" != "$MUSL_C1" ]; then
-        echo "  ERROR: musl-$MUSL_VERSION.apk does not match the index" >&2
-        echo "    index : $MUSL_C1" >&2
-        echo "    file  : $actual" >&2
-        rm -f "$APK"
-        exit 1
-    fi
-    echo "  checksum  : verified (SHA1, the strongest APKINDEX offers)"
-else
-    # Fail closed: the index and the .apk come from the same mirror, so a
-    # missing C: field would otherwise switch verification off silently.
-    echo "  ERROR: index carries no checksum for musl" >&2
+if not datahash:
+    # Fail closed for the same reason as an absent C:. Every real package
+    # carries this; its absence means the chain cannot be walked, not that it
+    # may be skipped.
+    sys.exit("no datahash in .PKGINFO; the payload cannot be verified")
+
+actual = hashlib.sha256(payload).hexdigest()
+if actual != datahash:
+    sys.exit("payload does not match the datahash the signed metadata names\n"
+             "  .PKGINFO: %s\n  file    : %s" % (datahash, actual))
+
+print("  control   : matches the signed index (SHA1, what APKINDEX carries)")
+print("  payload   : matches .PKGINFO datahash (SHA-256)")
+PY
+then
+    echo "  ERROR: musl-$MUSL_VERSION.apk failed verification" >&2
+    rm -f "$APK"
     exit 1
 fi
 
