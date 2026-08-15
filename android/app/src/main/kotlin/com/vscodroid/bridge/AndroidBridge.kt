@@ -90,6 +90,32 @@ object AuthTabWindow {
         lastOpenedAtMillis = nowMillis
     }
 
+    /**
+     * Puts the window back where it was, for a launch that was armed and then
+     * threw.
+     *
+     * Arming has to happen before the launch — see the caller — so a launch
+     * that never happened still widened the window, and until the launch could
+     * report failure nothing could tell. Ten minutes of an exported, BROWSABLE
+     * entry point accepting a `vscodroid://callback` from anything on the
+     * device, for a sign-in that was never started.
+     *
+     * Restores the previous reading rather than zeroing: an earlier launch may
+     * legitimately still be inside its own window, and this one failing is no
+     * reason to refuse that one's return.
+     *
+     * Named apart from [opened] so it does not read as a second launch site:
+     * `ExtensionCallbackTest` counts arming calls against browser launches to
+     * catch a launch that forgets to arm, and a rollback spelled with the same
+     * name would be counted as an arming. The two call names are deliberately
+     * not written out here either -- that test strips comment lines before
+     * counting, but a guard that only stays correct because a neighbour
+     * filters prose is one bad refactor from a false count.
+     */
+    fun disarm(previousMillis: Long) {
+        lastOpenedAtMillis = previousMillis
+    }
+
     fun openedAt(): Long = lastOpenedAtMillis
 }
 
@@ -156,6 +182,11 @@ class AndroidBridge(
     @JavascriptInterface
     fun openExternalUrl(url: String, authToken: String): Boolean {
         if (!security.validateToken(authToken)) return false
+        // Null until the auth window is armed, and the reading to put back if the
+        // launch that armed it then throws. Arming has to precede the launch, so
+        // without this a launch nothing accepted still left the callback relay
+        // open for ten minutes with no sign-in in flight.
+        var armedFrom: Long? = null
         return try {
             val uri = Uri.parse(url)
             val isLocalhost = uri.host == "127.0.0.1" || uri.host == "localhost"
@@ -165,6 +196,7 @@ class AndroidBridge(
                 // Recorded before the launch, not after: launchUrl hands off to
                 // another process, and a browser that answers instantly would
                 // otherwise be able to return before the window it needs is open.
+                armedFrom = AuthTabWindow.openedAt()
                 AuthTabWindow.opened(SystemClock.elapsedRealtime())
                 val customTabsIntent = CustomTabsIntent.Builder()
                     .setShowTitle(true)
@@ -179,6 +211,7 @@ class AndroidBridge(
             }
             true
         } catch (e: Exception) {
+            armedFrom?.let { AuthTabWindow.disarm(it) }
             Logger.e(tag, "Failed to open URL: $url", e)
             false
         }

@@ -52,6 +52,9 @@ const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
 const MAIN_ACTIVITY = path.join(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
 );
+const ENVIRONMENT = path.join(
+    __dirname, '../android/app/src/main/kotlin/com/vscodroid/util/Environment.kt',
+);
 
 /**
  * The severity contract, read from both sides rather than restated here.
@@ -106,6 +109,32 @@ function checkPressureContract(tmp) {
         monitor.PRESSURE_FILENAME, filename,
         'Kotlin writes the severity to a different filename than the monitor opens, so the ' +
         'signal is delivered to a path nothing reads.',
+    );
+
+    // The filename is only half the path. The directory is a third literal, in a
+    // third place: MainActivity hands applyMemoryPressure a File built from
+    // cacheDir, while the monitor opens $TMPDIR, which Environment builds from
+    // cacheDir separately. The monitor follows Environment by construction -- it
+    // reads the variable Environment sets -- so the pair that can silently drift
+    // is these two Kotlin expressions, and nothing compared them either.
+    const environment = fs.readFileSync(ENVIRONMENT, 'utf8');
+    const writerDir = kotlin.match(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/);
+    const envDir = environment.match(/val tmpDir = "\$cacheDir\/([^"]+)"/);
+    assert.ok(
+        writerDir,
+        'could not find the directory MainActivity writes the pressure file into, so the ' +
+        'comparison below would be against nothing',
+    );
+    assert.ok(
+        envDir,
+        'could not find the directory Environment exports as TMPDIR, so the comparison below ' +
+        'would be against nothing',
+    );
+    assert.strictEqual(
+        writerDir[1], envDir[1],
+        `MainActivity writes the pressure file into cacheDir/${writerDir[1]} while TMPDIR -- ` +
+        `which is the directory the monitor opens -- is cacheDir/${envDir[1]}. The severity is ` +
+        'written where nothing looks for it, and the filenames agreeing hides it.',
     );
 
     // The constant above is only worth comparing if it is the one start() built
