@@ -70,16 +70,20 @@ interface KeyEvent {
 // webView.evaluateJavascript("window.__vscodroid.injectKey(${keyJson})", null)
 ```
 
-#### Server Status Notification
+#### Memory Pressure Notification
 
 ```typescript
-// Notify VS Code UI about server events
-window.__vscodroid.onServerReady();           // Server is up
-window.__vscodroid.onServerRestarting();       // Server restarting
-window.__vscodroid.onLowMemory(level: number); // Android memory warning
-window.__vscodroid.onOAuthCallback(provider: string, code: string, state: string); // OAuth deep-link callback
-window.__vscodroid.onOAuthError(provider: string, error: string); // OAuth failure/cancel
+// Fired from MainActivity.onTrimMemory
+window.__vscodroid.onLowMemory(level: number); // Android trim-memory level
 ```
+
+This is the only hook Kotlin calls on the page, and the page supplies its own
+consumer — `MainActivity` installs one, rather than the workbench providing it.
+
+There is no `onServerReady`, `onServerRestarting`, `onOAuthCallback` or
+`onOAuthError` on this object. Server readiness is a Kotlin-side callback on
+`NodeService`; the page learns about it by being navigated, not by being called.
+The OAuth pair described a flow this app does not implement — see §2.5.
 
 ### 2.4 JavaScript → Kotlin Methods
 
@@ -127,13 +131,11 @@ fun onBackPressed(authToken: String): Boolean
 @JavascriptInterface
 fun minimizeApp(authToken: String)
 // Moves app to background (moveTaskToBack)
-
-@JavascriptInterface
-fun startGitHubOAuth(scopes: String, authToken: String): Boolean
-// Opens GitHub OAuth URL in Chrome Custom Tabs
-// Callback URI: vscodroid://oauth/github
-// Result delivered via window.__vscodroid.onOAuthCallback(...)
 ```
+
+There is no `startGitHubOAuth`. Sign-in is started by the extension that wants it,
+which hands its authorisation URL to `openExternalUrl` like any other link; the
+Custom Tab and the return trip are described in §2.5.
 
 #### File System
 
@@ -209,23 +211,56 @@ fun getThemeMode(authToken: String): String
 // Returns: "light" or "dark" (follows Android system theme)
 ```
 
-### 2.5 OAuth Callback Flow (Chrome Custom Tabs)
+### 2.5 Extension Auth Callback Relay (Chrome Custom Tabs)
+
+Kotlin knows nothing about OAuth here. It relays one opaque blob between two
+browser contexts, because the workbench's own callback mechanism assumes both ends
+share a `localStorage`, and on Android they do not: `callback.html` opens in Chrome
+while the workbench runs in the WebView.
 
 ```mermaid
 sequenceDiagram
   participant W as WebView (VS Code)
   participant K as Kotlin
   participant C as Chrome Custom Tabs
-  participant G as GitHub OAuth
-  W->>K: startGitHubOAuth(scopes, authToken)
-  K->>C: launch OAuth URL
-  C->>G: user login + consent
-  G-->>C: redirect vscodroid://oauth/github?code=...&state=...
-  C-->>K: deep link intent
-  K-->>W: onOAuthCallback("github", code, state)
+  participant P as Identity provider
+  W->>K: openExternalUrl(authUrl, authToken)
+  K->>K: AuthTabWindow.opened(elapsedRealtime)
+  K->>C: CustomTabsIntent.launchUrl (https only)
+  C->>P: user login + consent
+  P-->>C: redirect to the workbench callback page
+  C-->>K: VIEW intent, vscodroid://callback?data=ENCODED_JSON
+  K->>K: gate: workbenchLoaded, then authCallbackIsExpected(...)
+  K-->>W: evaluateJavascript, writes vscode-web.url-callbacks[id]
 ```
 
-MainActivity handles the deep link intent and forwards parsed values to WebView via `evaluateJavascript()`.
+The scheme is `vscodroid://callback`, not `vscodroid://oauth/<provider>`, and the
+payload is a single `data` parameter carrying the workbench's own JSON — no
+provider, code or state is parsed on the Kotlin side.
+
+**Two gates, and both refuse rather than relay.** The VIEW filter is exported and
+`BROWSABLE`, so any app or web page on the device can fire this intent:
+
+| Gate | Where | What it rejects |
+|---|---|---|
+| `isExtensionCallback(scheme, host)` | `MainActivity.kt` | Anything that is not exactly scheme `vscodroid` **and** host `callback` |
+| `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast rather than injecting — deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
+| `authCallbackIsExpected(openedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback arriving outside the window since this app last handed an https URL to a browser. `AUTH_TAB_WINDOW_MILLIS` is 10 minutes (`AndroidBridge.kt`) |
+
+The timing gate tests whether *this app* went looking for a sign-in, which is the
+only thing separating a genuine return from an invented one — the legitimate sender
+is a browser, so there is no caller identity to check, and the callback id is a
+counter the workbench hands out from one rather than a secret. `AuthTabWindow`
+records any https hand-off, not only a sign-in, because `openExternalUrl` cannot
+tell an authorisation page from a documentation link.
+
+A rejected callback is logged **without** the URI and raises no toast: it is the
+payload of a sign-in this app did not start, and a message there would be one an
+outside caller could raise at will.
+
+Relaying is also the end of the recovery, not a repair. The workbench keeps the ids
+it is waiting for in an in-memory `Set` that is never persisted, so a relayed value
+is consumable only by the page instance that began the sign-in.
 
 #### Logging
 

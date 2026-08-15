@@ -17,6 +17,18 @@
 > Dockerfile and build scripts were removed on 2026-08-14, and `toolchains/` is now only a
 > gitignored download work dir. Bundled binaries come from Termux packages instead, via
 > `scripts/download-*.sh`.
+>
+> Two M2/M4 capabilities below were built and then withdrawn, so treat them as plan rather
+> than description:
+>
+> - **"Open with VSCodroid" file-type intent filters** (M2-T6). Removed. They advertised the app
+>   for about twenty extensions and opened none of them; `AndroidManifest.xml` carries the reason
+>   where the filters used to be, and re-implementing is blocked on `content://` URIs having no
+>   POSIX path rather than on wiring.
+> - **A GitHub OAuth flow owned by Kotlin** (`vscodroid://oauth/github`, `startGitHubOAuth`).
+>   Never shipped in that shape. What exists is one opaque relay on `vscodroid://callback`, gated
+>   by whether this app itself opened a browser in the last ten minutes; `docs/05-API_SPEC.md` §2.5
+>   describes the shipped flow.
 
 ---
 
