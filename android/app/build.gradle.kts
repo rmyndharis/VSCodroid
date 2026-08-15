@@ -226,8 +226,73 @@ val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
     }
 }
 
+// The same script fetch-vscode-oss.sh runs, pointed at the tree that actually
+// gets packaged instead of the one that was downloaded. Those are two different
+// trees and only the second ships: server/vscode-reh is copied into assets/ by
+// package-assets.sh locally and by an inline cp in build.yml and release.yml, and
+// build-native-addons.sh then writes its .node files INTO that copy. So the
+// packaged tree is not byte-identical to anything that has been verified, and
+// this task is the only thing that reads it in the state it is packaged in.
+//
+// Do not fold this back into fetch-vscode-oss.sh. That script cannot see this
+// state, and on the path where it matters most it does not run at all: on a
+// build.yml assets-cache hit, assets/vscode-reh is restored from the cache and
+// every download step is skipped by `if: cache-hit != 'true'`, so
+// verify-server-tree.py executes nowhere in the job. release.yml has no assets
+// cache and always fetches; a local `./gradlew assembleDebug` after an old fetch
+// never fetches. A Gradle task is the single point all of them pass through.
+//
+// What it catches that checkPatchFingerprints cannot: staleness that is not a
+// missing patch. Measured on the tree in a working checkout on 2026-08-15 --
+// fingerprints exited 0 while this exited 1, on the same tree in the same
+// second, because the packaged workbench.css was built before an activity-bar
+// change that is appended at server-build time rather than applied as a patch.
+//
+// 0.56s on the real 699 MB tree, no network: one walk for native binaries, plus
+// product.json and workbench.css.
+val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
+    group = "verification"
+    description = "Checks the server tree in assets/ is one this app can run."
+
+    val serverTree = "android/app/src/main/assets/vscode-reh"
+    val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("python3", "scripts/verify-server-tree.py", serverTree)
+
+    // Absent is not stale, for the same reason as the task above: the lint and
+    // unit-test jobs create assets/vscode-reh/out as an empty stub purely so
+    // Gradle will configure, and a tree that was never downloaded has nothing to
+    // verify. Any tree that can produce a working APK has this file.
+    onlyIf { entryPoint.isFile }
+
+    isIgnoreExitValue = true
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(
+                "The server tree in assets/ is not one this app can run.\n" +
+                    "The FAIL line above names which check it did not meet.\n" +
+                    "\n" +
+                    "This tree is a copy of server/vscode-reh, so refresh both:\n" +
+                    "    ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n" +
+                    "\n" +
+                    "Nothing needs deleting by hand first. fetch-vscode-oss.sh asks the\n" +
+                    "server-<version> release what digest it carries now, compares the\n" +
+                    "cached tarball against it, and removes and refetches it when they\n" +
+                    "differ -- which is exactly the case when an earlier build of the same\n" +
+                    "version left this tree behind.\n" +
+                    "\n" +
+                    "If it reports the cached tarball as matching and this still fails, the\n" +
+                    "published server is itself stale: rebuild and republish it by running\n" +
+                    "the \"Build Code - OSS server\" workflow."
+            )
+        }
+    }
+}
+
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
-    .configureEach { dependsOn(checkPatchFingerprints) }
+    .configureEach { dependsOn(checkPatchFingerprints, verifyServerTree) }
