@@ -230,17 +230,22 @@ val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
 // gets packaged instead of the one that was downloaded. Those are two different
 // trees and only the second ships: server/vscode-reh is copied into assets/ by
 // package-assets.sh locally and by an inline cp in build.yml and release.yml, and
-// build-native-addons.sh then writes its .node files INTO that copy. So the
-// packaged tree is not byte-identical to anything that has been verified, and
-// this task is the only thing that reads it in the state it is packaged in.
+// build-native-addons.sh then writes its .node files INTO that copy. Several
+// steps read the packaged tree afterwards -- build-glibc-shim.sh --scan,
+// check-langserver-patterns.py, the "Verify assets" existence check -- but this
+// is the only one that asks whether the tree is VALID.
 //
-// Do not fold this back into fetch-vscode-oss.sh. That script cannot see this
-// state, and on the path where it matters most it does not run at all: on a
-// build.yml assets-cache hit, assets/vscode-reh is restored from the cache and
-// every download step is skipped by `if: cache-hit != 'true'`, so
-// verify-server-tree.py executes nowhere in the job. release.yml has no assets
-// cache and always fetches; a local `./gradlew assembleDebug` after an old fetch
-// never fetches. A Gradle task is the single point all of them pass through.
+// Be honest about where it earns its keep, because the obvious answer is wrong.
+// In CI this is defence in depth rather than a hole being closed: release.yml has
+// no assets cache and always fetches, so the fetch-side run always happens; in
+// build.yml a cache miss or a restore-keys partial hit both leave
+// `cache-hit != 'true'`, so the fetch runs there too; and on an EXACT assets-cache
+// hit the restored tree necessarily passed this same script already, because
+// scripts/verify-server-tree.py is itself part of that cache key. What it does
+// cover is the local path -- fetch once, then build repeatedly for days, possibly
+// after patches/ or branding/ have moved underneath -- and any future workflow
+// that packages a tree without fetching one. Do not fold it back into
+// fetch-vscode-oss.sh: that script only ever sees the copy it just made.
 //
 // What it catches that checkPatchFingerprints cannot: staleness that is not a
 // missing patch. Measured on the tree in a working checkout on 2026-08-15 --
@@ -291,8 +296,72 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     }
 }
 
+// Every binary in jniLibs, checked where it is packaged rather than only where
+// it was downloaded.
+//
+// Each download script runs verify-android-elf.py on the one file it just
+// installed, and that is the only time any of them is examined. Nothing asks the
+// question about the directory as a whole at the moment it goes into an APK, and
+// two paths reach that moment without a download having run: a build.yml
+// assets-cache hit restores jniLibs/arm64-v8a/ wholesale with every download step
+// skipped by `if: cache-hit != 'true'`, and a local `./gradlew assembleDebug`
+// after an old fetch never re-downloads anything. scripts/verify-android-elf.py
+// is also in neither CI cache key -- measured, 0 hits in both, against 1 for
+// verify-server-tree.py -- so tightening the checker does not invalidate a cached
+// binary that only ever passed the looser version of it.
+//
+// What that costs when it goes wrong is the quietest failure this project has:
+// a mis-built ripgrep installs perfectly and makes Search return no results,
+// which is indistinguishable from a project that genuinely contains no matches.
+//
+// Measured on the real bundled set: 11 binaries, all pass, 1.4s across separate
+// interpreter starts and well under that in the single call used here.
+val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
+    group = "verification"
+    description = "Checks every bundled binary in jniLibs can load on Android."
+
+    // The 64-byte stub the lint and unit-test jobs write so Gradle will
+    // configure: `printf '\x7fELF'` plus 60 zero bytes. It is not an ELF file and
+    // would fail this check, so the same size test build.yml already uses to tell
+    // a stub from a runtime gates the task. Absent is not stale, and a stub is
+    // not a binary.
+    val runtime = file("src/main/jniLibs/arm64-v8a/libnode.so")
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/verify-android-elf.py",
+        "--dir", "android/app/src/main/jniLibs/arm64-v8a",
+        "--lib-dir", "android/app/src/main/assets/usr/lib",
+    )
+
+    onlyIf { runtime.isFile && runtime.length() >= 1000 }
+
+    isIgnoreExitValue = true
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(
+                "A bundled binary in jniLibs cannot load on Android.\n" +
+                    "The FAIL line above names the file and the property it fails.\n" +
+                    "\n" +
+                    "These are placed by the download scripts, so re-run the one that\n" +
+                    "owns the file -- scripts/download-node.sh, download-python.sh,\n" +
+                    "download-termux-tools.sh, download-musl-loader.sh, or\n" +
+                    "fetch-vscode-oss.sh for libripgrep.so -- and let it fail there,\n" +
+                    "where the message says which upstream package it came from.\n" +
+                    "\n" +
+                    "In CI this most likely means a cached jniLibs restored a binary\n" +
+                    "that predates a change to scripts/verify-android-elf.py, which is\n" +
+                    "in neither cache key: bust the assets cache rather than refetching."
+            )
+        }
+    }
+}
+
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
-    .configureEach { dependsOn(checkPatchFingerprints, verifyServerTree) }
+    .configureEach {
+        dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries)
+    }

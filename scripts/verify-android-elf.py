@@ -92,18 +92,13 @@ def read_elf(path: pathlib.Path):
     return machine, needed, [a for *_, a in loads]
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("file", type=pathlib.Path)
-    ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
-                    help="directory whose libraries ship with the app")
-    args = ap.parse_args()
-
+def verify(path: pathlib.Path, lib_dirs: list) -> bool:
+    """Check one binary. Prints a line per property; returns True if all hold."""
     try:
-        machine, needed, aligns = read_elf(args.file)
+        machine, needed, aligns = read_elf(path)
     except (NotAnElf, IndexError, struct.error) as e:
         print(f"  FAIL   {e}")
-        return 1
+        return False
 
     failed = False
 
@@ -114,7 +109,7 @@ def main() -> int:
 
     check(machine == EM_AARCH64, "aarch64", f"e_machine = {machine:#x}")
 
-    bundled = {p.name for d in args.lib_dir if d.is_dir() for p in d.iterdir()}
+    bundled = {p.name for d in lib_dirs if d.is_dir() for p in d.iterdir()}
     missing = [lib for lib in needed if lib not in BIONIC and lib not in bundled]
     check(not missing, f"{len(needed)} linked libraries resolvable",
           "not provided by Bionic and not bundled: " + ", ".join(missing))
@@ -123,7 +118,47 @@ def main() -> int:
     check(worst >= MIN_ALIGN, f"LOAD segments aligned to {worst:#x}",
           f"Android 16 needs {MIN_ALIGN:#x}")
 
-    return 1 if failed else 0
+    return not failed
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    # Optional so --dir can stand in for it. The nine existing callers each pass
+    # exactly one path and are unaffected.
+    ap.add_argument("file", type=pathlib.Path, nargs="?")
+    # Every download script checks the binary it just installed, which leaves the
+    # set as a whole unchecked at the moment it is packaged: a binary restored
+    # from a build cache, or left by an earlier fetch, is never re-examined --
+    # and this checker is in neither CI cache key, so tightening it does not
+    # re-examine anything either. --dir lets the packaging step ask the question
+    # about the directory that actually ships.
+    ap.add_argument("--dir", type=pathlib.Path,
+                    help="check every *.so in this directory instead of one file")
+    ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
+                    help="directory whose libraries ship with the app")
+    args = ap.parse_args()
+
+    if args.dir is not None:
+        targets = sorted(args.dir.glob("*.so"))
+        if not targets:
+            # An empty directory is not a clean result. Reporting success here
+            # would make "nothing was checked" indistinguishable from "everything
+            # passed", which is the failure this whole check exists to avoid.
+            print(f"  FAIL   no *.so in {args.dir}")
+            return 1
+    elif args.file is not None:
+        targets = [args.file]
+    else:
+        ap.error("give a file, or --dir to check a whole directory")
+
+    ok = True
+    for target in targets:
+        if len(targets) > 1:
+            print(f"  {target.name}")
+        ok = verify(target, args.lib_dir) and ok
+    if len(targets) > 1:
+        print(f"  {len(targets)} binaries checked")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
