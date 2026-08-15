@@ -1334,10 +1334,29 @@ claude() {
             // are re-unpacked unconditionally, so a mixed one heals next run;
             // a fetched one is only ever in this list because it was absent, so
             // this branch is what makes its retry work at all.
+            //
+            // Which means the retry rests on that delete succeeding, and the
+            // condition it has to succeed in is the condition that caused the
+            // failure. Unlinking normally releases space rather than needing it,
+            // so a full disk should not stop it -- but "should not" is the whole
+            // of the evidence here: this path has never run on a device. If the
+            // delete does fail, the next attempt reads the partial directory as
+            // an install and skips it, exactly as before this branch, so the
+            // outcome is at worst the state we started from. Saying so at error
+            // level is what keeps it diagnosable instead of invisible; there is
+            // no second mechanism, and inventing one against a failure nobody
+            // has observed would be guessing.
             val dest = File(extensionsDir, name)
             val existedBefore = dest.exists()
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
-                if (!existedBefore) dest.deleteRecursively()
+                if (!existedBefore && !dest.deleteRecursively()) {
+                    Logger.e(
+                        tag,
+                        "Could not remove the partially unpacked $name. The next attempt will " +
+                            "read it as installed and skip it, so this extension needs the " +
+                            "directory removed by hand or an app update to recover.",
+                    )
+                }
                 throw IOException("could not unpack bundled extension $name")
             }
         }
