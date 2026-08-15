@@ -42,7 +42,17 @@ NOTICES = ROOT / "docs/LEGAL_NOTICES.md"
 
 # Licences carrying a source obligation. Matched case-insensitively as a
 # substring, so "LGPL-2.1, GPL-3.0" trips on either half.
-COPYLEFT = ("GPL", "AGPL", "LGPL", "MPL", "EPL", "CDDL")
+#
+# The spelled-out names are here because the abbreviations do not appear in them:
+# "Mozilla Public License 2.0" contains no "MPL", so a component recorded that way
+# was classified permissive and never asked for a source offer. Whoever adds a
+# library writes this field by hand, and Termux's own metadata uses both styles,
+# so the check cannot assume an SPDX identifier.
+COPYLEFT = (
+    "GPL", "AGPL", "LGPL", "MPL", "EPL", "CDDL",
+    "MOZILLA PUBLIC", "ECLIPSE PUBLIC", "COMMON DEVELOPMENT",
+    "GENERAL PUBLIC LICENSE",
+)
 
 # soname (or executable) -> (component name as written in LEGAL_NOTICES, licence)
 #
@@ -164,7 +174,7 @@ def main():
               file=sys.stderr)
         return 1
 
-    unknown, unattributed, unoffered = [], [], []
+    unknown, unattributed, unoffered, unlicensed = [], [], [], []
     for name in names:
         entry = LIBRARIES.get(name)
         if entry is None:
@@ -173,12 +183,19 @@ def main():
         component, licence = entry
         if component == "VSCodroid":
             continue
+        if not licence.strip():
+            # An empty licence answers the copyleft question with "no" for free,
+            # which is the one answer nobody should get without deciding it.
+            unlicensed.append(f"{name} ({component})")
         if component not in notices:
             unattributed.append(f"{name} ({component})")
         if any(c in licence.upper() for c in COPYLEFT) and component not in offer:
             unoffered.append(f"{name} ({component}, {licence})")
 
     for label, items, hint in (
+        ("recorded with no licence at all", unlicensed,
+         "fill in the licence Termux's build.sh declares; an empty field silently "
+         "answers the copyleft question with 'no'"),
         ("not classified", unknown,
          "add it to LIBRARIES with the licence Termux's build.sh declares"),
         ("not attributed in LEGAL_NOTICES.md", unattributed,
@@ -192,7 +209,7 @@ def main():
                 print(f"  {i}", file=sys.stderr)
             print(f"  -> {hint}", file=sys.stderr)
 
-    if unknown or unattributed or unoffered:
+    if unknown or unattributed or unoffered or unlicensed:
         return 1
 
     covered = {LIBRARIES[n][0] for n in names} - {"VSCodroid"}
