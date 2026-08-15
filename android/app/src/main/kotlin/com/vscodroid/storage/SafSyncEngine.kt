@@ -1151,6 +1151,14 @@ class SafSyncEngine(private val context: Context) {
                     if (isLink(child)) continue
                     val isDir = child.isDirectory
                     if (isDir && shouldSkip(child.name, isDir = true)) continue
+                    // The same filter every other local-to-device path applies.
+                    // shouldWriteBack drops these for single-file events, and the
+                    // recursion was the one route around it -- so a directory
+                    // appearing while an editor held a `.swp`, or while a mirror
+                    // copy was still `.vscodroid-partial`, put that scratch file on
+                    // the user's device folder under its temporary name, where
+                    // nothing later removes it.
+                    if (!isDir && isMachineTemporary(child.name)) continue
                     found.add(child)
                     if (isDir) pending.addLast(child)
                 }

@@ -201,6 +201,29 @@ def main():
         print(f"FAIL {NOTICES} is missing", file=sys.stderr)
         return 1
 
+    # The set of names this document actually attributes, matched whole rather
+    # than as substrings.
+    #
+    # Two narrowings, each because the looser version was satisfied by something
+    # that attributes nothing. A search over the whole document passes on any
+    # passing mention -- "Git" appears on sixteen lines here. Narrowing to table
+    # rows is not enough: libiconv's "Linked by" cell says "Bash and every Git
+    # executable". Narrowing to the first cell is still not enough: the heading
+    # "### @github/copilot (GitHub Copilot CLI)" contains "Git" inside "GitHub",
+    # so deleting Git's own row and heading left the check green.
+    attributed = set()
+    for line in notices.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            attributed.add(stripped.lstrip("#").strip())
+        elif stripped.startswith("|"):
+            cells = stripped.split("|")
+            if len(cells) > 1:
+                cell = cells[1].strip()
+                # `[GMP](https://gmplib.org)` -> `GMP`
+                link = re.match(r"^\[([^\]]+)\]\(", cell)
+                attributed.add(link.group(1) if link else cell)
+
     # The source-availability section, isolated so a component merely mentioned
     # elsewhere in the file cannot satisfy the copyleft check.
     m = re.search(r"^## GPL Source Code Availability$(.*?)^## ", notices,
@@ -229,7 +252,7 @@ def main():
             # An empty licence answers the copyleft question with "no" for free,
             # which is the one answer nobody should get without deciding it.
             unlicensed.append(f"{name} ({component})")
-        if component not in notices:
+        if component not in attributed:
             unattributed.append(f"{name} ({component})")
         if any(c in licence.upper() for c in COPYLEFT) and component not in offer:
             unoffered.append(f"{name} ({component}, {licence})")

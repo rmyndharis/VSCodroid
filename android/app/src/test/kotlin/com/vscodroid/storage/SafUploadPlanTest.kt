@@ -125,6 +125,28 @@ class SafUploadPlanTest {
     }
 
     @Test
+    fun `machine-temporary files are not uploaded`(@TempDir tmp: File) {
+        // The same filter shouldWriteBack applies to single-file events. The
+        // recursion was the one route around it, so a directory appearing while an
+        // editor held a backup, or while a mirror copy was still partial, put that
+        // scratch file on the device under its temporary name with nothing to
+        // remove it later.
+        val root = File(tmp, "proj").apply { mkdirs() }
+        File(root, "real.kt").writeText("k")
+        File(root, "notes.md~").writeText("x")
+        File(root, "session.tmp").writeText("x")
+        File(root, "copy.vscodroid-partial").writeText("x")
+
+        val names = SafSyncEngine.uploadableEntries(root, limit = 1000)
+            .map { it.name }
+
+        assertTrue(names.contains("real.kt"), "the real file must still go: $names")
+        assertFalse(names.any { it.endsWith("~") }, names.toString())
+        assertFalse(names.any { it.endsWith(".tmp") }, names.toString())
+        assertFalse(names.any { it.contains("partial") }, names.toString())
+    }
+
+    @Test
     fun `a symlinked root is not walked at all`(@TempDir tmp: File) {
         // The case that reaches outside the granted folder, and the one the
         // children loop cannot cover because the root never goes through it.
