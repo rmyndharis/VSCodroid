@@ -43,6 +43,33 @@ EXTENSIONS=(
 
 OPENVSX_API="https://open-vsx.org/api"
 
+# Every entry must name a version, checked before anything below reads the list.
+#
+# The sweep further down derives a directory name with "${entry%@*}-${entry##*@}",
+# and neither strip does anything to an entry containing no "@" -- foo.bar becomes
+# foo.bar-foo.bar, which matches nothing that is ever extracted. The tree such an
+# entry really produces, foo.bar-<resolved version>, is therefore absent from the
+# managed set and untracked by git, so the sweep deletes it on every single run.
+# That also destroys the tree the offline path at the bottom of the loop falls
+# back on, turning "Open VSX unreachable" from a note into a failed build.
+#
+# Refused rather than skipped, because the header above already requires pins for
+# an independent reason: unpinned resolves to whatever is newest on the day of the
+# build, and an extension whose engines.vscode outruns the server is registered,
+# never activates, and logs nothing. An entry with no version has no correct
+# handling to fall back on, so there is nothing for a skip to do but hide it.
+for entry in "${EXTENSIONS[@]}"; do
+    case "$entry" in
+        *@*) ;;
+        *)
+            echo "  FAIL   $entry names no version." >&2
+            echo "         Pin it as publisher.name@version. Unpinned entries resolve to" >&2
+            echo "         whatever is newest that day, and the cleanup sweep cannot compute" >&2
+            echo "         their directory name, so it deletes the extracted tree every run." >&2
+            exit 1 ;;
+    esac
+done
+
 echo "=== Downloading bundled extensions from Open VSX ==="
 
 mkdir -p "$ASSETS_DIR"
@@ -80,27 +107,21 @@ fi
 mkdir -p "$WORK_DIR"
 
 for EXT_SPEC in "${EXTENSIONS[@]}"; do
-    # Parse publisher.name@version or publisher.name (latest)
+    # publisher.name@version. The unpinned form is refused above, so both halves
+    # are always present here and neither branch that handled their absence
+    # survives -- an entry with no version can no longer reach this loop.
     EXT_ID="${EXT_SPEC%%@*}"
     PINNED_VERSION="${EXT_SPEC#*@}"
-    if [ "$PINNED_VERSION" = "$EXT_SPEC" ]; then
-        PINNED_VERSION=""
-    fi
 
     PUBLISHER="${EXT_ID%%.*}"
     NAME="${EXT_ID#*.}"
 
     echo ""
-    echo "--- $PUBLISHER/$NAME${PINNED_VERSION:+ @$PINNED_VERSION} ---"
+    echo "--- $PUBLISHER/$NAME @$PINNED_VERSION ---"
 
     # Query Open VSX API for version metadata
-    if [ -n "$PINNED_VERSION" ]; then
-        API_URL="$OPENVSX_API/$PUBLISHER/$NAME/$PINNED_VERSION"
-        METADATA_FILE="$WORK_DIR/${EXT_ID}-${PINNED_VERSION}.json"
-    else
-        API_URL="$OPENVSX_API/$PUBLISHER/$NAME"
-        METADATA_FILE="$WORK_DIR/${EXT_ID}.json"
-    fi
+    API_URL="$OPENVSX_API/$PUBLISHER/$NAME/$PINNED_VERSION"
+    METADATA_FILE="$WORK_DIR/${EXT_ID}-${PINNED_VERSION}.json"
 
     if [ ! -f "$METADATA_FILE" ]; then
         echo "  Fetching metadata..."
