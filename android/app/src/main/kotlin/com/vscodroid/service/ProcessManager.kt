@@ -142,41 +142,47 @@ class ProcessManager(private val context: Context) {
         // see PortFinder.getOrAllocatePort.
         if (_port == 0) {
             _port = PortFinder.getOrAllocatePort(context)
-        } else if (!PortFinder.isPortAvailable(_port)) {
-            // A restart, and something is already listening on our port.
-            //
-            // Only the cold path checked this. `getOrAllocatePort` tests the
-            // remembered port before reusing it and moves on if it is taken; the
-            // branch above skips that on every restart, so a held port was
-            // discovered only by the health probe -- which cannot tell whose
-            // server answered it. `isServerHealthy` reads a response code and
-            // nothing else, so a 200 from a stranger sets `_isReady`, and
-            // `NodeService.announceReady` then resets the restart budget. The
-            // budget that exists to end a crash loop could be refilled by the
-            // very thing causing it.
-            //
-            // Reaching that state does not take a stranger. `assets/server.js`
-            // forks the editor server and forwards SIGTERM to it, but a
-            // `server.js` that is SIGKILLed -- which is routine here, it is what
-            // the watchdog's 137 branch exists for -- forwards nothing, and
-            // `fork()` sets no PDEATHSIG. The grandchild outlives its parent
-            // still holding the socket, and nothing reaps it:
-            // `assets/process-monitor.js` only kills idle language servers, and
-            // it runs inside the parent it would have to outlive.
-            //
-            // Refusing here is upstream of all of that. What the packaged
-            // server-main.js does when it cannot bind is not known -- it is
-            // minified and gitignored -- but it does not need to be: whether the
-            // fresh child exits or lingers unbound, the stale one answers the
-            // probe either way, so the fix cannot depend on which happens.
-            //
-            // Moving to a different port instead would be worse than failing.
-            // The WebView's loaded URL and the WebViewClient are bound to this
-            // one and neither is rebuilt on restart, and the workbench's
-            // IndexedDB is keyed to it as an origin.
-            Logger.e(tag, "Port $_port is held by another process; refusing to start")
-            return false
         }
+        // Nothing here checks whether the port is still free, and that is a
+        // decision rather than an omission. A check was tried and removed; what
+        // follows is what it cost and what the real problem is, because the idea
+        // is an obvious one to have again.
+        //
+        // The situation it aimed at: `assets/server.js` forks the editor server
+        // and forwards SIGTERM to it, but a `server.js` that is SIGKILLed --
+        // routine here, it is what the watchdog's 137 branch exists for --
+        // forwards nothing, and `fork()` sets no PDEATHSIG. So the child outlives
+        // its parent still holding the port. `assets/process-monitor.js` does not
+        // reap it: it only kills idle language servers, and it runs inside the
+        // parent it would have to outlive.
+        //
+        // The trap is what that child IS. It is not a stranger and it is not
+        // wreckage -- it is a live, healthy editor server, the one the open
+        // WebView is still talking to. Refusing to start because the port is held
+        // therefore takes a working editor away from the user, in the common case,
+        // to fix bookkeeping. It also cannot recover: `_port` is written only
+        // while it is zero, so nothing re-derives it, and a refusal repeats for
+        // the life of this instance.
+        //
+        // What IS wrong is that the health probe reads a response code and nothing
+        // else, so the surviving server satisfies readiness and
+        // `NodeService.announceReady` refills the restart budget -- leaving a
+        // respawn loop of children that can never bind. That is the defect worth
+        // fixing, and it is not fixed by refusing to start.
+        //
+        // The shape most likely to fix it is adoption: when a server already
+        // holding the port is OURS, do not spawn a second one, serve that. The
+        // ownership test needs no change to the readiness probe -- `/version` is
+        // answered before the token gate and must stay a pure liveness probe, but
+        // `GET /` carrying our connection token is a different request, and
+        // answers 200 if the server accepts it and 403 if it does not. Only our
+        // own processes can read that token; it lives in app-private storage at
+        // mode 0600.
+        //
+        // The open question, and the reason adoption is not done here: a server
+        // adopted that way has no `Process` behind it, so no watchdog, so its
+        // later death goes unnoticed. Solving that is what makes adoption a piece
+        // of work rather than a patch.
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR exists — Android may clear cache between launches
