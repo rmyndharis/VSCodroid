@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -30,6 +31,15 @@ import java.io.File
  * `onSettingChanged:` is untouched and stays allowed -- a setting key is a
  * different kind of name, and VS Code's own Get Started walkthrough completes
  * its theme step on exactly the string ours does.
+ *
+ * The manifests are parsed with `org.json`, which `build.gradle.kts` puts on
+ * the test classpath for exactly this. An earlier version of this file read
+ * them with a regex and said in a comment that org.json throws "not mocked"
+ * here -- copied from a neighbouring test, true when that neighbour was
+ * written, and false since the real parser was added. The regex it justified
+ * had a matching bug the parser cannot have: it ended a `completionEvents`
+ * array at the first `]`, so an event containing one truncated the array and
+ * the events after it went unread.
  */
 class WalkthroughCompletionEventTest {
 
@@ -42,6 +52,40 @@ class WalkthroughCompletionEventTest {
             ?.sortedBy { it.path }
             ?: emptyList()
 
+    /** One walkthrough step: where it lives, what it links to, how it completes. */
+    private data class Step(
+        val where: String,
+        val commandLinks: Set<String>,
+        val events: List<String>,
+    )
+
+    private fun ourSteps(): List<Step> {
+        val found = mutableListOf<Step>()
+        for (manifest in ourManifests()) {
+            val walkthroughs = JSONObject(manifest.readText())
+                .optJSONObject("contributes")
+                ?.optJSONArray("walkthroughs")
+                ?: continue
+            for (w in 0 until walkthroughs.length()) {
+                val walkthrough = walkthroughs.getJSONObject(w)
+                val steps = walkthrough.optJSONArray("steps") ?: continue
+                for (s in 0 until steps.length()) {
+                    val step = steps.getJSONObject(s)
+                    val events = step.optJSONArray("completionEvents")
+                    found += Step(
+                        where = "${manifest.parentFile.name} step '${step.optString("id", "?")}'",
+                        commandLinks = COMMAND_LINK
+                            .findAll(step.optString("description", ""))
+                            .map { it.groupValues[1] }
+                            .toSet(),
+                        events = (0 until (events?.length() ?: 0)).map { events!!.getString(it) },
+                    )
+                }
+            }
+        }
+        return found
+    }
+
     @Test
     fun `no step of ours completes on a view id`() {
         val manifests = ourManifests()
@@ -50,28 +94,18 @@ class WalkthroughCompletionEventTest {
                 "in the wrong place, which would let it pass by finding nothing"
         }
 
-        // Not org.json: every method on JSONObject throws "not mocked" on this
-        // project's unit-test classpath. Same reason BundledExtensionHostTest
-        // reads its manifests with a pattern.
-        val found = mutableListOf<Pair<String, String>>()
-        for (manifest in manifests) {
-            val text = manifest.readText()
-            for (block in COMPLETION_EVENTS.findAll(text)) {
-                for (entry in ENTRY.findAll(block.groupValues[1])) {
-                    found += manifest.parentFile.name to entry.groupValues[1]
-                }
-            }
-        }
+        val found = ourSteps().flatMap { step -> step.events.map { step.where to it } }
 
-        // The positive control, and the one this test cannot do without. Every
-        // assertion below reports success by finding nothing, so a manifest
-        // layout this pattern stops matching turns the whole check into a scan
-        // of zero events that passes. "Are there manifests" does not cover it.
+        // The positive control, and the one this test cannot do without. The
+        // assertion below reports success by finding nothing, so a manifest that
+        // stopped declaring completionEvents -- or a walkthrough moved under a
+        // key this no longer walks -- would turn the whole check into a scan of
+        // zero events that passes. "Are there manifests" does not cover it.
         assertTrue(
             found.isNotEmpty(),
-            "no completionEvents matched in any bundled manifest, so this test is checking " +
-                "nothing. Either the manifests stopped declaring them or COMPLETION_EVENTS " +
-                "no longer matches how they are written.",
+            "no completionEvents were read from any bundled manifest, so this test is checking " +
+                "nothing. Either the manifests stopped declaring them, or they moved somewhere " +
+                "declaredEvents() no longer walks.",
         )
 
         val onView = found.filter { (_, event) -> event.startsWith("onView:") }
@@ -83,16 +117,59 @@ class WalkthroughCompletionEventTest {
                 "so a wrong id fails silently and the step stays unfinished forever. Complete " +
                 "on onCommand: naming the command the step's own button runs — that is " +
                 "checkable against the step itself, and it is what the workbench infers when " +
-                "a step declares no completionEvents at all. Scanned ${found.size} events.",
+                "a step declares no completionEvents at all. Read ${found.size} events.",
+        )
+    }
+
+    /**
+     * The claim the rule above rests on, enforced rather than asserted in prose.
+     *
+     * `onCommand:` is preferred over `onView:` because the command it names is
+     * the one the step's own button runs, so the two cannot drift apart. That
+     * is only true while something checks it. Nothing did: a single letter --
+     * `workbench.view.extension` against a button reading
+     * `workbench.view.extensions` -- would leave the step exactly as
+     * unfinishable as the view id it replaced, and the rule above would pass it.
+     *
+     * This forbids a step that completes on a command it does not offer. VS
+     * Code allows one; it would complete when the user happened to run that
+     * command from the palette, and no step of ours is built that way. If one
+     * ever should be, this fails loudly with the id in the message and the
+     * choice can be made deliberately, which is the point.
+     */
+    @Test
+    fun `a step completing on a command offers that command`() {
+        val steps = ourSteps()
+        check(steps.isNotEmpty()) { "no walkthrough steps found — nothing was checked" }
+
+        val commandEvents = steps.flatMap { step ->
+            step.events.filter { it.startsWith(COMMAND_EVENT) }.map { step to it }
+        }
+
+        // Without this the assertion below is satisfied by a manifest whose
+        // steps complete on nothing at all, or by a description format these
+        // links stop being found in.
+        assertTrue(
+            commandEvents.isNotEmpty(),
+            "no onCommand: completion events were found, so this check is inspecting nothing",
+        )
+
+        val orphans = commandEvents
+            .filter { (step, event) -> event.removePrefix(COMMAND_EVENT) !in step.commandLinks }
+            .map { (step, event) -> "${step.where}: $event" }
+
+        assertEquals(
+            emptyList<String>(), orphans,
+            "these steps complete on a command their own description does not offer, so the " +
+                "button and the completion event can no longer be wrong together — which is " +
+                "the only reason onCommand: is trusted here. Point the event at the command " +
+                "the step's button runs, or give the step a button that runs it.",
         )
     }
 
     private companion object {
-        /** The body of a `"completionEvents": [ ... ]` array, across newlines. */
-        val COMPLETION_EVENTS =
-            Regex(""""completionEvents"\s*:\s*\[(.*?)]""", RegexOption.DOT_MATCHES_ALL)
-
-        /** One quoted entry inside that array. */
-        val ENTRY = Regex(""""([^"]+)"""")
+        /** `[Browse Extensions](command:workbench.view.extensions)` in a step description. */
+        val COMMAND_LINK = Regex("""\(command:([^)?]+)""")
+        const val COMMAND_EVENT = "onCommand:"
     }
 }

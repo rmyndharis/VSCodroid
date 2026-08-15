@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "VSCodroid Welcome",
   "description": "Welcome walkthrough for VSCodroid",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
