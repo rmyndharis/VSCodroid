@@ -375,6 +375,78 @@ class RestartOwnershipTest {
 }
 
 /**
+ * That the once-per-run failure notice is keyed on the run and not on a count.
+ *
+ * The defect this exists for is a substitution that looks like an identity. The
+ * gate was `restartCount == 0`, which is true on the first attempt of a fresh
+ * process and therefore looked like "the first failure of this run". It is not.
+ * `announceReady` resets the count, and `retryOrGiveUp` increments it *before*
+ * calling the launch path — so every failure reached through the retry chain
+ * arrives with a count of at least one, and after a crash the gate never opened
+ * at all. A whole run of failures passed without a word: 62 seconds of backoff in
+ * front of a dead editor, with `startupNotice` cleared at the top of each attempt
+ * so a client binding in that window read nothing either.
+ *
+ * A count and a run agree on the first tick of a process and disagree ever
+ * afterwards, which is exactly the pair to get wrong.
+ *
+ * Source-reading, and the weak layer, and there is no strong one available here:
+ * the gate is a private method on a `Service`, and this suite can build neither a
+ * `Service` nor a main dispatcher. What it can do is refuse the substitution —
+ * the logic `a != b` is not what breaks, the choice of `a` is.
+ */
+class NoticeGateKeyTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `the notice gate is keyed on the run and both failures go through it`() {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+        val report = { hits: List<IndexedValue<String>> ->
+            hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+        }
+
+        // Control first: without it, a file that had lost the gate entirely would
+        // satisfy every assertion below by having nothing to find.
+        val gate = lines.filter { (_, l) -> l.contains("noticedRun") }
+        assertTrue(
+            gate.size >= 2,
+            "expected the gate to both read and write the run it has already spoken " +
+                "for; found:\n" + report(gate),
+        )
+
+        val throttled = lines.filter { (_, l) -> l.contains("reportOncePerRun(") }
+        assertEquals(
+            3, throttled.size,
+            "expected the declaration plus both failure outcomes -- a failure that " +
+                "speaks on every attempt is the defect, and so is one that never " +
+                "speaks. Found:\n" + report(throttled),
+        )
+
+        // The substitution itself. restartCount is a perfectly good field; it is
+        // just not a run, and re-keying on it reads as a simplification.
+        val miskeyed = lines.filter { (i, l) ->
+            l.contains("restartCount") && gate.any { (g, _) -> kotlin.math.abs(g - i) <= 3 }
+        }
+        assertEquals(
+            emptyList<String>(), miskeyed.map { (i, l) -> "NodeService.kt:${i + 1}: ${l.trim()}" },
+            "the notice gate must not be keyed on the restart count: it is already " +
+                "non-zero by the time any retried launch runs, so the gate would never open",
+        )
+    }
+}
+
+/**
  * Whether a coroutine waking from a backoff still belongs to the run that started
  * it.
  *
