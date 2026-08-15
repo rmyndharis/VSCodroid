@@ -372,6 +372,43 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `the server is told to bind loopback, and nothing widens it`() {
+        // The heap ceiling and the port are each pinned to the command line above.
+        // The bind address was not, and it is the one of the three that cannot be
+        // walked back after a release: a server on 0.0.0.0 puts the editor and its
+        // connection token on whatever network the phone has joined.
+        //
+        // It is also load-bearing somewhere non-obvious. PortFinder probes
+        // availability on 127.0.0.1 specifically, and its own comment records why:
+        // Java sets SO_REUSEADDR by default, so a wildcard ServerSocket can bind a
+        // port that is already held on loopback and report it free. That probe is
+        // correct only while the server binds the address it probes. Widening the
+        // bind here would not fail anything -- it would quietly turn PortFinder's
+        // answer back into the wrong one, three files away.
+        //
+        // The literal is repeated rather than read from production, deliberately.
+        // Asserting against the same constant the code uses would pass whatever
+        // that constant became, which is the mutation this exists to catch.
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--host=127.0.0.1"),
+            "the server must be told to bind loopback; got: $output"
+        )
+        // Both directions, because the first assertion alone still passes if a
+        // second, wider bind argument is appended after it.
+        assertFalse(
+            output.contains("0.0.0.0"),
+            "nothing may put the server on a routable address; got: $output"
+        )
+    }
+
+    @Test
     fun `a restart clears the shutdown flag so the next crash is still a crash`() {
         // stopServer() sets isShuttingDown so the watchdog does not read a
         // deliberate stop as a crash. Nothing cleared it on the way back in until
