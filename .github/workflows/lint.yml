@@ -56,6 +56,13 @@ jobs:
       - name: Check the documented build steps match the workflows
         run: python3 scripts/check-build-steps.py
 
+      # Same reasoning, one file further: reads two committed sources and no
+      # assets. The contract an extension author writes against had never been
+      # held to the bridge it describes, and one pass found fourteen
+      # disagreements across twenty-eight methods.
+      - name: Check the bridge API spec matches the registered signatures
+        run: python3 scripts/check-bridge-api-spec.py
+
       # Reads two files and no assets, so it runs beside the other cheap check
       # rather than inside the build. What it guards arrives a whole release
       # after the change that causes it: raising targetSdk closes the local
