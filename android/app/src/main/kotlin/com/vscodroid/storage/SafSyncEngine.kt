@@ -1128,7 +1128,16 @@ class SafSyncEngine(private val context: Context) {
          * and following it would copy files from outside the folder the user granted.
          */
         internal fun uploadableEntries(root: File, limit: Int): List<File> {
-            if (limit <= 0 || !root.isDirectory) return emptyList()
+            // [root] is tested for being a link before anything else, and that is not
+            // symmetry with the children loop below -- it is the case that reaches
+            // outside the folder the user granted. `File.isDirectory` follows links,
+            // and so does the observer that produces these jobs
+            // (`(event and IN_ISDIR) != 0 || localFile.isDirectory`), so a symlink to
+            // a directory arrives here looking exactly like a directory. Walking it
+            // would list the *target's* contents and copy them onto the device: point
+            // one at a home directory inside a synced folder and the whole of it
+            // uploads.
+            if (limit <= 0 || isLink(root) || !root.isDirectory) return emptyList()
 
             val found = mutableListOf<File>()
             val pending = ArrayDeque<File>()

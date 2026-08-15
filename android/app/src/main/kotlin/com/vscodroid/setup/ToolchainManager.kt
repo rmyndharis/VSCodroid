@@ -1267,6 +1267,25 @@ class ToolchainManager(private val context: Context) {
                 // tries again. Nothing else depends on it having run.
                 Logger.w(tag, "Toolchain repair pass failed: ${e.message}")
             }
+            try {
+                // Unconditionally, and separately from the repair above, because
+                // the two answer different questions. The repair is marked done per
+                // toolchain and never runs again; this has to run on every launch,
+                // because the env file is otherwise written only by an install or an
+                // uninstall. A toolchain installed by an earlier version keeps the
+                // file that version wrote -- so the loader wrappers, which are what
+                // make a toolchain command runnable at all, reached new installs
+                // only. That is the same shape as the bundled-extension defect this
+                // release fixed: an improvement that skips exactly the installs that
+                // need it.
+                //
+                // Cheap enough to do every time: it reads toolchains.json, formats a
+                // few dozen lines and writes them atomically. With no toolchains
+                // installed it deletes the file and returns.
+                regenerateEnvFile()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not refresh toolchain-env.sh: ${e.message}")
+            }
         }
     }
 

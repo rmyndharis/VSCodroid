@@ -125,6 +125,29 @@ class SafUploadPlanTest {
     }
 
     @Test
+    fun `a symlinked root is not walked at all`(@TempDir tmp: File) {
+        // The case that reaches outside the granted folder, and the one the
+        // children loop cannot cover because the root never goes through it.
+        // `File.isDirectory` follows links, and so does the observer that produces
+        // these jobs, so a symlink to a directory arrives looking like a directory.
+        // Walking it lists the target's contents: point one at a home directory
+        // inside a synced folder and the whole of it uploads to the device.
+        val outside = File(tmp, "home").apply { mkdirs() }
+        File(outside, "private.txt").writeText("s")
+        File(outside, "nested/deeper.txt").apply { parentFile!!.mkdirs(); writeText("s") }
+        val link = File(tmp, "proj/escape")
+        link.parentFile!!.mkdirs()
+        Files.createSymbolicLink(link.toPath(), outside.toPath())
+
+        assertTrue(link.isDirectory, "fixture check: the link does look like a directory")
+        assertTrue(
+            SafSyncEngine.uploadableEntries(link, limit = 1000).isEmpty(),
+            "a symlinked root must not be walked; its target is outside the folder " +
+                "the user granted",
+        )
+    }
+
+    @Test
     fun `a file, a missing directory and a zero cap all yield nothing`(@TempDir tmp: File) {
         val file = File(tmp, "plain.txt").apply { writeText("x") }
         assertTrue(SafSyncEngine.uploadableEntries(file, 1000).isEmpty())
