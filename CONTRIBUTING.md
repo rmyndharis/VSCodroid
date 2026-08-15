@@ -35,6 +35,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 | Node.js           | 20 LTS                         | For VS Code build tooling                    |
 | Python            | 3.x                            | For node-gyp (native module compilation)     |
 | Git               | Any recent version             | -                                            |
+| GnuPG (`gpg`)     | Any recent version             | `brew install gnupg` / `apt-get install gnupg`. The bundled-tool download scripts verify the Termux package index against its signature and refuse to run without it |
 | adb               | Via Android SDK platform-tools | For deploying to device                      |
 | ARM64 device or emulator | Android 13+ (API 33+)   | The bundled binaries are arm64-only, so an x86_64 emulator will not work; an arm64 emulator (the default on Apple Silicon) works fine |
 
