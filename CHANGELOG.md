@@ -173,6 +173,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Two checks now hold the bridge API documentation to the code it describes, so a method that is added, renamed, given a different argument or given a different return type cannot silently leave the documentation behind. One reads the compiled class and settles which methods exist; the other reads the source and settles their parameter names, order, nullability and return types. Neither alone is complete and each says so in its own header
 
 ### Security
+- Deciding whether the editor server already running on the port is this app's own
+  no longer involves handing that server the connection token. When the app
+  restarts after its server was killed — routine on a phone, where the system
+  reclaims memory and caps background processes — the port is usually still held
+  by the editor server itself, and reusing it keeps your open editor and its
+  stored state intact. The way that was confirmed, though, was to send the token
+  to whatever held the port and treat any reply other than a refusal as proof it
+  belonged to us. Binding a local port needs no permission on Android, so another
+  app that took the port in the moment after the server died would have been
+  handed the credential that opens every route of your editor, including the
+  terminal, and would then have been served to you inside the app. Ownership is
+  now settled from a record this app writes for itself, naming the process it
+  started; nothing is sent, and a holder we have no record for is treated as a
+  stranger and started over rather than adopted
 - The musl loader is now anchored to Alpine's signing key, and the signed chain
   is followed all the way to the bytes that ship. It was the last download taken
   on trust: the index naming its checksum came from the same host as the package,
@@ -198,6 +212,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor server's connection token no longer reaches the Android system log. That token is what authenticates the editor to its own server, and the system log can be read by other software on the device, so a value that gates the whole editor was leaving the app's private storage as a side effect of ordinary use. Nothing changes in day-to-day use: the token is still generated on first start, still kept in private storage, and still supplied for you
 
 ### Fixed
+- First run now asks for as much free space as unpacking actually needs. The
+  figure it checked was 500 MB and had been since the editor it unpacked was a
+  much smaller one; what ships now is over 800 MB. A device holding somewhere
+  between the two passed the check, ran out of space partway through, and was
+  told "Setup failed" — which named neither the cause nor the remedy. Tapping
+  Retry then produced the storage message at last, advising you to free 500 MB,
+  which would not have been enough either. The requirement is now measured from
+  what the app actually carries, so it stays correct as the editor grows, and the
+  message names the real figure
+- "Open Recent Folder" no longer closes the app. Commands that arrive from the
+  editor run on a background thread, and this one built its progress dialog there
+  before the copy began; the first progress update then reached that dialog from
+  the main thread and Android stopped the app for touching a window from the
+  wrong one. Every command that opens a dialog, a message or the folder picker
+  now moves to the right thread first
+- "Serve on Network" can find your dev server again. It listed running servers by
+  reading a system file that Android does not let an app open, and the failure was
+  indistinguishable from finding nothing — so the command answered "No dev server
+  is running yet" on every device, whether or not one was. It now finds servers by
+  connecting to them, checking both this device and its address on your network so
+  it can still tell you whether other devices can reach it. That means it looks at
+  the ports frameworks usually pick rather than at every port in use, so the list
+  now always ends with an entry for typing a port in yourself
 - The check that verifies the editor server tree now runs on the copy packaged
   into the app, not only on the copy the build downloads. Those are two
   different trees — the download is copied into the app's assets, and the native

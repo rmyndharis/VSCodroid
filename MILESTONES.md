@@ -82,6 +82,20 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Build VS Code REH server for ARM64**
+
+   > Both of the first two lines describe how this was done at the time and not
+   > how it is done now, and the difference is a licensing one rather than a
+   > preference. The pre-built server on Microsoft's update CDN ships under
+   > pre-release terms that do not permit modifying and redistributing it inside
+   > an APK, so on 2026-08-12 the build moved to compiling Code - OSS from the
+   > MIT source. `patches/code-server/` went with it; the diffs live in
+   > `patches/` and are applied by `scripts/build-vscode-oss.sh`.
+   >
+   > Left as they were rather than rewritten, because a milestone records what
+   > was done to reach it. The note is here so that nobody reads the checkboxes
+   > as a description of the current build — which is the mistake this file
+   > invited, since nothing else on the page says the approach changed.
+
    - [x] Download pre-built VS Code Server (vscode-reh) for Linux ARM64
    - [x] Apply VSCodroid branding patch (`patches/code-server/product.diff`)
    - [x] Branding covers: nameShort, nameLong, applicationName, dataFolderName, Open VSX gallery, telemetry off
@@ -255,7 +269,7 @@ M6 (Release)   → Play Store release
      - `vscodroid.vscodroid-welcome-1.2.1` — welcome tab with quick actions
      - `vscodroid.vscodroid-saf-bridge-1.3.0` — SAF storage integration
      - `vscodroid.vscodroid-process-monitor-1.0.0` — phantom process monitoring
-     - `vscodroid.vscodroid-serve-network-1.0.0` — serve a dev server on the LAN
+     - `vscodroid.vscodroid-serve-network-1.1.0` — serve a dev server on the LAN
    - [x] `extensions.json` manifest auto-generated on first run
 
 5. **First-run experience** (`SplashActivity.kt`, `FirstRunSetup.kt`)
