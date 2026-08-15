@@ -217,9 +217,9 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
 
     # These are executable payloads bundled into the APK, so they get the same
     # bar as every other download script: fail closed. (An earlier revision
-    # claimed Open VSX publishes no digests; review disproved that with a live
-    # fetch.) EXPECTED was read above, before the fast path, so that a tree this
-    # run does not download is held to the same comparison.
+    # claimed Open VSX publishes no digests; a live fetch of files.sha256
+    # disproved it.) EXPECTED was read above, before the fast path, so that a
+    # tree this run does not download is held to the same comparison.
     ACTUAL=$( (sha256sum "$VSIX_FILE" 2>/dev/null || shasum -a 256 "$VSIX_FILE") | cut -d' ' -f1)
     if [ "$ACTUAL" != "$EXPECTED" ]; then
         echo "  FAIL   $EXT_ID: VSIX does not match files.sha256" >&2
