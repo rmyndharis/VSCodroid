@@ -18,7 +18,16 @@ import com.vscodroid.util.Logger
 
 /**
  * Settings screen for managing on-demand toolchains.
- * Launched from AndroidBridge.openToolchainSettings() via VS Code.
+ *
+ * Reached from the launcher shortcut published by `publishToolchainShortcut` in
+ * [SplashActivity], which is the only route a user has. This activity is not
+ * exported and has no launcher entry of its own.
+ *
+ * [com.vscodroid.bridge.AndroidBridge.openToolchainSettings] can also start it,
+ * and nothing calls that: it is dispatched by the `openToolchainSettings` command
+ * on the BroadcastChannel relay, which no bundled extension sends. Naming it here
+ * as the way in is what this comment used to do, and it sent readers looking for
+ * a caller that does not exist.
  */
 class ToolchainActivity : AppCompatActivity() {
     private val tag = "ToolchainActivity"
