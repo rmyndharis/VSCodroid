@@ -875,9 +875,23 @@ class MainActivity : AppCompatActivity() {
             security = securityManager,
             clipboard = clipboardBridge,
             onBackPressed = { false },
-            onMinimize = { moveTaskToBack(true) },
-            onOpenFolderPicker = { openFolderPicker() },
-            onOpenRecentFolder = { uri -> openRecentSafFolder(uri) },
+            onMinimize = { runOnUiThread { moveTaskToBack(true) } },
+            // Every callback here arrives on the WebView's private "JavaBridge"
+            // thread, never the UI thread -- addJavascriptInterface says so in
+            // as many words. So each one that touches a View, a Dialog or a Toast
+            // has to hop, and the hop belongs here rather than inside the
+            // handlers: these five are the whole boundary, and a reader checking
+            // whether the rule holds can see all of them at once.
+            //
+            // onShowAbout was the only one wrapped. openRecentFolder is the one
+            // that showed why the rest have to be: it builds an AlertDialog and
+            // calls show() on this thread, then the progress callbacks reach the
+            // same dialog from the main thread, and ViewRootImpl.checkThread
+            // kills the app. It went unnoticed because the command was
+            // unreachable until the extension moved from "main" to "browser" --
+            // in the same window this review covers.
+            onOpenFolderPicker = { runOnUiThread { openFolderPicker() } },
+            onOpenRecentFolder = { uri -> runOnUiThread { openRecentSafFolder(uri) } },
             onShowAbout = { runOnUiThread { showAboutDialog() } },
             safManager = safManager
         )
