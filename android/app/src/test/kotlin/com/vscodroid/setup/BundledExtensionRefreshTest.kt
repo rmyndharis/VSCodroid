@@ -145,6 +145,60 @@ class BundledExtensionRefreshTest {
     }
 
     /**
+     * The other side of the split, driven through the real method.
+     *
+     * An extension `download-extensions.sh` fetches at a pinned version cannot
+     * have changed its bytes under that version, so its directory being present
+     * is a sound staleness test -- and re-copying it would overwrite whatever it
+     * has generated for itself since installation. The generated file here
+     * stands in for that: `PKief.material-icon-theme` rewrites a 450 KB icon
+     * definition inside its own directory when its settings change, and its
+     * activation returns early while the stored settings still match, so a
+     * reverted copy stays reverted.
+     */
+    @Test
+    fun `an extension fetched by version is not re-extracted over what it generated`() {
+        val fetched = "PKief.material-icon-theme-5.37.0"
+        every { assets.list("extensions") } returns arrayOf(fetched)
+        every { assets.list("extensions/$fetched") } returns arrayOf("extension.js")
+        every { assets.list("extensions/$fetched/extension.js") } returns emptyArray()
+        every { assets.open("extensions/$fetched/extension.js") } answers
+            { ByteArrayInputStream(shippedSource.toByteArray()) }
+
+        val dir = File(extensionsDir, fetched)
+        dir.mkdirs()
+        val generated = File(dir, "extension.js")
+        generated.writeText("// regenerated on the device")
+
+        extractBundledExtensions()
+
+        assertEquals(
+            "// regenerated on the device",
+            generated.readText(),
+            "a fetched extension was re-copied over its own generated state; its version " +
+                "has not moved, so its bytes in the APK cannot have changed",
+        )
+    }
+
+    /**
+     * The control for the test above. Without it, a build that had stopped
+     * extracting anything at all would satisfy that assertion too.
+     */
+    @Test
+    fun `an extension fetched by version is extracted when its directory is absent`() {
+        val fetched = "PKief.material-icon-theme-5.37.0"
+        every { assets.list("extensions") } returns arrayOf(fetched)
+        every { assets.list("extensions/$fetched") } returns arrayOf("extension.js")
+        every { assets.list("extensions/$fetched/extension.js") } returns emptyArray()
+        every { assets.open("extensions/$fetched/extension.js") } answers
+            { ByteArrayInputStream(shippedSource.toByteArray()) }
+
+        extractBundledExtensions()
+
+        assertEquals(shippedSource, File(extensionsDir, "$fetched/extension.js").readText())
+    }
+
+    /**
      * Extraction merges over what is there and never deletes, so a file that an
      * earlier release wrote into the directory survives. That is deliberate and
      * cheap to live with -- nothing loads a file `package.json` does not name --

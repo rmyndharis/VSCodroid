@@ -1235,42 +1235,26 @@ claude() {
             return
         }
 
-        // Extracted every time, not only when the directory is absent. The
-        // destination is named `publisher.name-version`, so asking `exists()`
-        // asked whether a directory carrying this version string had ever been
-        // unpacked -- never whether it holds the bytes this APK carries. An
-        // extension edited without a version bump therefore reached clean
-        // installs and nobody else, and nothing noticed: the extension tests in
-        // the pull-request and release workflows read the asset rather than the
-        // device, so they were green on the release whose users kept the
-        // previous file.
+        // Which of these need unpacking is [bundledDirsToExtract]'s decision and
+        // its doc carries the reasoning. The short version: asking `exists()`
+        // alone asked whether a directory carrying this version string had ever
+        // been unpacked, never whether it holds the bytes this APK carries, so
+        // an extension edited without a version bump reached clean installs and
+        // nobody else -- and nothing noticed, because the extension tests in the
+        // pull-request and release workflows read the asset rather than the
+        // device.
         //
-        // This is not cheap, and an earlier version of this comment said it
-        // was. It claimed "a few dozen KB across a handful of files". The tree
-        // is 57 MB across 3787 files: `ms-python.python` alone is 29 MB, a
-        // figure this same file already records at [supersededExtensionDirs].
-        // The 72 KB measured to justify it was taken in a git worktree, where
-        // `.gitignore` keeps only `vscodroid.vscodroid-*` and everything
-        // `download-extensions.sh` fetches is absent -- a real measurement of
-        // the wrong tree. Every versionName change now re-copies all of it,
-        // behind a progress bar that does not move off 88.
-        //
-        // It stays unconditional for now because the cheap alternative is the
-        // wrong one. A version-or-mtime check cannot work here: the version is
-        // precisely what does not change when this project edits one of its own
-        // extensions in place, which is the defect above. Only a content
-        // comparison would both skip the unchanged 3787 and still deliver such
-        // an edit, and that is a larger change than this one. Recorded rather
-        // than left as a surprise.
-        //
-        // It merges, so a file this build no longer ships stays behind. That is
-        // the better of the two failures available: emptying the directory
-        // first would leave no extension at all if the copy were interrupted,
-        // while an orphan that `package.json` does not name is never loaded.
-        // Not considered here, and worth knowing before narrowing this: some
-        // extensions write into their own directory at runtime, so re-copying
-        // can revert generated state as well as stale files.
-        for (name in bundled) {
+        // Read before extraction on purpose: the listing taken after it is the
+        // one the superseded sweep below needs, and it must see what extraction
+        // just created.
+        val installed = extensionsDir.list()?.toList() ?: emptyList()
+        val toExtract = bundledDirsToExtract(bundled.toList(), installed)
+        for (name in toExtract) {
+            // Merges rather than emptying the directory first. That leaves a
+            // file this build no longer ships behind, which is inert because
+            // `package.json` does not name it, and it is the better of the two
+            // failures: clearing first would leave no extension at all if the
+            // copy were interrupted.
             extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")
         }
 
@@ -1320,7 +1304,11 @@ claude() {
         // counter this replaced was incremented next to the call rather than
         // after checking it, so it never measured an outcome either. Claiming
         // "N extracted" would be the one reading nobody can verify from here.
-        Logger.i(tag, "Bundled extensions: ${bundled.size} in this build, " +
+        // Reports the decision, not the outcome. extractAssetFile swallows its
+        // own IOException and logs a warning per file, so a run where every
+        // copy failed would still reach this line; "N extracted" would be the
+        // one reading nobody can check from here.
+        Logger.i(tag, "Bundled extensions: ${toExtract.size} of ${bundled.size} needed unpacking, " +
             "${superseded.size} superseded removed")
     }
 
@@ -1802,11 +1790,61 @@ internal fun retiredOwnExtensionDirs(present: List<String>, bundled: List<String
 
     val bundledBases = bundled.mapNotNull(::base).toSet()
     return present.filter { name ->
-        name.startsWith("vscodroid.") &&
+        name.startsWith(OWN_EXTENSION_PREFIX) &&
             name !in bundled &&
             base(name).let { it != null && it !in bundledBases }
     }
 }
+
+/**
+ * The publisher this project ships extensions under.
+ *
+ * Shared by the two decisions that turn on authorship so they cannot drift
+ * apart: [retiredOwnExtensionDirs], which may delete a directory carrying it,
+ * and [bundledDirsToExtract], which re-unpacks one every time. It is safe to
+ * key on because this publisher never appears on the marketplace, so a
+ * directory carrying it can only have come from a build of this app.
+ */
+internal const val OWN_EXTENSION_PREFIX = "vscodroid."
+
+/**
+ * Which bundled extension directories have to be unpacked over what is already
+ * on disk.
+ *
+ * The split follows who wrote the extension, not how big it is, and that is the
+ * whole of it: **content authored in this repository can change without its
+ * version number moving; content fetched by version from Open VSX cannot.**
+ * Collapsing the two branches back into one loses that distinction in whichever
+ * direction it is collapsed.
+ *
+ * A directory is named `publisher.name-version`, so its presence answers "has a
+ * directory carrying this version string been unpacked before" and nothing
+ * about its contents. For an extension `download-extensions.sh` fetches at a
+ * pinned version that is an exact staleness test -- the same version is the
+ * same bytes. For one this repository edits in place it is no test at all,
+ * which is the defect that removed the check: the process-monitor extension's
+ * code was rewritten while its `package.json` stayed at 1.0.0, so the fix
+ * reached clean installs and no one who upgraded.
+ *
+ * Both kinds share `assets/extensions`, and `.gitignore` is where the line is
+ * already drawn -- this project's own are kept under source control, everything
+ * else is downloaded. [OWN_EXTENSION_PREFIX] is that line expressed in a form
+ * available at runtime.
+ *
+ * What the split buys, beyond correctness. Ours are twelve files and tens of
+ * KB, so re-unpacking them every time costs nothing. The fetched ones are 57 MB
+ * across 3787 files -- `ms-python.python` alone is 29 MB, a figure this file
+ * also records at [supersededExtensionDirs] -- and re-copying those on every
+ * versionName change would sit behind a progress bar that does not move off 88.
+ * It also means an extension that regenerates files inside its own directory at
+ * runtime is never copied over, so that state survives an upgrade; a blanket
+ * re-copy would silently revert it.
+ *
+ * Pure, and takes the two listings rather than a directory, so the decision is
+ * testable without a Context or a tree.
+ */
+internal fun bundledDirsToExtract(bundled: List<String>, present: List<String>): List<String> =
+    bundled.filter { it.startsWith(OWN_EXTENSION_PREFIX) || it !in present }
 
 /**
  * Whether [file] is itself a symbolic link.
