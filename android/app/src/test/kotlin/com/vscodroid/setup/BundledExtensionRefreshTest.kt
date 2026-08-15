@@ -289,6 +289,44 @@ class BundledExtensionRefreshTest {
     }
 
     /**
+     * A plain file where the extension directory belongs is cleared, not kept.
+     *
+     * The failure path preserves what was already there, because a directory
+     * from the previous release holds files that are still whole. A plain file
+     * is not that: it defeats `mkdirs` on this attempt and on every future one,
+     * and for a fetched extension the retry drops it from the list, so the
+     * extension can never be unpacked again. Asking `isDirectory` rather than
+     * `exists` reads it as nothing worth keeping, so the attempt clears it and
+     * the retry succeeds.
+     *
+     * Nothing this app writes produces that state; the value is that the state
+     * is recoverable rather than terminal if anything ever does.
+     */
+    @Test
+    fun `a plain file occupying an extension path is cleared so the retry can work`() {
+        val fetched = "PKief.material-icon-theme-5.37.0"
+        every { assets.list("extensions") } returns arrayOf(fetched)
+        every { assets.list("extensions/$fetched") } returns arrayOf("extension.js")
+        every { assets.list("extensions/$fetched/extension.js") } returns emptyArray()
+        every { assets.open("extensions/$fetched/extension.js") } answers
+            { ByteArrayInputStream(shippedSource.toByteArray()) }
+
+        // A file, not a directory, at the path the extension needs.
+        File(extensionsDir, fetched).writeText("not a directory")
+
+        assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+        assertFalse(
+            File(extensionsDir, fetched).exists(),
+            "the occupying file was preserved, so mkdirs will fail forever and the retry " +
+                "will skip the extension",
+        )
+
+        extractBundledExtensions()
+
+        assertEquals(shippedSource, File(extensionsDir, "$fetched/extension.js").readText())
+    }
+
+    /**
      * Extraction merges over what is there and never deletes, so a file that an
      * earlier release wrote into the directory survives. That is deliberate and
      * cheap to live with -- nothing loads a file `package.json` does not name --
