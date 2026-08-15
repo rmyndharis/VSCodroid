@@ -164,15 +164,31 @@ as a known outcome keeps an unchecked box meaning "not tested" rather than
 
 ## 12. SAF & External Files
 
-> ⚠️ These three cannot pass yet: the folder picker cannot be invoked
-> ([#79](https://github.com/rmyndharis/VSCodroid/issues/79)), so nothing downstream of
-> it is reachable. Leave them unchecked until that is fixed.
+> The picker blocker ([#79](https://github.com/rmyndharis/VSCodroid/issues/79)) is
+> fixed — the bridge extension declared `main`, so it loaded in the Node extension
+> host where its `BroadcastChannel` reached nothing; it declares `browser` now and
+> loads where its transport is. **These rows are executable and are the pre-release
+> pass for the area that has changed most.**
+>
+> Run the whole section against **one** device folder that has at least one
+> subdirectory and a `.vscode/` directory in it — several rows below depend on
+> subdirectory contents, and a flat folder passes them without exercising anything.
+>
+> A failure here is usually silent by construction: the editor reports success and
+> the device copy is what did not change. Verify from the **device** side (a file
+> manager, or reopening the folder in another app), never from the editor's own view
+> of the mirror.
 
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| SF-1 | Open external folder | Command palette > VSCodroid: Open Folder from Device | SAF picker opens, folder syncs to mirror | BLOCKED | picker unreachable |
-| SF-2 | Edit sync-back | Edit a file from SAF folder, save | Changes sync back to original location | BLOCKED | depends on SF-1 |
-| SF-3 | Recent folders | Open a folder, close app, reopen, check recents | Previously opened folder appears in recents | BLOCKED | depends on SF-1 |
+| SF-1 | Open external folder | Command palette > VSCodroid: Open Folder from Device | System picker opens; after granting, the folder appears in Explorer with its contents | | |
+| SF-2 | Edit sync-back, top level | Edit a file in the folder's root, save | Change is present in the file **on the device**, not only in the editor | | |
+| SF-3 | Recent folders | Open a folder, close the app, reopen, run VSCodroid: Open Recent Folder | The folder is listed and reopens; its mirror was not deleted by the listing itself | | |
+| SF-4 | Save inside a subfolder | Edit and save `<sub>/<file>`, two levels down if the folder allows | Change reaches the device. Watches are registered per directory, so a subfolder save is a different code path from SF-2 | | |
+| SF-5 | Dotfiles both ways | Edit `.vscode/settings.json` (or `.gitignore`) and save | Change reaches the device. The write-back filter used to drop anything beginning with a dot while the walk copied it in, so this appeared to work and changed nothing | | |
+| SF-6 | Rename a directory | Rename a subdirectory that has files in it, from the editor | Directory appears on the device under the new name **with its contents**. Renames arrive as an unpaired delete-then-create, so an empty new directory here means data loss | | |
+| SF-7 | Device-side deletion sticks | Delete a file from the folder using a device file manager, then reopen the folder in the editor | The file stays deleted; it is not restored from the stale mirror | | |
+| SF-8 | Revoked permission reclaimed | Revoke the folder's access in Android Settings > Apps > VSCodroid, relaunch | The mirror is reclaimed and the device copy is untouched. A folder still granted must **not** be emptied while open | | |
 
 ---
 
@@ -191,8 +207,8 @@ as a known outcome keeps an unchecked box meaning "not tested" rather than
 | Performance | 10 | | | |
 | Toolchains | 5 | | | |
 | Terminal & Tools | 10 | | | |
-| SAF & Files | 3 | | | |
-| **Total** | **76** | | | |
+| SAF & Files | 8 | | | |
+| **Total** | **81** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
