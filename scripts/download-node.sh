@@ -41,6 +41,14 @@ echo "=== Node runtime ==="
 mkdir -p "$WORK_DIR" "$JNILIBS_DIR"
 cd "$WORK_DIR"
 
+# Emptied at the start, the way the five other resolved-*.tsv writers do it, so a
+# run that fails leaves no record naming a runtime that is not in jniLibs. The
+# write itself is at the very end; both halves are needed, and truncation alone
+# would not have been enough -- the record used to be written before the digest of
+# what it named had been checked, so a failure there replaced a correct record
+# with a fresh and wrong one rather than merely leaving a stale one.
+: > "$WORK_DIR/resolved-node.tsv"
+
 if [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
     curl -sL --fail --show-error -o Packages "$PACKAGES_URL"
 fi
@@ -81,9 +89,6 @@ echo "  package : $PACKAGE $version"
 # fresh, must not be used.
 deb="debs/$(basename "$filename")"
 mkdir -p debs
-# Same record the other download scripts keep, so the build manifest is not
-# silently missing the one component that matters most.
-printf '%s %s %s\n' "$PACKAGE" "$filename" "${sha256:--}" > "$WORK_DIR/resolved-node.tsv"
 if [ ! -f "$deb" ]; then
     curl -sL --fail --show-error -o "$deb" "$TERMUX_REPO/$filename"
 fi
@@ -140,3 +145,12 @@ python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNILIBS_DIR/libnode.so" \
 echo ""
 echo "  Node $version carries NODE_MODULE_VERSION for its major line."
 echo "  build-native-addons.sh must be built against the matching headers."
+
+# Same record the other download scripts keep, so the build manifest is not
+# silently missing the one component that matters most -- and written LAST, after
+# the digest check, the extraction, the install and the ELF gate, so it can only
+# describe a runtime that is actually in jniLibs and passed every check. Nothing
+# in this script reads it; write-build-manifest.py picks it up through the
+# resolved-*.tsv glob, which is why a record that is merely present, rather than
+# correct, is worse than none.
+printf '%s %s %s\n' "$PACKAGE" "$filename" "${sha256:--}" > "$WORK_DIR/resolved-node.tsv"
