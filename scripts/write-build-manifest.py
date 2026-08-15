@@ -71,12 +71,15 @@ def resolved_entries() -> list[tuple[str, str, str]]:
     resolve". Most scripts truncate their own record at the start of a run, so
     these files answer the second question.
 
-    "Most", not "each", and the exception is worth knowing when reading a
-    manifest: download-node.sh writes resolved-node.tsv before it has checked the
-    digest of what it resolved, so a run that fails at that check leaves a record
-    naming a version that never reached jniLibs. A manifest line can therefore be
-    ahead of the tree it describes. One grep settles which scripts are which:
-        grep -n ': > "$PKG_MAP_FILE"' scripts/download-*.sh
+    Every script that keeps a record now truncates it at the start of a run and
+    writes it at the end, so a run that fails leaves no record rather than one
+    naming something that never reached the tree. download-node.sh was the
+    exception until it was fixed; a manifest read from an older tree can still
+    carry a line ahead of what that tree contains. One grep settles which state a
+    checkout is in, and the anchor matters -- an earlier form of this note gave
+    `grep -n ': > "$PKG_MAP_FILE"'`, which misses the two scripts that truncate
+    through literal filenames and matches any comment quoting the pattern:
+        grep -nE '^[[:space:]]*: >' scripts/download-*.sh
     """
     work = ROOT / "toolchains" / "termux-packages"
     # Cleared per call rather than appended to: collect() may be called more than

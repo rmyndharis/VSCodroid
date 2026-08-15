@@ -38,17 +38,19 @@ MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
 echo "=== musl loader ==="
 mkdir -p "$WORK_DIR" "$JNI_DIR"
 
-# Truncated at the start of the run, as five of the six other resolved-*.tsv
-# writers do -- download-python.sh, download-termux-tools.sh and the three
-# toolchain scripts. Check rather than take it on trust, since it is one grep:
-#     grep -n ': > "$PKG_MAP_FILE"' scripts/download-*.sh
-# download-node.sh is the exception, and not a harmless one: it writes its record
-# before the digest of what it resolved has been checked, so a run that fails
-# there leaves a record naming a version that never reached jniLibs. That is the
-# failure this line exists to avoid, which is why the count matters more than the
-# generalisation this comment used to make.
+# Truncated at the start of the run, as every other resolved-*.tsv writer now
+# does. That was not true when this line was written -- download-node.sh wrote its
+# record before the digest of what it resolved had been checked -- and it is one
+# grep to confirm which state the tree is in:
+#     grep -nE '^[[:space:]]*: >' scripts/download-*.sh
+# Note the anchor. An earlier form of this comment prescribed
+# grep -n ': > "$PKG_MAP_FILE"', which answered the wrong question in both
+# directions: it missed this script and download-node.sh, which truncate through
+# literal filenames rather than that variable, and it matched this file anyway --
+# on the comment quoting the pattern. A grep that can match its own documentation
+# cannot fail for the person who wrote it.
 #
-# Sharper reason here than in any of them: the loader is installed well before
+# Sharper reason here than in most of them: the loader is installed well before
 # the record is written, so a run that copies a new loader over the old one and
 # then fails -- the ELF gate, an interrupt -- would otherwise leave the PREVIOUS
 # run's record on disk naming a version that is no longer the file in jniLibs.

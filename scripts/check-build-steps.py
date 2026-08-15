@@ -3,7 +3,7 @@
 
     check-build-steps.py
 
-Three assertions, all about scripts nobody notices are missing until an app is
+Four assertions, all about scripts nobody notices are missing until an app is
 built without them, or shipped without them having run:
 
   * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
@@ -14,7 +14,14 @@ built without them, or shipped without them having run:
     same workflow run things -- a device test harness, for one -- that
     build-all.sh has no business invoking;
   * every scripts/test-*.js runs in both lint.yml and release.yml, so a
-    self-check cannot be added to the tree and then run by nothing.
+    self-check cannot be added to the tree and then run by nothing;
+  * every scripts/check-*.py is invoked by something -- a workflow, a build
+    script or the Gradle build. Not "by both workflows", which is right for the
+    self-checks and wrong here: two of the no-argument checkers deliberately run
+    in build.yml rather than lint.yml because they read an assets tree lint does
+    not build, and the rest are invoked with arguments from a script or from
+    Gradle. The answerable question for this family is whether anything runs
+    them at all.
 
 The first two are about `.sh` and say so. The third is deliberately not folded
 into them: those two pair three sources -- the workflow, build-all.sh and
@@ -52,13 +59,32 @@ BUILD_ALL = ROOT / "scripts/build-all.sh"
 IN_WORKFLOW = re.compile(r"bash\s+scripts/([\w-]+\.sh)")
 IN_BUILD_ALL = re.compile(r"\$SCRIPT_DIR/([\w-]+\.sh)")
 
-# An invocation, not a mention. CONTRIBUTING.md is matched on the bare name above
-# because being described there is the whole point; a workflow has to actually run
-# the thing. The distinction is not academic here: lint.yml carries a paragraph
-# explaining why test-dns-proxy.js matters, so a substring test counts that script
-# as covered even with its `node` line deleted -- measured, the first version of
-# this rule passed a workflow that no longer ran it.
+# A LIVE invocation, not a mention and not a disabled one. CONTRIBUTING.md is
+# matched on the bare name above because being described there is the whole point;
+# a workflow has to actually run the thing. Two ways that went wrong, both
+# measured, both on the same script -- lint.yml carries a paragraph explaining why
+# test-dns-proxy.js matters, so a substring test called it covered with its `node`
+# line deleted; and matching raw text called it covered with the line commented
+# out. executable_lines() closes the second, this pattern the first.
 RUNS_SELFCHECK = re.compile(r"node\s+scripts/(test-[\w.-]+\.js)")
+
+# Every checker in the tree has to be run by something. The rule above asks
+# whether a named self-check is wired; this one asks the prior question -- whether
+# anything at all would notice the file existing. Measured: a scripts/check-*.py
+# could be added, or have its only invocations deleted, with nothing going red,
+# because no rule in this file looked at that family.
+#
+# Deliberately NOT "both lint.yml and release.yml", which is what the .js rule
+# requires. The four no-argument checkers split on purpose:
+#     check-build-steps.py, check-local-network-permission.py   lint + release
+#     check-library-attribution.py, check-welcome-claims.py     build + release
+# The second pair reads the assets tree, which lint.yml does not build -- it
+# writes stubs -- so demanding lint would demand attributing a tree with nothing
+# in it. The others take arguments and are invoked from a script or from Gradle
+# rather than from a workflow at all. So the honest requirement is that something
+# runs them, not which job does.
+RUNNERS_OF_CHECKERS = (".github/workflows/*.yml", "scripts/*.sh",
+                       "android/app/build.gradle.kts")
 
 # Both, not either. lint.yml runs on pull_request only and release.yml on tags,
 # so a self-check in just one of them is unrun on half the paths that reach a
@@ -66,8 +92,29 @@ RUNS_SELFCHECK = re.compile(r"node\s+scripts/(test-[\w.-]+\.js)")
 SELFCHECK_WORKFLOWS = ("lint.yml", "release.yml")
 
 
+def executable_lines(path) -> str:
+    """The file's text with whole-line comments dropped.
+
+    A workflow's `run:` blocks are shell, and a line whose first non-space
+    character is `#` is a comment in both YAML and shell; `//` covers the Gradle
+    build. Matching raw text counted a DISABLED invocation as a live one, which is
+    the likelier of the two failures this rule guards -- measured: replacing
+    `node scripts/test-dns-proxy.js` with
+    `# node scripts/test-dns-proxy.js  (disabled: flaky)` left the rule green,
+    while deleting the line correctly turned it red. Silencing a check in place
+    with a note is what happens to one that has started failing.
+
+    A trailing `# note` after a real command is deliberately left alone: that line
+    still runs.
+    """
+    return "\n".join(
+        line for line in path.read_text().splitlines()
+        if not line.lstrip().startswith(("#", "//"))
+    )
+
+
 def named_by(pattern, path):
-    return set(pattern.findall(path.read_text()))
+    return set(pattern.findall(executable_lines(path)))
 
 
 def job_body(path, job):
@@ -166,7 +213,7 @@ def main() -> int:
         if not wf.is_file():
             print(f"  FAIL   {wf_name} is missing; the workflow layout changed")
             return 1
-        missing = selfchecks - set(RUNS_SELFCHECK.findall(wf.read_text()))
+        missing = selfchecks - set(RUNS_SELFCHECK.findall(executable_lines(wf)))
         if missing:
             unrun[wf_name] = missing
 
@@ -179,6 +226,33 @@ def main() -> int:
     else:
         print(f"  ok     all {len(selfchecks)} JavaScript self-checks run in "
               f"{' and '.join(SELFCHECK_WORKFLOWS)}")
+
+    checkers = {p.name for p in (ROOT / "scripts").glob("check-*.py")}
+    if not checkers:
+        print("  FAIL   no scripts/check-*.py matched; the glob stopped matching")
+        return 1
+
+    runners = [p for pattern in RUNNERS_OF_CHECKERS
+               for p in sorted(ROOT.glob(pattern)) if p.is_file()]
+    if not runners:
+        print("  FAIL   nothing to search for invocations; the layout changed")
+        return 1
+
+    wired = set()
+    for runner in runners:
+        text = executable_lines(runner)
+        wired |= {name for name in checkers if name in text}
+
+    unwired = checkers - wired
+    if unwired:
+        report("checkers in scripts/ that nothing invokes", unwired,
+               "a workflow, a build script, or android/app/build.gradle.kts",
+               "A checker nothing runs is the same as no checker, and costs more:"
+               " its presence in the tree reads as coverage.")
+        failed = True
+    else:
+        print(f"  ok     all {len(checkers)} scripts/check-*.py are invoked, "
+              f"across {len(runners)} files that could run one")
 
     return 1 if failed else 0
 
