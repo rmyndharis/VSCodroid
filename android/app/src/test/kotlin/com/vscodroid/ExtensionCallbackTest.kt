@@ -252,58 +252,135 @@ class WorkbenchUrlTest {
             assertTrue(url.endsWith("/?folder=/projects"), url)
         }
     }
+
+    @Test
+    fun `redaction holds wherever in a message the URL sits`() {
+        // The property [NavigationTokenLoggingTest] rests on. That test requires
+        // every mention of the navigation URL inside a log statement to be
+        // wrapped in redactToken, and the requirement is only worth having if a
+        // wrapped mention is safe in whatever shape the surrounding message
+        // takes. A redactor anchored at the start of the string, or one
+        // replacing the first match and stopping, would leave that test correct
+        // and still ship the token out of a message built by concatenation or
+        // one that names the URL twice.
+        val url = workbenchUrl(13337, "/projects", token)
+
+        val messages = mapOf(
+            "interpolated" to "Loading VS Code at $url",
+            "concatenated" to "Loading VS Code at " + url + " now",
+            "named twice" to "$url then $url",
+            "assembled by a builder" to StringBuilder("at ").append(url).append(" ok").toString(),
+            "carrying a further parameter" to "$url&reload=1",
+            "quoted" to "\"$url\"",
+        )
+
+        messages.forEach { (shape, message) ->
+            val safe = redactToken(message)
+            assertFalse(
+                safe.contains(token),
+                "the token survived redaction of a message that is $shape: $safe",
+            )
+            assertTrue(
+                safe.contains("tkn=<redacted>"),
+                "nothing at all was redacted in a message that is $shape: $safe",
+            )
+        }
+    }
 }
 
 /**
- * That the only place the navigation URL reaches the log is a redacted one.
+ * That nothing in `MainActivity` puts a token-bearing value into logcat.
  *
- * [WorkbenchUrlTest] pins that the redactor understands the URL; this pins that
- * it is used, and that there is only one URL for it to be used on. The defect it
- * replaces was not a leak but the shape of one: the method built two strings, the
- * URL it loaded and a token-free twin it logged, and what kept the token out of
- * logcat was a person keeping them apart. Collapsing them is what a merge does,
- * and it is also the deliberate edit of anyone who wants the real navigation URL
- * in the log.
+ * [WorkbenchUrlTest] pins that the redactor understands the URL, and that a
+ * redacted message stays safe however it was assembled; this pins that the
+ * redactor is reached at all, and that there is only one URL for it to be reached
+ * on. The defect is not a leak but the shape of one: the method used to build two
+ * strings, the URL it loaded and a token-free twin it logged, and what kept the
+ * token out of logcat was a person keeping them apart. Collapsing them is what a
+ * merge does, and it is also the deliberate edit of anyone who wants the real
+ * navigation URL in the log.
+ *
+ * What is dangerous is a *value*, not a *spelling*: something holding the
+ * connection token reaching a `Logger` argument. A check written against one
+ * spelling is a check on that spelling wearing the costume of a check on the
+ * leak — `"at $url"` fails it, and `"at " + url` walks straight through while the
+ * token goes to a release build's logcat, readable by anything holding READ_LOGS.
+ *
+ * So [TokenTaint] reads the file the way taint reads it. A `val`/`var`
+ * declaration seeded from `workbenchUrl(...)`, `getConnectionToken()` or a
+ * WebView's `url` is tainted; anything declared from a tainted name is tainted
+ * too; and a `Logger` statement is an offender when a tainted name survives
+ * removing every `redactToken(...)` from it. Statements are read whole, across
+ * the lines a formatter wraps them onto, and string prose is dropped so the word
+ * "token" in a message is not mistaken for the variable. Interpolation,
+ * concatenation and an intermediate local all read the same to it. The reader is
+ * driven against fixed snippets in the cases below, so it is measured in both
+ * directions rather than trusted in either.
+ *
+ * What still passes. The first of these is pinned as a case below, so the claim
+ * is measured rather than promised, and the rest are the same shape as it:
+ *
+ *  - a value laundered through something that is not a declaration — appended to
+ *    a `StringBuilder`, put in a collection, or assigned to a `var` some lines
+ *    after it was declared;
+ *  - a declaration split across lines, with `val x =` on one and the value on the
+ *    next;
+ *  - a token arriving by a route none of the three seeds name;
+ *  - a value handed to a helper that logs it somewhere else. The reverse of that
+ *    one is a false accusation rather than a miss: only `redactToken(...)` counts
+ *    as sanitising, so any other wrapper is reported and has to be argued with;
+ *  - names are tracked across the whole file rather than per scope, so an
+ *    unrelated local called `url` or `token` is held to the same rule. Every
+ *    binding of either name in this file today holds the same tokened URL or the
+ *    bridge's session token, so here that is the answer wanted; elsewhere it
+ *    would be a nuisance.
  *
  * Source reading, and the weaker layer for the usual reason: the statement is
- * inside an Activity method, and a plain JVM test can build no Activity.
+ * inside an Activity method, and a plain JVM test can build no Activity. The
+ * webview layer needs none of this — `ConnectionTokenLoggingTest` drives its log
+ * statements for real and reads what came out, which catches every spelling at
+ * once.
  */
 class NavigationTokenLoggingTest {
 
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
-    private fun codeLines(): List<IndexedValue<String>> =
-        mainActivity.readLines().withIndex().filterNot { (_, line) ->
-            val t = line.trimStart()
-            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
-        }
-
-    @Test
-    fun `no log statement prints the navigation URL unredacted`() {
+    private fun source(): List<String> {
         check(mainActivity.isFile) {
             "MainActivity.kt not found at ${mainActivity.absolutePath} — this test " +
                 "would otherwise pass by looking at nothing"
         }
-        val lines = codeLines()
+        return mainActivity.readLines()
+    }
 
-        val offenders = lines
-            .filter { (_, l) -> l.contains("Logger.") && Regex("""\$\{?url""").containsMatchIn(l) }
-            .filterNot { (_, l) -> l.contains("redactToken") }
-            .map { (i, l) -> "MainActivity.kt:${i + 1}: ${l.trim()}" }
+    @Test
+    fun `no log statement prints a token-bearing value unredacted`() {
+        val offenders = TokenTaint.leaks(source()).map { "MainActivity.kt:$it" }
 
         assertEquals(
             emptyList<String>(), offenders,
-            "the URL the WebView loads carries the connection token, and Logger.i is " +
-                "not gated on a debuggable build. Print it through redactToken().",
+            "the URL the WebView loads carries the connection token, and only " +
+                "Logger.d is gated on a debuggable build — so this reaches a release " +
+                "build's logcat. Print it through redactToken().",
         )
+    }
 
-        // Control. Without this, deleting the log statement altogether — or
-        // renaming the local — satisfies the assertion above by looking at
-        // nothing, which is the shape of the defect being guarded.
+    @Test
+    fun `the navigation URL still reaches the log, redacted`() {
+        // Control, and it has to be a control on the *statement*. Asserting that
+        // some line somewhere calls `redactToken(url)` is satisfied by a spare
+        // `val safe = redactToken(url)` that nothing logs, which is exactly the
+        // company a raw log statement keeps. Deleting the log statement, renaming
+        // the local, or logging the URL by some other route all leave this empty.
+        val redacted = TokenTaint.redactedLogs(source())
+
         assertTrue(
-            lines.any { (_, l) -> l.contains("redactToken(url)") },
-            "nothing redacts the navigation URL; either the log statement went or it " +
-                "stopped going through the redactor",
+            redacted.isNotEmpty(),
+            "no log statement in MainActivity prints a token-bearing value through " +
+                "redactToken. Either the navigation log went, or it stopped going " +
+                "through the redactor, or the seeds in TokenTaint no longer recognise " +
+                "where the token enters the file — and in every one of those cases the " +
+                "test above is passing by looking at nothing",
         )
     }
 
@@ -311,8 +388,13 @@ class NavigationTokenLoggingTest {
     fun `the workbench URL is assembled in exactly one place`() {
         // The affordance, not the symptom. Two expressions for the same URL is
         // what made the redaction a matter of discipline; one cannot drift from
-        // itself.
-        val builders = codeLines()
+        // itself. Read off the raw lines: the literal host is string prose, which
+        // is the one thing TokenTaint's reader throws away.
+        val builders = source().withIndex()
+            .filterNot { (_, l) ->
+                val t = l.trimStart()
+                t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+            }
             .filter { (_, l) -> l.contains("http://127.0.0.1:\$port") }
             .map { (i, l) -> "MainActivity.kt:${i + 1}: ${l.trim()}" }
 
@@ -322,6 +404,337 @@ class NavigationTokenLoggingTest {
                 "string loaded cannot differ. Found:\n" + builders.joinToString("\n"),
         )
     }
+
+    // --- The reader itself, driven against fixed snippets. ------------------
+    //
+    // Everything above points TokenTaint at one file, where the only measurable
+    // outcome is "found nothing". A reader that always finds nothing passes all
+    // of it. These give it sources whose answer is known.
+
+    /** A stand-in for `navigateToFolder`, with the log statement swapped in. */
+    private fun navigateSource(vararg body: String): List<String> =
+        listOf(
+            "    private fun navigateToFolder(port: Int, folderPath: String) {",
+            "        val token = nodeService?.getConnectionToken()",
+            "        val url = workbenchUrl(port, folderPath, token)",
+        ) + body + listOf(
+            "        wv.loadUrl(url)",
+            "    }",
+        )
+
+    private val redactedLog =
+        """        Logger.i(tag, "Loading VS Code at ${'$'}{redactToken(url)}")"""
+
+    @Test
+    fun `the code as it stands reads clean`() {
+        val clean = navigateSource(redactedLog)
+
+        assertEquals(emptyList<String>(), TokenTaint.leaks(clean))
+        assertTrue(
+            TokenTaint.redactedLogs(clean).isNotEmpty(),
+            "the reader did not recognise the redacted log statement it is built around",
+        )
+    }
+
+    @Test
+    fun `an interpolated URL is a leak`() {
+        assertLeaks(
+            navigateSource("""        Logger.i(tag, "Loading VS Code at ${'$'}url")"""),
+        )
+    }
+
+    @Test
+    fun `a concatenated URL is a leak, even beside a redacted copy of it`() {
+        // The spelling that defeats a check written against interpolation, and
+        // the one worth stating in full because it is what the honest version of
+        // the mistake looks like: someone keeps the redacted string, and prints
+        // the real one next to it.
+        val defeat = navigateSource(
+            """        val safeUrl = redactToken(url)""",
+            """        Logger.i(tag, "Loading VS Code at " + url + " (" + safeUrl + ")")""",
+        )
+
+        assertLeaks(defeat)
+        assertEquals(
+            emptyList<String>(), TokenTaint.redactedLogs(defeat),
+            "a `val safeUrl = redactToken(url)` that nothing logs must not answer for " +
+                "the log statement; that is how a control gets satisfied by a line it " +
+                "has nothing to do with",
+        )
+    }
+
+    @Test
+    fun `an intermediate local carries the taint with it`() {
+        assertLeaks(
+            navigateSource(
+                """        val shown = url""",
+                """        Logger.i(tag, shown)""",
+            ),
+        )
+    }
+
+    @Test
+    fun `a statement the formatter wrapped is read whole`() {
+        // Both directions, because line-at-a-time reading gets them both wrong:
+        // it misses the leak, since the line holding the URL has no `Logger.` on
+        // it, and — for a reader patched to look at neighbouring lines instead of
+        // whole statements — it would accuse the correct one for the same reason.
+        val wrappedRaw = navigateSource(
+            """        Logger.i(""",
+            """            tag,""",
+            """            "Loading VS Code at " +""",
+            """                url,""",
+            """        )""",
+        )
+        val wrappedRedacted = navigateSource(
+            """        Logger.i(""",
+            """            tag,""",
+            """            "Loading VS Code at ${'$'}{redactToken(url)}",""",
+            """        )""",
+        )
+
+        assertLeaks(wrappedRaw)
+        assertEquals(emptyList<String>(), TokenTaint.leaks(wrappedRedacted))
+        assertTrue(
+            TokenTaint.redactedLogs(wrappedRedacted).isNotEmpty(),
+            "a redacted log statement stopped counting as one once it was wrapped",
+        )
+    }
+
+    @Test
+    fun `the word token in a message is not the variable token`() {
+        // The false accusation this would make if it matched on text rather than
+        // on code positions. MainActivity really does log "No connection token;
+        // the workbench will be refused." a few lines above the statement under
+        // guard, so getting this wrong makes the whole guard unrunnable and the
+        // next person deletes it.
+        val prose = navigateSource(
+            """        Logger.e(tag, "No connection token; the workbench will be refused.")""",
+            redactedLog,
+        )
+
+        assertEquals(emptyList<String>(), TokenTaint.leaks(prose))
+    }
+
+    @Test
+    fun `a value laundered through a builder still passes -- a stated limit`() {
+        // Pinned rather than described, so the docstring's list of what gets
+        // through is measured. Taint is followed through declarations only, and a
+        // `StringBuilder` is fed by a call. The redacted statement is kept beside
+        // it deliberately: with it gone the control catches this anyway, which
+        // would flatter the reader into looking like it saw the leak.
+        //
+        // If this case ever fails because the reader grew to follow a builder,
+        // that is an improvement: delete the case and the bullet in the docstring
+        // that promises it.
+        val laundered = navigateSource(
+            redactedLog,
+            """        val message = StringBuilder("also at ")""",
+            """        message.append(url)""",
+            """        Logger.w(tag, message.toString())""",
+        )
+
+        assertEquals(emptyList<String>(), TokenTaint.leaks(laundered))
+        assertTrue(
+            TokenTaint.redactedLogs(laundered).isNotEmpty(),
+            "the control has to be satisfied here, or this case is not the gap it claims",
+        )
+    }
+
+    private fun assertLeaks(source: List<String>) {
+        assertTrue(
+            TokenTaint.leaks(source).isNotEmpty(),
+            "a token-bearing value reaches Logger here and the reader did not see it:\n" +
+                source.joinToString("\n"),
+        )
+    }
+}
+
+/**
+ * Which `Logger` statements in a Kotlin source hand on a value carrying the
+ * connection token.
+ *
+ * Kept apart from the test that uses it because it is the part with behaviour of
+ * its own: the cases in [NavigationTokenLoggingTest] drive it against sources
+ * whose answer is known, which is only possible while it takes lines rather than
+ * a filename.
+ *
+ * Three passes over the text, none of them a Kotlin parser and none pretending to
+ * be. [codeView] drops string prose while keeping what a `$` interpolation names,
+ * so a message can talk about a token without being one. [statements] gathers a
+ * `Logger` call across however many lines it was wrapped onto, by counting
+ * parentheses on that same prose-free view — which is what keeps a `" ("` in a
+ * message from unbalancing the count. [taintedNames] walks declarations to a
+ * fixpoint from the three places the token enters.
+ *
+ * Its blind spots are the docstring on [NavigationTokenLoggingTest], and one more
+ * that belongs to the text scanning rather than to the design: a double quote
+ * written inside an interpolation inside a string — `trim('"')` is one, and
+ * MainActivity has it — ends the literal early, because handling it properly
+ * means recursing into interpolations. The damage is bounded to that one
+ * statement, and it cannot hide an interpolated name: [leaks] asks twice, once of
+ * the prose-free view and once of the raw text, and only the first is affected.
+ */
+private object TokenTaint {
+
+    /** Where a value carrying the connection token enters a file. */
+    private val SOURCES = listOf(
+        Regex("""\bworkbenchUrl\("""),
+        Regex("""\bgetConnectionToken\("""),
+        Regex("""\b(?:wv|webView)\??\.url\b"""),
+    )
+
+    private val DECLARATION = Regex("""\b(?:val|var)\s+([A-Za-z_]\w*)\s*(?::[^=]*?)?=(.*)""")
+    private val INTERPOLATION = Regex("""\$\{[^}]*}|\$[A-Za-z_]\w*""")
+    private val IDENTIFIER = Regex("""[A-Za-z_]\w*""")
+
+    /** Statements printing a tainted value with nothing hiding it. */
+    fun leaks(source: List<String>): List<String> {
+        val tainted = taintedNames(source)
+        return statements(source).filter { st ->
+            val code = stripRedacted(st.code)
+            val raw = stripRedacted(st.raw)
+            tainted.any { mentions(code, it) } ||
+                INTERPOLATION.findAll(raw).any { hole ->
+                    IDENTIFIER.findAll(hole.value).any { it.value in tainted }
+                }
+        }.map { "${it.line}: ${it.raw}" }
+    }
+
+    /** Statements printing a tainted value through the redactor. */
+    fun redactedLogs(source: List<String>): List<String> {
+        val tainted = taintedNames(source)
+        return statements(source).filter { st ->
+            redactedArguments(st.raw).any { arg -> tainted.any { mentions(arg, it) } }
+        }.map { "${it.line}: ${it.raw}" }
+    }
+
+    private class Statement(val line: Int, val raw: String, val code: String)
+
+    private fun isComment(line: String): Boolean {
+        val t = line.trimStart()
+        return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+    }
+
+    private fun mentions(text: String, name: String): Boolean =
+        Regex("""\b${Regex.escape(name)}\b""").containsMatchIn(text)
+
+    /**
+     * The line with its string prose removed and its interpolations kept.
+     *
+     * An identifier inside a literal can only be referred to through `$`, so what
+     * is left after this is every position where a name means a value.
+     */
+    private fun codeView(line: String): String {
+        val out = StringBuilder()
+        var i = 0
+        while (i < line.length) {
+            when {
+                line.startsWith("\"\"\"", i) -> {
+                    val end = line.indexOf("\"\"\"", i + 3)
+                    val inner = if (end < 0) line.substring(i + 3) else line.substring(i + 3, end)
+                    out.append(' ').append(interpolations(inner)).append(' ')
+                    i = if (end < 0) line.length else end + 3
+                }
+                line[i] == '"' -> {
+                    var j = i + 1
+                    while (j < line.length && !(line[j] == '"' && line[j - 1] != '\\')) j++
+                    val inner = line.substring(i + 1, j.coerceAtMost(line.length))
+                    out.append(' ').append(interpolations(inner)).append(' ')
+                    i = j + 1
+                }
+                else -> out.append(line[i++])
+            }
+        }
+        return out.toString()
+    }
+
+    private fun interpolations(inner: String): String =
+        INTERPOLATION.findAll(inner).joinToString(" ") { it.value }
+
+    /** Every `Logger` call, gathered across the lines it was wrapped onto. */
+    private fun statements(source: List<String>): List<Statement> {
+        val code = source.map { if (isComment(it)) "" else codeView(it) }
+        val out = mutableListOf<Statement>()
+        var i = 0
+        while (i < source.size) {
+            if (!code[i].contains("Logger.")) {
+                i++
+                continue
+            }
+            val raw = StringBuilder()
+            val whole = StringBuilder()
+            var depth = 0
+            var j = i
+            while (j < source.size && j - i < 12) {
+                raw.append(if (isComment(source[j])) "" else source[j].trim()).append(' ')
+                whole.append(code[j]).append(' ')
+                depth += code[j].count { it == '(' } - code[j].count { it == ')' }
+                if (depth <= 0) break
+                j++
+            }
+            out += Statement(i + 1, raw.toString().trim(), whole.toString())
+            i = j + 1
+        }
+        return out
+    }
+
+    /** Names holding a value that came, however indirectly, from a [SOURCES] hit. */
+    private fun taintedNames(source: List<String>): Set<String> {
+        val code = source.filterNot(::isComment).map(::codeView)
+        val names = linkedSetOf<String>()
+        // Declarations are walked to a fixpoint rather than once in file order, so
+        // that a chain assigned in the other order is still followed.
+        repeat(3) {
+            for (line in code) {
+                for (m in DECLARATION.findAll(line)) {
+                    val name = m.groupValues[1]
+                    val initialiser = m.groupValues[2]
+                    val seeded = SOURCES.any { it.containsMatchIn(initialiser) }
+                    val derived = names.toList()
+                        .any { mentions(stripRedacted(initialiser), it) }
+                    if (seeded || derived) names += name
+                }
+            }
+        }
+        return names
+    }
+
+    /** The spans of every `redactToken(...)` call, argument list included. */
+    private fun redactSpans(text: String): List<IntRange> {
+        val spans = mutableListOf<IntRange>()
+        var from = 0
+        while (true) {
+            val at = text.indexOf("redactToken(", from)
+            if (at < 0) return spans
+            var depth = 0
+            var i = at + "redactToken".length
+            var end = -1
+            while (i < text.length) {
+                if (text[i] == '(') depth++
+                else if (text[i] == ')' && --depth == 0) {
+                    end = i
+                    break
+                }
+                i++
+            }
+            if (end < 0) {
+                spans += at..text.lastIndex
+                return spans
+            }
+            spans += at..end
+            from = end + 1
+        }
+    }
+
+    private fun stripRedacted(text: String): String {
+        var out = text
+        for (span in redactSpans(text).reversed()) out = out.removeRange(span)
+        return out
+    }
+
+    private fun redactedArguments(text: String): List<String> =
+        redactSpans(text).map { text.substring(it).substringAfter('(').removeSuffix(")") }
 }
 
 /**
