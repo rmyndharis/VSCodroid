@@ -107,6 +107,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- The user guide's list of bundled extensions matches what ships. It named two
+  that are not included — a theme and a Git annotation extension, the latter
+  dropped from the bundled set — and listed the icon theme that *is* included
+  under "extensions to install", so a reader was sent to install something
+  already there and to look for two things that were never there
+- The on-device toolchain checklist can be followed. Its five rows sent the tester
+  to a Settings screen that does not exist — the toolchain screen is reached by
+  touching and holding the app icon, which the app's own strings call the only way
+  in — and expected `go build` to succeed, which cannot happen on Android. Go's
+  compile step is now recorded as a known limit rather than a case that fails every
+  time, so an unchecked box means untested instead of broken
 - The Tailwind CSS language server is visible to the process monitor again, so it
   can be reclaimed when memory runs short and appears under its own name rather
   than as an unknown process. It had been recognised by the extension's folder

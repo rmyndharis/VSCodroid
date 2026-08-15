@@ -123,11 +123,29 @@
 
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| TC-1 | Go install | Settings > Toolchains > Install Go | Downloads, extracts, `go version` works | | |
-| TC-2 | Ruby install | Settings > Toolchains > Install Ruby | Downloads, extracts, `ruby --version` works | | |
-| TC-3 | Java install | Settings > Toolchains > Install Java | Downloads, extracts, `java -version` works | | |
-| TC-4 | Toolchain verify | Run hello world in each installed language | Compiles/runs correctly | | |
-| TC-5 | Toolchain uninstall | Uninstall a toolchain from Settings | Files removed, command no longer in PATH | | |
+There is no Settings entry for this screen. Touch and hold the app icon on the
+home screen and pick **Manage toolchains** — `strings.xml` calls that the only
+entry point there is, and every row below starts from it.
+
+Run each command in the app's own terminal. `adb shell run-as` will not answer
+these: it runs in a different SELinux domain, one that is allowed to execute
+files the app itself may not, so it reports success for a binary that fails on
+the device.
+
+| ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
+|----|----------|-------|-----------------|-----------|-------|
+| TC-1 | Go install | Long-press app icon > Manage toolchains > Install Go | Downloads, extracts, `go version` prints a version | | |
+| TC-2 | Ruby install | Long-press app icon > Manage toolchains > Install Ruby | Downloads, extracts, `ruby --version` prints a version | | |
+| TC-3 | Java install | Long-press app icon > Manage toolchains > Install Java | Downloads, extracts, `java -version` prints a version | | |
+| TC-4 | Ruby and Java run | `ruby -e 'puts 1+1'`; write and run a `Hello.java` with `java Hello.java` | Both print their output | | |
+| TC-5 | Go runs but does not compile | `go version`, then `go build` on any package | `go version` prints; `go build` **is expected to fail** with a permission error. Anything else is the surprise worth reporting | | |
+| TC-6 | Toolchain uninstall | Manage toolchains > uninstall one | Files removed, command no longer found in a new terminal | | |
+
+TC-5 is written as an expected failure on purpose. `go` starts its compiler and
+linker as separate programs from the app's own storage, and Android refuses to
+execute anything stored there — a limit no packaging change reaches. Recording it
+as a known outcome keeps an unchecked box meaning "not tested" rather than
+"tested and broken".
 
 ## 11. Terminal & Tools
 

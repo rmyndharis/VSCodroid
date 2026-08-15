@@ -189,12 +189,18 @@ Extensions are downloaded from Open VSX and persist across app restarts.
 
 These extensions come bundled with VSCodroid:
 
-- **One Dark Pro** -- dark theme
+- **Material Icon Theme** -- file and folder icons
 - **ESLint** -- JavaScript/TypeScript linting
 - **Prettier** -- code formatting
 - **Tailwind CSS IntelliSense** -- Tailwind autocomplete
-- **GitLens** -- Git annotations and history
 - **Python** -- Python language support
+
+VSCodroid also ships four of its own, which do not appear in the marketplace:
+the Get Started walkthrough, the device-folder bridge, **Serve on Network**, and
+the process monitor in the status bar.
+
+Themes are not bundled. VSCodroid opens on the editor's own dark theme; install
+whichever you prefer from the marketplace.
 
 ### Recommended Extensions to Install
 
@@ -203,7 +209,6 @@ These extensions come bundled with VSCodroid:
 | **Error Lens** | Show errors inline in the editor |
 | **Auto Rename Tag** | Rename paired HTML/XML tags |
 | **Path Intellisense** | Autocomplete file paths |
-| **Material Icon Theme** | Better file icons |
 | **REST Client** | Send HTTP requests from the editor |
 
 ### Extension Webviews
