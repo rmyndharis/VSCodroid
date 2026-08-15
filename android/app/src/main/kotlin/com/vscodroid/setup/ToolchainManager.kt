@@ -1118,6 +1118,19 @@ class ToolchainManager(private val context: Context) {
                     val relPath = binaries.getString(i)
                     val command = relPath.substringAfterLast('/')
                     if (command.isEmpty() || command in scriptNames) continue
+                    // A name bash cannot use as a function is skipped rather than
+                    // written. The manifests are regenerated from upstream packages
+                    // at build time, so a future version can introduce a binary
+                    // called something like `foo-bar` or `2to3` without anyone here
+                    // choosing it -- and this file is sourced by .bashrc, so one
+                    // unusable name is a parse error that takes out *every* new
+                    // terminal, not just that command. Losing one wrapper is the
+                    // smaller failure, and it says so in the log.
+                    if (!isShellFunctionName(command)) {
+                        Logger.w(tag, "No wrapper for $command: not a name bash can " +
+                            "use as a function, so it would break every terminal")
+                        continue
+                    }
                     if (!isElfFile(File(context.filesDir, relPath))) continue
                     lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" \"\$@\"; }")
                 }
@@ -1378,6 +1391,47 @@ internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymli
         }
     return fixed
 }
+
+/**
+ * Whether [name] is safe to write into `toolchain-env.sh` as a shell function.
+ *
+ * `.bashrc` sources that file unconditionally, and one unusable name does not cost
+ * one command -- it costs the rest of the file. Measured: sourcing a file holding
+ * `good() {...}`, then `a=b() {...}`, then `after() {...}` leaves `good` defined
+ * and `after` gone. So a toolchain whose manifest carried a bad name would take
+ * out every wrapper written after it, in every new terminal.
+ *
+ * The boundary is measured against bash rather than assumed, because assuming it
+ * was wrong in both directions. An earlier version of this allowed only
+ * `[A-Za-z_][A-Za-z0-9_]*`, which is the rule for shell *variables*; bash is far
+ * more permissive about function names and happily defines `grpc-tool`, `2to3`,
+ * `foo.bar` and even `café`. Refusing those would have dropped working wrappers.
+ *
+ * What actually goes wrong divides in two, and both are refused:
+ *
+ *  - `( ) < > = [ $ \ " ' `` ` ``` and whitespace make the definition a parse
+ *    error, which is what kills the rest of the file.
+ *  - `; | &` are worse than an error: they split the line, so bash defines a
+ *    function under a *different* name and reports nothing. The wrapper is simply
+ *    absent under the name the user will type.
+ *
+ * Everything else measured -- `- . + : @ % ^ ! , { } ] * ? # ~ /`, a leading
+ * digit, non-ASCII -- defines correctly and is allowed. All fifty command names in
+ * the three shipped manifests pass, but those manifests are regenerated from
+ * upstream packages at build time, so what they contain is not this repository's
+ * choice to make.
+ */
+internal fun isShellFunctionName(name: String): Boolean {
+    if (name.isEmpty()) return false
+    return name.none { it in SHELL_UNSAFE || it.isWhitespace() }
+}
+
+/**
+ * The characters measured to break a function definition or to silently define one
+ * under another name. Not a guess at what looks dangerous: each was checked by
+ * defining a function and asking `declare -F` whether that name exists.
+ */
+private const val SHELL_UNSAFE = "()<>=[\$\\\"'`;|&"
 
 /** Whether [file] begins with the four bytes every ELF object starts with. */
 internal fun isElfFile(file: File): Boolean = try {
