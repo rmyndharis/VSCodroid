@@ -81,10 +81,16 @@ nothing, so the only failure it could report was a throw out of `onCreate`,
 which `firstRun_extractionSetsVersion` reports as well in 11.7 s — and that one
 also catches a setup ending in `showSetupError()`.
 
-So 21 tests and roughly 52 s of test time remain, plus whatever the build and
-install cost, which the XML does not measure. This paragraph claimed three
-minutes for a long time; the recorded run says otherwise, which is what reading
-the XML is for.
+That accounted for 21 tests and roughly 52 s of test time. This paragraph claimed
+three minutes for a long time; the recorded run says otherwise, which is what
+reading the XML is for.
+
+**At HEAD there are 23 tests across six classes**, counted from the sources rather
+than from any run: `SafWatchWiringTest` arrived with the per-directory watch work
+and adds five, and the classes have moved since besides. No recorded run covers
+this set, so there is no honest wall-clock figure to quote for it — the 52 s above
+measured a different suite and is kept only as the reason not to say "three
+minutes". Read the times out of your own run's XML.
 
 ## What is here, and what it is worth
 
@@ -94,6 +100,7 @@ the XML is for.
 | `MainActivityTest` | WebView and ExtraKeyRow initial state; the About dialog's trademark disclaimer, which is a stated legal requirement rather than cosmetic. |
 | `SplashActivityTest` | First-run extraction, and that a later launch skips it. The slow ones. |
 | `FileObserverTreeSemanticsTest` | The platform behaviour the SAF write-back rests on: that a watch covers a directory and not a tree, that the path an event reports is the bare entry name, and that inotify's directory flag survives the trip through FileObserver. Needs no app state at all, so it has no precondition that a skip could hide. |
+| `SafWatchWiringTest` | That those semantics are wired up: a save two directories down and a `.vscode/` settings file are both queued for write-back, a scratch file beside an ordinary one is not, deleting a watched directory releases its watch, and a skipped directory is never watched at all. The layer above `FileObserverTreeSemanticsTest` — that one proves the platform behaves as assumed, this one proves the assumption was used. |
 | `ToolchainInsetsTest` | With edge-to-edge enforced, the Toolchains screen stays out of both system bars: toolbar below the status bar, grid above the navigation bar. The screen shipped drawing its title under the clock, so this is the regression the padding exists to prevent. |
 | `ExtractionOnDeviceTest` | The parts of bundled-extension extraction a JVM cannot answer: that `AssetManager.list()` returns an empty array for a leaf, which is the basis on which `extractAssetDir` decides file-or-directory and which every unit test stubs; that `deleteRecursively()` succeeds on app-private storage, which the retry after a failed unpack depends on; and the abort-and-retry itself, driven by a real out-of-space condition. Redirects `getFilesDir()` through a `ContextWrapper` so the real AssetManager stays in play, so it needs no server tree and no first-run setup. |
 
