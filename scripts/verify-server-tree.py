@@ -10,6 +10,7 @@ other gate and only show up on a device.
 """
 
 import json
+import os
 import pathlib
 import struct
 import sys
@@ -69,8 +70,21 @@ def main(tree):
     # arch() report, so an x86-64 build host yields a tree that installs cleanly,
     # passes every other check, and then fails at exec with Search silently
     # returning no results.
+    # os.walk with onerror, not rglob. pathlib's selector swallows a directory it
+    # cannot list, so an unreadable subtree reported nothing at all -- unreadable
+    # FILES were stated by the catch below while unreadable DIRECTORIES were
+    # silent, which is the worse half: a whole subtree of binaries can vanish from
+    # the count with the run still green.
     wrong, checked = [], 0
-    for path in sorted(tree.rglob("*")):
+    unlistable = []
+    candidates = []
+    for dirpath, _, filenames in os.walk(tree, onerror=unlistable.append):
+        for name in filenames:
+            candidates.append(pathlib.Path(dirpath) / name)
+    for err in unlistable:
+        check(False, f"{err.filename} could not be listed", str(err))
+
+    for path in sorted(candidates):
         if not path.is_file() or path.is_symlink():
             continue
         if path.suffix != ".node" and path.name != "rg":
@@ -97,7 +111,15 @@ def main(tree):
         # sibling reported "FAIL index out of range" and carried on. A truncated
         # download or an interrupted copy lands exactly there.
         try:
-            head = path.open("rb").read(20)
+            head = path.open("rb").read(64)
+            # Shorter than an ELF64 header is not "some other format this walk
+            # should skip" -- nothing executable in this tree, PE addons included,
+            # is under 64 bytes. Treating it as unrecognised is how a 3-byte rg
+            # reached the end as "ok 0 native binaries are aarch64".
+            if len(head) < 64:
+                check(False, f"{path.relative_to(tree)} is {len(head)} bytes",
+                      "truncated: too short to be an executable of any format")
+                continue
             if head[:4] != b"\x7fELF":
                 continue
             machine = struct.unpack_from("<H", head, 18)[0]
@@ -110,7 +132,16 @@ def main(tree):
 
     for rel, arch in wrong:
         check(False, f"{rel} is {arch}, not aarch64", "build on an arm64 host")
-    if not wrong:
+    if not checked:
+        # Zero examined is not a pass. This printed "ok 0 native binaries are
+        # aarch64", which reads exactly like a clean verdict and is the same
+        # nothing-was-checked-versus-everything-passed conflation the sibling
+        # refuses an empty --dir sweep for. Reachable: on an assets-cache hit the
+        # fetch and the addon build are both skipped while the tree is restored
+        # whole, and this is the only gate that reads it.
+        check(False, "no native binaries found to check",
+              "a server tree carries node-pty, the file watcher and ripgrep at least")
+    elif not wrong:
         check(True, f"{checked} native binaries are aarch64")
 
     product_path = tree / "product.json"
