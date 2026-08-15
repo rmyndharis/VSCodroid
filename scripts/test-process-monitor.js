@@ -49,6 +49,81 @@ const REH = '/data/user/0/com.vscodroid/files/server/vscode-reh';
 // different tree from the editor's own extensions under REH.
 const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
 
+const MAIN_ACTIVITY = path.join(
+    __dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+);
+
+/**
+ * The severity contract, read from both sides rather than restated here.
+ *
+ * Kotlin decides the word and writes it to a file; this monitor reads that file
+ * and acts on the word. Neither side could see the other. Every Kotlin test
+ * compares against the PRESSURE_CRITICAL *constant*, so editing its value to any
+ * other word keeps them all green while KILL_ON_PRESSURE below stops matching --
+ * and the idle kill then never fires under real memory pressure, silently. The
+ * same hole runs the other way: widening this set, or renaming the file on
+ * either side, was equally unobserved.
+ *
+ * So the words are lifted out of the Kotlin source and compared with the ones
+ * this module actually uses. Reading the source is the weak half -- a pattern
+ * that stops matching would find nothing and agree with everything -- so each
+ * one asserts it matched before anything is concluded from it.
+ */
+function checkPressureContract(tmp) {
+    const kotlin = fs.readFileSync(MAIN_ACTIVITY, 'utf8');
+
+    const literal = (name, pattern) => {
+        const m = kotlin.match(pattern);
+        assert.ok(
+            m,
+            `${pattern} matched nothing in MainActivity.kt, so this check is comparing ` +
+            `the monitor against nothing. Find what ${name} is called now and fix the pattern.`,
+        );
+        return m[1];
+    };
+
+    const critical = literal('PRESSURE_CRITICAL',
+        /internal const val PRESSURE_CRITICAL\s*=\s*"([^"]+)"/);
+    const moderate = literal('PRESSURE_MODERATE',
+        /internal const val PRESSURE_MODERATE\s*=\s*"([^"]+)"/);
+    const filename = literal('the pressure file',
+        /File\(tmpDir,\s*"([^"]+)"\)\.writeText\(pressure\)/);
+
+    assert.deepStrictEqual(
+        [...monitor.KILL_ON_PRESSURE].sort(), [critical],
+        `the monitor kills on ${JSON.stringify([...monitor.KILL_ON_PRESSURE])} but Kotlin ` +
+        `writes ${JSON.stringify(critical)} for pressure worth shedding work over. One side ` +
+        `was renamed without the other, and the idle kill fires on nothing.`,
+    );
+
+    assert.ok(
+        !monitor.KILL_ON_PRESSURE.has(moderate),
+        `${JSON.stringify(moderate)} is the level Kotlin reports without asking for anything ` +
+        `to be killed; acting on it sheds language servers the device has room for.`,
+    );
+
+    assert.strictEqual(
+        monitor.PRESSURE_FILENAME, filename,
+        'Kotlin writes the severity to a different filename than the monitor opens, so the ' +
+        'signal is delivered to a path nothing reads.',
+    );
+
+    // The constant above is only worth comparing if it is the one start() built
+    // pressurePath from, and the read is only one-shot if the file is gone
+    // afterwards -- without the unlink a single critical event would make every
+    // later scan kill idle servers forever.
+    const file = path.join(tmp, monitor.PRESSURE_FILENAME);
+    fs.writeFileSync(file, `${critical}\n`);
+    assert.strictEqual(
+        monitor.readMemoryPressure(), critical,
+        `the monitor did not read ${critical} back from ${monitor.PRESSURE_FILENAME}; the path ` +
+        'start() opens is not the one the exported name describes',
+    );
+    assert.ok(!fs.existsSync(file), 'the pressure signal was not consumed, so it will fire again');
+
+    return { critical, moderate, filename };
+}
+
 function main() {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-monitor-'));
     const proc = path.join(tmp, 'proc');
@@ -118,8 +193,13 @@ function main() {
     assert.strictEqual(snapshot.budget.current, snapshot.total, 'budget.current disagrees with total');
     assert.strictEqual(snapshot.total, cases.length + 1, 'the count moved');
 
+    const contract = checkPressureContract(tmp);
+
     fs.rmSync(tmp, { recursive: true, force: true });
-    console.log(`ok -- ${snapshot.total} processes counted, ${cases.length} classifications checked`);
+    console.log(
+        `ok -- ${snapshot.total} processes counted, ${cases.length} classifications checked, ` +
+        `pressure contract agrees on ${JSON.stringify(contract.critical)} in ${contract.filename}`,
+    );
 }
 
 main();
