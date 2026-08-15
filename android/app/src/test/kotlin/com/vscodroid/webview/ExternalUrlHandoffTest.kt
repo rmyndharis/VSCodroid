@@ -21,20 +21,27 @@ import org.junit.jupiter.api.Test
 /**
  * What `shouldOverrideUrlLoading` hands to another app, and what it keeps.
  *
- * This method had no test at all, which is the finding that stands on its own
- * whatever anyone decides about the behaviour. It is the app's second exit for a
- * URL, and the two exits do not agree.
+ * Handing any external URL to the system browser is DELIBERATE and these cases
+ * exist to say so. This is a development environment: a link in the editor can
+ * legitimately point at a LAN dev server, a private registry, a staging host on
+ * a scheme nobody anticipated. Refusing what an allow-list has not heard of would
+ * break the product rather than protect it.
  *
- * The other one is `SecurityManager.isAllowedUrl`, reached through the bridge's
- * `openUrl`. It permits `https:`, `mailto:`, and `http:` only for localhost —
- * everything else is refused and logged, and `UrlAllowlistWiringTest` pins
- * `intent://scan/#Intent;scheme=zxing;end` among what must never reach a browser.
- * This path applies no such rule: anything that is not the workbench origin and
- * not a CDN host is handed to `ACTION_VIEW`.
+ * The method had no test at all until now, which is why the decision had never
+ * been written down anywhere and read as an oversight.
  *
- * These cases pin what that actually is, so the asymmetry is a decision someone
- * makes rather than something nobody has looked at. They assert CURRENT
- * behaviour; if the policy changes, they invert in the same commit.
+ * It differs from `SecurityManager.isAllowedUrl`, reached through the bridge's
+ * `openUrl`, which permits `https:`, `mailto:` and `http:` to localhost only —
+ * and `UrlAllowlistWiringTest` pins `intent://scan/#Intent;scheme=zxing;end`
+ * among what must never reach a browser from there. The two are not inconsistent,
+ * they answer different questions:
+ *
+ *  - here the USER followed a link, and opening it is what a browser does;
+ *  - there the PAGE called a native method, which is an app capability handed to
+ *    JavaScript rather than an action anyone took, so it is allow-listed.
+ *
+ * Change the rule here and the cases below invert; that is the point of them
+ * being written down rather than assumed.
  *
  * A word on how far the asymmetry goes, because the obvious reading overstates
  * it. Handing `intent://…` here is NOT the intent-redirection hazard it looks
@@ -105,11 +112,13 @@ class ExternalUrlHandoffTest {
 
     /**
      * A plain-http LAN address, which the bridge's allow-list refuses and this
-     * path allows.
+     * path allows on purpose.
      *
-     * Worth knowing before anyone aligns the two: a dev server on the LAN is an
-     * ordinary thing for this app's users to open, so applying `isAllowedUrl`
-     * here verbatim would refuse a workflow rather than an attack.
+     * This is the case that decides the policy rather than illustrating it. A dev
+     * server on the LAN is the ordinary thing a user of this app opens, so
+     * applying `isAllowedUrl` here would refuse the workflow the product exists
+     * for. Anyone tempted to align the two should fail this test first and then
+     * ask whether they meant to.
      */
     @Test
     fun `a LAN address the bridge refuses is handed to an activity here`() {
