@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Opening a link from the editor no longer depends on which route the editor happened to use. A dev server on the local network, or anything else on plain http to a machine other than this one, was silently dropped when the editor opened it through one path and worked when it opened it through the other — with nothing said either way. VSCodroid is a development environment, so any address it is asked to open now opens
 - Berkeley DB is no longer bundled, and every remaining library is attributed.
   It is licensed **AGPL-3.0-only** -- the strongest copyleft in common use -- and
   had shipped in every release since it arrived as a dependency of Kerberos,
