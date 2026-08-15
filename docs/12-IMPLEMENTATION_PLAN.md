@@ -2338,7 +2338,17 @@ android/app/src/main/kotlin/com/vscodroid/
 - [x] Localhost matching uses `Uri.parse()` for exact host comparison
 - [x] Extracted binaries have owner-only execute permissions — all three sites that grant execute
       (`FirstRunSetup` git-core, `ToolchainManager` install and its repair pass) call
-      `setExecutable(true, true)`; there is no plain `setExecutable(true)` anywhere in the tree
+      `setExecutable(true, true)`; there is no plain `setExecutable(true)` anywhere in the tree, and
+      the only `Os.chmod` calls are `0700` on `.ssh` and `0600` on the ssh config. ⚠️ **The bit is
+      not what constrains execution here.** SELinux refuses `execve` on anything under `filesDir`
+      whatever its mode — `markExecutablesIn`'s own documentation says so, and the tree records the
+      measurements: a device reporting `cannot exec 'git-remote-https': Permission denied`, and a
+      valid ELF at `0755` failing `EACCES`, identically through a symlink, because the check is on
+      the resolved inode's label rather than the path. That is why binaries ship in
+      `nativeLibraryDir` and why `npm`/`npx` are shell functions. Ticking this line without that
+      leaves a reader right about the fact and wrong about the world. Not measured either way:
+      whether **every** extracted binary passes through one of the three setters, or whether a mode
+      carried in from a ZIP can reach disk untouched
 
 ---
 
