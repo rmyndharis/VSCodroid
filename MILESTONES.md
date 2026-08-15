@@ -136,7 +136,7 @@ M6 (Release)   → Play Store release
 - [x] Git works in terminal (`git --version`, `git init`, `git commit`)
 - [x] Git status works in VS Code SCM panel (`git.path` configured)
 - [x] Can install extensions from Open VSX
-- [x] Extensions activate and function (bundled: Material Icon Theme, ESLint, Prettier, Python, GitLens, Tailwind CSS)
+- [x] Extensions activate and function (bundled: Material Icon Theme, ESLint, Prettier, Python, Tailwind CSS)
 
 ### Estimated Effort: 3-4 weeks
 
@@ -249,12 +249,13 @@ M6 (Release)   → Play Store release
    - [x] `.npmrc` created with `script-shell` pointing to `libbash.so`
 
 4. **Pre-bundled extensions** (`FirstRunSetup.extractBundledExtensions`)
-   - [x] 6 marketplace extensions bundled offline in `assets/extensions/`:
-     - Material Icon Theme, ESLint, Prettier, Python, GitLens, Tailwind CSS
-   - [x] 3 custom VSCodroid extensions:
+   - [x] 5 marketplace extensions bundled offline in `assets/extensions/`:
+     - Material Icon Theme, ESLint, Prettier, Python, Tailwind CSS
+   - [x] 4 custom VSCodroid extensions:
      - `vscodroid.vscodroid-welcome-1.2.1` — welcome tab with quick actions
-     - `vscodroid.vscodroid-saf-bridge-1.0.0` — SAF storage integration
+     - `vscodroid.vscodroid-saf-bridge-1.3.0` — SAF storage integration
      - `vscodroid.vscodroid-process-monitor-1.0.0` — phantom process monitoring
+     - `vscodroid.vscodroid-serve-network-1.0.0` — serve a dev server on the LAN
    - [x] `extensions.json` manifest auto-generated on first run
 
 5. **First-run experience** (`SplashActivity.kt`, `FirstRunSetup.kt`)
