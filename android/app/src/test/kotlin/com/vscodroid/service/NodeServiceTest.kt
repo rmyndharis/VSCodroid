@@ -179,6 +179,128 @@ class LaunchOutcomeTest {
 }
 
 /**
+ * Which outcomes leave nothing running, and therefore have to leave the app able
+ * to start again.
+ *
+ * The defect this pins is what a failed start used to leave behind. Both failure
+ * branches recorded a notice and returned, and neither cleared the flag
+ * `onStartCommand` guards on — so the service went on believing it was running,
+ * every later launch was a no-op, and the notification still said "VSCodroid is
+ * running" over a Stop button for a server that did not exist. The failure was
+ * permanent for the life of the process; the only way out was that Stop button,
+ * or force-stopping the app.
+ *
+ * `enterTerminalState` had already written down why that matters, eleven lines
+ * from the code that failed to do it: clearing the flag "is what makes the app
+ * recoverable ... relaunching would bind to a service that believes it is
+ * already running, start nothing, and leave the editor waiting for a readiness
+ * callback that can no longer fire". The crash path did it. The two start
+ * failures did not.
+ */
+class LeavesNothingRunningTest {
+
+    @Test
+    fun `a spawn that never happened leaves nothing running`() {
+        assertTrue(leavesNothingRunning(LaunchOutcome.NOT_STARTED))
+    }
+
+    @Test
+    fun `a process that died before answering leaves nothing running`() {
+        assertTrue(leavesNothingRunning(LaunchOutcome.DIED_BEFORE_ANSWERING))
+    }
+
+    @Test
+    fun `a serving server is left alone`() {
+        assertFalse(
+            leavesNothingRunning(LaunchOutcome.READY),
+            "tearing down a server that just came up would be the opposite of the fix",
+        )
+    }
+
+    @Test
+    fun `a slow start that is still alive is left alone`() {
+        // The case worth being deliberate about, and the one a careless `else`
+        // would get wrong. The caller reaches the check after the late-readiness
+        // loop ends, which happens when the process dies -- but that exit belongs
+        // to the crash path, which is about to spend a restart on it. Answering
+        // true here would rewrite the notification behind that restart and report
+        // a failure for a server the app is still trying to bring back.
+        assertFalse(
+            leavesNothingRunning(LaunchOutcome.STILL_COMING_UP),
+            "a live process has not failed, and its eventual exit is the crash path's to report",
+        )
+    }
+
+    @Test
+    fun `every outcome is classified`() {
+        // Control. The two assertions above prove two values; this proves the
+        // function is total, so an outcome added later cannot fall through to a
+        // silent default. The `when` is exhaustive over the enum, so this also
+        // fails to compile rather than to run if one is added -- belt and braces,
+        // because the compile-time half disappears the moment someone adds `else`.
+        LaunchOutcome.entries.forEach { leavesNothingRunning(it) }
+        assertEquals(
+            4, LaunchOutcome.entries.size,
+            "an outcome was added; decide whether it leaves anything running",
+        )
+    }
+}
+
+/**
+ * That the two start failures actually go through the recoverable stop.
+ *
+ * [LeavesNothingRunningTest] pins the decision; this pins that it is consulted
+ * and acted on. Neither subsumes the other: the predicate can be perfect and
+ * called from nowhere, which is the exact shape of the defect being closed —
+ * `enterTerminalState` did the right thing and the two start failures simply did
+ * not call it.
+ *
+ * Source-reading, and therefore the weaker layer. The methods are private on a
+ * `Service` and this suite can build neither a `Service` nor its main
+ * dispatcher, so there is no stronger option available here.
+ */
+class RecoverableStopCallSiteTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `the launch path consults the predicate and acts on it`() {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+
+        val consulted = lines.filter { (_, l) -> l.contains("leavesNothingRunning(") }
+        val acted = lines.filter { (_, l) -> l.contains("stopServingRecoverably()") }
+        val report = { hits: List<IndexedValue<String>> ->
+            hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+        }
+
+        assertTrue(
+            consulted.any { (_, l) -> l.contains("if (leavesNothingRunning(") },
+            "the predicate has to gate something, not merely be computed. Found:\n" +
+                report(consulted),
+        )
+        // The definition plus both callers: enterTerminalState and the launch
+        // coroutine. A floor rather than an exact count, because a third caller
+        // would be an ordinary thing to add.
+        assertTrue(
+            acted.size >= 3,
+            "expected the recoverable stop to be defined and called from both the " +
+                "crash path and the launch path; found ${acted.size} mention(s):\n" +
+                report(acted),
+        )
+    }
+}
+
+/**
  * What a crash report gets: nothing, another attempt, or the end.
  */
 class CrashActionTest {
