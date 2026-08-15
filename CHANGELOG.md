@@ -107,6 +107,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- Five checks that were supposed to stop earlier defects returning could not fail,
+  and now can. Each was confirmed by breaking the thing it guards and watching it
+  stay green, then breaking it again after the change and watching it report the
+  fault by name. Nothing a user can see changes; what changes is whether the next
+  release notices when one of these goes wrong. Two of them needed the code around
+  them reshaped rather than the check tightened — a check that searches the source
+  for a name can never tell a call whose answer is obeyed from one whose answer is
+  thrown away
 - The user guide's list of bundled extensions matches what ships. It named two
   that are not included — a theme and a Git annotation extension, the latter
   dropped from the bundled set — and listed the icon theme that *is* included

@@ -726,7 +726,11 @@ class SafSyncEngine(private val context: Context) {
         val created = mutableMapOf(localDir.absolutePath to dirSafUri)
         var made = 0
         for (entry in entries) {
-            val parentUri = created[entry.parentFile?.absolutePath] ?: continue
+            // Split rather than chained: `parentFile` is a platform type, so the
+            // chained form indexed the map with a String? and the compiler warned
+            // about it. An entry with no parent cannot be placed anywhere.
+            val parentPath = entry.parentFile?.absolutePath ?: continue
+            val parentUri = created[parentPath] ?: continue
             createOneInSaf(entry, parentUri, treeUri)?.let { uri ->
                 if (entry.isDirectory) created[entry.absolutePath] = uri
                 made++

@@ -1118,7 +1118,7 @@ class ToolchainManager(private val context: Context) {
                     val relPath = binaries.getString(i)
                     val command = relPath.substringAfterLast('/')
                     if (command.isEmpty() || command in scriptNames) continue
-                    if (!isElf(File(context.filesDir, relPath))) continue
+                    if (!isElfFile(File(context.filesDir, relPath))) continue
                     lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" \"\$@\"; }")
                 }
                 if (lines.isNotEmpty()) {
@@ -1301,27 +1301,7 @@ class ToolchainManager(private val context: Context) {
      * outside this toolchain -- `usr/lib` is shared with the base install -- and
      * a repair has no business changing permissions there.
      */
-    private fun markExecutablesUnder(root: File): Int {
-        var fixed = 0
-        root.walkTopDown()
-            .onEnter { !isSymlink(it) }
-            .forEach { file ->
-                if (!file.isFile || isSymlink(file)) return@forEach
-                if (!isElf(file)) return@forEach
-                if (file.canExecute()) return@forEach
-                if (file.setExecutable(true, true)) fixed++
-            }
-        return fixed
-    }
-
-    private fun isElf(file: File): Boolean = try {
-        file.inputStream().use { input ->
-            val header = ByteArray(4)
-            input.read(header) == 4 && isElfHeader(header)
-        }
-    } catch (e: Exception) {
-        false
-    }
+    private fun markExecutablesUnder(root: File): Int = markExecutablesIn(root)
 
     // -- State persistence --
 
@@ -1367,6 +1347,48 @@ class ToolchainManager(private val context: Context) {
  * be checked against real files rather than a mock that would only agree with
  * the implementation it was written from.
  */
+/**
+ * Gives the execute bit to every ELF object under [root], returning how many
+ * needed it.
+ *
+ * At file scope and taking its symlink predicate as a parameter so a test can
+ * reach it. [isSymlink] uses `Os.lstat`, which cannot run in a JVM unit test --
+ * it throws, the catch turns that into "not a link", and every entry then looks
+ * like a regular file. Injecting the predicate is what lets the skip-links
+ * behaviour be asserted rather than assumed; production still passes
+ * [isSymlink].
+ *
+ * Links are stepped over rather than followed: a toolchain's `usr/lib` is shared
+ * with the base install, so a link there can point at a file this pass has no
+ * business changing the permissions of.
+ *
+ * Only ELF objects. Scripts are deliberately excluded -- they are wrapped in
+ * shell functions that route them through their interpreter, because nothing
+ * under `filesDir` can be executed directly whatever its mode.
+ */
+internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymlink): Int {
+    var fixed = 0
+    root.walkTopDown()
+        .onEnter { !isLink(it) }
+        .forEach { file ->
+            if (!file.isFile || isLink(file)) return@forEach
+            if (!isElfFile(file)) return@forEach
+            if (file.canExecute()) return@forEach
+            if (file.setExecutable(true, true)) fixed++
+        }
+    return fixed
+}
+
+/** Whether [file] begins with the four bytes every ELF object starts with. */
+internal fun isElfFile(file: File): Boolean = try {
+    file.inputStream().use { input ->
+        val header = ByteArray(4)
+        input.read(header) == 4 && isElfHeader(header)
+    }
+} catch (e: Exception) {
+    false
+}
+
 internal fun isElfHeader(header: ByteArray): Boolean =
     header.size >= 4 &&
         header[0] == 0x7F.toByte() &&

@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
@@ -50,14 +51,40 @@ class CommandReferenceTest {
         check(sources.isNotEmpty()) { "No sources found — the test is looking in the wrong place" }
 
         val dangling = sortedMapOf<String, MutableSet<String>>()
+        val foundIn = sortedMapOf<String, MutableSet<String>>()
         for (file in sources) {
             for (m in REFERENCE.findAll(file.readText())) {
                 val named = "VSCodroid: " + m.groupValues[1].trim()
+                foundIn.getOrPut(file.extension) { sortedSetOf() }.add(named)
                 if (named !in titles) {
                     dangling.getOrPut(named) { sortedSetOf() }.add(file.name)
                 }
             }
         }
+
+        // Positive control, and the one this test was missing. Everything above
+        // reports success by finding nothing, so a REFERENCE that stops matching
+        // -- a quoting style that changes, a character class that stops covering a
+        // real title -- turns the whole check into a scan of zero references that
+        // passes. The existing checks cover "are there sources" and "are there
+        // extensions"; neither covers "did the pattern match anything in them".
+        //
+        // Asserted per source kind rather than in total, because the two quote the
+        // name differently and only one of them is fragile: Kotlin escapes it as
+        // \"VSCodroid: ...\" while JavaScript writes it plainly. A pattern that
+        // quietly stopped handling the escaped form would still match the JS
+        // references and keep a total-count assertion green.
+        assertTrue(
+            foundIn["kt"]?.isNotEmpty() == true,
+            "no command reference matched in any Kotlin source, so the escaped form " +
+                "\\\"VSCodroid: ...\\\" is no longer being recognised and this test is " +
+                "checking nothing there. Found: $foundIn",
+        )
+        assertTrue(
+            foundIn["js"]?.isNotEmpty() == true,
+            "no command reference matched in any bundled extension, so this test is " +
+                "checking nothing there. Found: $foundIn",
+        )
 
         assertEquals(
             emptyMap<String, Set<String>>(), dangling.toMap(),
