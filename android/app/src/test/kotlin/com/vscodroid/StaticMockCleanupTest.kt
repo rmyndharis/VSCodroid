@@ -68,7 +68,7 @@ class StaticMockCleanupTest {
     @Test
     @Order(2)
     fun `the mock is gone by the time the next test runs`() {
-        // If UnmockkAllExtension is not registered, PortFinder is still mocked here
+        // If the cleanup extension is not registered, PortFinder is still mocked here
         // and isPortAvailable answers false for everything — which is exactly the
         // cross-class contamination this guards against, observed within one class
         // so it does not depend on how the runner orders classes.
@@ -76,10 +76,9 @@ class StaticMockCleanupTest {
         org.junit.jupiter.api.Assertions.assertFalse(
             stillMocked,
             "PortFinder is still mocked from the previous test, so nothing removed it. " +
-                "Check that UnmockkAllExtension is listed in " +
-                "src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension " +
-                "and that junit.jupiter.extensions.autodetection.enabled is true in " +
-                "junit-platform.properties.",
+                "Check that junit.jupiter.extensions.autodetection.enabled is true in " +
+                "src/test/resources/junit-platform.properties -- that is what registers " +
+                "mockk's own MockKExtension, which does the cleanup.",
         )
     }
 }

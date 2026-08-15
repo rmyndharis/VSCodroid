@@ -1462,6 +1462,13 @@ internal fun isElfFile(file: File): Boolean = try {
     false
 }
 
+/**
+ * Whether these opening bytes are an ELF object's.
+ *
+ * The same four bytes the packaging gates read. Separated so the repair pass can
+ * be checked against real files rather than a mock that would only agree with
+ * the implementation it was written from.
+ */
 internal fun isElfHeader(header: ByteArray): Boolean =
     header.size >= 4 &&
         header[0] == 0x7F.toByte() &&

@@ -77,6 +77,13 @@ function main() {
             '--node-ipc', '--clientProcessId=1'], 'langserver'],
         [1010, [NODE, `${EXT}/bradlc.vscode-tailwindcss-0.16.0/dist/tailwindModeServer.js`,
             '--node-ipc'], 'langserver'],
+        // The other half of that pattern: a bare 'tailwind' would match all three of
+        // these, and 'langserver' is not a label -- it makes a process eligible for
+        // the idle kill under memory pressure. These are the user's own work.
+        [1011, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/tailwind.config.js'],
+            'unknown'],
+        [1012, [NODE, '/data/user/0/com.vscodroid/files/home/projects/build-tailwind.js'],
+            'unknown'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);

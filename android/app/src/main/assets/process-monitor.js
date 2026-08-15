@@ -44,14 +44,23 @@ const LANG_SERVER_PATTERNS = [
     // 'tailwindcss' until the matching moved from the whole command line to the
     // basename of each argument. That string only ever appeared in the extension's
     // *directory* -- bradlc.vscode-tailwindcss-0.16.0 -- so the change quietly
-    // un-classified the server it names. The processes are tailwindServer.js and
-    // tailwindModeServer.js, and 'tailwind' is what both basenames share.
+    // un-classified the server it names.
+    //
+    // Both program names in full, rather than the 'tailwind' they share. A bare
+    // 'tailwind' also matches a user's own tailwind.config.js, build-tailwind.js,
+    // or an npx tailwindcss run, and being classified 'langserver' is not cosmetic:
+    // it puts a process into lsCpuTracker and makes it eligible for the idle kill
+    // under memory pressure. Killing a build someone is waiting on is a worse
+    // outcome than failing to reclaim a language server.
+    //
+    // Two entries because neither contains the other: 'tailwindmodeserver.js' does
+    // not contain 'tailwindserver'.
     //
     // check-langserver-patterns.py cannot see this one: it globs *ServerMain.js
     // under vscode-reh/extensions, and Tailwind is a marketplace extension living
     // under assets/extensions with a name that does not match the glob. The
-    // fixture in scripts/test-process-monitor.js is what guards it instead.
-    'tailwind'
+    // fixtures in scripts/test-process-monitor.js are what guard it instead.
+    'tailwindServer', 'tailwindModeServer'
 ];
 
 let outputPath = '';

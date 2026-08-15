@@ -109,6 +109,18 @@ internal fun resourceOutcome(path: String, resourceRoots: List<String>): Resourc
     return ResourceOutcome.Serve(file)
 }
 
+/**
+ * The file a webview resource request names, if it resolves inside a published
+ * root, and null otherwise.
+ *
+ * Symbolic links are resolved rather than normalised away lexically. A workspace
+ * is a published root and a workspace is routinely a checked-out repository, so a
+ * link inside one is attacker-supplied in the ordinary case; `..` handling alone
+ * would follow it out.
+ *
+ * The canonical path is what comes back, not the path as asked for, so that the
+ * file opened is the file that was checked.
+ */
 internal fun resolveWebviewResource(requestedPath: String, roots: List<String>): File? {
     val canonical = canonicalOrNull(requestedPath) ?: return null
     // Compared with the separator appended: a root's name is also a prefix of
