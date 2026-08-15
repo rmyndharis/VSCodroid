@@ -224,6 +224,14 @@ jobs:
           bash scripts/build-glibc-shim.sh \
             --scan android/app/src/main/assets/vscode-reh \
             --scan android/app/src/main/assets/extensions
+      # Runs where the libraries actually exist, which lint.yml is not: it
+      # builds stub assets, and a stub tree has nothing to attribute. Berkeley
+      # DB shipped under AGPL-3.0 for every release before this check existed,
+      # having arrived as a transitive Kerberos dependency that no step looked
+      # at.
+      - name: Check every shipped library is attributed
+        run: python3 scripts/check-library-attribution.py
+
       - name: Verify assets
         run: |
           echo "=== Assets ==="

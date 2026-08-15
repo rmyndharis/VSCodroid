@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Berkeley DB is no longer bundled, and every remaining library is attributed.
+  It is licensed **AGPL-3.0-only** -- the strongest copyleft in common use -- and
+  had shipped in every release since it arrived as a dependency of Kerberos,
+  with no attribution anywhere and no offer of source. Reading the link tables of
+  all 150 shipped binaries showed nothing referenced it at all, so it was dropped
+  rather than documented, which ends the obligation instead of taking it on.
+  Four libraries that *are* used were missing from the source offer for the same
+  reason -- libiconv, gdbm, xz/liblzma and Zstandard, reached through Bash, Git
+  and three Python modules -- and are now listed. `NOTICE.md` and
+  `docs/LEGAL_NOTICES.md` carry the full inventory of 39 components, generated
+  from the files actually present rather than written by hand: the old table
+  named liblzma as public domain and libcrypt as LGPL, and both were wrong.
+  Builds now fail on a shipped binary nobody has classified
 - The Accounts and Manage (gear) icons are back at the bottom of the activity
   bar. A stylesheet appended at server-build time had hidden them since before
   the Code - OSS pivot -- parity carried forward release after release -- which

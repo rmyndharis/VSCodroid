@@ -41,7 +41,16 @@ REQUIRED_PACKAGES=(
     libedit
     ldns
     krb5
-    libdb
+    # libdb is deliberately absent. It arrived as a krb5 dependency and is the
+    # only AGPL-3.0 component this project has ever shipped, which is the
+    # strongest copyleft in common use and carries a source obligation the rest
+    # of the tree does not. Measured before removing it: across all 155 shipped
+    # ELF objects, nothing lists libdb-18.1.so in DT_NEEDED, and the only
+    # binary containing the string "libdb" is that library naming itself in its
+    # own SONAME. krb5's client libraries do not use it -- the Berkeley DB
+    # backend belongs to the KDC, which is server-side and not built here.
+    # Dropping it extinguishes the obligation entirely rather than documenting
+    # it, which is both cheaper and less fragile than a written source offer.
     libresolv-wrapper
     # Node's own dependencies. It is fetched by download-node.sh, but its
     # libraries belong here: step 5 wipes assets/usr/lib before repopulating it,
@@ -75,7 +84,6 @@ get_sonames() {
         libedit)           echo "libedit.so" ;;
         ldns)              echo "libldns.so" ;;
         krb5)              echo "libgssapi_krb5.so.2 libkrb5.so.3 libk5crypto.so.3 libkrb5support.so.0 libcom_err.so.3" ;;
-        libdb)             echo "libdb-18.1.so" ;;
         libresolv-wrapper) echo "libresolv_wrapper.so" ;;
         c-ares)            echo "libcares.so" ;;
         # libicudata is the 32 MB data blob the other two are useless without.
@@ -92,7 +100,7 @@ LIB_PACKAGES=(
     libcurl openssl pcre2 libexpat
     libnghttp2 libnghttp3 libngtcp2 libssh2 zlib
     libevent libandroid-glob libedit ldns
-    krb5 libdb libresolv-wrapper
+    krb5 libresolv-wrapper
     c-ares libicu libc++ libsqlite
 )
 

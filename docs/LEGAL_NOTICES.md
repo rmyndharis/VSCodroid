@@ -175,6 +175,73 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 
 ---
 
+## Complete Bundled Native Library Inventory
+
+Every shared library and executable redistributed inside the APK, with the licence
+each is distributed under. The licence column is taken from Termux's own
+`TERMUX_PKG_LICENSE`, which is what these packages are built from, rather than from
+upstream project pages that may describe a different version.
+
+`scripts/check-library-attribution.py` regenerates the basis for this table from the
+files actually present in the build tree and fails when a shipped binary is absent
+from it, or when a copyleft component is missing from the source offer below. It runs
+on every pull request. Before it existed, Berkeley DB shipped under **AGPL-3.0-only**
+in every release with no attribution and no source offer, having arrived as a
+transitive dependency of Kerberos that nobody classified; it is no longer bundled,
+because measurement showed nothing linked it.
+
+Not listed here, because they are not third-party code: `libglibc-shim.so` and the
+stubs beside it (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`,
+`librt.so.1`, `libutil.so.1`, `libresolv.so.2`, `libcrypt.so.1`, `libgcc_s.so.1`,
+`ld-linux-aarch64.so.1`). They carry glibc's names so a glibc-linked binary can
+resolve against them, but contain none of glibc's code — they are built from
+`scripts/glibc-shim.c` and `scripts/gen-glibc-forwarders.py` in this repository and
+are covered by the root `LICENSE`.
+
+| Component | Licence | Copyleft | Files shipped |
+|---|---|---|---|
+| [Bash](https://www.gnu.org/software/bash/) | GPL-3.0 | **yes** | `libbash.so` |
+| [bzip2](https://sourceware.org/bzip2/) | BSD-4-Clause | no | `libbz2.so`, `libbz2.so.1.0` |
+| [c-ares](https://c-ares.org) | MIT | no | `libcares.so` |
+| [Expat](https://libexpat.github.io) | MIT | no | `libexpat.so.1` |
+| [gdbm](https://www.gnu.org.ua/software/gdbm/) | GPL-3.0 | **yes** | `libgdbm.so`, `libgdbm_compat.so` |
+| [Git](https://git-scm.com) | GPL-2.0 | **yes** | `libgit-remote-curl.so`, `libgit.so` |
+| [GNU Make](https://www.gnu.org/software/make/) | GPL-3.0 | **yes** | `libmake.so` |
+| [ICU](https://icu.unicode.org) | ICU | no | `libicudata.so.78`, `libicui18n.so.78`, `libicuuc.so.78` |
+| [Kerberos 5](https://web.mit.edu/kerberos/) | MIT | no | `libcom_err.so.3`, `libgssapi_krb5.so.2`, `libk5crypto.so.3`, `libkrb5.so.3`, `libkrb5support.so.0` |
+| [ldns](https://www.nlnetlabs.nl/projects/ldns/) | BSD-3-Clause | no | `libldns.so` |
+| [libandroid-glob](https://github.com/termux/libandroid-glob) | BSD-3-Clause | no | `libandroid-glob.so` |
+| [libandroid-posix-semaphore](https://github.com/termux/libandroid-posix-semaphore) | MIT | no | `libandroid-posix-semaphore.so` |
+| [libandroid-support](https://github.com/termux/libandroid-support) | Apache-2.0, MIT | no | `libandroid-support.so` |
+| [libc++](https://libcxx.llvm.org) | NCSA | no | `libc++_shared.so` |
+| [libcrypt](http://michael.dipperstein.com/crypt/) | BSD-2-Clause | no | `libcrypt.so` |
+| [libcurl](https://curl.se) | MIT | no | `libcurl.so` |
+| [libedit](https://thrysoee.dk/editline/) | BSD-3-Clause | no | `libedit.so` |
+| [libevent](https://libevent.org) | BSD-3-Clause | no | `libevent-2.1.so`, `libevent_core-2.1.so` |
+| [libffi](https://sourceware.org/libffi/) | MIT | no | `libffi.so` |
+| [libiconv](https://www.gnu.org/software/libiconv/) | LGPL-2.1, GPL-3.0 | **yes** | `libiconv.so` |
+| [libresolv-wrapper](https://cwrap.org) | BSD-3-Clause | no | `libresolv_wrapper.so` |
+| [libssh2](https://libssh2.org) | BSD-3-Clause | no | `libssh2.so` |
+| [musl libc](https://musl.libc.org) | MIT | no | `libldmusl.so` |
+| [ncurses](https://invisible-island.net/ncurses/) | MIT | no | `libncursesw.so.6`, `libpanelw.so.6` |
+| [nghttp2](https://nghttp2.org) | MIT | no | `libnghttp2.so` |
+| [nghttp3](https://github.com/ngtcp2/nghttp3) | MIT | no | `libnghttp3.so` |
+| [ngtcp2](https://github.com/ngtcp2/ngtcp2) | MIT | no | `libngtcp2.so`, `libngtcp2_crypto_ossl.so` |
+| [Node.js](https://nodejs.org) | MIT | no | `libnode.so` |
+| [OpenSSH](https://www.openssh.com) | BSD | no | `libssh-keygen.so`, `libssh.so` |
+| [OpenSSL](https://www.openssl.org) | Apache-2.0 | no | `libcrypto.so.3`, `libssl.so.3` |
+| [PCRE2](https://www.pcre.org) | BSD-3-Clause | no | `libpcre2-8.so` |
+| [Python](https://www.python.org) | PSF-2.0 | no | `libpython.so`, `libpython3.14.so` |
+| [readline](https://tiswww.case.edu/php/chet/readline/rltop.html) | GPL-3.0 | **yes** | `libreadline.so.8` |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT | no | `libripgrep.so` |
+| [SQLite](https://sqlite.org) | Public Domain | no | `libsqlite3.so` |
+| [tmux](https://github.com/tmux/tmux) | ISC | no | `libtmux.so` |
+| [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so`, `liblzma.so.5` |
+| [zlib](https://zlib.net) | Zlib | no | `libz.so.1` |
+| [Zstandard](https://facebook.github.io/zstd/) | GPL-2.0 | **yes** | `libzstd.so.1` |
+
+---
+
 ## Proprietary Redistributed Components
 
 ### @github/copilot (GitHub Copilot CLI)
@@ -271,6 +338,15 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **Git** (GPL-2.0): Source available at https://github.com/termux/termux-packages (package: `git`)
 - **GNU Make** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `make`)
 - **readline** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `readline`)
+- **libiconv** (LGPL-2.1 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libiconv`) — linked by Bash and by every Git executable
+- **gdbm** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `gdbm`) — linked by Python's `dbm` and `gdbm` modules
+- **xz / liblzma** (LGPL-2.1 / GPL-2.0 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `liblzma`) — linked by Python's `lzma` module
+- **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`) — linked by Python's `zstd` module
+
+The four entries after readline were absent from this offer until the library
+inventory above was compiled. Each is dynamically linked and shipped as its own
+`.so`, so the LGPL's relinking condition is satisfied by replacing the file; the
+source offer below applies to all of them regardless.
 
 You may also request a copy of the source code by contacting us (see contact information below). Source code will be provided for a period of three years from the date of distribution of the corresponding binary, for a charge no more than the cost of physically performing the distribution.
 

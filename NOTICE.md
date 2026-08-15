@@ -23,33 +23,58 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | @parcel/watcher | MIT | https://github.com/parcel-bundler/watcher — native addon rebuilt for Android/Bionic |
 | musl (dynamic loader) | MIT | Alpine Linux package, https://musl.libc.org — bundled so the Claude Code CLI can run; the CLI itself is installed by the user and is not redistributed here |
 
-## Shared Libraries (from Termux)
+## Bundled Native Components
 
-| Library | License | Purpose |
-|---------|---------|---------|
-| ICU (libicu*) | Unicode License | Internationalization for Node.js |
-| c-ares | MIT | DNS resolution for Node.js |
-| readline | GPL v3 | Line editing for Bash |
-| ncurses | MIT | Terminal interface for Bash/tmux |
-| libevent | BSD 3-Clause | Event loop for tmux |
-| libedit | BSD 3-Clause | Line editing for OpenSSH |
-| pcre2 | BSD 3-Clause | Regular expressions for Git |
-| libcurl | MIT/X derivative | HTTP client for Git |
-| openssl | Apache 2.0 | TLS for Git, OpenSSH, Python, npm |
-| zlib | zlib License | Compression for Git, Python |
-| libffi | MIT | Foreign function interface (Python, Ruby toolchain) |
-| libbz2 | BSD-style | Compression for Python |
-| liblzma | Public Domain | Compression for Python |
-| libsqlite3 | Public Domain | Database for Python |
-| libgdbm | GPL v3 | Database for Python |
-| libcrypt | LGPL v2.1 | Cryptography for Python |
-| libandroid-posix-semaphore | Apache 2.0 | POSIX semaphores for Python |
-| libandroid-glob | BSD | Glob support for Make |
-| libgmp | LGPL v3 | Arbitrary precision math (Ruby toolchain) |
-| libyaml | MIT | YAML parsing (Ruby toolchain) |
-| libandroid-shmem | BSD 3-Clause | Shared memory (Java toolchain) |
-| libandroid-spawn | BSD 2-Clause | Process spawning (Java toolchain), built from source |
-| libc++_shared | Apache 2.0 / MIT | C++ standard library (NDK) |
+Licences here are Termux's own `TERMUX_PKG_LICENSE` for the package each binary
+comes from, and the "Linked by" column is read out of the shipped ELF headers
+rather than written by hand. `scripts/check-library-attribution.py` fails the build
+when a shipped binary is missing from this set or a copyleft component is missing
+from the source offer in `docs/LEGAL_NOTICES.md`.
+
+Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
+glibc's soname but are built from this repository's own source.
+
+| Component | License | Linked by |
+|---|---|---|
+| Bash | GPL-3.0 | bundled tool in its own right |
+| bzip2 | BSD-4-Clause | Python |
+| c-ares | MIT | Node.js |
+| Expat | MIT | Git, Python |
+| gdbm | GPL-3.0 | Python, gdbm |
+| Git | GPL-2.0 | bundled tool in its own right |
+| GNU Make | GPL-3.0 | bundled tool in its own right |
+| ICU | ICU | ICU, Node.js |
+| Kerberos 5 | MIT | Kerberos 5, OpenSSH |
+| ldns | BSD-3-Clause | OpenSSH |
+| libandroid-glob | BSD-3-Clause | Kerberos 5, tmux |
+| libandroid-posix-semaphore | MIT | Python |
+| libandroid-support | Apache-2.0, MIT | Bash, Kerberos 5, OpenSSH, Python, readline, tmux |
+| libc++ | NCSA | ICU, Node.js |
+| libcrypt | BSD-2-Clause | bundled tool in its own right |
+| libcurl | MIT | Git |
+| libedit | BSD-3-Clause | bundled tool in its own right |
+| libevent | BSD-3-Clause | tmux |
+| libffi | MIT | Python |
+| libiconv | LGPL-2.1, GPL-3.0 | Bash, Git |
+| libresolv-wrapper | BSD-3-Clause | Kerberos 5 |
+| libssh2 | BSD-3-Clause | libcurl |
+| musl libc | MIT | bundled tool in its own right |
+| ncurses | MIT | Python, libedit, ncurses, readline, tmux |
+| nghttp2 | MIT | libcurl |
+| nghttp3 | MIT | libcurl |
+| ngtcp2 | MIT | libcurl, ngtcp2 |
+| Node.js | MIT | bundled tool in its own right |
+| OpenSSH | BSD | bundled tool in its own right |
+| OpenSSL | Apache-2.0 | Git, Node.js, OpenSSH, OpenSSL, Python, ldns, libcrypt, libcurl, libssh2, ngtcp2 |
+| PCRE2 | BSD-3-Clause | Git |
+| Python | PSF-2.0 | Python |
+| readline | GPL-3.0 | Bash, Python |
+| ripgrep | MIT | bundled tool in its own right |
+| SQLite | Public Domain | Node.js, Python |
+| tmux | ISC | bundled tool in its own right |
+| xz / liblzma | LGPL-2.1, GPL-2.0, GPL-3.0 | Python |
+| zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2 |
+| Zstandard | GPL-2.0 | Python |
 
 ## On-Demand Toolchains
 
