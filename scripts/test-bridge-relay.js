@@ -162,6 +162,13 @@ Module._load = function (request) {
  * Only this direction is asserted. Branches with no sender are dead code, not a
  * user-visible failure, and there are some; they are reported rather than
  * refused so removing one stays a deliberate decision.
+ *
+ * The limit worth knowing, because a reader would assume otherwise: both sides
+ * are read as LITERALS. A command name built from a variable is absent from the
+ * sent set and therefore unchecked -- silently, and in the one direction this
+ * exists for. `sent.size > 0` catches total blindness, not a partial miss. All
+ * twelve are literals today, which is what makes the check worth having and also
+ * what would make the first non-literal invisible.
  */
 function checkCommandCoverage(relay) {
     const dispatched = new Set(
@@ -218,8 +225,13 @@ async function main() {
         shown.info.length = 0; shown.error.length = 0; bridgeCalls.length = 0;
         bridgeAnswer = answer;
         inputBoxAnswer = url;
+        // No wait after this. The handler is async and awaits sendBridgeCommand,
+        // whose promise settles only from the channel's onmessage or its own 5s
+        // timeout, and the catch calls showErrorMessage synchronously -- so by the
+        // time this returns, anything the user would see has already been pushed.
+        // A sleep here would add nothing except a way for a contended runner to
+        // fail two required workflows with a message about the relay.
         await openInBrowser();
-        await new Promise((r) => setTimeout(r, 60));   // the channel round trip
         return { info: [...shown.info], error: [...shown.error], calls: [...bridgeCalls] };
     }
 
@@ -230,7 +242,12 @@ async function main() {
     assert.strictEqual(refused.calls.length, 1, 'the relay never reached the bridge');
     assert.strictEqual(
         refused.error.length, 1,
-        'a declined URL must surface exactly one message; got ' + JSON.stringify(refused.error),
+        refused.error.length === 0
+            ? 'the bridge was called but nothing reached the user. Either the relay stopped ' +
+              'answering a declined URL -- the defect this check exists for -- or the await in ' +
+              'run() no longer covers the channel round trip, which would be a fault in this ' +
+              'check rather than in the relay. Rule the second out before reading the first.'
+            : 'a declined URL must surface exactly one message; got ' + JSON.stringify(refused.error),
     );
     assert.ok(!refused.error[0].includes('undefined'),
         'the surfaced message leaked an undefined: ' + refused.error[0]);
