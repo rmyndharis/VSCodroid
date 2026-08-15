@@ -92,6 +92,10 @@ RUNNERS_OF_CHECKERS = (".github/workflows/*.yml", "scripts/*.sh",
 SELFCHECK_WORKFLOWS = ("lint.yml", "release.yml")
 
 
+class Unreadable(Exception):
+    """A file this script must read cannot be read or decoded."""
+
+
 def executable_lines(path) -> str:
     """The file's text with whole-line comments dropped.
 
@@ -106,11 +110,49 @@ def executable_lines(path) -> str:
 
     A trailing `# note` after a real command is deliberately left alone: that line
     still runs.
+
+    Returns None, and says why, for a file that cannot be read or decoded. The
+    checker rule reads every shell script and the Gradle build, which this script
+    never touched before, so it now meets files it had no exposure to: a binary-ish
+    .sh, or one saved in a non-UTF-8 encoding. Returning "" instead would make such
+    a file look empty and mark its invocations missing, which is a lie in the other
+    direction.
     """
-    return "\n".join(
-        line for line in path.read_text().splitlines()
-        if not line.lstrip().startswith(("#", "//"))
-    )
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError) as e:
+        raise Unreadable(f"{path} could not be read  {e}") from e
+    kept = [line for line in text.splitlines()
+            if not line.lstrip().startswith(("#", "//"))]
+    return "\n".join(drop_disabled_steps(kept))
+
+
+def drop_disabled_steps(lines: list) -> list:
+    """Remove workflow step blocks whose `if:` is a literal false.
+
+    Commenting a command out is one of the two canonical ways to silence a CI step;
+    `if: false` is the other, and it leaves the `run:` line untouched, so a rule
+    that only strips comments still counts a step GitHub Actions will skip. A step
+    block runs from one `- ` bullet at step indentation to the next.
+
+    Bounded on purpose, and the bound is the point: only the literal form is caught.
+    `if: ${{ false }}`, or an expression that happens to be false at run time, is
+    not, and cannot be without evaluating GitHub's expression language. No workflow
+    here uses any form today -- measured, zero occurrences -- so this changes
+    nothing in the current tree and only starts acting when someone disables a step
+    that way.
+    """
+    out, block, in_block = [], [], False
+    for line in lines + ["\x00sentinel"]:
+        starts_step = line.lstrip().startswith("- ") and line.startswith("      ")
+        if starts_step or line == "\x00sentinel":
+            if in_block and not any(
+                    re.match(r"\s*if:\s*false\s*$", b) for b in block):
+                out.extend(block)
+            block, in_block = [], True
+        if line != "\x00sentinel":
+            (block if in_block else out).append(line)
+    return out
 
 
 def named_by(pattern, path):
@@ -127,7 +169,14 @@ def job_body(path, job):
     job is the fix; exempting the script by name would have muted the rule
     instead of correcting it.
     """
-    lines = path.read_text().splitlines()
+    # Comment-stripped, like every other reader in this file. It was the one that
+    # was not, and the asymmetry was a false failure waiting: `built` came from
+    # named_by() and so ignored a commented-out line in build-all.sh, while ci_pr
+    # came from this raw text and still counted the matching commented-out line in
+    # the workflow. Disabling a step consistently in BOTH files therefore reported
+    # "scripts the PR build runs that build-all.sh does not" -- measured, on
+    # download-python.sh.
+    lines = executable_lines(path).splitlines()
     start = next((i for i, line in enumerate(lines)
                   if line.startswith(f"  {job}:")), None)
     if start is None:
@@ -150,6 +199,17 @@ def report(label, missing, where, fix):
 
 
 def main() -> int:
+    # One place to turn an unreadable input into a stated failure. Every reader in
+    # this file goes through executable_lines(), so a file that cannot be decoded
+    # reports which file rather than a traceback from inside a comprehension.
+    try:
+        return _main()
+    except Unreadable as e:
+        print(f"  FAIL   {e}")
+        return 1
+
+
+def _main() -> int:
     if not WORKFLOWS.is_dir():
         print(f"  FAIL   no workflows at {WORKFLOWS}")
         return 1
@@ -241,7 +301,17 @@ def main() -> int:
     wired = set()
     for runner in runners:
         text = executable_lines(runner)
-        wired |= {name for name in checkers if name in text}
+        # An invocation, not a mention -- the same distinction the self-check rule
+        # above is built on, and it was missing here. A plain `name in text` counted
+        # a checker as wired when its only appearance was inside a hashFiles cache
+        # key: measured, a checker with zero invocations reported "all 9 invoked".
+        # Requiring `python3` on the same line covers all three real forms --
+        # `python3 scripts/x.py` in a workflow, `python3 "$SCRIPT_DIR/x.py"` in a
+        # shell script, and `"python3", "scripts/x.py"` in the Gradle build -- and
+        # excludes a bare filename in a key, a comment or a doc string.
+        wired |= {name for name in checkers
+                  for line in text.splitlines()
+                  if name in line and "python3" in line}
 
     unwired = checkers - wired
     if unwired:
