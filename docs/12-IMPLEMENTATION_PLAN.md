@@ -1141,7 +1141,10 @@ android/app/src/main/kotlin/com/vscodroid/
 
 android/app/src/main/res/
 ├── layout/
-│   └── view_extra_key_row.xml      (ViewPager2 + dot indicators + trackpad)
+│   └── view_extra_key_row.xml      (planned; never built this way, now deleted --
+│                                    ExtraKeyRow builds its views in code, and the
+│                                    layout that did exist was a HorizontalScrollView
+│                                    of Buttons, not ViewPager2)
 └── values/
     ├── dimens.xml                  (key sizes, 48dp minimum)
     └── colors.xml                  (key colors)
@@ -2620,7 +2623,7 @@ Total new files created across all milestones:
 | Category                   | Approx Count | Key Files                                                                                                                                                                                                                    |
 | -------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Kotlin sources**         | ~30 files    | MainActivity, NodeService, ProcessManager, AndroidBridge, ExtraKeyRow, GestureTrackpad, ToolchainManager, SafStorageManager, SshKeyBridge, CrashReporter, etc.                                                               |
-| **Layouts (XML)**          | ~8 files     | activity_main, activity_splash, activity_toolchain, layout_toolchain_picker, layout_toolchain_progress, item_toolchain_card, view_extra_key_row                                                                              |
+| **Layouts (XML)**          | ~8 files     | activity_main, activity_splash, activity_toolchain, layout_toolchain_picker, layout_toolchain_progress, item_toolchain_card, ~~view_extra_key_row~~ (deleted — nothing inflated it)                                          |
 | **Build/download scripts** | ~13 files    | download-node.sh, download-python.sh, download-go.sh, download-ruby.sh, download-java.sh, build-git.sh, build-bash.sh, build-tmux.sh, build-node-pty.sh, download-termux-tools.sh, build-all.sh, apply-patches.sh, deploy.sh |
 | **VS Code patches**        | ~19 files    | 9 code-server patches + 10 VSCodroid patches (incl. ext-host-worker, pty-host-worker, android-fs)                                                                                                                            |
 | **Gradle configs**         | ~6 files     | root + app + 3 asset pack modules (Go, Ruby, Java) + settings                                                                                                                                                                |
