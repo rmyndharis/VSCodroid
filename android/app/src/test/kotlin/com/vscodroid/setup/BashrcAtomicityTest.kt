@@ -12,11 +12,14 @@ import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.IOException
+import java.lang.reflect.InvocationTargetException
 
 /**
  * Tests that no half-written `.bashrc` can survive, and -- the sharper half --
@@ -77,6 +80,9 @@ class BashrcAtomicityTest {
         every { context.applicationInfo } returns ApplicationInfo().apply {
             nativeLibraryDir = "/data/app/~~hash==/com.vscodroid-hash==/lib/arm64"
         }
+        // createBashrc interpolates this into PROJECTS_DIR; pinned so the file
+        // it writes does not depend on what a relaxed mock invents.
+        every { context.getExternalFilesDir(null) } returns File(filesDir, "external")
 
         bashrc = File(filesDir, "home/.bashrc")
         bashrc.parentFile?.mkdirs()
@@ -190,6 +196,62 @@ class BashrcAtomicityTest {
             bashrc.readText(),
             "a partial append survived; `npm()` opens this writer's own block, so a body " +
                 "cut short by process death would satisfy the guard and never be repaired",
+        )
+    }
+
+    private fun createBashrc() {
+        FirstRunSetup::class.java
+            .getDeclaredMethod("createBashrc")
+            .apply { isAccessible = true }
+            .invoke(FirstRunSetup(context))
+    }
+
+    @Test
+    fun `writes the shell configuration on a first run`() {
+        bashrc.delete()
+
+        createBashrc()
+
+        assertTrue(bashrc.isFile, "no .bashrc was written")
+        assertTrue(bashrc.readText().contains("export PROJECTS_DIR"), "the file is not the one we write")
+    }
+
+    /**
+     * The first-run write is not like the three above it, and the difference is
+     * which loop gets to try again.
+     *
+     * Those three run from SplashActivity on every launch, so a failure heals by
+     * itself next time. This one runs only inside `runSetupLocked`, whose
+     * `markSetupComplete()` sits at the end of the same try block, and
+     * `isFirstRun()` is keyed on versionName -- so a failure that merely logs
+     * lets setup be certified with no .bashrc at all, and nothing writes one
+     * until the app updates. The every-launch repairs cannot fill the gap
+     * either: `createNpmWrappers`, `ensureToolchainEnvSourcing` and
+     * `ensurePromptFix` all open with `if (bashrc.exists())`, so with the file
+     * absent all three no-op forever too.
+     *
+     * Failing loudly reaches `runSetupLocked`'s catch, which SplashActivity
+     * turns into an error screen with a Retry button. Atomicity is what makes
+     * that retry worth pressing: the file is absent rather than truncated, so
+     * the retry's own `if (!bashrc.exists())` is true and it writes a complete
+     * one. On main the truncated file satisfied that guard and the retry skipped
+     * it, so neither half alone produces a working shell.
+     */
+    @Test
+    fun `a failed first-run write leaves nothing behind and fails loudly`() {
+        bashrc.delete()
+        blockTheWrite()
+
+        val thrown = assertThrows(InvocationTargetException::class.java) { createBashrc() }
+
+        assertTrue(
+            thrown.cause is IOException,
+            "the failure must reach runSetupLocked's catch so markSetupComplete is skipped; " +
+                "it surfaced as ${thrown.cause}",
+        )
+        assertFalse(
+            bashrc.exists(),
+            "a truncated .bashrc was left behind; the retry's own exists() guard would skip it",
         )
     }
 }

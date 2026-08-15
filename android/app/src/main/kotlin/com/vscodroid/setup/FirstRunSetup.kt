@@ -1066,8 +1066,22 @@ claude() {
                     cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
                 fi
             """.trimIndent() + "\n"
+            // Thrown, not logged. This runs only from runSetupLocked, whose
+            // markSetupComplete() is the last statement of the same try block --
+            // so swallowing the failure certifies an install that has no
+            // .bashrc, and isFirstRun() is keyed on versionName, so nothing
+            // writes one until the app updates. The every-launch repairs cannot
+            // cover it either: createNpmWrappers, ensureToolchainEnvSourcing
+            // and ensurePromptFix all open with `if (bashrc.exists())`.
+            //
+            // The throw and the atomic write are worth exactly nothing apart.
+            // The throw alone is what main did, and main's retry then skipped
+            // the file, because writeText had already created a truncated one
+            // that satisfied the guard above. Atomicity alone leaves the file
+            // absent but tells no one, so no retry is offered. Together the
+            // retry starts from a clean slate and produces a working shell.
             if (!writeAtomically(bashrc) { it.write(initial.toByteArray()) }) {
-                Logger.e(tag, "Could not write .bashrc; the terminal will start without it")
+                throw IOException("could not write $bashrc")
             }
         }
     }
@@ -1192,8 +1206,15 @@ claude() {
                     }
                 }
             """.trimIndent()
+            // Thrown for the reason createBashrc() throws: this runs only from
+            // runSetupLocked, markSetupComplete() is downstream in the same try
+            // block, and the every-launch repair that would otherwise catch up
+            // opens with `if (!settingsFile.exists()) return`. A swallowed
+            // failure here means no terminal profile, no git.path, no
+            // claudeProcessWrapper and no verifySignature until the app
+            // updates -- reported to the user as a successful first run.
             if (!writeAtomically(settingsFile) { it.write(defaults.toByteArray()) }) {
-                Logger.e(tag, "Could not write the default settings.json")
+                throw IOException("could not write $settingsFile")
             }
         }
     }
@@ -1224,15 +1245,31 @@ claude() {
         // device, so they were green on the release whose users kept the
         // previous file.
         //
-        // Re-copying costs less than deciding not to. The whole bundled tree is
-        // a few dozen KB across a handful of files, and this runs once per
-        // versionName change rather than per launch, so comparing content to
-        // skip a write would read as many bytes as writing them.
+        // This is not cheap, and an earlier version of this comment said it
+        // was. It claimed "a few dozen KB across a handful of files". The tree
+        // is 57 MB across 3787 files: `ms-python.python` alone is 29 MB, a
+        // figure this same file already records at [supersededExtensionDirs].
+        // The 72 KB measured to justify it was taken in a git worktree, where
+        // `.gitignore` keeps only `vscodroid.vscodroid-*` and everything
+        // `download-extensions.sh` fetches is absent -- a real measurement of
+        // the wrong tree. Every versionName change now re-copies all of it,
+        // behind a progress bar that does not move off 88.
+        //
+        // It stays unconditional for now because the cheap alternative is the
+        // wrong one. A version-or-mtime check cannot work here: the version is
+        // precisely what does not change when this project edits one of its own
+        // extensions in place, which is the defect above. Only a content
+        // comparison would both skip the unchanged 3787 and still deliver such
+        // an edit, and that is a larger change than this one. Recorded rather
+        // than left as a surprise.
         //
         // It merges, so a file this build no longer ships stays behind. That is
         // the better of the two failures available: emptying the directory
         // first would leave no extension at all if the copy were interrupted,
         // while an orphan that `package.json` does not name is never loaded.
+        // Not considered here, and worth knowing before narrowing this: some
+        // extensions write into their own directory at runtime, so re-copying
+        // can revert generated state as well as stale files.
         for (name in bundled) {
             extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")
         }
@@ -1277,7 +1314,13 @@ claude() {
             reconcileExtensionsManifest(manifestFile, extensionsDir, bundled)
         }
 
-        Logger.i(tag, "Bundled extensions: ${bundled.size} extracted, " +
+        // Says what this build carries, not what landed. extractAssetFile
+        // swallows its own IOException and logs a warning per file, so a run
+        // where every copy failed would still reach this line -- and the
+        // counter this replaced was incremented next to the call rather than
+        // after checking it, so it never measured an outcome either. Claiming
+        // "N extracted" would be the one reading nobody can verify from here.
+        Logger.i(tag, "Bundled extensions: ${bundled.size} in this build, " +
             "${superseded.size} superseded removed")
     }
 
@@ -1315,10 +1358,25 @@ claude() {
         // and reconciliation cannot parse a half-written document -- it catches
         // and returns -- so the manifest is never regenerated and the list stays
         // empty for the life of the install.
+        // Thrown rather than returned, and the caller is the reason. Returning
+        // only ends this function: extractBundledExtensions would go on to
+        // rememberBundledIds(), persisting the bundled identifier set for an
+        // install that has no manifest. That record outlives the process and
+        // the upgrade, and it is what a later reconcile uses to tell an
+        // extension the user uninstalled from one this app has never shipped --
+        // so an identifier recorded with no entry beside it reads as
+        // deliberately removed and is never listed again.
+        //
+        // "Nothing else creates extensions.json, so the reconcile branch is
+        // unreachable" was the reasoning that made that look harmless, and the
+        // comment fourteen lines above the branch refutes it in this file's own
+        // words: the server manages this file for marketplace installs. One
+        // install from the gallery creates it, and the next upgrade then reads
+        // every bundled extension as removed. Throwing also skips
+        // markSetupComplete(), so the whole setup is retried instead.
         val manifestFile = File(extensionsDir, "extensions.json")
         if (!writeAtomically(manifestFile) { it.write(entries.toString(2).toByteArray()) }) {
-            Logger.e(tag, "Could not write extensions.json; no bundled extension will be listed")
-            return
+            throw IOException("could not write $manifestFile")
         }
         Logger.i(tag, "Generated extensions.json with ${entries.length()} entries")
     }

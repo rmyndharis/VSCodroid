@@ -13,11 +13,14 @@ import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.IOException
+import java.lang.reflect.InvocationTargetException
 
 /**
  * Tests the one-shot move of settings.json from the path this app used to write
@@ -161,17 +164,40 @@ class SettingsMigrationTest {
         assertTrue(current.readText().contains("workbench.startupEditor"), "the defaults are not in it")
     }
 
+    /**
+     * Two properties, and the second is the one that took a correction.
+     *
+     * Leaving nothing at the destination is necessary but not sufficient. This
+     * runs inside `runSetupLocked`, whose `markSetupComplete()` sits at the end
+     * of the same try block -- so a failure that merely logs lets setup be
+     * certified with no settings file at all, and `isFirstRun()` is keyed on
+     * versionName, meaning nothing writes it again until the app updates. The
+     * every-launch repair cannot help either: `updateSettingsNativeLibPaths`
+     * opens with `if (!settingsFile.exists()) return`.
+     *
+     * So the write has to fail *loudly*. An exception reaches
+     * `runSetupLocked`'s catch, becomes SetupResult.ERROR, and SplashActivity
+     * puts a Retry button on screen. Atomicity is what makes that retry worth
+     * offering: the destination is absent rather than truncated, so the retry's
+     * `if (!settingsFile.exists())` is true and it writes the file properly.
+     * Neither half achieves that alone.
+     */
     @Test
-    fun `a failed first-run write leaves no settings file behind`() {
+    fun `a failed first-run write leaves nothing behind and fails loudly`() {
         legacy.delete()
         blockTheWrite()
 
-        createDefaultSettings()
+        val thrown = assertThrows(InvocationTargetException::class.java) { createDefaultSettings() }
 
+        assertTrue(
+            thrown.cause is IOException,
+            "the failure must reach runSetupLocked's catch as an exception so markSetupComplete " +
+                "is skipped; it surfaced as ${thrown.cause}",
+        )
         assertFalse(
             current.exists(),
-            "a truncated defaults file was left where the guard reads it, so the missing " +
-                "settings would never be written again",
+            "a truncated defaults file was left where the guard reads it, so the retry would " +
+                "skip it and the missing settings would never be written",
         )
     }
 }

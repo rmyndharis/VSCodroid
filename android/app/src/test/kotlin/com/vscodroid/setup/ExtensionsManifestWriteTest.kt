@@ -1,6 +1,8 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.content.res.AssetManager
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -10,15 +12,20 @@ import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.unmockkConstructor
 import io.mockk.unmockkObject
+import io.mockk.verify
 import org.json.JSONArray
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
+import java.lang.reflect.InvocationTargetException
 
 /**
  * Tests that the first-run write of `extensions.json` cannot leave a truncated
@@ -55,11 +62,17 @@ class ExtensionsManifestWriteTest {
     lateinit var filesDir: File
 
     private lateinit var context: Context
+    private lateinit var assets: AssetManager
+    private lateinit var editor: SharedPreferences.Editor
     private lateinit var extensionsDir: File
     private lateinit var manifestFile: File
 
     /** Stands in for whatever the real serialiser would produce. */
     private val serialised = """[{"identifier":{"id":"vscodroid.vscodroid-welcome"}}]"""
+
+    private val dirName = "vscodroid.vscodroid-welcome-1.2.0"
+    private val pkgJson =
+        """{"publisher":"vscodroid","name":"vscodroid-welcome","version":"1.2.0"}"""
 
     @BeforeEach
     fun setUp() {
@@ -73,8 +86,23 @@ class ExtensionsManifestWriteTest {
         every { anyConstructed<JSONArray>().toString(2) } returns serialised
         every { anyConstructed<JSONArray>().length() } returns 1
 
+        assets = mockk()
+        every { assets.list("extensions") } returns arrayOf(dirName)
+        every { assets.list("extensions/$dirName") } returns arrayOf("package.json")
+        every { assets.list("extensions/$dirName/package.json") } returns emptyArray()
+        every { assets.open("extensions/$dirName/package.json") } answers
+            { ByteArrayInputStream(pkgJson.toByteArray()) }
+
+        // Captured rather than relaxed-through, because the whole point of one
+        // test below is that a particular editor call never happens.
+        editor = mockk(relaxed = true)
+        val prefs = mockk<SharedPreferences>(relaxed = true)
+        every { prefs.edit() } returns editor
+
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
+        every { context.assets } returns assets
+        every { context.getSharedPreferences(any(), any()) } returns prefs
 
         extensionsDir = File(filesDir, "home/.vscodroid/extensions")
         extensionsDir.mkdirs()
@@ -107,19 +135,78 @@ class ExtensionsManifestWriteTest {
         assertEquals(serialised, manifestFile.readText())
     }
 
-    @Test
-    fun `a failed write leaves no manifest behind`() {
-        // Non-empty, so the cleanup delete() cannot quietly reclaim it.
+    /** Non-empty, so the cleanup delete() cannot quietly reclaim it. */
+    private fun blockTheWrite() {
         val blocker = File(extensionsDir, "${manifestFile.name}.tmp~")
         assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
         File(blocker, "occupied").writeText("x")
+    }
 
-        generateExtensionsManifest()
+    @Test
+    fun `a failed write leaves no manifest behind and fails loudly`() {
+        blockTheWrite()
 
+        val thrown = assertThrows(InvocationTargetException::class.java) { generateExtensionsManifest() }
+
+        assertTrue(
+            thrown.cause is IOException,
+            "the failure must reach runSetupLocked's catch so markSetupComplete is skipped; " +
+                "it surfaced as ${thrown.cause}",
+        )
         assertFalse(
             manifestFile.exists(),
             "a truncated manifest was left at the path; the next launch reconciles rather " +
                 "than regenerates, cannot parse it, and the extension list stays empty for good",
         )
+    }
+
+    private fun extractBundledExtensions() {
+        FirstRunSetup::class.java
+            .getDeclaredMethod("extractBundledExtensions")
+            .apply { isAccessible = true }
+            .invoke(FirstRunSetup(context))
+    }
+
+    /**
+     * The caller must not record what the manifest failed to say.
+     *
+     * `rememberBundledIds` persists the bundled identifier set into
+     * SharedPreferences, and that record outlives the process and the app
+     * upgrade. It exists so a later reconcile can tell an extension the user
+     * uninstalled from one this app has never shipped -- an identifier already
+     * in the record with no manifest entry reads as "the user removed it" and is
+     * never listed again.
+     *
+     * Writing it when no manifest was written is therefore not a harmless stale
+     * value, and the reasoning that it was rested on "nothing else creates
+     * extensions.json". The comment fourteen lines above the branch says
+     * otherwise in this file's own words: "The server manages this file for
+     * marketplace installs". So the sequence is reachable -- failed write, no
+     * manifest, ids recorded; user installs anything from Open VSX and the
+     * server creates the file; the next upgrade takes the reconcile branch and
+     * reads every bundled extension as deliberately removed, permanently.
+     */
+    @Test
+    fun `a failed manifest write records no bundled ids`() {
+        blockTheWrite()
+
+        assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+
+        verify(exactly = 0) {
+            editor.putStringSet(any(), any())
+        }
+    }
+
+    /**
+     * The control for the test above: on the path that works, the record IS
+     * written. Without this, a build where rememberBundledIds had been deleted
+     * outright would satisfy the assertion above.
+     */
+    @Test
+    fun `a successful generate records the bundled ids`() {
+        extractBundledExtensions()
+
+        assertTrue(manifestFile.isFile, "the manifest was not written; the harness is wrong")
+        verify { editor.putStringSet(any(), any()) }
     }
 }
