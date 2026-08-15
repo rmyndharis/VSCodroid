@@ -615,6 +615,17 @@ private var ProcessManager.cachedTokenField: String?
     get() = field("cachedToken").get(this) as String?
     set(value) = field("cachedToken").set(this, value)
 
+/**
+ * Reaches `ProcessManager.procDir`, which is private production state.
+ *
+ * The machines this suite runs on have no `/proc`, so without redirecting it the
+ * adoption tests could only ever exercise the branch where the recorded process
+ * is missing — passing, while never once adopting anything.
+ */
+private var ProcessManager.procDirField: File
+    get() = field("procDir").get(this) as File
+    set(value) = field("procDir").set(this, value)
+
 private fun field(name: String) =
     ProcessManager::class.java.getDeclaredField(name).apply { isAccessible = true }
 
@@ -933,12 +944,37 @@ class AdoptionTest {
     private fun serving(status: Int): StubServer =
         StubServer(status).also { stub = it; manager.portField = it.port }
 
+    /**
+     * Writes the note `assets/server.js` leaves naming the editor server it
+     * forked, and a matching `/proc` entry, then points the manager at both.
+     *
+     * [entry] is what `/proc/<pid>/cmdline` will say. The default is what the real
+     * bootstrap forks; a test passes something else to stand for a pid that has
+     * been recycled into an unrelated process.
+     */
+    private fun recordEditorServer(pid: Int, port: Int, entry: String = "server-main.js") {
+        File(tempDir, "server").mkdirs()
+        File(tempDir, "server/editor-server.pid")
+            .writeText("""{"pid":$pid,"port":$port}""")
+        File(tempDir, "proc/$pid").mkdirs()
+        // NUL-separated, the way the kernel writes argv.
+        File(tempDir, "proc/$pid/cmdline")
+            .writeText("/lib/libnode.so /data/server/vscode-reh/out/$entry ")
+        manager.procDirField = File(tempDir, "proc")
+    }
+
+    /** Holds the port without answering, so any HTTP probe would fail. */
+    private fun holdingPortSilently(): StubServer =
+        StubServer(null).also { stub = it; manager.portField = it.port }
+
     @Test
-    fun `a server that accepts our token is adopted rather than spawned over`() {
-        // 200 to everything, including the tokened `/`, so the ownership probe
-        // sees acceptance. The port is genuinely held by the stub, which is what
-        // sends startServer down this branch at all.
-        serving(200)
+    fun `a live editor server of ours on the port is adopted rather than spawned over`() {
+        // The stub holds the port and answers nothing at all. That is deliberate:
+        // ownership is decided from the note this app wrote, so the holder is
+        // never asked, and a test that let it answer could not tell the two
+        // mechanisms apart.
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 4242, port = holder.port)
 
         assertTrue(manager.startServer(), "adopting is a successful start")
         assertTrue(manager.isAdopted(), "the server on the port is not ours to claim we spawned")
@@ -949,37 +985,64 @@ class AdoptionTest {
     }
 
     @Test
-    fun `a holder that refuses our token is not adopted`() {
-        // 403 is the discriminating answer and the only one that means "not ours".
-        // A stranger can hold a loopback port on Android; only our own processes
-        // can read the token file the probe presents.
-        serving(403)
+    fun `the ownership test never sends the connection token to the port holder`() {
+        // The defect this replaced: the test built `/?tkn=<token>` and sent it to
+        // whoever held the port, before anything about them was known. Binding a
+        // loopback port on Android needs no permission, so the one party the test
+        // existed to identify was handed the credential first.
+        //
+        // Asserted at the socket rather than by reading the source: the stub
+        // records the request line it received, and there must not be one.
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
 
-        assertFalse(manager.portHolderAcceptsOurToken(), "403 is a refusal, not an acceptance")
-        manager.startServer()
-        assertFalse(manager.isAdopted(), "a server that refuses our token is not ours to adopt")
+        assertTrue(manager.portHeldByOurEditorServer())
+        assertNull(
+            holder.lastRequestLine(),
+            "the ownership test must not contact the port holder at all",
+        )
     }
 
     @Test
-    fun `a redirect counts as acceptance`() {
-        // The server consumes the token on `/` and redirects while turning it into
-        // the vscode-tkn cookie, so pinning 200 alone would call our own server a
-        // stranger. The probe judges by what the answer is NOT.
-        serving(302)
-
-        assertTrue(manager.portHolderAcceptsOurToken())
-    }
-
-    @Test
-    fun `an empty token cannot claim ownership of anything`() {
-        // Kills a probe that treats a missing token as a pass. Before the server
-        // has written one there is nothing to present, and "no answer to the
-        // question" must not read as "yes".
+    fun `a port held by something we have no note for is not adopted`() {
+        // No note: either this app never started a server on this port, or the
+        // note was cleared when the last one exited. Both mean the holder is a
+        // stranger, and a stranger is spawned over rather than adopted.
         serving(200)
-        File(tempDir, "token").writeText("")
-        manager.cachedTokenField = null
 
-        assertFalse(manager.portHolderAcceptsOurToken())
+        assertFalse(manager.portHeldByOurEditorServer())
+        manager.startServer()
+        assertFalse(manager.isAdopted(), "an unrecorded holder is not ours to adopt")
+    }
+
+    @Test
+    fun `a note written for a different port does not vouch for this one`() {
+        // Guards the reason the port is written alongside the pid. A server that
+        // is genuinely ours, genuinely alive, and on a different port says nothing
+        // about who holds this one.
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 4242, port = holder.port + 1)
+
+        assertFalse(manager.portHeldByOurEditorServer())
+    }
+
+    @Test
+    fun `a recorded process that has exited is not adopted`() {
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 4242, port = holder.port)
+        File(tempDir, "proc/4242").deleteRecursively()
+
+        assertFalse(manager.portHeldByOurEditorServer(), "a dead pid vouches for nothing")
+    }
+
+    @Test
+    fun `a recycled pid running something else is not adopted`() {
+        // Android reuses pids freely, so "the number is still in /proc" is not the
+        // question. What the process IS decides it.
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 4242, port = holder.port, entry = "some-other-program")
+
+        assertFalse(manager.portHeldByOurEditorServer())
     }
 
     @Test
@@ -987,7 +1050,11 @@ class AdoptionTest {
         // The half that makes adoption safe. There is no Process behind an adopted
         // server, so nothing reports its death for free; without this the class
         // would report it healthy for as long as it ran.
-        serving(200)
+        //
+        // Serving, unlike the ownership tests above, because this one is about
+        // readiness after adoption rather than about the adoption decision.
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
         assertTrue(manager.startServer())
         assertTrue(manager.probeReadiness(), "the fixture must start out serving")
 
@@ -1009,7 +1076,8 @@ class AdoptionTest {
         // The start guard's other half. `isRunning()` answers false for an adopted
         // server because there is no Process, so without consulting adoption this
         // would spawn onto a port that is still held.
-        serving(200)
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
         assertTrue(manager.startServer())
 
         assertFalse(manager.startServer(), "a second start must be refused while one is adopted")
@@ -1024,7 +1092,8 @@ class AdoptionTest {
         // kept running.
         val warnings = mutableListOf<String>()
         every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
-        serving(200)
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
         assertTrue(manager.startServer())
 
         manager.stopServer()

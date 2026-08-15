@@ -213,6 +213,44 @@ if (!fs.existsSync(rehEntryPoint)) {
             stdio: 'inherit'
         });
 
+        // Who holds the port, recorded from the side that knows.
+        //
+        // This process can be SIGKILLed while the child it forked keeps running
+        // and keeps the socket -- routine here, and the reason the Kotlin side
+        // adopts a surviving server rather than spawning one that cannot bind.
+        // But the survivor is anonymous to the next launch: the Process handle
+        // died with the parent, and Android denies an app any read of
+        // /proc/net/tcp, so the port cannot be mapped back to a pid.
+        //
+        // So write the pid down while it is still known. The alternative the
+        // Kotlin side used was to ask over HTTP whether the port holder accepted
+        // our connection token -- which meant sending the token to whoever held
+        // the port, before knowing whether they were ours. Anything on Android
+        // can bind a loopback port; that made the test hand the secret to the one
+        // party it was meant to identify.
+        //
+        // The port is written with the pid on purpose: a stale file from an
+        // earlier run on a different port must not vouch for this one.
+        const pidFile = path.join(SERVER_DIR, 'editor-server.pid');
+        try {
+            const tmp = pidFile + '.tmp';
+            fs.writeFileSync(tmp, JSON.stringify({ pid: server.pid, port: PORT }));
+            fs.renameSync(tmp, pidFile);
+        } catch (e) {
+            // Not fatal: adoption is an optimisation, and its absence costs a
+            // restart rather than a session.
+            log('warn', 'Could not record the editor server pid: ' + e.message);
+        }
+
+        const clearPidFile = () => {
+            try {
+                fs.unlinkSync(pidFile);
+            } catch {
+                // Already gone, or never written. Either way there is nothing to
+                // clean up, and a stale file is handled by the reader anyway.
+            }
+        };
+
         // Start process monitor (non-fatal if it fails)
         try {
             const monitor = require(path.join(SERVER_DIR, 'process-monitor.js'));
@@ -236,6 +274,9 @@ if (!fs.existsSync(rehEntryPoint)) {
             // 128 + signum is the shell convention, and it is what the Kotlin side
             // already expects: its 137 branch exists to name SIGKILL and could
             // never be reached.
+            // Cleared on the child's exit rather than on this process's, because
+            // this process being killed is exactly the case the file exists for.
+            clearPidFile();
             if (signal) {
                 const signum = os.constants.signals[signal] || 0;
                 log('warn', `VS Code Server killed by ${signal}`);
