@@ -305,6 +305,19 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     }
 }
 
+// A jniLibs entry smaller than this is the placeholder the lint, unit-test and R8
+// jobs write so Gradle will configure -- `printf '\x7fELF'` followed by 60 zero
+// bytes, 64 in total, which is not an ELF file at all and would fail any check of
+// it. The same threshold is written out twice more, in build.yml's and
+// release.yml's "Verify assets" steps; named here so this side has one place to
+// change, and so the others are findable rather than folklore:
+//     grep -n 'lt 1000' .github/workflows/*.yml
+//     grep -rn "printf '.x7fELF'" .github/workflows/
+// If a workflow ever raises its placeholder past this, the gate below starts
+// running in those jobs and fails on a file never meant to be a binary. Loud, not
+// silent -- but the fix is there, not here.
+val jniLibsStubCeiling = 1000L
+
 // Every binary in jniLibs, checked where it is packaged rather than only where
 // it was downloaded.
 //
@@ -329,21 +342,35 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     group = "verification"
     description = "Checks every bundled binary in jniLibs can load on Android."
 
-    // The 64-byte stub the lint and unit-test jobs write so Gradle will
-    // configure: `printf '\x7fELF'` plus 60 zero bytes. It is not an ELF file and
-    // would fail this check, so the same size test build.yml already uses to tell
-    // a stub from a runtime gates the task. Absent is not stale, and a stub is
-    // not a binary.
-    val runtime = file("src/main/jniLibs/arm64-v8a/libnode.so")
+    val jniDir = file("src/main/jniLibs/arm64-v8a")
 
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/verify-android-elf.py",
         "--dir", "android/app/src/main/jniLibs/arm64-v8a",
+        // Both directories, matching what every installer passes -- see the
+        // --lib-dir pairs in download-node.sh, download-python.sh and
+        // download-termux-tools.sh. jniLibs is the second one for a reason that is
+        // easy to miss: Android extracts it to nativeLibraryDir, which is on the
+        // loader path, so a bundled binary may legitimately name another bundled
+        // lib*.so in its DT_NEEDED. Passing only assets/usr/lib here would make
+        // this gate stricter than the checks it was modelled on, and it would
+        // reject at packaging what the installer had just accepted -- then send
+        // the developer back to re-run the script that passed.
         "--lib-dir", "android/app/src/main/assets/usr/lib",
+        "--lib-dir", "android/app/src/main/jniLibs/arm64-v8a",
     )
 
-    onlyIf { runtime.isFile && runtime.length() >= 1000 }
+    // Runs when jniLibs holds at least one real binary. Keyed on "any", not on
+    // libnode.so: the binary this gate most earns its keep on is ripgrep, which
+    // fetch-vscode-oss.sh installs while download-node.sh installs the runtime, so
+    // keying on Node would skip a tree that had a fetched-but-bad ripgrep and no
+    // Node in it.
+    onlyIf {
+        jniDir.listFiles()?.any {
+            it.name.endsWith(".so") && it.length() >= jniLibsStubCeiling
+        } == true
+    }
 
     isIgnoreExitValue = true
     val result = executionResult
