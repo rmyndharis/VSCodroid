@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- When a previous editor server is still running, the app now serves that one instead of starting a second it cannot use. Android reclaims background processes individually, so the process the app launches can be killed while the server it started keeps running and keeps the port — and the app would then start another that could never listen, watch that one instead, and lose track of the server you were actually using. It now recognises the surviving server as its own, keeps watching it, and notices if it goes away. It still cannot stop a server it did not start, and now says so instead of reporting that it did
 - Opening a link from the editor no longer depends on which route the editor happened to use. A dev server on the local network, or anything else on plain http to a machine other than this one, was silently dropped when the editor opened it through one path and worked when it opened it through the other — with nothing said either way. VSCodroid is a development environment, so any address it is asked to open now opens
 - Berkeley DB is no longer bundled, and every remaining library is attributed.
   It is licensed **AGPL-3.0-only** -- the strongest copyleft in common use -- and
