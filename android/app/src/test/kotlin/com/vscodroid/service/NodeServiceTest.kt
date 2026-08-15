@@ -255,7 +255,7 @@ class SpawnedNothingTest {
 /**
  * That the two start failures actually go through the recoverable stop.
  *
- * [LeavesNothingRunningTest] pins the decision; this pins that it is consulted
+ * [SpawnedNothingTest] pins the decision; this pins that it is consulted
  * and acted on. Neither subsumes the other: the predicate can be perfect and
  * called from nowhere, which is the exact shape of the defect being closed —
  * `enterTerminalState` did the right thing and the two start failures simply did
@@ -371,6 +371,55 @@ class RestartOwnershipTest {
                 "and waiting out the backoff, or it outlives the wait and clears the service " +
                 "state from under the restart. Statements found in that span:\n$shown",
         )
+    }
+}
+
+/**
+ * Whether a coroutine waking from a backoff still belongs to the run that started
+ * it.
+ *
+ * The defect: the only thing checked on the far side of the backoff was
+ * `isServiceRunning`, and that flag legitimately goes false and true again. Stop
+ * clears it; `onStartCommand` sets it back for a fresh run. A backoff reaches
+ * half a minute at the later attempts, so a Stop followed by a relaunch inside
+ * one let the stale chain wake, read `true`, and restart on top of the server the
+ * new run had already started — refused as a live process, so it arrived as a
+ * start failure with nothing actually wrong and spent the budget down to the
+ * terminal state.
+ *
+ * A boolean cannot express "still the same run". Two ints can.
+ */
+class StillOurRunTest {
+
+    @Test
+    fun `the run that started the wait may finish it`() {
+        assertTrue(stillOurRun(serviceRunning = true, startedRun = 7, currentRun = 7))
+    }
+
+    @Test
+    fun `a stopped service ends the wait`() {
+        assertFalse(
+            stillOurRun(serviceRunning = false, startedRun = 7, currentRun = 7),
+            "restarting a server the user stopped is the one outcome nothing explains",
+        )
+    }
+
+    @Test
+    fun `a stop and relaunch inside the backoff fences the old chain out`() {
+        // The case the flag alone cannot catch, and the whole reason the counter
+        // exists: the service IS running, because a newer run started it. A check
+        // that only read the flag passes here, which is the defect.
+        assertFalse(
+            stillOurRun(serviceRunning = true, startedRun = 7, currentRun = 8),
+            "a newer run owns the server now; the old chain must not restart over it",
+        )
+    }
+
+    @Test
+    fun `both conditions are required, not either`() {
+        // Kills `||` in place of `&&`, which reads identically at the call site
+        // and lets a stopped service through whenever the run happens to match.
+        assertFalse(stillOurRun(serviceRunning = false, startedRun = 1, currentRun = 2))
     }
 }
 

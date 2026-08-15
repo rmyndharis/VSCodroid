@@ -53,6 +53,23 @@ class NodeService : Service() {
     private var restartCount = 0
     private var isServiceRunning = false
     private var launchJob: Job? = null
+
+    /**
+     * Which run of the server this is, counted from the service's point of view.
+     *
+     * Exists because [isServiceRunning] cannot answer "is this still the same
+     * run", and a coroutine waiting out a backoff needs to know. That backoff
+     * reaches half a minute at the later attempts, and Stop can land inside it:
+     * the flag goes false, and then [onStartCommand] sets it back to true for a
+     * fresh run. A chain that only re-reads the flag wakes up, sees true, and
+     * calls [launchServer] against the server the new run has already started --
+     * which [ProcessManager.startServer] refuses, so a perfectly healthy server
+     * is walked down to the terminal state with nothing wrong with it.
+     *
+     * Incremented wherever a run ends or begins, and only from the main
+     * dispatcher, like every other field here.
+     */
+    private var runId = 0
     private var startupNotice: String? = null
 
     /** Invoked when the server is healthy and accepting connections. */
@@ -264,6 +281,15 @@ class NodeService : Service() {
         Logger.i(tag, "Stop requested from the notification")
         isServiceRunning = false
         cancelLaunch()
+        // This run is over. A recovery chain already waiting out its backoff
+        // cannot be cancelled from here -- it is not [launchJob] -- so it is
+        // fenced off instead: it compares the run it belongs to against this one
+        // when it wakes, and leaves.
+        runId++
+        // And the next run starts with a full budget. Without this, stopping
+        // during a crash loop and starting again gave whatever was left of the
+        // previous run's allowance.
+        restartCount = 0
         processManager.stopServer()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -345,7 +371,16 @@ class NodeService : Service() {
             when (outcome) {
                 LaunchOutcome.NOT_STARTED -> {
                     Logger.e(tag, "Failed to start server process")
-                    reportStartupNotice(getString(R.string.error_server_start))
+                    // Once per run, not once per attempt. The retry chain below
+                    // can produce five more of these inside a minute, and
+                    // `MainActivity` answers each one with a long toast -- so a
+                    // single honest failure arrived as a queue of them, still
+                    // appearing after the app had given up. The log keeps every
+                    // attempt; the user gets the first, and then the terminal
+                    // state's message when the budget is gone.
+                    if (restartCount == 0) {
+                        reportStartupNotice(getString(R.string.error_server_start))
+                    }
                 }
 
                 LaunchOutcome.READY -> announceReady()
@@ -415,6 +450,8 @@ class NodeService : Service() {
             CrashAction.GIVE_UP -> enterTerminalState()
 
             CrashAction.RESTART -> {
+                // Captured before the wait, compared after. See [runId].
+                val startedRun = runId
                 restartCount++
                 // The superseded attempt ends here, not when its own poll expires.
                 //
@@ -431,10 +468,12 @@ class NodeService : Service() {
                 cancelLaunch()
                 delay(restartBackoffMs(restartCount))
                 // Checked again on the far side of the pause, which is measured in
-                // seconds and grows: Stop can land while it elapses, and
-                // restarting the server the user just stopped is the one outcome
-                // nothing downstream would explain.
-                if (!isServiceRunning) return
+                // seconds and grows. Stop can land while it elapses, and so can a
+                // Stop followed by a relaunch -- which is why the run is compared
+                // and not just the flag. Restarting the server the user just
+                // stopped, or restarting on top of one a newer run has already
+                // started, are both outcomes nothing downstream would explain.
+                if (!stillOurRun(isServiceRunning, startedRun, runId)) return
                 launchServer()
             }
         }
@@ -654,6 +693,8 @@ class NodeService : Service() {
      */
     private fun stopServingRecoverably() {
         isServiceRunning = false
+        // This run is over too, for the same reason [shutdown] says so.
+        runId++
         // A fresh budget for whoever starts it next. [announceReady] was the only
         // reset, so a run that ended without ever becoming ready left its count
         // standing: a user who relaunched after five crashes got one retry rather
@@ -869,6 +910,26 @@ internal fun spawnedNothing(outcome: LaunchOutcome): Boolean = when (outcome) {
     LaunchOutcome.STILL_COMING_UP,
     LaunchOutcome.DIED_BEFORE_ANSWERING -> false
 }
+
+/**
+ * Whether a coroutine that has just woken from a backoff still belongs to the run
+ * that started it.
+ *
+ * Two conditions and they catch different things. [serviceRunning] false means the
+ * user stopped the server and nothing should restart it. The run comparison
+ * catches the case the flag cannot: a Stop followed by a relaunch inside the same
+ * backoff, which sets the flag back to true for a *different* run. A chain that
+ * only re-read the flag would then restart on top of a server that new run had
+ * already started -- refused as a live process, so it arrives as a start failure
+ * with nothing actually wrong, and spends the budget down to the terminal state.
+ *
+ * A counter rather than a job handle because the crash route registers itself from
+ * the watchdog thread, and a field written there is outside the single-dispatcher
+ * confinement everything else in the service relies on. Comparing two ints read on
+ * the main dispatcher needs no such promise.
+ */
+internal fun stillOurRun(serviceRunning: Boolean, startedRun: Int, currentRun: Int): Boolean =
+    serviceRunning && startedRun == currentRun
 
 /** What a crash report gets. */
 internal enum class CrashAction {
