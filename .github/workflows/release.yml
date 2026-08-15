@@ -414,20 +414,73 @@ jobs:
             fi
           done
 
-      - name: Report artifact sizes
+      # Reporting the sizes was all this did, and `ls a b c | awk` reports awk's
+      # exit status, so a path that stopped matching printed one row fewer and
+      # passed. Nothing further down disagreed: the upload below only warned, the
+      # checksums were taken over whatever arrived, and the release published
+      # without the file. AGP moving an output directory is the ordinary way a
+      # path stops matching, and the first report of it is a user finding no APK
+      # on the release page.
+      #
+      # So it names every file the release has to carry and fails on a missing
+      # one. The toolchain ZIPs are named here as a set only; that the set is
+      # COMPLETE is settled by the step above, against the registry.
+      - name: Require every artifact, and report its size
         run: |
-          ls -la android/app/build/outputs/apk/release/*.apk \
-                 android/app/build/outputs/bundle/release/*.aab \
-                 toolchain-zips/*.zip 2>/dev/null \
-            | awk '{ printf "  %8.1f MiB  %s\n", $5/1048576, $NF }'
+          missing=0
+          for f in android/app/build/outputs/apk/release/*.apk \
+                   android/app/build/outputs/bundle/release/*.aab \
+                   android/app/build/outputs/mapping/release/mapping.txt \
+                   toolchain-zips/*.zip \
+                   toolchain-zips/toolchains.sha256 \
+                   build-manifest.txt; do
+            # A glob that matches nothing survives as itself in bash, so -f is
+            # what decides and the message then names the pattern that found
+            # nothing rather than silently checking one file fewer.
+            if [ -f "$f" ]; then
+              wc -c < "$f" | awk -v f="$f" '{ printf "  %8.1f MiB  %s\n", $1/1048576, f }'
+            else
+              echo "::error::$f was not produced; the release would publish without it."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
 
+      # mapping.txt is in that list because R8 runs on this build type and on no
+      # other (app/build.gradle.kts, buildTypes.release isMinifyEnabled), so every
+      # stack trace a released build produces names a.b.c rather than the class it
+      # came from, and this file is the only thing that reverses it. There is a
+      # chain waiting on it: CrashReporter stores traces on the device, the
+      # bug-report action in MainActivity hands them to the user, and the bridge
+      # exposes both to the web client -- so what reaches an issue is
+      # `at a.b.c(Unknown Source)`, from a build whose runner is long gone.
+      #
+      # Regenerating it later is not an option, for the same reason the manifest
+      # above exists: the Termux components resolve from a live index at fetch
+      # time, so a rebuild of this tag is a different tree and its names would not
+      # describe the APK anyone installed. The mapping has to be kept from the run
+      # that produced the bytes, and only this job can keep it.
+      #
+      # r8.yml keeps its own copy, of a build whose output is thrown away. That
+      # one is for reading R8's decisions on a failing run; it is not this one and
+      # cannot stand in for it.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
+          # Catches an upload that carries nothing at all, which is the case the
+          # step above cannot reach: if the workspace is empty for a reason that
+          # predates it, this refuses rather than publishing an empty artifact for
+          # the release job to find. It is NOT the guard for a single missing
+          # file -- upload-artifact searches every pattern as one list and tests
+          # the combined result, so five matches and one empty pattern is a
+          # success here. That case belongs to the step above and to
+          # fail_on_unmatched_files in the release job.
+          if-no-files-found: error
           path: |
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/mapping/release/mapping.txt
             toolchain-zips/*.zip
             toolchain-zips/toolchains.sha256
             build-manifest.txt
@@ -457,6 +510,21 @@ jobs:
           find . -type f \( -name "*.apk" -o -name "*.aab" -o -name "*.zip" \) \
             -exec sha256sum {} \; > checksums.sha256
           cat checksums.sha256
+
+          # find writes an empty file rather than failing when nothing matches, so
+          # a build that produced no APK, or no AAB, leaves a zero-line
+          # checksums.sha256 that reads as an ordinary one. This is the only place
+          # that sees what actually survived the artifact round trip, so the
+          # assertion belongs here as well as in the build job: the categories are
+          # named separately because losing one of the three is the failure, and a
+          # count of files is satisfied by the other two.
+          for kind in apk aab zip; do
+            if ! grep -q "\.$kind\$" checksums.sha256; then
+              echo "::error::checksums.sha256 lists no .$kind; the release would publish without one."
+              exit 1
+            fi
+          done
+
           # The manifest is attached by exact path, which assumes the upload put
           # it at the artifact root. That holds because the artifact root is the
           # least common ancestor of the uploaded paths and this file sits at the
@@ -465,14 +533,37 @@ jobs:
           ls -la
           test -f build-manifest.txt
 
+      # mapping.txt is attached to the release rather than left as a workflow
+      # artifact, and the reason is lifetime: an artifact expires -- 90 days by
+      # default, and retention-days tops out there -- while a crash report against
+      # a version arrives whenever someone hits the bug. A release asset lasts as
+      # long as the release it explains, which is the only span that matches.
+      #
+      # Deliberate consequence, not an oversight: the file names every class and
+      # method in the app to anyone who downloads it, which is most of what
+      # minification hid. It costs nothing here because the names come from this
+      # repository and it is public -- but the reasoning is that, not "mappings
+      # are harmless", and it would need revisiting the day anything unpublished
+      # ships inside the APK.
+      #
+      # Only mapping.txt. R8 writes seeds/usage/configuration/resources beside it
+      # and those describe its decisions, not a stack trace; r8.yml keeps the
+      # whole directory for exactly that purpose.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # Defaults to false, which is how a release publishes one asset short
+          # and stays green. Per pattern rather than per release -- the action
+          # fails if ANY glob below matches nothing -- which is what these need:
+          # a missing AAB leaves the other six matching, so a release carrying an
+          # APK and no AAB is the case a whole-list test cannot see.
+          fail_on_unmatched_files: true
           files: |
             artifacts/**/*.apk
             artifacts/**/*.aab
             artifacts/**/*.zip
             artifacts/**/toolchains.sha256
+            artifacts/**/mapping.txt
             artifacts/checksums.sha256
             artifacts/build-manifest.txt
