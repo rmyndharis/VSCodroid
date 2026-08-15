@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.net.InetAddress
 import java.net.ServerSocket
 
 /**
@@ -67,7 +68,7 @@ class PortFinderTest {
             while (held.size < 1024) {
                 val port = PortFinder.findAvailablePort()
                 if (port >= EPHEMERAL_BASE) break
-                held += ServerSocket(port)
+                held += hold(port)
             }
         } catch (e: Exception) {
             // findAvailablePort() reports a port as free and this binds it, which is
@@ -85,6 +86,32 @@ class PortFinderTest {
     private companion object {
         /** Bottom of the kernel's ephemeral range (`net.ipv4.ip_local_port_range`). */
         const val EPHEMERAL_BASE = 32768
+
+        /**
+         * Holds [port] the way a real holder holds it: on `127.0.0.1`.
+         *
+         * These fixtures used `ServerSocket(port)`, which binds the wildcard
+         * address, and that models a holder this app never meets. The server is
+         * launched with `--host=127.0.0.1`, and the case [PortFinder] exists to
+         * survive is an orphaned server of our own still sitting on that address.
+         *
+         * The distinction is not pedantic; it decides the answer. Measured on
+         * darwin with `SO_REUSEADDR`, which Java sets on a `ServerSocket` by
+         * default:
+         *
+         *     holder=wildcard  tester=loopback  -> SUCCEEDS
+         *     holder=loopback  tester=wildcard  -> SUCCEEDS
+         *     holder=loopback  tester=loopback  -> BindException
+         *     holder=wildcard  tester=wildcard  -> BindException
+         *
+         * A conflict is seen only when both sockets name the same address, so
+         * neither form is the stronger one — the check simply has to bind what the
+         * server binds. With a wildcard fixture these tests passed while modelling
+         * something that cannot happen, and would have gone on passing against a
+         * check unable to detect the holder that can.
+         */
+        fun hold(port: Int): ServerSocket =
+            ServerSocket(port, 0, InetAddress.getByName("127.0.0.1"))
     }
 
     @Nested
@@ -119,7 +146,7 @@ class PortFinderTest {
             // environmental failure, not a verdict on PortFinder -- on any machine
             // already using that port.
             val taken = PortFinder.findAvailablePort()
-            ServerSocket(taken).use {
+            hold(taken).use {
                 val port = PortFinder.findAvailablePort()
                 assertNotEquals(taken, port, "the scan must step over a bound port")
                 assertTrue(PortFinder.isPortAvailable(port))
@@ -203,7 +230,7 @@ class PortFinderTest {
             // the port we had just moved to.
             val first = PortFinder.getOrAllocatePort(context)
 
-            val moved = ServerSocket(first).use {
+            val moved = hold(first).use {
                 PortFinder.getOrAllocatePort(context).also { moved ->
                     assertNotEquals(first, moved, "a held port cannot be reused")
                 }
@@ -220,7 +247,7 @@ class PortFinderTest {
         fun `moves off a remembered port that something else has taken`() {
             val first = PortFinder.getOrAllocatePort(context)
 
-            ServerSocket(first).use {
+            hold(first).use {
                 val second = PortFinder.getOrAllocatePort(context)
                 assertNotEquals(first, second, "a taken port cannot be reused")
                 assertEquals(second, stored, "the new port must replace the old one")
@@ -233,15 +260,47 @@ class PortFinderTest {
 
         @Test
         fun `returns true for an unused port`() {
-            val port = ServerSocket(0).use { it.localPort }
+            val port = hold(0).use { it.localPort }
             assertTrue(PortFinder.isPortAvailable(port), "Released port $port should be available")
         }
 
         @Test
         fun `returns false for a port in use`() {
-            ServerSocket(0).use { socket ->
+            // Held on 127.0.0.1, which is where the server listens and therefore
+            // the only place a holder can actually stop it binding. See [hold].
+            hold(0).use { socket ->
                 val port = socket.localPort
                 assertFalse(PortFinder.isPortAvailable(port), "Bound port $port should NOT be available")
+            }
+        }
+
+        @Test
+        fun `a holder on the wildcard address does not make the port unavailable`() {
+            // Not a curiosity -- it is the property that decides which address the
+            // check binds, and it is the one a reader is most likely to get
+            // backwards. On darwin, with SO_REUSEADDR set by default, a loopback
+            // bind succeeds beside a wildcard holder, so the server would bind
+            // successfully too and "available" is the honest answer. On a kernel
+            // that refuses the overlap, the check and the server's own bind fail
+            // together. Either way the check agrees with what the server will
+            // meet, which is the whole requirement.
+            //
+            // Asserted as a documented observation rather than as a demand on the
+            // platform: what must hold is that the check and the server agree, and
+            // both bind 127.0.0.1, so they cannot disagree by construction.
+            ServerSocket(0).use { wildcard ->
+                val port = wildcard.localPort
+                val available = PortFinder.isPortAvailable(port)
+                val serverCouldBind = try {
+                    hold(port).use { true }
+                } catch (e: Exception) {
+                    false
+                }
+                assertEquals(
+                    serverCouldBind, available,
+                    "the availability check must give the same answer the server's own " +
+                        "bind would give; it said $available, the bind said $serverCouldBind",
+                )
             }
         }
     }
