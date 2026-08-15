@@ -66,10 +66,23 @@ class NodeService : Service() {
      * which [ProcessManager.startServer] refuses, so a perfectly healthy server
      * is walked down to the terminal state with nothing wrong with it.
      *
-     * Incremented wherever a run ends or begins, and only from the main
-     * dispatcher, like every other field here.
+     * Incremented wherever a run ENDS -- [shutdown] and [stopServingRecoverably]
+     * -- and only from the main dispatcher, like every other field here.
+     * Deliberately not incremented where one begins: a run starting cannot
+     * invalidate anything, because nothing is waiting on a run that does not
+     * exist yet, and every chain that could be waiting was started by a run that
+     * has since had to end. So a coroutine parked in a backoff necessarily holds
+     * a value below the current one, and adding an increment to [onStartCommand]
+     * would fence out nothing while making the identity mean two things.
+     *
+     * Also what [reportOncePerRun] throttles on, since a run is the unit that
+     * deserves one message.
      */
     private var runId = 0
+
+    /** The run whose start failure has already been reported. See [reportOncePerRun]. */
+    private var noticedRun = -1
+
     private var startupNotice: String? = null
 
     /** Invoked when the server is healthy and accepting connections. */
@@ -371,16 +384,7 @@ class NodeService : Service() {
             when (outcome) {
                 LaunchOutcome.NOT_STARTED -> {
                     Logger.e(tag, "Failed to start server process")
-                    // Once per run, not once per attempt. The retry chain below
-                    // can produce five more of these inside a minute, and
-                    // `MainActivity` answers each one with a long toast -- so a
-                    // single honest failure arrived as a queue of them, still
-                    // appearing after the app had given up. The log keeps every
-                    // attempt; the user gets the first, and then the terminal
-                    // state's message when the budget is gone.
-                    if (restartCount == 0) {
-                        reportStartupNotice(getString(R.string.error_server_start))
-                    }
+                    reportOncePerRun(getString(R.string.error_server_start))
                 }
 
                 LaunchOutcome.READY -> announceReady()
@@ -396,7 +400,11 @@ class NodeService : Service() {
                 // long as it ran.
                 LaunchOutcome.DIED_BEFORE_ANSWERING -> {
                     Logger.e(tag, "Server timeout and the process is gone")
-                    reportStartupNotice(getString(R.string.error_server_timeout))
+                    // Through the same gate as the branch above. These two are the
+                    // failure pair and were treated unevenly -- one throttled, one
+                    // not -- which is a difference nothing could justify from the
+                    // user's side, since both mean the same thing to them.
+                    reportOncePerRun(getString(R.string.error_server_timeout))
                 }
 
                 LaunchOutcome.STILL_COMING_UP -> {
@@ -563,6 +571,26 @@ class NodeService : Service() {
      * which on a start that outlives its activity is the only one there is. See
      * [lastStartupNotice] for why neither is called a failure.
      */
+    private fun reportOncePerRun(message: String) {
+        // Keyed on the run, because the thing being throttled is per-run and
+        // nothing else in scope counts runs. The first version of this gate keyed
+        // on `restartCount == 0` and looked equivalent -- a fresh run does start
+        // with a count of zero. It is not equivalent after a crash:
+        // [announceReady] resets the count, then [retryOrGiveUp] increments it
+        // *before* calling [launchServer], so every failure reached through the
+        // retry chain arrives with a count of at least one. The gate never opened,
+        // and a whole run of failures went by without a word -- 62 seconds of
+        // backoff in front of a dead editor, with `startupNotice` cleared at the
+        // top of each attempt so a client binding in that window read nothing
+        // either.
+        //
+        // A count is not a run. Two things that agree on the first tick of a
+        // process and disagree ever afterwards are exactly the pair to get wrong.
+        if (noticedRun == runId) return
+        noticedRun = runId
+        reportStartupNotice(message)
+    }
+
     private fun reportStartupNotice(message: String) {
         startupNotice = message
         onServerError?.invoke(message)
