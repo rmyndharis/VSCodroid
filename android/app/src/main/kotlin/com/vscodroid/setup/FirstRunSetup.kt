@@ -2,6 +2,7 @@ package com.vscodroid.setup
 
 import android.content.Context
 import android.system.Os
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import kotlinx.coroutines.Dispatchers
@@ -51,9 +52,15 @@ class FirstRunSetup(private val context: Context) {
         }
         val startTime = System.currentTimeMillis()
 
-        // Pre-flight: check available storage (~500MB needed for extraction)
+        // Pre-flight: enough room for everything under assets/, plus slack.
+        //
+        // The asset total comes from the build rather than from a literal here --
+        // see EXTRACTED_ASSET_BYTES in app/build.gradle.kts for why. The slack on
+        // top covers what extraction does not account for: the per-file rounding
+        // of 23,000-odd files to filesystem blocks, and the handful of small files
+        // written afterwards (settings.json, .bashrc, ssh defaults, git config).
         val available = context.filesDir.usableSpace
-        val required = 500L * 1_048_576L
+        val required = BuildConfig.EXTRACTED_ASSET_BYTES + EXTRACTION_SLACK_BYTES
         if (available < required) {
             Logger.e(tag, "Insufficient storage: ${available / 1_048_576}MB available, ${required / 1_048_576}MB required")
             return@withContext SetupResult.LOW_STORAGE
@@ -81,13 +88,18 @@ class FirstRunSetup(private val context: Context) {
             // verify-server-tree.py checks the build, not the install.
             //
             // Aborting was held back on the argument that a single lost file
-            // would send a low-storage device round a 390 MB unpack for ever.
-            // It does not: the pre-flight above needs 500 MB free, so a device
-            // still short of room returns LOW_STORAGE before extracting
-            // anything and the user gets the storage error instead of a silent
-            // churn. A device that has since found room re-extracts once and
-            // succeeds. That gate is what makes this safe to abort on, and it
-            // is the reason the hold no longer applies.
+            // would send a low-storage device round a full unpack for ever. It
+            // does not, but only because the pre-flight above asks for the whole
+            // asset total: a device still short of room returns LOW_STORAGE
+            // before extracting anything and the user gets the storage error
+            // instead of a silent churn. A device that has since found room
+            // re-extracts once and succeeds.
+            //
+            // That gate is load-bearing for this abort, so the two have to move
+            // together -- which is why the pre-flight measures the tree instead
+            // of naming a figure. While it named one, the figure was 500 MB
+            // against a tree over 800 MiB, and this paragraph was describing a
+            // protection that did not reach far enough to give it.
             val incomplete = mutableListOf<String>()
 
             // The reh-web download carries the web client inside this same tree,
@@ -1856,6 +1868,32 @@ claude() {
     companion object {
         private const val KEY_VERSION = "setup_version"
         private const val KEY_VERSION_CODE = "setup_version_code"
+
+        /**
+         * Headroom above the asset total for the pre-flight check, and the one
+         * number here that is still a judgement rather than a measurement.
+         *
+         * Two things extraction needs that the asset byte count does not include.
+         * The larger is block rounding: the tree is over 23,000 files, and each
+         * one rounds up to a filesystem block on the way out, so a few KiB of
+         * slack per file adds up to tens of MiB. The smaller is the files written
+         * after extraction -- settings.json, .bashrc, ssh defaults, git config --
+         * which together are under a megabyte.
+         *
+         * Deliberately a fixed figure rather than a percentage: block rounding
+         * scales with the file COUNT, not with the total size, and the count has
+         * been stable across pins while the size has not.
+         */
+        private const val EXTRACTION_SLACK_BYTES = 64L * 1_048_576L
+
+        /**
+         * What the pre-flight requires, in whole MB, for messages shown to the
+         * user. Asking [FirstRunSetup] rather than repeating a literal in the UI:
+         * a screen telling someone to free 500 MB when 875 is needed sends them
+         * to clear space, come back, and fail again in the same place.
+         */
+        fun requiredStorageMb(): Long =
+            (BuildConfig.EXTRACTED_ASSET_BYTES + EXTRACTION_SLACK_BYTES) / 1_048_576L
 
         /**
          * Bundled extension identifiers as of the last setup. Deliberately not

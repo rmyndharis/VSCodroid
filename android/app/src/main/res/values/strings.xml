@@ -28,7 +28,12 @@
          ago it was recorded, so it says nothing about elapsed time. -->
     <string name="status_server_slow_start">The development server is taking longer than usual to start. The editor will open as soon as it is ready.</string>
     <string name="status_updating_python">Updating Python…</string>
-    <string name="error_storage_full">Not enough storage space. Free at least 500 MB and try again.</string>
+    <!-- The figure is passed in rather than written here: it is the size of the
+         bundled asset tree, which grows with every VS Code pin. A fixed 500 MB
+         outlived the tree it was measured against and sent people to free half
+         of what unpacking actually needs, so they cleared space, came back, and
+         failed in the same place. See FirstRunSetup.requiredStorageMb(). -->
+    <string name="error_storage_full">Not enough storage space. Free at least %1$d MB and try again.</string>
     <string name="error_setup_failed">Setup failed. Tap Retry or reinstall the app.</string>
     <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
 

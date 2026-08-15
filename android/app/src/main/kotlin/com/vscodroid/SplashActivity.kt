@@ -159,7 +159,10 @@ class SplashActivity : AppCompatActivity() {
                     if (shouldShowPicker()) showToolchainPicker() else launchMain()
                 }
                 FirstRunSetup.SetupResult.LOW_STORAGE -> {
-                    showSetupError(statusText, progressBar, getString(R.string.error_storage_full), setup)
+                    val message = getString(
+                        R.string.error_storage_full, FirstRunSetup.requiredStorageMb()
+                    )
+                    showSetupError(statusText, progressBar, message, setup)
                 }
                 FirstRunSetup.SetupResult.ERROR -> {
                     showSetupError(statusText, progressBar, getString(R.string.error_setup_failed), setup)

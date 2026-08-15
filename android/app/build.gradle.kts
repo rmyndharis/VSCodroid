@@ -37,6 +37,28 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+
+        // How much room first-run extraction needs is the size of the asset tree,
+        // and that number cannot be written by hand: it moves with every VS Code
+        // pin. It was written by hand, as 500 MB, when the tree was a pre-built
+        // 1.96.4 server -- and by 1.133.0 the tree is over 800 MiB, so the gate
+        // passed devices that then ran out of disk mid-extraction and reported
+        // "Setup failed" rather than "not enough room". Measuring it here instead
+        // removes the way that goes wrong rather than restating the number.
+        //
+        // Every file under assets/ is extracted: extractAssetDir copies whole
+        // trees for vscode-reh and usr, extractBundledExtensions unpacks all of
+        // extensions/, and the bootstrap scripts are copied individually. So the
+        // whole tree is the right thing to measure, not a subset.
+        //
+        // Jobs that build without a real asset tree (lint, unit tests, R8) get a
+        // small number here, which is correct rather than a gap: their APK has no
+        // tree to unpack either, so the gate keeps matching what shipped.
+        buildConfigField(
+            "long",
+            "EXTRACTED_ASSET_BYTES",
+            "${fileTree("src/main/assets").files.sumOf { it.length() }}L"
+        )
     }
 
     buildTypes {
