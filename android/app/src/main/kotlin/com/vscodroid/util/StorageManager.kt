@@ -3,6 +3,7 @@ package com.vscodroid.util
 import android.content.Context
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Tracks disk usage per component and provides cache-clearing operations.
@@ -122,6 +123,13 @@ object StorageManager {
         stack.addLast(dir)
         while (stack.isNotEmpty()) {
             val f = stack.removeLast()
+            // A link contributes nothing and is not descended into: its target's bytes
+            // are not in the directory being measured. usr/ is where this shows: every
+            // launch relinks the tools into nativeLibraryDir — git-core alone is 146
+            // links to one libgit.so — and counting each target charged "tools" with
+            // several hundred MB of APK payload that does not sit in filesDir at all,
+            // several times its real size, and put the same figure into "total".
+            if (isLink(f)) continue
             if (f.isFile) {
                 size += f.length()
             } else if (f.isDirectory) {
@@ -139,7 +147,16 @@ object StorageManager {
         stack.addLast(dir)
         while (stack.isNotEmpty()) {
             val f = stack.removeLast()
-            if (f.isFile) {
+            // A link is unlinked, never followed. cacheDir/tmp is TMPDIR and
+            // TMUX_TMPDIR for every terminal and for the server, so `ln -s
+            // ~/projects/app $TMPDIR/app` is an ordinary thing for a person or a build
+            // tool to leave there — and isDirectory/listFiles answer for the target, so
+            // clearing the cache emptied ~/projects/app and reported its bytes as cache
+            // freed. Unlinking also clears a dangling link, which the branches below
+            // match neither of and which kept its directory from being removed.
+            if (isLink(f)) {
+                f.delete()
+            } else if (f.isFile) {
                 freed += f.length()
                 f.delete()
             } else if (f.isDirectory) {
@@ -150,6 +167,21 @@ object StorageManager {
         // Delete directories bottom-up (children first)
         dirs.forEach { it.delete() }
         return freed
+    }
+
+    /**
+     * Whether [f] is a symbolic link, asked without following it.
+     *
+     * `isFile`, `isDirectory`, `length` and `listFiles` all resolve the target, so every
+     * one of them answers for something that may sit outside the directory being
+     * measured or cleared. A path this cannot answer for counts as a link: measuring
+     * then skips it and clearing then unlinks rather than descends, which is the
+     * direction to be wrong in.
+     */
+    private fun isLink(f: File): Boolean = try {
+        Files.isSymbolicLink(f.toPath())
+    } catch (e: Exception) {
+        true
     }
 
     fun formatSize(bytes: Long): String {

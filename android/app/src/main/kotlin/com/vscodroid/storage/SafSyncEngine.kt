@@ -647,12 +647,14 @@ class SafSyncEngine(private val context: Context) {
     private fun createInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri) {
         val docUri = createOneInSaf(localFile, parentSafUri, treeUri) ?: return
         if (localFile.isDirectory) {
-            // A directory that just appeared brings whatever is inside it. The case
-            // this exists for is a rename: inotify reports one as a delete of the old
-            // name and a create of the new, with nothing tying them together, so the
-            // delete had already removed the directory and its contents on the device
-            // and this created an empty replacement. Recreating the contents is what
-            // makes the pair add up to a rename instead of a deletion.
+            // A directory that just appeared brings whatever is inside it; without
+            // this it landed on the device empty and its files stayed in the mirror.
+            // A rename is the usual way to get here — inotify reports one as a delete
+            // of the old name and a create of the new, with nothing tying them
+            // together — and this half is why the other half is now declined in
+            // [handleMirrorEvent]: what can be put under the new name stops at
+            // [MAX_UPLOAD_ENTRIES] and excludes whatever [SKIP_DIRECTORIES] kept out
+            // of the mirror, so it cannot stand in for the old name's copy.
             createChildrenInSaf(localFile, docUri, treeUri)
         }
     }
@@ -847,53 +849,91 @@ class SafSyncEngine(private val context: Context) {
 
         override fun onEvent(event: Int, path: String?) {
             if (path == null || !isWatching) return
-
-            val localFile = File(dir, path)
-            val relativePath = localFile.relativeTo(rootDir).path
-
-            val type = when (event and ALL_EVENTS) {
-                MODIFY -> SyncType.MODIFY
-                CREATE, MOVED_TO -> SyncType.CREATE
-                DELETE, MOVED_FROM -> SyncType.DELETE
-                else -> return
-            }
-
-            // inotify reports this alongside the event type when the entry is a
-            // directory, and for a delete it is the only way to know: there is nothing
-            // left to stat by then.
-            val isDirectory = (event and IN_ISDIR) != 0 || localFile.isDirectory
-
-            // A directory arriving or leaving changes what has to be watched. Unwatching
-            // is unconditional because it is a no-op for anything never watched.
-            when (type) {
-                SyncType.CREATE ->
-                    if (isDirectory && !shouldSkip(localFile.name, isDir = true)) {
-                        watchTree(localFile, rootDir, safTreeUri)
-                    }
-                SyncType.DELETE -> unwatchTree(localFile)
-                else -> Unit
-            }
-
-            if (!shouldWriteBack(relativePath, isDirectory)) return
-
-            // Resolve the SAF URI for this file via its relative path
-            val safDocUri = resolveDocumentUri(safTreeUri, relativePath)
-            val safParentUri = resolveDocumentUri(
-                safTreeUri,
-                File(relativePath).parent ?: ""
-            )
-
-            writeBackQueue.offer(
-                SyncJob(
-                    type = type,
-                    localPath = localFile.absolutePath,
-                    safDocUri = safDocUri,
-                    safParentUri = safParentUri,
-                    safTreeUri = safTreeUri,
-                    timestamp = System.currentTimeMillis()
-                )
-            )
+            handleMirrorEvent(event, File(dir, path), rootDir, safTreeUri)
         }
+    }
+
+    /**
+     * Turns one inotify event on [localFile] into the watch bookkeeping and the
+     * write-back job it implies.
+     *
+     * On the engine rather than on [DirectoryObserver] so a test can drive it without
+     * one: constructing a [FileObserver] runs a static initializer that reaches native
+     * code a JVM test has no way to satisfy, and what happens to the device copy is
+     * decided here.
+     */
+    internal fun handleMirrorEvent(event: Int, localFile: File, rootDir: File, safTreeUri: Uri) {
+        val relativePath = localFile.relativeTo(rootDir).path
+
+        val type = when (event and FileObserver.ALL_EVENTS) {
+            FileObserver.MODIFY -> SyncType.MODIFY
+            FileObserver.CREATE, FileObserver.MOVED_TO -> SyncType.CREATE
+            FileObserver.DELETE, FileObserver.MOVED_FROM -> SyncType.DELETE
+            else -> return
+        }
+
+        // inotify reports this alongside the event type when the entry is a
+        // directory, and for a delete it is the only way to know: there is nothing
+        // left to stat by then.
+        val isDirectory = (event and IN_ISDIR) != 0 || localFile.isDirectory
+
+        // A directory arriving or leaving changes what has to be watched. Unwatching
+        // is unconditional because it is a no-op for anything never watched.
+        when (type) {
+            SyncType.CREATE ->
+                if (isDirectory && !shouldSkip(localFile.name, isDir = true)) {
+                    watchTree(localFile, rootDir, safTreeUri)
+                }
+            SyncType.DELETE -> unwatchTree(localFile)
+            else -> Unit
+        }
+
+        if (!shouldWriteBack(relativePath, isDirectory)) return
+
+        // A directory that moved away is one half of a rename, and the device holds the
+        // only complete copy of it. Android does not expose inotify's cookie, so the
+        // MOVED_FROM and the MOVED_TO cannot be paired and this half arrives as a plain
+        // delete — which on a directory document is `deleteDocument` taking everything
+        // beneath it on the device. What the other half gives back is the mirror's copy,
+        // and the mirror is not all of it: [createChildrenInSaf] stops at
+        // [MAX_UPLOAD_ENTRIES], and the mirror never held the `.git` or `node_modules`
+        // that [SKIP_DIRECTORIES] kept out of it, so those go and never return. Renaming
+        // a folder of 3000 files therefore left 1000 of them nowhere but the mirror,
+        // which is reclaimed as soon as the folder's permission lapses.
+        //
+        // Declining costs a stale copy under the old name. It stays in the device
+        // folder, and reopening the folder copies it back down, so the old name
+        // reappears in the editor beside the new one — untidy, visible, and removable,
+        // which the delete was none of. Removing it there propagates: an outright
+        // delete arrives as DELETE and is still acted on, so this does not reach a real
+        // deletion. What it does now leave behind is a directory the editor moved to a
+        // trash location outside the mirror.
+        if (isDirectory && (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_FROM) {
+            Logger.i(
+                tag,
+                "Directory moved away; keeping the device copy of $relativePath, which is " +
+                    "the complete one"
+            )
+            return
+        }
+
+        // Resolve the SAF URI for this file via its relative path
+        val safDocUri = resolveDocumentUri(safTreeUri, relativePath)
+        val safParentUri = resolveDocumentUri(
+            safTreeUri,
+            File(relativePath).parent ?: ""
+        )
+
+        writeBackQueue.offer(
+            SyncJob(
+                type = type,
+                localPath = localFile.absolutePath,
+                safDocUri = safDocUri,
+                safParentUri = safParentUri,
+                safTreeUri = safTreeUri,
+                timestamp = System.currentTimeMillis()
+            )
+        )
     }
 
     /**
@@ -1114,15 +1154,17 @@ class SafSyncEngine(private val context: Context) {
          *
          * Renaming a directory is what makes this necessary. inotify reports it as a
          * MOVED_FROM on the old name and a MOVED_TO on the new one, with no way for
-         * `FileObserver` to pair them -- Android does not expose inotify's cookie. So
-         * the two arrive as an unrelated delete and create, the delete removes the
-         * directory on the device *and everything under it*, and the create put back
-         * an empty one. Renaming `src/util` to `src/helpers` in the editor emptied the
-         * folder on the device; the files survived only in the local mirror, which is
-         * reclaimed as soon as the permission lapses.
+         * `FileObserver` to pair them -- Android does not expose inotify's cookie -- so
+         * the two arrive as an unrelated delete and create. Without this walk the create
+         * put an empty directory on the device under the new name and the files stayed
+         * in the local mirror, which is reclaimed as soon as the permission lapses. It
+         * does the same for the plain "a directory appeared" case, which was equally
+         * unhandled.
          *
-         * Walking the new name restores the contents, and it does so for the plain
-         * "a directory appeared" case as well, which was equally unhandled.
+         * What it cannot do is stand in for the copy under the old name: the cap bounds
+         * it, and [SKIP_DIRECTORIES] excludes directories the mirror never held a copy
+         * of in the first place. That is why [handleMirrorEvent] leaves the old name on
+         * the device rather than deleting it and rebuilding from here.
          *
          * Breadth-first so the cap, when it bites, spends the budget on the shallow
          * entries a person is likelier to be looking at. Parents precede children by

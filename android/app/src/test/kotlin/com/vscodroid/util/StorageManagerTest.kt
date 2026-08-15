@@ -8,10 +8,12 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 
 /**
- * Tests for [StorageManager] — specifically the pure [formatSize] function.
+ * Tests for [StorageManager] — specifically the pure [StorageManager.formatSize] function.
  *
- * Methods that require Android [Context] (getStorageBreakdown, clearCaches, etc.)
- * are better tested as instrumented tests. This test covers the platform-independent logic.
+ * The methods that take a [android.content.Context] are covered by [StorageSymlinkTest],
+ * which hands them a mock whose `filesDir` and `cacheDir` are real temporary directories.
+ * This file used to claim they belonged in an instrumented test; they do not, and saying
+ * so left the two directory walks with no test at all.
  */
 class StorageManagerTest {
 
