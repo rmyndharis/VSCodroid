@@ -30,11 +30,13 @@ index 8d1020b..dea1902 100644
  		const totalComposites = compositesToShow.length;
  		let size = 0;
 -		const limit = this.options.orientation === ActionsOrientation.VERTICAL ? this.dimension.height : this.dimension.width;
-+		// Measure the room the bar actually has, not the dimension cached before the
-+		// mobile stylesheet hid the Manage section. Its own clientHeight is no good
++		// Measure the room the bar actually has, not the dimension this.dimension
++		// cached at an earlier layout. Its own clientHeight is no good
 +		// here: that is the RESULT of how many icons fit, so once they overflow it
 +		// collapses to a single row and the calculation can never recover -- which on
-+		// a phone leaves every view in the "..." menu with the space visibly free.
++		// a phone left every view in the "..." menu with the space visibly free
++		// (first seen when a stylesheet hid the Manage section; the live measure
++		// below is correct whatever is or is not shown around the bar).
 +		//
 +		// The room is what the siblings leave in the parent: the compact menubar above
 +		// and the global actions below. Queried from the document because this class is

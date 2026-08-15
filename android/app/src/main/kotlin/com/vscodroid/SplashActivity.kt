@@ -12,6 +12,7 @@ import android.widget.TextView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -172,6 +173,7 @@ class SplashActivity : AppCompatActivity() {
             // Show retry button dynamically
             val parent = statusText.parent as? android.view.ViewGroup ?: return@runOnUiThread
             val retryButton = Button(this).apply {
+                id = View.generateViewId()
                 text = getString(R.string.progress_retry)
                 setOnClickListener {
                     // Reset UI and retry
@@ -182,7 +184,23 @@ class SplashActivity : AppCompatActivity() {
                     runSetupWithRetry(setup, statusText, progressBar)
                 }
             }
-            parent.addView(retryButton)
+            // Constrained below the (hidden) progress bar, centered. Added
+            // without LayoutParams, a ConstraintLayout child lays out at
+            // (0,0) — the top-left corner, under the transparent status bar.
+            if (parent is ConstraintLayout) {
+                val lp = ConstraintLayout.LayoutParams(
+                    ConstraintLayout.LayoutParams.WRAP_CONTENT,
+                    ConstraintLayout.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    topToBottom = R.id.progressBar
+                    startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+                    endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+                    topMargin = (16 * resources.displayMetrics.density).toInt()
+                }
+                parent.addView(retryButton, lp)
+            } else {
+                parent.addView(retryButton)
+            }
         }
     }
 

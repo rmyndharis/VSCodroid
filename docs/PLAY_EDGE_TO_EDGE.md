@@ -14,9 +14,11 @@ against this repo's own R8 map (`android/app/build/outputs/mapping/release/mappi
 | `a.n.b` | `androidx.activity.EdgeToEdge` (`enableEdgeToEdge()` internals) |
 | `com.google.android.material.datepicker.n.y` | `MaterialDatePicker.onStart()` |
 
-(The obfuscated names change every release. Re-derive with
-`grep -nE '^[^ ].* -> <name>:' .../mapping.txt` — member lines under a class
-header carry the method mapping.)
+(The obfuscated names change every release. A Play location like `a.o.a` is
+class `a.o` plus member `a`, so grep for the CLASS — strip the last segment:
+`grep -nE '^[^ ].* -> a\.o:' .../mapping.txt` — then read the indented member
+lines under that class header for the method. Grepping the full `a.o.a`
+matches nothing: member mappings never appear at column 0.)
 
 Facts, with sources:
 

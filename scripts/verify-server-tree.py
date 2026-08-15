@@ -118,6 +118,29 @@ def main(tree):
         check("marketplace.visualstudio.com" not in gallery,
               "no Microsoft marketplace URL", f"serviceUrl = {gallery!r}")
 
+    # The Mobile CSS block is appended to the packaged workbench.css at server
+    # build time, and on 2026-08-15 its content changed — the Accounts/Manage
+    # hide was removed — while the idempotency marker stayed the same. The
+    # server tarball is rebuilt in place without the version moving, so a
+    # workflow dispatched from a ref that predates the change would publish a
+    # tree that passes every other check here and silently hides the section
+    # again. Two assertions, one per failure direction: the marker missing
+    # means the append never ran; the hide selector present means the block is
+    # the old one. This runs on both sides — the build before publishing, the
+    # fetch before packaging — so either end refuses the stale tree.
+    wb_css = tree / "out/vs/code/browser/workbench/workbench.css"
+    if wb_css.exists():
+        css = wb_css.read_text(errors="replace")
+        check("VSCodroid: Mobile-friendly" in css,
+              "workbench.css carries the mobile menu overrides",
+              "the Mobile CSS append did not run")
+        check('aria-label="Manage"' not in css,
+              "workbench.css does not hide Accounts/Manage",
+              "built from a ref that predates the 2026-08-15 un-hide")
+    else:
+        check(False, "out/vs/code/browser/workbench/workbench.css exists",
+              "the packaged web client is missing")
+
     return 1 if failed else 0
 
 
