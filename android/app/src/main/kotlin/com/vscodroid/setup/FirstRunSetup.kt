@@ -1309,7 +1309,16 @@ claude() {
         // Read before extraction on purpose: the listing taken after it is the
         // one the superseded sweep below needs, and it must see what extraction
         // just created.
-        val installed = extensionsDir.list()?.toList() ?: emptyList()
+        // Directories only, and the filter is the point. `list()` returns files
+        // and directories alike, so a plain file sitting at an extension's path
+        // would answer "already installed" for a fetched one and drop it from
+        // the list -- never unpacked, never retried, and nothing said. The
+        // sweeps below take the unfiltered listing on purpose: for them a stray
+        // file is something to remove, not something to mistake for an install.
+        val installed = extensionsDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.map { it.name }
+            ?: emptyList()
         val toExtract = bundledDirsToExtract(installed, bundled.toList())
         for (name in toExtract) {
             // Merges rather than emptying the directory first. That leaves a
@@ -1318,71 +1327,69 @@ claude() {
             // failures: clearing first would leave no extension at all if the
             // copy were interrupted.
             //
-            // The result is checked, and this is the one place on this path
-            // that has to. extractAssetFile logs a failed copy and carries on,
-            // which is right for the server tree -- one missing file there is
-            // not worth abandoning a 390 MB unpack -- and wrong here: a copy
-            // that silently does not happen leaves the previous release's code
-            // in place, which is the exact defect this loop was rewritten to
-            // fix, one layer further down. Throwing puts it in front of
-            // runSetupLocked's catch, upstream of markSetupComplete().
-            // Throwing is not enough on its own, and this is the half that was
-            // missing. extractAssetDir creates the destination before copying
-            // anything into it, so a copy that fails partway leaves a directory
-            // holding some of the files. The retry then reads that directory as
-            // proof the extension is installed -- [bundledDirsToExtract] keeps a
-            // fetched one only while it is absent -- drops it from the list,
-            // runs an empty loop, throws nothing, and lets markSetupComplete()
-            // certify a half-unpacked extension. The manifest lists it from the
-            // package.json that did land, so it appears installed and fails to
-            // activate on every launch, permanently.
+            // A failed unpack has to do two things, and doing either alone
+            // leaves the defect standing.
             //
-            // Removing what this attempt created restores the absence the retry
-            // needs. Only what it created: a directory that was already there
-            // belongs to the previous release, and its files were each replaced
-            // atomically, so what survives is whole even if it is mixed. Ours
-            // are re-unpacked unconditionally, so a mixed one heals next run;
-            // a fetched one is only ever in this list because it was absent, so
-            // this branch is what makes its retry work at all.
+            // THROW, because extractAssetFile logs a failed copy and carries
+            // on. That is right for the server tree, where one missing file is
+            // not worth abandoning a 390 MB unpack, and wrong here: a copy that
+            // silently does not happen leaves the previous release's code in
+            // place, which is what this loop exists to replace. Throwing puts
+            // it in front of runSetupLocked's catch, upstream of
+            // markSetupComplete().
             //
-            // Which means the retry rests on that delete succeeding, and the
-            // condition it has to succeed in is the condition that caused the
-            // failure. Two things could defeat it, and they are not equally
-            // likely -- the obvious one is measured safe and the other is not
-            // the disk at all.
+            // REMOVE WHAT THIS ATTEMPT CREATED, because throwing alone does not
+            // make the retry retry. extractAssetDir creates the destination
+            // before copying into it, so a partial copy leaves a directory --
+            // and [bundledDirsToExtract] keeps a fetched extension only while
+            // its directory is ABSENT. The next attempt would drop it from the
+            // list, run an empty loop, throw nothing, and let setup certify a
+            // half-unpacked extension that the manifest then lists from the
+            // package.json that did land: installed to look at, dead on every
+            // activation, permanently.
             //
-            // A full filesystem does not stop it. Measured on ext4: a partial
-            // extraction lookalike, the partition filled to 0 bytes free, a
-            // control write of 64 KB refused with ENOSPC to prove the disk was
-            // genuinely full, and `rm -rf` then returning 0 with the tree gone.
-            // Unlinking releases space rather than needing it. Two limits worth
-            // keeping: that was ext4 on an emulator, f2fs is untested, and it
-            // measures the delete rather than this code, which has never run on
-            // a device.
+            // Only what this attempt created. A directory that was already
+            // there belongs to the previous release and its files were each
+            // replaced atomically, so what survives is whole even if mixed, and
+            // ours are re-unpacked unconditionally so a mixed one heals next
+            // run. A fetched one is in this list only because it was absent,
+            // which is why this branch is the whole of its retry.
             //
-            // What would actually defeat it is `listFiles()` answering null,
-            // because `deleteRecursively` walks with it and returns false having
-            // removed nothing -- measured in a JVM probe: unreadable directory,
-            // null listing, false returned, every file still there. Reachable
-            // here only through hardware failure. The tree is created by
-            // `destDir.mkdirs()` moments earlier in this same run, by this
-            // process, under `filesDir`, and nothing between the two changes its
-            // mode; a plain file at the path is not this case, since the walk
-            // yields it and deletes it. There is no test for it because
-            // producing the state needs an unreadable directory, and a
-            // permission test passes vacuously wherever the suite runs as root.
-            // A guard that reports green when its own setup did not take is
-            // worse than the gap it covers.
+            // That makes the retry rest on the delete succeeding, in the
+            // condition that caused the failure. Two things could defeat it:
             //
-            // So the error line below is for a state nobody expects rather than
-            // a fallback for one we do. If it fires, the next attempt reads the
-            // partial directory as an install and skips it, exactly as before
-            // this branch -- the fix not applying, not a new defect. Inventing a
-            // second mechanism against that would add unmeasured state to guard
-            // an unmeasured failure, which is the trade this file has spent
-            // several passes undoing.
+            //   a full disk does not. Measured on ext4 -- partition filled to
+            //   zero, a 64 KB control write refused with ENOSPC to prove it,
+            //   and the recursive removal then succeeding. Unlinking releases
+            //   space rather than needing it. Limits: ext4 on an emulator,
+            //   f2fs untested, and it measured the removal rather than this
+            //   code.
+            //
+            //   `listFiles()` answering null would. deleteRecursively walks
+            //   with it and returns false having removed nothing -- measured in
+            //   a JVM probe. Reachable here only through hardware failure: the
+            //   tree is created by mkdirs moments earlier in this same run, by
+            //   this process, under filesDir, with nothing changing its mode in
+            //   between. A plain file at the path is not this case; the walk
+            //   yields it and removes it.
+            //
+            // So the error line below reports a state nobody expects rather
+            // than guarding one we do. If it fires the next attempt skips the
+            // extension exactly as it did before this branch existed -- the fix
+            // not applying, not a new defect. There is deliberately no second
+            // mechanism: producing the state for a test needs an unreadable
+            // directory, and a permission test passes vacuously wherever the
+            // suite runs as root, so a fallback here would be unmeasured state
+            // guarding an unmeasured failure.
             val dest = File(extensionsDir, name)
-            val existedBefore = dest.exists()
+            // isDirectory, not exists, and for the same reason createDirectories
+            // asks it: the question is whether a previous release left something
+            // worth keeping, and a plain file at this path is not that. It would
+            // answer exists() with yes, be preserved rather than cleared, and
+            // then defeat mkdirs on every future attempt -- unrecoverable for a
+            // fetched extension, since the retry drops it from the list. Reading
+            // it as "nothing usable here" clears it and lets the retry work.
+            val existedBefore = dest.isDirectory
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
                 if (!existedBefore && !dest.deleteRecursively()) {
                     Logger.e(
@@ -1494,7 +1501,12 @@ claude() {
         // markSetupComplete(), so the whole setup is retried instead.
         val manifestFile = File(extensionsDir, "extensions.json")
         if (!writeAtomically(manifestFile) { it.write(entries.toString(2).toByteArray()) }) {
-            throw IOException("could not write $manifestFile")
+            // The same type its twin throws, though nothing here needs a type to
+            // escape a catch: this function sits outside any. Uniform because
+            // the two are one decision written twice, and a reader who wrapped
+            // this branch to match the reconcile branch beside it would
+            // otherwise turn a plain IOException back into a swallowed one.
+            throw ManifestWriteFailed("could not write $manifestFile")
         }
         Logger.i(tag, "Generated extensions.json with ${entries.length()} entries")
     }
