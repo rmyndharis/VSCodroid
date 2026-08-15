@@ -238,8 +238,19 @@ async function main() {
     // A URL the bridge declines has to reach the user. This is the whole point:
     // the relay used to post ok:true here, which resolved the extension's promise
     // and left its error handler unreachable.
-    const refused = await run('http://192.168.1.5:3000', false);
+    const LAN = 'http://192.168.1.5:3000';
+    const refused = await run(LAN, false);
     assert.strictEqual(refused.calls.length, 1, 'the relay never reached the bridge');
+
+    // What it passed, not just that it passed something. The relay calls
+    // openExternalUrl(d.url, token) and the bridge validates the SECOND argument
+    // as the session token; swapping them -- which reads like a tidy-up, since
+    // every sibling branch takes the token first -- hands the URL to the token
+    // check and refuses every open on device, while a length assertion stays green.
+    assert.deepStrictEqual(
+        refused.calls[0], { url: LAN, token: 'test-token' },
+        'the relay passed the wrong arguments to the bridge: ' + JSON.stringify(refused.calls[0]),
+    );
     assert.strictEqual(
         refused.error.length, 1,
         refused.error.length === 0
@@ -277,9 +288,12 @@ async function main() {
         );
     }
 
-    // An allowed scheme that still fails to open -- the ActivityNotFound case.
-    // Same message, and that is the point: it must not tell this user their
-    // scheme was the problem when the message itself lists it as allowed.
+    // An allowed scheme that still fails to open. NOT the ActivityNotFound case:
+    // the bridge is stubbed here and ignores the URL, so this run is identical to
+    // the one above and cannot fail independently of it. What it does pin is that
+    // the SAME message is surfaced for a scheme the message itself calls allowed,
+    // which is the wording property -- the cause it stands in for lives in Kotlin
+    // and is not reachable from this harness.
     const allowedButUnopened = await run('mailto:someone@example.com', false);
     assert.strictEqual(allowedButUnopened.error.length, 1,
         'an allowed URL that failed to open must still reach the user');
