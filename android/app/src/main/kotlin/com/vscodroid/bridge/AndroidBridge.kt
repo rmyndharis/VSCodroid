@@ -125,13 +125,13 @@ class AndroidBridge(
     }
 
     /**
-     * Opens a URL outside the editor. Any URL.
+     * Opens a URL outside the editor. Any URL. Says whether it did.
      *
      * There is no allow-list, and its absence is the product decision rather than
      * an omission. VSCodroid is a development environment: a link can point at a
      * LAN dev server on plain http, a private registry, a staging host, or a
      * scheme belonging to another tool on the device. A list of permitted shapes
-     * refuses the work this app exists for, and it did — `http://192.168.1.50:5173`
+     * refuses the work this app exists for, and it did -- `http://192.168.1.50:5173`
      * was refused here while the same URL followed as a link opened, because the
      * two routes had different rules and the workbench chooses the route: VS Code
      * sends "Open in Browser" through `window.open`, which `MainActivity` relays
@@ -142,11 +142,21 @@ class AndroidBridge(
      * The session token above still gates the call, and that is a different
      * question: it asks whether the caller is our own page, not whether the
      * destination is one somebody approved.
+     *
+     * The answer is the other half. This returned Unit, so a launch that failed
+     * and a launch that worked were the same event from outside: the relay in
+     * `MainActivity.injectBridgeRelay` reported `ok: true` either way, and the
+     * bundled extension's "Open in Browser" closed its input box with its own
+     * error handler sitting unreachable behind a promise that always resolved.
+     *
+     * @return true when the URL was handed to a browser, false when the token
+     *   was rejected or no activity took the intent -- which, with no filtering
+     *   left, is the only way a well-formed call fails.
      */
     @JavascriptInterface
-    fun openExternalUrl(url: String, authToken: String) {
-        if (!security.validateToken(authToken)) return
-        try {
+    fun openExternalUrl(url: String, authToken: String): Boolean {
+        if (!security.validateToken(authToken)) return false
+        return try {
             val uri = Uri.parse(url)
             val isLocalhost = uri.host == "127.0.0.1" || uri.host == "localhost"
             // Use system browser for localhost URLs (dev server preview needs full browser),
@@ -167,8 +177,10 @@ class AndroidBridge(
                 }
                 context.startActivity(intent)
             }
+            true
         } catch (e: Exception) {
             Logger.e(tag, "Failed to open URL: $url", e)
+            false
         }
     }
 
