@@ -107,6 +107,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- Renaming a folder inside a device folder no longer empties it. Android reports a
+  rename as an unrelated delete of the old name and creation of the new one, with
+  nothing connecting the two, so the delete removed the folder and everything
+  under it from the device while the creation put back an empty one. Renaming
+  `src/util` to `src/helpers` in the explorer, or `mv`-ing it in the terminal, left
+  the device copy with an empty `helpers` and no files — they survived only in the
+  app's own storage, which is reclaimed when the folder's permission lapses.
+  A folder that appears is now copied across with its contents, which also fixes
+  the plainer case of creating a folder that already has files in it. Symbolic
+  links are not followed, since a synced folder is routinely a checked-out
+  repository, and very large moves stop at a bound and say so rather than
+  appearing to have finished
 - Installed toolchains can be run. Ruby and Java installed, reported success and
   then refused to start: typing `ruby -v` gave `Permission denied` and exit 126.
   Nothing was wrong with the download or the file. Android refuses to execute

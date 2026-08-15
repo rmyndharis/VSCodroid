@@ -644,7 +644,28 @@ class SafSyncEngine(private val context: Context) {
      * safe to keep.
      */
     private fun createInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri) {
-        try {
+        val docUri = createOneInSaf(localFile, parentSafUri, treeUri) ?: return
+        if (localFile.isDirectory) {
+            // A directory that just appeared brings whatever is inside it. The case
+            // this exists for is a rename: inotify reports one as a delete of the old
+            // name and a create of the new, with nothing tying them together, so the
+            // delete had already removed the directory and its contents on the device
+            // and this created an empty replacement. Recreating the contents is what
+            // makes the pair add up to a rename instead of a deletion.
+            createChildrenInSaf(localFile, docUri, treeUri)
+        }
+    }
+
+    /**
+     * Creates or opens the document for [localFile] under [parentSafUri], writing its
+     * bytes if it is a file, and returns the document's URI.
+     *
+     * Does not descend. [createInSaf] owns that, so that the recursion lives in one
+     * place and this stays the single-entry operation both it and
+     * [createChildrenInSaf] need.
+     */
+    private fun createOneInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri): Uri? {
+        return try {
             val parentDocId = DocumentsContract.getDocumentId(parentSafUri)
             val existingDocId = findChildDocId(treeUri, parentDocId, localFile.name)
 
@@ -659,7 +680,7 @@ class SafSyncEngine(private val context: Context) {
                 DocumentsContract.createDocument(
                     context.contentResolver, parentSafUri, mimeType, localFile.name
                 )
-            } ?: return
+            } ?: return null
 
             if (localFile.isFile) {
                 writeLocalToSaf(localFile, docUri)
@@ -678,9 +699,47 @@ class SafSyncEngine(private val context: Context) {
                     else "$parentRelPath/${localFile.name}"
                 docIdCache[relPath] = DocumentsContract.getDocumentId(docUri)
             }
+            docUri
         } catch (e: Exception) {
             Logger.w(tag, "Failed to create ${localFile.name} in SAF: ${e.message}")
+            null
         }
+    }
+
+    /**
+     * Creates everything under [localDir] on the device, beneath [dirSafUri].
+     *
+     * Iterative rather than recursive through [createInSaf], and that is deliberate:
+     * [uploadableEntries] already returns parents before children, so each entry's
+     * parent document exists by the time it is reached, and the URI of every
+     * directory created along the way is remembered here. Recursing instead would
+     * re-query the provider for a parent it had just made.
+     *
+     * A child whose parent is missing from [created] is skipped rather than guessed
+     * at. That happens when the parent's own creation failed, and inventing a place
+     * to put the child would file it somewhere the user did not put it.
+     */
+    private fun createChildrenInSaf(localDir: File, dirSafUri: Uri, treeUri: Uri) {
+        val entries = uploadableEntries(localDir, MAX_UPLOAD_ENTRIES)
+        if (entries.isEmpty()) return
+
+        val created = mutableMapOf(localDir.absolutePath to dirSafUri)
+        var made = 0
+        for (entry in entries) {
+            val parentUri = created[entry.parentFile?.absolutePath] ?: continue
+            createOneInSaf(entry, parentUri, treeUri)?.let { uri ->
+                if (entry.isDirectory) created[entry.absolutePath] = uri
+                made++
+            }
+        }
+        if (entries.size >= MAX_UPLOAD_ENTRIES) {
+            // Said out loud rather than silently truncated: the user's copy on the
+            // device is then genuinely incomplete, and a log line is the only place
+            // that can say so.
+            Logger.w(tag, "Stopped at $MAX_UPLOAD_ENTRIES entries under ${localDir.name}; " +
+                "the rest were not copied to the device")
+        }
+        Logger.i(tag, "Created $made of ${entries.size} entries under ${localDir.name}")
     }
 
     /**
@@ -921,6 +980,16 @@ class SafSyncEngine(private val context: Context) {
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
         /**
+         * How many entries one directory-create is allowed to copy to the device.
+         *
+         * A rename normally moves a handful of files, but nothing stops it moving a
+         * whole project, and every entry here is a provider round trip on the main
+         * sync path. The cap bounds that; reaching it is logged, because past it the
+         * copy on the device is genuinely incomplete and nothing else would say so.
+         */
+        internal const val MAX_UPLOAD_ENTRIES = 2000
+
+        /**
          * Whether the mirror copy may be replaced with the one from the device folder.
          *
          * Opening a folder re-runs the whole copy, so this is what stands between a
@@ -1029,6 +1098,69 @@ class SafSyncEngine(private val context: Context) {
          * spends the budget on the shallow ones, which is where a person edits, rather
          * than on wherever a depth-first descent happened to reach first.
          */
+        /**
+         * Everything under [root] that has to be created on the device when [root]
+         * itself is created, parents before children.
+         *
+         * Renaming a directory is what makes this necessary. inotify reports it as a
+         * MOVED_FROM on the old name and a MOVED_TO on the new one, with no way for
+         * `FileObserver` to pair them -- Android does not expose inotify's cookie. So
+         * the two arrive as an unrelated delete and create, the delete removes the
+         * directory on the device *and everything under it*, and the create put back
+         * an empty one. Renaming `src/util` to `src/helpers` in the editor emptied the
+         * folder on the device; the files survived only in the local mirror, which is
+         * reclaimed as soon as the permission lapses.
+         *
+         * Walking the new name restores the contents, and it does so for the plain
+         * "a directory appeared" case as well, which was equally unhandled.
+         *
+         * Breadth-first so the cap, when it bites, spends the budget on the shallow
+         * entries a person is likelier to be looking at. Parents precede children by
+         * construction, which the caller needs: a child cannot be created until its
+         * parent document exists.
+         *
+         * Symbolic links are not followed. A mirror is routinely a checked-out
+         * repository, so a link inside one is attacker-supplied in the ordinary case,
+         * and following it would copy files from outside the folder the user granted.
+         */
+        internal fun uploadableEntries(root: File, limit: Int): List<File> {
+            if (limit <= 0 || !root.isDirectory) return emptyList()
+
+            val found = mutableListOf<File>()
+            val pending = ArrayDeque<File>()
+            pending.addLast(root)
+
+            while (pending.isNotEmpty() && found.size < limit) {
+                val dir = pending.removeFirst()
+                val children = dir.listFiles() ?: continue
+                for (child in children.sortedBy { it.name }) {
+                    if (found.size >= limit) break
+                    if (isLink(child)) continue
+                    val isDir = child.isDirectory
+                    if (isDir && shouldSkip(child.name, isDir = true)) continue
+                    found.add(child)
+                    if (isDir) pending.addLast(child)
+                }
+            }
+            return found
+        }
+
+        /**
+         * Whether [file] is a symbolic link, without following it.
+         *
+         * `File.exists()` follows links, so it cannot answer this. Comparing the
+         * canonical path against the absolute one can: they differ exactly when some
+         * component of the path was a link. The parent is canonicalised first so a
+         * link *above* this file -- which is not this file's problem -- does not make
+         * every entry beneath it look like one.
+         */
+        private fun isLink(file: File): Boolean = try {
+            val parent = file.parentFile?.canonicalFile ?: return false
+            File(parent, file.name).let { it.canonicalPath != it.absolutePath }
+        } catch (e: Exception) {
+            true
+        }
+
         internal fun watchableDirectories(root: File, limit: Int): List<File> {
             if (limit <= 0 || !root.isDirectory) return emptyList()
 
