@@ -119,6 +119,7 @@ jobs:
           node scripts/test-server-bootstrap.js
           node scripts/test-process-monitor-extension.js
           node scripts/test-bridge-relay.js
+          node scripts/test-serve-network.js
 
       - name: Run lint
         working-directory: android
