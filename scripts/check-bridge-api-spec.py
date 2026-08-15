@@ -25,10 +25,13 @@ still correct, which is why this notice exists in both files rather than in one
 
 THIS SCRIPT IS HALF THE GATE. `BridgeApiSpecParityTest` is the other half and is
 the authority on WHICH methods exist, because it asks the compiled class rather
-than the source text. Read its header before trusting a green from here: a
-method whose annotation this file's patterns cannot spell -- `@android.webkit.
-JavascriptInterface`, or an aliased import -- is invisible to BOTH patterns
-below at once, so the counts agree and this script reports ok. Nor does this file
+than the source text. Read its header before trusting a green from here: a method
+whose annotation this file's patterns cannot spell -- an aliased import, or the
+fully-qualified `@android.webkit.JavascriptInterface` -- is invisible to BOTH
+patterns below at once, so the counts agree and this script reports ok. (Kept on
+one line on purpose: someone hunting this problem greps for that identifier, and
+a line wrap through the middle of it is the difference between finding this
+paragraph and concluding it was never considered.) Nor does this file
 see a method the bridge INHERITS: its window is one file, and the page can call
 inherited public methods. That was measured, not imagined. Do not treat a pass
 here as "the spec matches the bridge"; treat it as "the parameter names, order,
