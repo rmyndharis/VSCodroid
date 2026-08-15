@@ -164,14 +164,37 @@ class ProcessManager(private val context: Context) {
         // while it is zero, so nothing re-derives it, and a refusal repeats for
         // the life of this instance.
         //
-        // What IS wrong is that the health probe reads a response code and nothing
-        // else, so the surviving server satisfies readiness and
-        // `NodeService.announceReady` refills the restart budget -- leaving a
-        // respawn loop of children that can never bind. That is the defect worth
-        // fixing, and it is not fixed by refusing to start.
+        // What IS wrong is that nothing distinguishes the survivor from a server
+        // this class started. The health probe reads a response code and nothing
+        // else, so the survivor satisfies readiness, `NodeService.announceReady`
+        // fires, and the WebView is pointed at it. That much works -- the token
+        // matches, because `server.js` reuses the token file -- which is why
+        // nothing downstream notices. The cost is everywhere the app assumes the
+        // server it is serving is the one it spawned:
         //
-        // The shape most likely to fix it is adoption: when a server already
-        // holding the port is OURS, do not spawn a second one, serve that. The
+        //  - `serverProcess` refers to the process spawned here, not the survivor.
+        //    So [stopServer] destroys the wrong one. Stop takes the notification
+        //    down, reports success, and `MainActivity`'s `onServerStopped` closes
+        //    the editor with `finishAndRemoveTask()` -- while the survivor is
+        //    still running, still serving, still holding the port, and now with no
+        //    foreground service tracking it at all.
+        //  - the next cold start finds the port taken, and
+        //    `PortFinder.getOrAllocatePort` moves to another one. It says so
+        //    itself: "Workbench storage keyed to the old origin is lost." That is
+        //    IndexedDB -- signed-out sessions, every extension's globalState,
+        //    secret storage -- discarded with no user-visible cause.
+        //  - and the restart budget is refilled by the survivor answering, so the
+        //    children that can never bind respawn without bound.
+        //
+        // Those are the defects worth fixing, and none of them is fixed by
+        // refusing to start. Do not read the list as an argument for putting the
+        // refusal back: refusing produced a state the user could not reach the
+        // editor from at all, which is worse than every line above.
+        //
+        // The shape most likely to fix them is adoption: when a server already
+        // holding the port is OURS, do not spawn a second one, serve that. It is
+        // the only route that makes `serverProcess` and the thing on the port the
+        // same subject again, which is what all three cost lines come from. The
         // ownership test needs no change to the readiness probe -- `/version` is
         // answered before the token gate and must stay a pure liveness probe, but
         // `GET /` carrying our connection token is a different request, and
