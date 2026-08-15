@@ -35,12 +35,12 @@ import java.io.File
  * stubbed AssetManager, because the property under test is which bytes are on
  * disk afterwards.
  *
- * One fixture detail is load-bearing: `extensions.json` is pre-created. Every
- * `org.json` method throws "not mocked" on this module's unit-test classpath
- * (see [BundledExtensionHostTest]), and the manifest branch taken when the file
- * already exists is the one that catches its own exceptions. Without the file,
- * the fresh-manifest branch would throw straight out of the method and these
- * would fail for a reason that has nothing to do with extraction.
+ * No `extensions.json` fixture, and its absence is deliberate rather than an
+ * omission. These used to pre-create one because the manifest branch taken when
+ * the file exists catches its own exceptions, which mattered while org.json was
+ * believed to throw "not mocked" here. It does not -- build.gradle.kts puts the
+ * real org.json on the test classpath -- so the manifest work runs for real and
+ * these exercise the same path a clean install takes.
  */
 class BundledExtensionRefreshTest {
 
@@ -89,7 +89,6 @@ class BundledExtensionRefreshTest {
         every { context.assets } returns assets
 
         extensionsDir.mkdirs()
-        File(extensionsDir, "extensions.json").writeText("[]")
     }
 
     @AfterEach

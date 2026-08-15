@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
@@ -38,12 +39,23 @@ class BundledExtensionHostTest {
                 val source = File(dir, "extension.js").takeIf { it.isFile }?.readText().orEmpty()
                 if (!source.contains("BroadcastChannel")) return@dynamicTest
 
-                // Not org.json: on this project's unit-test classpath every method on
-                // JSONObject throws "not mocked", so parsing here would fail for a reason
-                // that has nothing to do with the manifest.
-                val manifest = File(dir, "package.json").readText()
+                // Parsed, not pattern-matched. The question is whether the manifest
+                // declares a browser entry point at the top level, and only a parser
+                // answers that: `^\s*"browser"\s*:` under MULTILINE matches a line
+                // starting at any nesting depth, so a `browser` key buried inside
+                // some other object satisfied it while the extension still loaded on
+                // the Node host -- the exact failure this test exists to catch. It
+                // was wrong in the other direction too, since a manifest written on
+                // one line has no line start to anchor to and would be failed for
+                // its formatting.
+                //
+                // The comment that justified the regex said org.json throws "not
+                // mocked" here. That was true of the android.jar stub and stopped
+                // being true when build.gradle.kts added the real org.json to the
+                // test classpath; measured, JSONObject parses on this classpath.
+                val manifest = JSONObject(File(dir, "package.json").readText())
                 assertTrue(
-                    Regex("""^\s*"browser"\s*:""", RegexOption.MULTILINE).containsMatchIn(manifest),
+                    manifest.optString("browser").isNotBlank(),
                     "${dir.name} talks to the bridge relay over BroadcastChannel, so it has to run " +
                         "in the web extension host — but its manifest declares no browser entry " +
                         "point. Loaded on the Node host, every bridge call times out."

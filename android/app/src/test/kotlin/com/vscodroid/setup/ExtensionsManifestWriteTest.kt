@@ -8,9 +8,7 @@ import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
-import io.mockk.mockkConstructor
 import io.mockk.mockkObject
-import io.mockk.unmockkConstructor
 import io.mockk.unmockkObject
 import io.mockk.verify
 import org.json.JSONArray
@@ -46,15 +44,12 @@ import java.lang.reflect.InvocationTargetException
  * never repaired, and the extension list stays empty for the life of the
  * install.
  *
- * `org.json` is unusable here -- every method on this module's unit-test
- * classpath throws "not mocked" (see [BundledExtensionHostTest]) -- and the
- * method opens by constructing a JSONArray. The repo's usual answer is to test
- * the pure decision instead, but there is no decision here: the defect is
- * entirely in how the bytes land, so the write has to be reached. Constructing
- * the array is therefore intercepted and asked only for the two things this
- * method uses of it. manifestEntryFor needs no stub: it wraps its own JSON in a
- * try/catch and answers null for every directory, which is why `put` is never
- * called.
+ * The method builds a real JSONArray and these let it. An earlier version of
+ * this file intercepted the constructor, on the belief that org.json throws
+ * "not mocked" on this classpath; build.gradle.kts puts the real org.json on
+ * the test classpath, so it does not. Interception bought nothing and cost the
+ * only thing worth having here -- with `toString(2)` stubbed, the bytes these
+ * tests assert about were the stub's, not the ones the method would write.
  */
 class ExtensionsManifestWriteTest {
 
@@ -67,10 +62,8 @@ class ExtensionsManifestWriteTest {
     private lateinit var extensionsDir: File
     private lateinit var manifestFile: File
 
-    /** Stands in for whatever the real serialiser would produce. */
-    private val serialised = """[{"identifier":{"id":"vscodroid.vscodroid-welcome"}}]"""
-
     private val dirName = "vscodroid.vscodroid-welcome-1.2.0"
+    private val expectedId = "vscodroid.vscodroid-welcome"
     private val pkgJson =
         """{"publisher":"vscodroid","name":"vscodroid-welcome","version":"1.2.0"}"""
 
@@ -81,10 +74,6 @@ class ExtensionsManifestWriteTest {
         every { Logger.i(any(), any()) } just Runs
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
-
-        mockkConstructor(JSONArray::class)
-        every { anyConstructed<JSONArray>().toString(2) } returns serialised
-        every { anyConstructed<JSONArray>().length() } returns 1
 
         assets = mockk()
         every { assets.list("extensions") } returns arrayOf(dirName)
@@ -107,32 +96,42 @@ class ExtensionsManifestWriteTest {
         extensionsDir = File(filesDir, "home/.vscodroid/extensions")
         extensionsDir.mkdirs()
         manifestFile = File(extensionsDir, "extensions.json")
+
+        // manifestEntryFor reads the extension's own package.json to build an
+        // entry, so the directory has to be on disk for the direct calls below.
+        // extractBundledExtensions writes it itself from the stubbed asset.
+        File(extensionsDir, dirName).mkdirs()
+        File(extensionsDir, "$dirName/package.json").writeText(pkgJson)
     }
 
     @AfterEach
-    fun tearDown() {
-        unmockkConstructor(JSONArray::class)
-        unmockkObject(Logger)
-    }
+    fun tearDown() = unmockkObject(Logger)
 
     private fun generateExtensionsManifest() {
         FirstRunSetup::class.java
             .getDeclaredMethod("generateExtensionsManifest", File::class.java, Array<String>::class.java)
             .apply { isAccessible = true }
-            .invoke(FirstRunSetup(context), extensionsDir, arrayOf("vscodroid.vscodroid-welcome-1.2.0"))
+            .invoke(FirstRunSetup(context), extensionsDir, arrayOf(dirName))
     }
 
     /**
-     * The control. Without it the assertion below would also hold for a method
-     * that had stopped writing anything at all, and for a harness whose
-     * constructor interception silently did not take.
+     * The control, and it asserts on the real document rather than on a stubbed
+     * string, which is what the constructor interception used to prevent.
+     * Without it the failure assertions below would also hold for a method that
+     * had stopped writing anything at all.
      */
     @Test
     fun `writes the manifest on a first run`() {
         generateExtensionsManifest()
 
         assertTrue(manifestFile.isFile, "no manifest was written")
-        assertEquals(serialised, manifestFile.readText())
+        val entries = JSONArray(manifestFile.readText())
+        assertEquals(1, entries.length(), "wrong number of entries in $manifestFile")
+        assertEquals(
+            expectedId,
+            entries.getJSONObject(0).getJSONObject("identifier").getString("id"),
+            "the entry does not name the extension it was built from",
+        )
     }
 
     /** Non-empty, so the cleanup delete() cannot quietly reclaim it. */
