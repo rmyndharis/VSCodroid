@@ -172,6 +172,79 @@ class BundledExtractionSplitTest {
         )
     }
 
+    /** What earlier releases unpacked and no build ships any more. */
+    private val gitlens = "eamodio.gitlens-2026.2.1114"
+
+    @Test
+    fun `an extension this project stopped shipping is retired at any version`() {
+        // Keyed on the identifier, not the version. The pin moved four times
+        // before removal, so a version literal would clear some devices and
+        // leave others -- and the one the last release shipped is not the one
+        // the repository carried last.
+        for (version in listOf("2026.2.1114", "2026.3.1505", "17.11.1", "18.3.0")) {
+            val dir = "eamodio.gitlens-$version"
+            assertEquals(
+                listOf(dir),
+                retiredFetchedExtensionDirs(listOf(dir, ourWelcome)),
+                "$dir was not retired",
+            )
+        }
+    }
+
+    @Test
+    fun `an extension still bundled is not retired by it`() {
+        // The other direction. This sweep names only what the list names, so
+        // everything the build still ships has to come through untouched.
+        assertTrue(
+            retiredFetchedExtensionDirs(listOf(ourWelcome, ourMonitor, fetchedIcons, fetchedPython)).isEmpty()
+        )
+    }
+
+    @Test
+    fun `a publisher whose name merely begins the same way is not retired`() {
+        // The match is the id, or the id followed by a hyphen -- never a bare
+        // prefix, which would also claim a different extension.
+        assertTrue(retiredFetchedExtensionDirs(listOf("eamodio.gitlens2-1.0.0")).isEmpty())
+        assertTrue(retiredFetchedExtensionDirs(listOf("eamodio.gitlensx")).isEmpty())
+    }
+
+    @Test
+    fun `a fresh install has nothing to retire`() {
+        // Pinned deliberately: "no-op when absent" is the case a future widening
+        // to a prefix or a glob would break with every other assertion here
+        // still green.
+        assertTrue(retiredFetchedExtensionDirs(emptyList()).isEmpty())
+        assertTrue(retiredFetchedExtensionDirs(listOf(ourWelcome, fetchedIcons)).isEmpty())
+    }
+
+    /**
+     * Which of the four sweeps claims it, since they all read one listing.
+     *
+     * Three of them derive their answer from what is currently bundled, so the
+     * natural assumption is that one already covers this. None does: GitLens
+     * carries someone else's publisher, so retirement cannot see it, and no
+     * version of its id is bundled, so supersession cannot either.
+     */
+    @Test
+    fun `a stopped-shipping extension is claimed by exactly one sweep`() {
+        val present = listOf(gitlens, ourWelcome, fetchedIcons)
+        val bundled = listOf(ourWelcome, fetchedIcons)
+
+        assertTrue(
+            supersededExtensionDirs(present, bundled).isEmpty(),
+            "supersession claimed it; no version of its id is bundled",
+        )
+        assertTrue(
+            retiredOwnExtensionDirs(present, bundled).isEmpty(),
+            "retirement claimed it; it is not our publisher",
+        )
+        assertTrue(
+            bundledDirsToExtract(present = present, bundled = bundled).none { it == gitlens },
+            "extraction wanted to unpack it; it is not in the build",
+        )
+        assertEquals(listOf(gitlens), retiredFetchedExtensionDirs(present))
+    }
+
     @Test
     fun `the two listings are not interchangeable`() {
         // Pins the parameter order itself. With the arguments transposed the
