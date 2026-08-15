@@ -1131,13 +1131,27 @@ claude() {
             return
         }
 
-        var extracted = 0
+        // Extracted every time, not only when the directory is absent. The
+        // destination is named `publisher.name-version`, so asking `exists()`
+        // asked whether a directory carrying this version string had ever been
+        // unpacked -- never whether it holds the bytes this APK carries. An
+        // extension edited without a version bump therefore reached clean
+        // installs and nobody else, and nothing noticed: the extension tests in
+        // the pull-request and release workflows read the asset rather than the
+        // device, so they were green on the release whose users kept the
+        // previous file.
+        //
+        // Re-copying costs less than deciding not to. The whole bundled tree is
+        // a few dozen KB across a handful of files, and this runs once per
+        // versionName change rather than per launch, so comparing content to
+        // skip a write would read as many bytes as writing them.
+        //
+        // It merges, so a file this build no longer ships stays behind. That is
+        // the better of the two failures available: emptying the directory
+        // first would leave no extension at all if the copy were interrupted,
+        // while an orphan that `package.json` does not name is never loaded.
         for (name in bundled) {
-            val dest = File(extensionsDir, name)
-            if (!dest.exists()) {
-                extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")
-                extracted++
-            }
+            extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")
         }
 
         val present = extensionsDir.list()?.toList() ?: emptyList()
@@ -1180,8 +1194,8 @@ claude() {
             reconcileExtensionsManifest(manifestFile, extensionsDir, bundled)
         }
 
-        Logger.i(tag, "Bundled extensions: $extracted extracted, " +
-            "${superseded.size} superseded removed, ${bundled.size} total")
+        Logger.i(tag, "Bundled extensions: ${bundled.size} extracted, " +
+            "${superseded.size} superseded removed")
     }
 
     /**
