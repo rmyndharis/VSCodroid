@@ -458,7 +458,6 @@ class ProcessManager(private val context: Context) {
     /** Returns `true` if the server process is alive. */
     fun isRunning(): Boolean = serverProcess?.isAlive == true
 
-
     /**
      * Whether the server has answered a health check and has not stopped since.
      *
