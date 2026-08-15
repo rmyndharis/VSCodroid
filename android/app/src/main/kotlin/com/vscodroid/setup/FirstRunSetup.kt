@@ -1307,8 +1307,19 @@ claude() {
             manifestEntryFor(extensionsDir, dirName)?.let { entries.put(it) }
         }
 
+        // Atomic, on the same grounds reconcileExtensionsManifest states for the
+        // other write of this file: a truncated manifest is read as an empty
+        // extension list, so the extensions vanish rather than the write
+        // visibly failing. Here it is also unrecoverable. Anything at this path
+        // sends the next launch down the reconcile branch instead of this one,
+        // and reconciliation cannot parse a half-written document -- it catches
+        // and returns -- so the manifest is never regenerated and the list stays
+        // empty for the life of the install.
         val manifestFile = File(extensionsDir, "extensions.json")
-        manifestFile.writeText(entries.toString(2))
+        if (!writeAtomically(manifestFile) { it.write(entries.toString(2).toByteArray()) }) {
+            Logger.e(tag, "Could not write extensions.json; no bundled extension will be listed")
+            return
+        }
         Logger.i(tag, "Generated extensions.json with ${entries.length()} entries")
     }
 
