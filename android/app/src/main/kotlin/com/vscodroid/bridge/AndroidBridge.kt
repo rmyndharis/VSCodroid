@@ -680,7 +680,11 @@ class AndroidBridge(
 
     /**
      * Lists all SSH keys in ~/.ssh/.
-     * Returns JSON array of {name, type, fingerprint} for each key pair.
+     * Returns JSON array of {name, type, comment} for each key pair.
+     *
+     * Not a fingerprint, though this said so for a long time: computing one means
+     * hashing the decoded key blob, and nothing here does that. What the third
+     * field carries is the public key line's own comment.
      */
     @JavascriptInterface
     fun listSshKeys(authToken: String): String {
