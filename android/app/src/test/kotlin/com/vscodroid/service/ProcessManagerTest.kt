@@ -650,13 +650,41 @@ class ServerReadinessTest {
         // that fails must not clear a readiness established earlier, because a
         // single refused connection during a restart is not evidence the server
         // has stopped -- the watchdog owns that transition.
-        val server = StubServer(200)
-        manager.portField = server.port
-        server.stop()
-        manager.readyField = true
+        //
+        // The port is held rather than released. Stopping the stub and probing the
+        // freed port asserts that nothing else on the machine is listening there,
+        // which is not this test's to guarantee: a shared CI runner reused the port
+        // between the stop and the probe, the probe got its 200, and the assertion
+        // below failed for a reason that had nothing to do with readiness. A socket
+        // that accepts and drops the connection is "not serving" in the only sense
+        // the probe can observe, and cannot be taken by anyone else.
+        val server = StubServer(null)
+        try {
+            manager.portField = server.port
+            manager.readyField = true
 
-        assertFalse(manager.probeReadiness())
-        assertTrue(manager.isReady(), "one failed probe must not be treated as a stop")
+            assertFalse(manager.probeReadiness())
+            assertTrue(manager.isReady(), "one failed probe must not be treated as a stop")
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `the not-serving fixture really is holding its port`() {
+        // Control for the test above. Without it, a fixture that failed to bind at
+        // all would produce the same refused probe and the same green result, and
+        // the case would pass while testing nothing.
+        val server = StubServer(null)
+        try {
+            assertTrue(server.port > 0, "the fixture must have bound a port")
+            java.net.Socket().use { probe ->
+                probe.connect(java.net.InetSocketAddress("127.0.0.1", server.port), 2000)
+                assertTrue(probe.isConnected, "the port must accept connections")
+            }
+        } finally {
+            server.stop()
+        }
     }
 
     @Test
@@ -711,7 +739,7 @@ class ServerReadinessTest {
  * It records the request line so a test can assert *which* route was asked for,
  * which is half of what the probe's contract says.
  */
-private class StubServer(status: Int) {
+private class StubServer(status: Int?) {
 
     private val socket = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
     private val requestLine = AtomicReference<String?>(null)
@@ -729,6 +757,12 @@ private class StubServer(status: Int) {
             while (running) {
                 try {
                     socket.accept().use { client ->
+                        // A null status is a port this holds but does not serve on:
+                        // the connection is accepted and dropped without a reply, so
+                        // the probe's `responseCode` throws and readiness is refused.
+                        // Holding the port is the point -- releasing it and trusting
+                        // that nothing else binds it is a race the CI runner lost.
+                        if (status == null) return@use
                         val reader = client.getInputStream().bufferedReader()
                         requestLine.set(reader.readLine())
                         // Headers to the blank line, so the client sees a
