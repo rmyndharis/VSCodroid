@@ -142,14 +142,24 @@ class FirstRunSetup(private val context: Context) {
             "usr/lib/git-core",
             "usr/share/terminfo",
         )
+        // isDirectory, not exists, for the reason ensureProjectsDir documents:
+        // a plain file at the path answers exists() with yes, mkdirs() is then
+        // skipped, and nothing says so -- every later write into the "directory"
+        // fails on a state this method was built to prevent. mkdirs() cannot
+        // repair that case (it will not replace a file), so the honest outcome
+        // is a loud one. ProcessManager hardened its TMPDIR check to this same
+        // form; it re-runs on every server start and is the effective backstop
+        // for tmp, but only this method covers the rest.
         for (dir in dirs) {
             val file = File(context.filesDir, dir)
-            if (!file.exists()) {
-                file.mkdirs()
+            if (!file.isDirectory && !file.mkdirs()) {
+                Logger.w(tag, "Could not create $dir; something else occupies the path")
             }
         }
         val tmpDir = File(context.cacheDir, "tmp")
-        if (!tmpDir.exists()) tmpDir.mkdirs()
+        if (!tmpDir.isDirectory && !tmpDir.mkdirs()) {
+            Logger.w(tag, "Could not create the tmp directory; something else occupies the path")
+        }
 
         ensureProjectsDir()
     }
