@@ -251,6 +251,23 @@ class MainActivity : AppCompatActivity() {
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
         if (!isExtensionCallback(uri.scheme, uri.host)) return
+        if (!workbenchLoaded) {
+            // Ahead of the timing gate, and that ordering is the whole point.
+            // This branch injects nothing; it explains. The case it exists for
+            // is arriving through onCreate after the process was killed while
+            // the browser had the foreground -- and a fresh process has no
+            // record of opening a tab, so gating this would delete the
+            // explanation for exactly the user who came back expecting to be
+            // signed in.
+            Logger.w(tag, "Extension callback arrived with no workbench page left to receive it")
+            Toast.makeText(
+                this,
+                "Sign-in could not be completed because the editor restarted. " +
+                    "Please sign in again.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
         if (!authCallbackIsExpected(
                 AuthTabWindow.openedAt(),
                 SystemClock.elapsedRealtime(),
@@ -259,21 +276,12 @@ class MainActivity : AppCompatActivity() {
         ) {
             // Logged without the URI. It is the payload of a sign-in this app
             // did not start, and the log is readable by anything holding
-            // READ_LOGS on a developer device.
+            // READ_LOGS on a developer device. No toast either: a message here
+            // would be one an outside caller could raise at will.
             Logger.w(tag, "Ignoring a sign-in callback that no sign-in was waiting for")
             return
         }
-        if (workbenchLoaded) {
-            handleExtensionCallback(uri)
-            return
-        }
-        Logger.w(tag, "Extension callback arrived with no workbench page left to receive it")
-        Toast.makeText(
-            this,
-            "Sign-in could not be completed because the editor restarted. " +
-                "Please sign in again.",
-            Toast.LENGTH_LONG
-        ).show()
+        handleExtensionCallback(uri)
     }
 
     override fun onDestroy() {

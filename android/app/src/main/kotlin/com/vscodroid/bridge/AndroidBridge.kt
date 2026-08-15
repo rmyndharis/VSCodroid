@@ -53,7 +53,14 @@ private const val DRAIN_JOIN_MILLIS = 1_000L
 internal const val AUTH_TAB_WINDOW_MILLIS = 10 * 60 * 1000L
 
 /**
- * When this app last handed a URL to a browser for an external sign-in.
+ * When this app last handed an https URL to a browser.
+ *
+ * Any of them, not only a sign-in, and that is not a slip: nothing here can tell
+ * an authorisation page from a documentation link, since both arrive as an https
+ * URL through the same bridge method. Opening a link therefore widens the window
+ * as much as starting a sign-in does. It still bounds an entry point that had no
+ * bound at all, to the ten minutes after the user last left for a browser rather
+ * than to every moment the app is running.
  *
  * The `vscodroid://callback` relay had nothing to test but the shape of the URI,
  * and its VIEW filter is exported and BROWSABLE, so the value it writes into the
@@ -71,14 +78,18 @@ internal const val AUTH_TAB_WINDOW_MILLIS = 10 * 60 * 1000L
  * reopens the window.
  */
 object AuthTabWindow {
+    // Named apart from the accessor on purpose. `private var openedAt` beside
+    // `fun openedAt()` compiles and resolves to the field, but the reader has to
+    // work that out, and "does this recurse?" is not a question worth leaving in
+    // a security check.
     @Volatile
-    private var openedAt = 0L
+    private var lastOpenedAtMillis = 0L
 
     fun opened(nowMillis: Long) {
-        openedAt = nowMillis
+        lastOpenedAtMillis = nowMillis
     }
 
-    fun openedAt(): Long = openedAt
+    fun openedAt(): Long = lastOpenedAtMillis
 }
 
 class AndroidBridge(

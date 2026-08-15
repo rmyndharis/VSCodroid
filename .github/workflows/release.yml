@@ -427,6 +427,13 @@ jobs:
           find . -type f \( -name "*.apk" -o -name "*.aab" -o -name "*.zip" \) \
             -exec sha256sum {} \; > checksums.sha256
           cat checksums.sha256
+          # The manifest is attached by exact path, which assumes the upload put
+          # it at the artifact root. That holds because the artifact root is the
+          # least common ancestor of the uploaded paths and this file sits at the
+          # workspace root -- but if it ever stops holding, the release would be
+          # published without the record and nothing would say so.
+          ls -la
+          test -f build-manifest.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

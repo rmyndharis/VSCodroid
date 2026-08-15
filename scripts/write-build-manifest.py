@@ -31,6 +31,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# Filled by resolved_entries() when two scripts disagree about a package.
+_CONFLICTS: list[tuple[str, tuple[str, str], tuple[str, str]]] = []
+
 
 def sha256(path: pathlib.Path) -> str:
     h = hashlib.sha256()
@@ -69,6 +72,10 @@ def resolved_entries() -> list[tuple[str, str, str]]:
     these files answer the second question.
     """
     work = ROOT / "toolchains" / "termux-packages"
+    # Cleared per call rather than appended to: collect() may be called more than
+    # once in a process, and a module-level list would report each disagreement
+    # again every time.
+    _CONFLICTS.clear()
     seen: dict[str, tuple[str, str]] = {}
     for rec in sorted(work.glob("resolved-*.tsv")):
         for line in rec.read_text().splitlines():
@@ -76,7 +83,17 @@ def resolved_entries() -> list[tuple[str, str, str]]:
             if len(fields) < 3:
                 continue
             pkg, filename, digest = fields[0], fields[1], fields[2]
-            seen[pkg] = (version_from_filename(filename), digest)
+            entry = (version_from_filename(filename), digest)
+            if pkg in seen and seen[pkg] != entry:
+                # Two scripts resolved the same package differently, which means
+                # the index moved under the build -- callers refetch it once it
+                # is over an hour old, and the checker refetches it when it stops
+                # matching the signature. Recorded rather than resolved: last
+                # wins would put one of two true answers in the manifest and say
+                # nothing about the other, and the disagreement is the more
+                # useful fact for anyone asking what a release was built from.
+                _CONFLICTS.append((pkg, seen[pkg], entry))
+            seen[pkg] = entry
     return [(pkg, v, d) for pkg, (v, d) in sorted(seen.items())]
 
 
@@ -109,6 +126,12 @@ def collect() -> list[str]:
         lines.append("# (none -- no download script has run in this tree)")
     for pkg, ver, digest in entries:
         lines.append(f"termux\t{pkg}\t{ver}\t{digest}")
+
+    for pkg, first, second in _CONFLICTS:
+        lines.append(
+            f"# NOTE {pkg} was resolved twice in this build: "
+            f"{first[0]} then {second[0]} -- the index moved mid-build"
+        )
 
     return lines
 

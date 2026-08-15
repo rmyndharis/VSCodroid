@@ -159,3 +159,7 @@ toolchain-zips/
 
 # Where release.yml stages downloaded build artifacts; a local run leaves it behind
 /artifacts/
+
+# Written by scripts/write-build-manifest.py. It belongs on a release as a record
+# of what that build resolved, not in the tree, where it would change every run
+/build-manifest.txt

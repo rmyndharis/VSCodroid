@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import com.vscodroid.bridge.AuthTabWindow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -57,6 +58,38 @@ class ExtensionCallbackTest {
 }
 
 /**
+ * That the window actually carries the value between the two halves.
+ *
+ * `authCallbackIsExpected` is tested on numbers and the call sites are tested on
+ * source text, so nothing in either touches the object that carries the reading
+ * from the browser launch to the relay. An `AuthTabWindow` that returned a
+ * constant, or whose accessor recursed into itself, would leave both sets green
+ * and every sign-in broken on the device.
+ *
+ * Plain JVM: the object holds a Long its callers supply and reads no Android API.
+ */
+class AuthTabWindowTest {
+
+    @Test
+    fun `the reading handed in is the reading handed back`() {
+        AuthTabWindow.opened(123_456L)
+        assertEquals(123_456L, AuthTabWindow.openedAt())
+
+        AuthTabWindow.opened(987_654L)
+        assertEquals(
+            987_654L, AuthTabWindow.openedAt(),
+            "a second launch must move the window, not be ignored",
+        )
+
+        // Back to the value a fresh process starts with. This object is a
+        // process-wide singleton and these are the only tests that touch it, but
+        // leaving it armed would hand the next test a state it did not set.
+        AuthTabWindow.opened(0L)
+        assertEquals(0L, AuthTabWindow.openedAt())
+    }
+}
+
+/**
  * That the timing gate is reached, and that anything opening a browser arms it.
  *
  * `authCallbackIsExpected` can be exactly right and never called, and the two
@@ -105,6 +138,33 @@ class AuthCallbackCallSiteTest {
                 "waiting for; found $calls call site(s), and without one the " +
                 "exported entry point takes a value from anything on the device " +
                 "at any moment",
+        )
+    }
+
+    @Test
+    fun `the restart message is decided before the timing gate, not after`() {
+        // A regression that was made and caught in review rather than by any
+        // test. Putting the timing gate first is the obvious ordering and it is
+        // wrong: the case the restart message exists for is arriving through
+        // onCreate after the process was killed with the browser in front, and a
+        // fresh process has openedAt == 0, so the gate returns before the
+        // message is ever reached. The user who came back from signing in gets
+        // silence, and every test stays green because neither branch is a value
+        // any of them can see.
+        check(mainActivity.isFile) { "MainActivity.kt not found" }
+
+        val lines = code(mainActivity)
+        val restart = lines.indexOfFirst { it.contains("if (!workbenchLoaded)") }
+        val gate = lines.indexOfFirst {
+            it.contains("authCallbackIsExpected(") && !it.contains("fun authCallbackIsExpected")
+        }
+
+        assertTrue(restart >= 0, "the no-workbench branch is gone; the restart message with it")
+        assertTrue(gate >= 0, "the timing gate is gone")
+        assertTrue(
+            restart < gate,
+            "the no-workbench branch must come first: it explains rather than " +
+                "injects, and gating it silences the one case it was written for",
         )
     }
 
