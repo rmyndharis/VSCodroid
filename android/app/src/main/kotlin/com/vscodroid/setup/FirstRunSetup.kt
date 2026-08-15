@@ -1153,12 +1153,42 @@ claude() {
         val manifestFile = File(extensionsDir, "extensions.json")
         if (!manifestFile.exists()) {
             generateExtensionsManifest(extensionsDir, bundled)
+            // Recorded on this path too. A fresh install lists everything, so
+            // nothing here needs the history -- but the *next* upgrade does, and
+            // an install that never wrote it would read an empty set and treat
+            // every bundled extension as new.
+            rememberBundledIds(
+                bundled.mapNotNull {
+                    manifestEntryFor(extensionsDir, it)
+                        ?.getJSONObject("identifier")?.getString("id")
+                }
+            )
         } else {
             reconcileExtensionsManifest(manifestFile, extensionsDir, bundled)
         }
 
         Logger.i(tag, "Bundled extensions: $extracted extracted, " +
             "${superseded.size} superseded removed, ${bundled.size} total")
+    }
+
+    /**
+     * The bundled extension identifiers this app recorded the last time it set
+     * up extensions.
+     *
+     * Empty on an install that predates the record, which is not the same as
+     * "this app has never bundled anything" but is the only honest reading
+     * available: see [bundledIdsToRelist] for what that costs, once.
+     */
+    private fun previouslyBundledIds(): Set<String> =
+        prefs.getStringSet(KEY_BUNDLED_IDS, emptySet()) ?: emptySet()
+
+    /**
+     * A defensive copy is required: [android.content.SharedPreferences.Editor.putStringSet]
+     * documents that the set passed in must not be modified afterwards, and the
+     * instance handed back by `getStringSet` must not be modified at all.
+     */
+    private fun rememberBundledIds(ids: List<String>) {
+        prefs.edit().putStringSet(KEY_BUNDLED_IDS, HashSet(ids)).apply()
     }
 
     private fun generateExtensionsManifest(extensionsDir: File, bundledDirs: Array<String>) {
@@ -1243,18 +1273,32 @@ claude() {
                 entry.optJSONObject("identifier")?.optString("id")?.let { keptIds.add(it) }
             }
 
+            // Built once so the identifier of each bundled directory is read
+            // from its own package.json rather than guessed from the folder name.
+            val bundledEntries = bundledDirs.mapNotNull { dirName ->
+                manifestEntryFor(extensionsDir, dirName)?.let {
+                    it.getJSONObject("identifier").getString("id") to it
+                }
+            }
+
+            val relist = bundledIdsToRelist(
+                bundledIds = bundledEntries.map { it.first },
+                keptIds = keptIds,
+                droppedIds = droppedIds,
+                previouslyBundledIds = previouslyBundledIds(),
+            ).toSet()
+
             var added = 0
-            for (dirName in bundledDirs) {
-                val entry = manifestEntryFor(extensionsDir, dirName) ?: continue
-                val id = entry.getJSONObject("identifier").getString("id")
-                // Only replace what was just dropped. An id with no entry at all
-                // is an extension the user uninstalled - re-adding it on every
-                // app upgrade would undo that choice each time - so the freshly
-                // extracted directory stays unlisted and inert instead.
-                if (id in keptIds || id !in droppedIds) continue
+            for ((id, entry) in bundledEntries) {
+                if (id !in relist) continue
                 kept.put(entry)
                 added++
             }
+
+            // Written whatever happened above, and after the decision rather
+            // than before it: this is the record that lets the next upgrade tell
+            // an extension the user removed from one this app has never shipped.
+            rememberBundledIds(bundledEntries.map { it.first })
 
             if (dropped > 0 || added > 0) {
                 // Same exposure as settings.json above: a truncated manifest
@@ -1376,6 +1420,14 @@ claude() {
     companion object {
         private const val KEY_VERSION = "setup_version"
         private const val KEY_VERSION_CODE = "setup_version_code"
+
+        /**
+         * Bundled extension identifiers as of the last setup. Deliberately not
+         * written by [markSetupComplete] with the two above: those describe the
+         * install, this describes what was bundled, and the reconcile that reads
+         * it runs before setup is marked complete.
+         */
+        private const val KEY_BUNDLED_IDS = "bundled_extension_ids"
 
         // Process-wide: each Splash instance builds its own FirstRunSetup, so an
         // instance field would serialize nothing.
@@ -1701,6 +1753,47 @@ internal fun supersededPythonEntries(present: List<String>, runtime: String): Li
 // directory that merely begins with the same letters.
 internal val PYTHON_RUNTIME_NAME = Regex("""^libpython(3\.\d+)\.so$""")
 internal val PYTHON_STDLIB_NAME = Regex("""^python3\.\d+$""")
+
+/**
+ * Which bundled extension identifiers need an entry written back into
+ * `extensions.json`, given what the manifest already holds.
+ *
+ * Two cases arrive here looking exactly alike -- no manifest entry, and a
+ * directory that extraction has just (re)created:
+ *
+ *  - the user uninstalled a bundled extension. VS Code removes the entry *and*
+ *    the directory, so re-listing it would undo that choice on every upgrade.
+ *  - the app began bundling an extension it has never shipped before.
+ *
+ * [previouslyBundledIds] is the only thing that separates them, which is why the
+ * caller persists it. An identifier this app has never bundled cannot be one the
+ * user removed. Without that record the first case was assumed for both, and
+ * `vscodroid.vscodroid-serve-network` -- new in v1.1.0 -- reached no one
+ * upgrading from v1.0.0 while working perfectly on a clean install, so no test
+ * on a fresh device could have caught it.
+ *
+ * [keptIds] wins over every other reason to add: an identifier that still has a
+ * live entry must not gain a second one, and a user's own newer install of the
+ * same extension keeps its entry rather than being shadowed by the bundled copy.
+ *
+ * Pure, and takes the four sets rather than the files, so the decision is
+ * testable without a manifest, a directory tree or a Context.
+ */
+internal fun bundledIdsToRelist(
+    bundledIds: List<String>,
+    keptIds: Set<String>,
+    droppedIds: Set<String>,
+    previouslyBundledIds: Set<String>,
+): List<String> = bundledIds.filter { id ->
+    when {
+        id in keptIds -> false
+        // Its entry was just dropped because the directory it named is gone --
+        // an upgrade swapping 1.0.0 for 1.3.0 does exactly this.
+        id in droppedIds -> true
+        // Never bundled before, so there was no copy for the user to remove.
+        else -> id !in previouslyBundledIds
+    }
+}
 
 internal fun supersededExtensionDirs(present: List<String>, bundled: List<String>): List<String> {
     fun split(dir: String): Pair<String, String>? {

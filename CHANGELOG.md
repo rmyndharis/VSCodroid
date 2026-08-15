@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- **Serve on Network** now appears for people upgrading, not only on a clean
+  install. An extension bundled for the first time had no entry in the manifest
+  the workbench scans, and the reconcile that repairs that manifest could not
+  tell "never shipped before" from "the user uninstalled this" -- both look like
+  an identifier with no entry and a directory that has just been extracted -- so
+  it took the cautious reading and left the extension inert. It was invisible to
+  every existing user while working perfectly on any fresh device, which is where
+  it was tested. The app now records which extensions it bundled last time, and
+  an identifier it has never bundled cannot be one you removed
 - The next VS Code upgrade will build. One of the twelve source patches had prose
   rewritten inside its body without its hunk header being adjusted to match, which
   leaves a file `git apply` refuses to read -- and the server build applies the
