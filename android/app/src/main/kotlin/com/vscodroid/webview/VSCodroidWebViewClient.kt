@@ -206,6 +206,43 @@ private fun canonicalOrNull(path: String): String? =
         null
     }
 
+/**
+ * The `tkn` query parameter, wherever it appears in a string.
+ *
+ * Also matches the tail of `vscode-tkn=`, the cookie the server sets from it,
+ * which carries the same secret and is redacted for the same reason.
+ */
+private val TOKEN_PARAMETER = Regex("""tkn=[^&\s"']*""", RegexOption.IGNORE_CASE)
+
+/**
+ * [text] with the server's connection token taken out of it.
+ *
+ * The token authenticates every route but `/version`, `/delay-shutdown` and
+ * `/callback`, so anything holding it can read what the server can read and open
+ * a terminal. logcat is readable by anything holding `READ_LOGS`, which makes a
+ * log line a disclosure rather than a diagnostic.
+ *
+ * `MainActivity.navigateToFolder` already builds a stripped copy of the
+ * navigation URL to log, and says in a comment that it is the only place the
+ * token could escape. It was not: the same value is appended by [withToken] to
+ * every proxied request, and arrives here on the navigation URL that the page
+ * callbacks are handed. Four statements printed it, and two of them —
+ * `Page loaded` at `Logger.i` and the un-rewritable-URL warning at `Logger.w` —
+ * are not gated on a debuggable build, so they shipped in release.
+ *
+ * Keyed on the parameter rather than on the token's value, because most of the
+ * call sites below are in a companion object that never receives it. The ceiling
+ * that leaves is worth naming: a statement that prints the bare token, in no
+ * `tkn=` at all, would pass straight through. Nothing does today, and
+ * `ConnectionTokenLoggingTest` drives the real call sites rather than this
+ * function, so such a statement fails there rather than here.
+ *
+ * Null becomes `"null"` so that redacting a nullable URL prints what string
+ * interpolation already printed for it.
+ */
+internal fun redactToken(text: String?): String =
+    text?.replace(TOKEN_PARAMETER, "tkn=<redacted>") ?: "null"
+
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
     private val resourceRoots: List<String>,
@@ -228,9 +265,9 @@ class VSCodroidWebViewClient(
             val intent = Intent(Intent.ACTION_VIEW, url)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             view.context.startActivity(intent)
-            Logger.i(tag, "Opened external URL: $url")
+            Logger.i(tag, "Opened external URL: ${redactToken(url.toString())}")
         } catch (e: Exception) {
-            Logger.e(tag, "Failed to open external URL: $url", e)
+            Logger.e(tag, "Failed to open external URL: ${redactToken(url.toString())}", e)
         }
         return true  // Don't navigate WebView to external URL
     }
@@ -252,7 +289,10 @@ class VSCodroidWebViewClient(
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-        Logger.d(tag, "Page loading: $url")
+        // The URL the activity navigates to carries the connection token in its
+        // query, so this is one of the two callbacks handed the very string
+        // MainActivity took care not to print. See [redactToken].
+        Logger.d(tag, "Page loading: ${redactToken(url)}")
     }
 
     /**
@@ -268,7 +308,12 @@ class VSCodroidWebViewClient(
      * `doUpdateVisitedHistory` override here; re-run the grep before adding one.
      */
     override fun onPageFinished(view: WebView, url: String?) {
-        Logger.i(tag, "Page loaded: $url")
+        // Redacted for the log only. [onPageLoaded] gets the URL as it arrived,
+        // because MainActivity derives the open workspace folder from it and
+        // nothing else does -- a redacted copy would lose the folder on every
+        // load. This log statement is at `Logger.i`, which is not gated on a
+        // debuggable build, so it was the leak that shipped.
+        Logger.i(tag, "Page loaded: ${redactToken(url)}")
         onPageLoaded(url)
     }
 
@@ -393,7 +438,10 @@ class VSCodroidWebViewClient(
             val localUrl = rewriteCdnUrl(path, uri.query, port, token)
 
             if (localUrl == null) {
-                Logger.w(TAG, "CDN URL could not be rewritten: $uri")
+                // The whole URI, so its query comes with it -- and the workbench
+                // appends the token to requests of its own. At `Logger.w`, so this
+                // one shipped too.
+                Logger.w(TAG, "CDN URL could not be rewritten: ${redactToken(uri.toString())}")
                 return null
             }
 
@@ -492,7 +540,9 @@ class VSCodroidWebViewClient(
                 val contentType = conn.contentType ?: guessMimeType(url)
                 val encoding = conn.contentEncoding
 
-                Logger.d(TAG, "CDN redirect: $logTag -> $url ($responseCode)")
+                // `url` has been through withToken() by both callers that reach
+                // here against our own server.
+                Logger.d(TAG, "CDN redirect: $logTag -> ${redactToken(url)} ($responseCode)")
 
                 val responseStream = if (responseCode < 400) {
                     conn.inputStream
@@ -533,7 +583,13 @@ class VSCodroidWebViewClient(
                 )
             } catch (e: Exception) {
                 connection?.disconnect()
-                Logger.w(TAG, "Proxy failed for $logTag: ${e.message}")
+                // `logTag` never carries the token -- every caller builds it from
+                // the host and path only. `e.message` is the reason this is
+                // redacted anyway: a connection failure names the socket and not
+                // the URL, which is measured rather than assumed, but
+                // `MalformedURLException` from `URL(url)` above reports the spec it
+                // was handed, and that spec has been through withToken().
+                Logger.w(TAG, "Proxy failed for $logTag: ${redactToken(e.message)}")
                 null
             }
         }
