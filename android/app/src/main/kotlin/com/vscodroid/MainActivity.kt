@@ -1193,8 +1193,15 @@ class MainActivity : AppCompatActivity() {
                             AndroidBridge.showAboutDialog(token);
                             ch.postMessage({id: d.id, ok: true});
                         } else if (d.cmd === 'openExternalUrl') {
-                            AndroidBridge.openExternalUrl(d.url, token);
-                            ch.postMessage({id: d.id, ok: true});
+                            // The only branch here whose bridge method can decline. Every
+                            // other one either returns data or cannot fail in a way the
+                            // caller could act on, which is why they post ok:true flatly.
+                            // Posting ok:true for this one turned a blocked URL into a
+                            // resolved promise, and the caller's error handler never ran.
+                            result = AndroidBridge.openExternalUrl(d.url, token);
+                            ch.postMessage(result
+                                ? {id: d.id, ok: true}
+                                : {id: d.id, ok: false, error: 'VSCodroid did not open it. Allowed: https, mailto, and http on localhost'});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
