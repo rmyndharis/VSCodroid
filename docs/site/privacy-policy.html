@@ -53,7 +53,9 @@
     <ul>
         <li><strong>Extension marketplace</strong> &mdash; When you search for or install extensions, requests go to <a href="https://open-vsx.org">open-vsx.org</a> (the Open VSX registry).</li>
         <li><strong>Git operations</strong> &mdash; When you push, pull, or clone repositories, requests go to the Git remote you configured (e.g., GitHub, GitLab).</li>
-        <li><strong>npm packages</strong> &mdash; When you run <code>npm install</code>, requests go to the npm registry.</li>
+        <li><strong>npm packages</strong> &mdash; When you run <code>npm install</code>, requests go to the npm registry. The same applies to other package managers you run yourself, such as <code>pip</code>.</li>
+        <li><strong>Signing in to a service from the editor</strong> &mdash; If an extension asks you to sign in (to GitHub, for example), VSCodroid hands the authorisation URL to your device's browser and the sign-in happens there, not inside the app. The app receives back only the opaque value the editor itself issued, and passes it to the editor page unread &mdash; it does not parse, store or transmit your credentials. Tokens the editor keeps afterwards are stored locally in the app's private storage.</li>
+        <li><strong>SSH connections</strong> &mdash; If you use the bundled SSH client, the connection goes directly from your device to the server you name. VSCodroid does not proxy, monitor or log it.</li>
         <li><strong>Toolchain downloads</strong> &mdash; Optional language toolchains (Go, Ruby, Java 17) are delivered one of two ways, chosen at runtime from the package that installed the app: Google Play Store asset packs when that package is the Play Store, and otherwise a ZIP downloaded over HTTPS from this project's <a href="https://github.com/rmyndharis/VSCodroid/releases">GitHub Releases</a> &mdash; which covers sideloaded APKs, debug builds, <code>adb install</code>, and any install whose source cannot be read.</li>
     </ul>
     <p>No data is sent to VSCodroid developers or any third-party analytics service.</p>
@@ -70,7 +72,7 @@
 
     <h2>Permissions</h2>
     <ul>
-        <li><strong>Internet</strong> &mdash; Required for extension marketplace, Git, and npm (user-initiated only).</li>
+        <li><strong>Internet</strong> &mdash; Required for the uses listed under Network Requests above, all of them user-initiated. It is the only permission the app declares that reaches the network.</li>
         <li><strong>Foreground Service</strong> &mdash; Keeps the local development server running while you code.</li>
         <li><strong>Notifications</strong> &mdash; Shows that the server is active (required by Android for foreground services).</li>
     </ul>

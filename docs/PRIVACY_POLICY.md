@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: August 14, 2026**
+**Last Updated: August 15, 2026**
 
 ## Summary
 
@@ -27,9 +27,17 @@ VSCodroid requires the INTERNET permission for the following purposes only:
 
 When you browse, search for, or install extensions, the app connects to **Open VSX** (https://open-vsx.org), an open-source extension registry operated by the Eclipse Foundation. These requests are made by the VS Code Workbench running in the WebView, not by any analytics or tracking code. Open VSX has its own privacy policy at https://open-vsx.org/about.
 
-### GitHub Authentication (User-Initiated)
+### Signing In to a Service From the Editor (User-Initiated)
 
-If you choose to sign in to GitHub from within the editor (for example, to use GitHub-related extensions), the app opens a standard OAuth flow in your system browser. VSCodroid does not store or transmit your GitHub credentials. Authentication tokens are stored locally in the app's private storage on your device.
+If an extension asks you to sign in — to GitHub, for example — the app hands that extension's authorisation URL to your device's browser, and the sign-in happens there rather than inside the app. VSCodroid never sees your password: it is typed into the provider's own page in the browser.
+
+What comes back is a single opaque value that the editor itself issued and is waiting for. The app passes it to the editor page without reading, parsing or storing it, and without sending it anywhere. It is accepted only while a sign-in is plausibly in flight — the app records when it last opened a browser, and a callback arriving outside a ten-minute window from that moment is discarded rather than delivered, so another app on your device cannot inject one at will.
+
+Any tokens the editor keeps afterwards are stored locally in the app's private storage on your device.
+
+### Git Operations (User-Initiated)
+
+When you push, pull, clone or fetch, the bundled Git client connects directly to the remote you configured — GitHub, GitLab, a self-hosted server, whatever you named. VSCodroid does not proxy these connections, add its own destinations, or record where you push.
 
 ### Toolchain Downloads (User-Initiated)
 
