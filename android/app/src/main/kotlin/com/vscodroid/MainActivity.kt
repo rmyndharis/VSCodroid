@@ -1127,7 +1127,14 @@ class MainActivity : AppCompatActivity() {
                 window.open = function(url) {
                     if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
                         var t = (window.__vscodroid || {}).authToken;
-                        if (t) { AndroidBridge.openExternalUrl(url, t); return null; }
+                        // Only claim the click if the bridge actually opened it. This
+                        // is a development tool: a link the user clicked opens, and
+                        // that includes a LAN dev server, a private registry or a
+                        // staging host the bridge's allow-list does not cover.
+                        // Swallowing the false here meant the click did nothing and
+                        // said nothing; falling through lets the WebView navigation
+                        // path open it, which is where opening anything already lives.
+                        if (t && AndroidBridge.openExternalUrl(url, t)) { return null; }
                     }
                     return orig.apply(window, arguments);
                 };
