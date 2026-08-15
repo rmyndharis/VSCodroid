@@ -370,19 +370,73 @@ class NodeService : Service() {
                 }
             }
 
-            // Saying why it failed is not the same as leaving the app able to try
-            // again, and until now only the first happened. The branches above
-            // record a notice and return; the flag [onStartCommand] guards on
-            // stayed true, so every later launch was a no-op and the failure was
-            // permanent for the life of the process.
+            // A start that produced no process has no watchdog behind it, so
+            // nothing else is going to notice this run ended. Every other outcome
+            // does have one -- `startWatchdog` fires `onServerCrashed` for every
+            // exit code, and only a deliberate stop suppresses it -- so handing
+            // those to the retry chain as well would drive two recoveries for one
+            // death.
             //
-            // Driven by the predicate rather than repeated in the two branches, so
-            // that which outcomes end a run is a decision a test can hold. Note
-            // this is reached after [awaitLateReadiness] returns as well, which is
-            // exactly why the predicate answers false for STILL_COMING_UP: a
-            // process that has finally exited is the crash path's to report, and
-            // it is about to.
-            if (leavesNothingRunning(outcome)) stopServingRecoverably()
+            // Saying why it failed is not the same as leaving the app able to try
+            // again, and for a long time only the first happened: the branches
+            // above recorded a notice and returned, the flag [onStartCommand]
+            // guards on stayed true, and every later launch was a no-op. Handing
+            // the run to the same budget a crash gets is what closes that, and it
+            // closes more than the flag. A start refused because the port is held
+            // now retries, so an orphan that dies -- which is how it got there --
+            // is recovered from without the user doing anything, and a budget that
+            // runs out ends in the terminal state, which says so where they can
+            // see it.
+            //
+            // On a separate job, not this one: [retryOrGiveUp] cancels the launch
+            // job, and that is this one, finishing.
+            if (spawnedNothing(outcome)) serviceScope.launch { retryOrGiveUp() }
+        }
+    }
+
+    /**
+     * Another attempt on the shared budget, or the end of the road.
+     *
+     * The same decision the crash path makes, because a run that ended without a
+     * server is the same event however it ended -- and keeping one implementation
+     * is what stops the two drifting into different budgets.
+     *
+     * Nothing here clears [isServiceRunning] on its own. That was tried and it is
+     * what produced the defect this replaced: the launch path wrote "nothing is
+     * running" while a restart was already in flight, and the check on the far
+     * side of the backoff read it as the user having stopped the server and
+     * returned. One owner ends a run -- [enterTerminalState], reached when the
+     * budget is gone -- and everything else either retries or leaves.
+     */
+    private suspend fun retryOrGiveUp() {
+        when (crashAction(isServiceRunning, restartCount)) {
+            CrashAction.IGNORE -> return
+
+            CrashAction.GIVE_UP -> enterTerminalState()
+
+            CrashAction.RESTART -> {
+                restartCount++
+                // The superseded attempt ends here, not when its own poll expires.
+                //
+                // [ProcessManager.waitForReady] asks the port and never the
+                // process, so it runs its whole READY_POLL_TIMEOUT_MS budget even
+                // though the process it waits for has just died -- which is the
+                // crash being handled. [launchServer] normally prevents the
+                // overlap by cancelling the previous job as its first act, but
+                // that only helps while the backoff is shorter than what remains
+                // of the poll, and by the last attempt the backoff alone exceeds
+                // the whole poll. Cancelling here makes the handover immediate,
+                // and stops half a minute of HTTP probes against a port whose
+                // process is known to be gone.
+                cancelLaunch()
+                delay(restartBackoffMs(restartCount))
+                // Checked again on the far side of the pause, which is measured in
+                // seconds and grows: Stop can land while it elapses, and
+                // restarting the server the user just stopped is the one outcome
+                // nothing downstream would explain.
+                if (!isServiceRunning) return
+                launchServer()
+            }
         }
     }
 
@@ -516,40 +570,11 @@ class NodeService : Service() {
         }
 
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
-        if (action == CrashAction.GIVE_UP) {
-            enterTerminalState()
-            return
-        }
-
-        restartCount++
-        // The superseded attempt ends here, not when its own poll expires.
-        //
-        // [ProcessManager.waitForReady] asks the port and never the process, so it
-        // runs its whole READY_POLL_TIMEOUT_MS budget even though the process it
-        // is waiting for has just died -- that is the crash being handled. Left
-        // alone it concludes DIED_BEFORE_ANSWERING and calls
-        // [stopServingRecoverably], which clears [isServiceRunning]. The check on
-        // the far side of the pause below then reads that as the user having
-        // stopped the server, and returns without restarting.
-        //
-        // [launchServer] normally prevents this by cancelling the previous job as
-        // its first act, but that only helps while the backoff is shorter than
-        // what remains of the poll. It is not, at the attempts that matter: the
-        // last backoff alone exceeds the entire poll, so there the stale attempt
-        // always concludes first, and the restart it silently swallows is the last
-        // one the budget had. Cancelling here rather than at the far end is what
-        // makes the ownership transfer immediate.
-        //
-        // Free of charge, it also stops half a minute of HTTP probes against a
-        // port whose process is known to be gone.
-        cancelLaunch()
-        delay(restartBackoffMs(restartCount))
-        // Checked again on the far side of the pause, which is measured in
-        // seconds and grows: Stop can land while it elapses, and restarting the
-        // server the user just stopped is the one outcome nothing downstream
-        // would explain.
-        if (!isServiceRunning) return
-        launchServer()
+        // The decision and the waiting both live in [retryOrGiveUp], shared with
+        // the start path. Recomputing `crashAction` there costs nothing and reads
+        // the same values: only a non-suspending log statement separates the two
+        // reads, and both fields are confined to this dispatcher.
+        retryOrGiveUp()
     }
 
     /**
@@ -602,10 +627,14 @@ class NodeService : Service() {
      * is running" and offering to Stop a server that does not exist. The only way
      * out was to press that Stop, or to force-stop the app.
      *
-     * Written up as [enterTerminalState]'s reasoning and true of it since; what
-     * this function is for is that the two start failures need exactly the same
-     * treatment and had none of it. Both leave nothing running, so both have to
-     * leave the service able to try again.
+     * It is a function rather than four lines inside [enterTerminalState] because
+     * ending a run is one operation with one owner, and it took two wrong shapes
+     * to find that. Calling it from the launch path directly was the first: it
+     * cleared the flag while a restart was already waiting out its backoff, and
+     * the check on the far side read that as the user having stopped the server
+     * and returned without restarting. So the launch path now hands unreported
+     * runs to [retryOrGiveUp] instead, and this is reached from one place --
+     * [enterTerminalState], when the budget is gone.
      *
      * The notification is rewritten through `startForeground` rather than posted
      * again, because updating the foreground notification needs no notification
@@ -619,13 +648,18 @@ class NodeService : Service() {
      * recover in place, with the port and the connection token that the
      * workbench's IndexedDB is already bound to.
      *
-     * Deliberately does **not** cancel the launch coroutine. One of its two
-     * callers is that coroutine, which is finishing; cancelling from inside itself
-     * would be a no-op dressed as an action. [enterTerminalState], which is
-     * reached from the crash scope instead, cancels separately and has to.
+     * Deliberately does **not** cancel the launch coroutine. [enterTerminalState]
+     * does that first, and it is reached from a job that is not the launch job, so
+     * the cancel lands on something other than its own caller.
      */
     private fun stopServingRecoverably() {
         isServiceRunning = false
+        // A fresh budget for whoever starts it next. [announceReady] was the only
+        // reset, so a run that ended without ever becoming ready left its count
+        // standing: a user who relaunched after five crashes got one retry rather
+        // than five, and nothing on screen said why. This is the end of a run, and
+        // the next one is not a continuation of it.
+        restartCount = 0
         ServiceCompat.startForeground(
             this,
             VSCodroidApp.NOTIFICATION_ID,
@@ -811,24 +845,29 @@ internal suspend fun launchOutcome(
 }
 
 /**
- * Whether [outcome] ends the run, leaving no server process behind.
+ * Whether [outcome] means no process was ever created, so no watchdog exists to
+ * report that this run ended.
  *
- * The two failures do and the two successes do not, which sounds obvious and was
- * not done: both failure branches recorded a notice and returned, leaving the
- * service believing it was still running and every later launch a no-op.
+ * The distinction decides who owns the recovery, and getting it wrong is what
+ * produced a defect worth writing down. `DIED_BEFORE_ANSWERING` looks like a
+ * sibling of `NOT_STARTED` -- both end with nothing running -- but a process
+ * existed and died, so `ProcessManager`'s watchdog has already reported it and
+ * the crash path is already acting. Treating the two alike gives one death two
+ * recoveries, and the slower of them writes its conclusion over the other's.
  *
- * `STILL_COMING_UP` is the one worth being deliberate about. It is false here
- * even though the caller reaches this point only after the late-readiness loop
- * has ended -- which it does when the process dies. That exit is the crash
- * path's to report, through the watchdog and [CrashAction], and reporting it
- * twice would spend a restart and rewrite the notification behind it.
+ * Only `NOT_STARTED` is genuinely unreported: no spawn, no watchdog, no callback,
+ * so without this nothing would ever try again. That is the case a port held by
+ * an orphan reaches, which is exactly the case that has to be able to recover on
+ * its own.
  *
  * Exhaustive over the enum rather than an `else`, so adding an outcome is a
  * compile error here instead of a silent `false`.
  */
-internal fun leavesNothingRunning(outcome: LaunchOutcome): Boolean = when (outcome) {
-    LaunchOutcome.NOT_STARTED, LaunchOutcome.DIED_BEFORE_ANSWERING -> true
-    LaunchOutcome.READY, LaunchOutcome.STILL_COMING_UP -> false
+internal fun spawnedNothing(outcome: LaunchOutcome): Boolean = when (outcome) {
+    LaunchOutcome.NOT_STARTED -> true
+    LaunchOutcome.READY,
+    LaunchOutcome.STILL_COMING_UP,
+    LaunchOutcome.DIED_BEFORE_ANSWERING -> false
 }
 
 /** What a crash report gets. */

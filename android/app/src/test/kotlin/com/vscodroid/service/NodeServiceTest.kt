@@ -197,51 +197,57 @@ class LaunchOutcomeTest {
  * callback that can no longer fire". The crash path did it. The two start
  * failures did not.
  */
-class LeavesNothingRunningTest {
+class SpawnedNothingTest {
 
     @Test
-    fun `a spawn that never happened leaves nothing running`() {
-        assertTrue(leavesNothingRunning(LaunchOutcome.NOT_STARTED))
+    fun `a spawn that never happened has nothing watching it`() {
+        // No process means no watchdog and no crash callback, so without the
+        // launch path handing this on, nothing in the app would ever try again.
+        // That is the state a port held by an orphan reaches -- and an orphan is
+        // something that dies, so the attempt is worth repeating.
+        assertTrue(spawnedNothing(LaunchOutcome.NOT_STARTED))
     }
 
     @Test
-    fun `a process that died before answering leaves nothing running`() {
-        assertTrue(leavesNothingRunning(LaunchOutcome.DIED_BEFORE_ANSWERING))
-    }
-
-    @Test
-    fun `a serving server is left alone`() {
+    fun `a process that died before answering is the crash path's to report`() {
+        // The distinction the whole function exists for, and the one that reads
+        // wrong at a glance: this ends with nothing running too, so it looks like
+        // a sibling of NOT_STARTED. It is not. A process existed and exited, which
+        // means the watchdog has already fired for it and a recovery is already
+        // under way. Answering true here gives one death two recoveries, and the
+        // slower one writes its conclusion over the other's -- which is exactly
+        // the defect that made this function change shape.
         assertFalse(
-            leavesNothingRunning(LaunchOutcome.READY),
-            "tearing down a server that just came up would be the opposite of the fix",
+            spawnedNothing(LaunchOutcome.DIED_BEFORE_ANSWERING),
+            "a process that existed has a watchdog behind it; recovering it twice " +
+                "is how a restart gets swallowed",
         )
     }
 
     @Test
-    fun `a slow start that is still alive is left alone`() {
-        // The case worth being deliberate about, and the one a careless `else`
-        // would get wrong. The caller reaches the check after the late-readiness
-        // loop ends, which happens when the process dies -- but that exit belongs
-        // to the crash path, which is about to spend a restart on it. Answering
-        // true here would rewrite the notification behind that restart and report
-        // a failure for a server the app is still trying to bring back.
+    fun `a serving server needs no recovery`() {
+        assertFalse(spawnedNothing(LaunchOutcome.READY))
+    }
+
+    @Test
+    fun `a slow start that is still alive needs no recovery`() {
         assertFalse(
-            leavesNothingRunning(LaunchOutcome.STILL_COMING_UP),
+            spawnedNothing(LaunchOutcome.STILL_COMING_UP),
             "a live process has not failed, and its eventual exit is the crash path's to report",
         )
     }
 
     @Test
     fun `every outcome is classified`() {
-        // Control. The two assertions above prove two values; this proves the
-        // function is total, so an outcome added later cannot fall through to a
-        // silent default. The `when` is exhaustive over the enum, so this also
-        // fails to compile rather than to run if one is added -- belt and braces,
-        // because the compile-time half disappears the moment someone adds `else`.
-        LaunchOutcome.entries.forEach { leavesNothingRunning(it) }
+        // Control. The cases above prove four values; this proves the function is
+        // total, so an outcome added later cannot fall through to a silent
+        // default. The `when` is exhaustive over the enum, so adding one is a
+        // compile error too -- belt and braces, because that half disappears the
+        // moment someone adds an `else`.
+        LaunchOutcome.entries.forEach { spawnedNothing(it) }
         assertEquals(
             4, LaunchOutcome.entries.size,
-            "an outcome was added; decide whether it leaves anything running",
+            "an outcome was added; decide whether anything is watching it",
         )
     }
 }
@@ -270,32 +276,38 @@ class RecoverableStopCallSiteTest {
         }
 
     @Test
-    fun `the launch path consults the predicate and acts on it`() {
+    fun `an unreported run is handed on, and ending a run has one owner`() {
         check(nodeService.isFile) {
             "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
                 "otherwise pass by looking at nothing"
         }
         val lines = codeLines()
-
-        val consulted = lines.filter { (_, l) -> l.contains("leavesNothingRunning(") }
-        val acted = lines.filter { (_, l) -> l.contains("stopServingRecoverably()") }
         val report = { hits: List<IndexedValue<String>> ->
             hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
         }
 
+        val gated = lines.filter { (_, l) -> l.contains("if (spawnedNothing(") }
         assertTrue(
-            consulted.any { (_, l) -> l.contains("if (leavesNothingRunning(") },
-            "the predicate has to gate something, not merely be computed. Found:\n" +
-                report(consulted),
+            gated.isNotEmpty(),
+            "the launch path must hand a run nothing is watching to the retry budget, " +
+                "or a start that spawned no process is never tried again",
         )
-        // The definition plus both callers: enterTerminalState and the launch
-        // coroutine. A floor rather than an exact count, because a third caller
-        // would be an ordinary thing to add.
         assertTrue(
-            acted.size >= 3,
-            "expected the recoverable stop to be defined and called from both the " +
-                "crash path and the launch path; found ${acted.size} mention(s):\n" +
-                report(acted),
+            gated.any { (_, l) -> l.contains("retryOrGiveUp") },
+            "the predicate must gate the retry, not something else:\n" + report(gated),
+        )
+
+        // Exactly two: the declaration and the single call in enterTerminalState.
+        // An exact count rather than a floor, and that is the whole assertion --
+        // a second caller is the defect, not an extension. Calling this from the
+        // launch path is what cleared the service flag while a restart was still
+        // waiting out its backoff, and the check on the far side then read it as
+        // the user having stopped the server.
+        val owners = lines.filter { (_, l) -> l.contains("stopServingRecoverably()") }
+        assertEquals(
+            2, owners.size,
+            "ending a run has one owner -- enterTerminalState, when the budget is " +
+                "gone. Found ${owners.size} mention(s):\n" + report(owners),
         )
     }
 }
