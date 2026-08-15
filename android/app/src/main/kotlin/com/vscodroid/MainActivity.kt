@@ -516,7 +516,11 @@ class MainActivity : AppCompatActivity() {
         // is answering, so isServerRunning() calls a mid-restart server healthy
         // and lets the branches below reload the page into a port that is not
         // listening yet.
-        if (nodeService?.isServerReady() != true) return
+        // Through shouldActOnResume for the same reason as the binding decision:
+        // the verdict has to be obeyed, and only a function that returns it can be
+        // tested for obeying it. `backgroundedAt` is still consumed above whether
+        // or not this passes, which is the behaviour that was here before.
+        if (!shouldActOnResume(nodeService?.isServerReady(), ts, serverPort)) return
 
         val bgMs = SystemClock.elapsedRealtime() - ts
         when {
@@ -791,18 +795,27 @@ class MainActivity : AppCompatActivity() {
         // the same: say it and do not load, because the server is not serving.
         // A slow one that comes up afterwards arrives through onServerReady,
         // which is assigned above.
-        val notice = service.lastStartupNotice()
-        if (notice != null) {
-            Logger.w(tag, "Server start notice predating this binding: $notice")
-            Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
-            return
-        }
-
-        val port = service.getPort()
-        if (port > 0 && service.isServerReady()) {
-            Logger.i(tag, "Server already serving on port $port, loading immediately")
-            serverPort = port
-            loadVSCode(port)
+        // Through bindDecision so the branch is a value a test can assert on.
+        // Reading the source for the *name* isServerReady cannot tell a call whose
+        // answer is obeyed from one whose answer is discarded, and the second is
+        // the mutation that survived the suite.
+        when (
+            val decision = bindDecision(
+                notice = service.lastStartupNotice(),
+                port = service.getPort(),
+                ready = service.isServerReady(),
+            )
+        ) {
+            is BindDecision.ShowNotice -> {
+                Logger.w(tag, "Server start notice predating this binding: ${decision.message}")
+                Toast.makeText(this, decision.message, Toast.LENGTH_LONG).show()
+            }
+            is BindDecision.Load -> {
+                Logger.i(tag, "Server already serving on port ${decision.port}, loading immediately")
+                serverPort = decision.port
+                loadVSCode(decision.port)
+            }
+            BindDecision.Wait -> Unit
         }
     }
 
@@ -1486,6 +1499,54 @@ internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
  */
 internal fun isExtensionCallback(scheme: String?, host: String?): Boolean =
     scheme == "vscodroid" && host == "callback"
+
+/**
+ * What binding to an already-running service should do about it.
+ *
+ * Extracted so the decision is a value rather than a shape in the source.
+ * `ServerReadinessCallSiteTest` reads `MainActivity.kt` and checks *which* method
+ * is called, which catches putting `isServerRunning` back and cannot catch
+ * calling the right method and ignoring the answer -- both call sites were
+ * mutated that way with the whole suite still green. A branch that returns one of
+ * these can be tested for what it decides.
+ */
+internal sealed interface BindDecision {
+    /** The server said something about its start that predates this binding. */
+    data class ShowNotice(val message: String) : BindDecision
+
+    /** Serving, on a port worth navigating to. */
+    data class Load(val port: Int) : BindDecision
+
+    /** Not serving yet; `onServerReady` will arrive if it comes up. */
+    object Wait : BindDecision
+}
+
+/**
+ * The notice is read first, and that ordering is load-bearing: it may be terminal
+ * or it may be a slow start still coming up, and in both cases the server is not
+ * serving, so it must not be shadowed by a port that happens to look plausible.
+ *
+ * [ready] is the health probe's own finding, never process liveness. A process is
+ * alive from the instant it is spawned and stays alive through the seconds before
+ * its port is bound and through a whole post-crash restart; navigating on that
+ * points the WebView at nothing, and `onReceivedError` only logs, so the
+ * connection-refused page it produces is never cleared.
+ */
+internal fun bindDecision(notice: String?, port: Int, ready: Boolean): BindDecision = when {
+    notice != null -> BindDecision.ShowNotice(notice)
+    port > 0 && ready -> BindDecision.Load(port)
+    else -> BindDecision.Wait
+}
+
+/**
+ * Whether returning from the background should touch the page at all.
+ *
+ * [ready] is nullable because the service may not be bound, and null is not
+ * evidence of anything: it must not be read as permission to reload. Only a
+ * probe that actually found the server serving is.
+ */
+internal fun shouldActOnResume(ready: Boolean?, backgroundedAt: Long, serverPort: Int): Boolean =
+    backgroundedAt != 0L && serverPort != 0 && ready == true
 
 /**
  * Whether a sign-in callback arriving now is one this app went looking for.

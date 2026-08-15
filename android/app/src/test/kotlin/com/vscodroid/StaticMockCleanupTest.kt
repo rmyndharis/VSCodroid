@@ -1,81 +1,85 @@
 package com.vscodroid
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
+import com.vscodroid.util.PortFinder
+import io.mockk.every
+import io.mockk.mockkObject
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.MethodOrderer
+import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Test
-import java.io.File
+import org.junit.jupiter.api.TestMethodOrder
 
 /**
- * `mockkObject` and `mockkStatic` replace their target for the whole process, and Gradle
- * runs this suite in one JVM (`useJUnitPlatform()`, no `forkEvery`, no `maxParallelForks`),
- * so a mock left standing outlives the class that installed it.
+ * That a process-wide mock does not survive the test that installed it.
  *
- * That is not hypothetical here. `BridgeTokenUniformityTest.tearDown` records the last
- * occurrence: three tests in `CrashReporterTest` failed when the two classes ran together,
- * and the full suite passed only because some class scheduled in between happened to call
- * `unmockkAll()` for its own reasons. Five classes were still missing the teardown when
- * this was written, so the same accident was one scheduling change away from returning.
+ * `mockkObject`, `mockkStatic` and `mockkConstructor` replace their target for the
+ * whole JVM, and Gradle runs this suite in one JVM (`useJUnitPlatform()`, no
+ * `forkEvery`, no `maxParallelForks`), so a mock left standing outlives its class.
+ * The damage lands elsewhere: three tests in `CrashReporterTest` once failed
+ * because another class had left `Logger` mocked, and the suite passed overall only
+ * because some class scheduled in between called `unmockkAll()` for its own reasons.
  *
- * Per-file discipline fixed those five. This is what keeps the sixth from being written:
- * the failure it prevents shows up as an unrelated class failing, in a run that does not
- * name this one.
+ * ## Why this file no longer reads the sources
+ *
+ * It used to walk `src/test/kotlin` and require an `unmockk` call in every file
+ * that installs a mock. That measured how well it searched. Deleting the
+ * `@AfterEach` annotation from a teardown leaves the call in the file, so the text
+ * still matched and the method never ran — the guard passed while the thing it
+ * guarded was gone.
+ *
+ * The cleanup is now mockk's own `io.mockk.junit5.MockKExtension`, which the mockk
+ * jar declares in its `META-INF/services` and which calls `unmockkAll()` after
+ * every test. All it needed was switching on:
+ * `junit.jupiter.extensions.autodetection.enabled = true` in
+ * `src/test/resources/junit-platform.properties`. No class has to remember, so
+ * none can forget, and there is no annotation whose deletion matters.
+ *
+ * What is left worth testing is whether the mechanism is actually in force, which
+ * is what these two cases do — and unlike a source scan, they fail if that
+ * property is removed or set to false. Confirmed by doing exactly that before
+ * trusting them.
+ *
+ * [PortFinder] is the subject only because it is an `object` with a cheap pure
+ * method. Nothing here is about ports.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class StaticMockCleanupTest {
 
-    private val processWideMock = Regex("""\bmockk(Object|Static|Constructor)\s*\(""")
-
-    /**
-     * A call, not the word. Matching the bare string accepted a class whose only
-     * "unmockk" was in a comment saying it should have one -- which is the exact
-     * shape of the mistake this guard exists to catch.
-     */
-    private val teardown = Regex("""\bunmockk\w*\s*\(""")
-
-    /**
-     * Comments in this suite quote these calls. BridgeTokenUniformityTest's own KDoc
-     * writes `unmockkAll()`, parentheses included, while explaining why it needs one --
-     * so matching raw text let exactly that class, the one whose incident this guard
-     * records, satisfy the check with prose once its real teardown was deleted.
-     *
-     * String literals are not stripped, so a `//` inside one takes the rest of its line.
-     * That can only hide a mock call sharing a line with a URL literal, which no file
-     * here does, and it fails towards missing an offender rather than inventing one.
-     */
-    private fun code(text: String) = text
-        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-        .replace(Regex("""//[^\n]*"""), " ")
+    private companion object {
+        /** A value the real implementation cannot return, so the two are never confused. */
+        const val IMPOSSIBLE_PORT = -4242
+    }
 
     @Test
-    fun `every class that mocks process-wide also tears it down`() {
-        // Resolved by probing rather than assumed: the working directory of the test JVM is
-        // Gradle's business, and a wrong guess here would find zero files and pass.
-        val root = listOf("src/test/kotlin", "app/src/test/kotlin", "android/app/src/test/kotlin")
-            .map(::File)
-            .firstOrNull { it.isDirectory }
-        assertTrue(root != null, "test sources not found from ${File("").absolutePath}")
+    @Order(1)
+    fun `a process-wide mock is installed and deliberately not torn down here`() {
+        // No @AfterEach, no unmockkAll, on purpose: this test exists to leave a mock
+        // standing so the next one can prove something removed it. Under the old
+        // source-scanning guard this very file would have been an offender.
+        mockkObject(PortFinder)
+        every { PortFinder.isPortAvailable(any()) } returns false
 
-        val sources = root!!.walkTopDown().filter { it.extension == "kt" }.toList()
-
-        // Positive control. Without it a scan that finds nothing reports success, which is
-        // the failure mode this whole class exists to argue against.
-        assertTrue(
-            sources.any { it.name == "StaticMockCleanupTest.kt" },
-            "the scan did not find its own source under ${root.absolutePath}, so it is " +
-                "looking in the wrong place and would pass no matter what the suite does",
+        assertNotEquals(
+            IMPOSSIBLE_PORT, PortFinder.findAvailablePort(),
+            "sanity: the mock is installed and the object still answers",
         )
+    }
 
-        val offenders = sources
-            .filter { file ->
-                val text = code(file.readText())
-                processWideMock.containsMatchIn(text) && !teardown.containsMatchIn(text)
-            }
-            .map { it.name }
-            .sorted()
-
-        assertEquals(
-            emptyList<String>(), offenders,
-            "these classes install a process-wide mock and never remove it, so it is still " +
-                "standing when a later class runs: $offenders",
+    @Test
+    @Order(2)
+    fun `the mock is gone by the time the next test runs`() {
+        // If UnmockkAllExtension is not registered, PortFinder is still mocked here
+        // and isPortAvailable answers false for everything — which is exactly the
+        // cross-class contamination this guards against, observed within one class
+        // so it does not depend on how the runner orders classes.
+        val stillMocked = !PortFinder.isPortAvailable(0)
+        org.junit.jupiter.api.Assertions.assertFalse(
+            stillMocked,
+            "PortFinder is still mocked from the previous test, so nothing removed it. " +
+                "Check that UnmockkAllExtension is listed in " +
+                "src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension " +
+                "and that junit.jupiter.extensions.autodetection.enabled is true in " +
+                "junit-platform.properties.",
         )
     }
 }

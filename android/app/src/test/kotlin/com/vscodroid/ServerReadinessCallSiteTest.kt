@@ -15,16 +15,25 @@ import java.io.File
  * away again. `isServerReady()` reports what the health probe found.
  *
  * This reads the source, which is a weaker kind of test than the rest of this
- * suite, and it is here because it is the only kind available. The decision sits
- * inside `setupServiceCallbacks()` and `handleResumeFromBackground()`, both of
- * which need an Activity; there is no seam to extract, because the mutation is
- * not a value the code computes — it is which of two methods gets called. A
- * function handed a boolean cannot tell which question produced it.
+ * suite. It is one of two layers, and it is worth being exact about which half
+ * each covers, because an earlier version of this comment claimed there was no
+ * seam to extract and that turned out to be wrong.
  *
- * What it therefore does not catch: a third call site added later that asks the
- * wrong question through some other spelling, or the same mistake made in
- * another file. It catches the specific regression of putting `isServerRunning`
- * back here, which is the one that already happened.
+ * A source-reading test sees the token `isServerReady` and not the branch, so it
+ * cannot tell a call whose answer is obeyed from one whose answer is discarded.
+ * That mutation was applied to both call sites — keep the calls, drop the
+ * verdicts — and all 632 tests stayed green. What could not be extracted is the
+ * *identity* of the method, since a function handed a boolean cannot tell which
+ * question produced it; what could be, and now is, are the branches themselves:
+ * `bindDecision` and `shouldActOnResume`, covered by
+ * [ServerReadinessDecisionTest], which fails on either mutation by name.
+ *
+ * So: that file owns "the answer is obeyed", this one owns "the right question
+ * is asked". Neither subsumes the other, and only this one would notice
+ * `isServerRunning` coming back.
+ *
+ * What neither catches: a third call site added later that asks the wrong
+ * question through some other spelling, or the same mistake made in another file.
  */
 class ServerReadinessCallSiteTest {
 
