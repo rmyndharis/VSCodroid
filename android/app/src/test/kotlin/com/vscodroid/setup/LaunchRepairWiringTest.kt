@@ -25,10 +25,29 @@ import java.io.File
  *
  * Read out of the source, following [com.vscodroid.DownloadStateWiringTest],
  * which explains why an Activity's `onCreate` is not reachable from a JVM test
- * here and why Robolectric costs more than the gap. This is a check on the shape
- * of a call site rather than on behaviour, and it is worth saying so plainly:
- * what it can prove is that each repair is named, is named before the return, and
- * is named inside its own guard. It cannot prove any of them work.
+ * here and why Robolectric costs more than the gap.
+ *
+ * WHAT THIS CAN AND CANNOT PROVE, because a source-shaped check invites being
+ * read as more than it is. It proves that each repair is named, that it is named
+ * above the early return, that the name sits inside its own `repair()` guard, in
+ * the order this class lists, and that the guarded body is a single
+ * unconditional call and nothing else. That last one is not decoration: while
+ * the check was "the line begins with `repair(` and contains the name",
+ * `repair("tool symlinks") { if (false) setup.setupToolSymlinks() }` satisfied
+ * every test here -- measured, not supposed -- and so would a `?.` on a null
+ * receiver or a call handed the wrong argument.
+ *
+ * What stays out of reach:
+ *
+ *  - whether any repair does anything. Every one of them can return at its first
+ *    line and this class is satisfied.
+ *  - whether the receiver is the right object. `setup` is matched as text, so a
+ *    second `FirstRunSetup` built over a different Context reads the same.
+ *  - whether `repair()` still catches. Gutting the helper into `action()` leaves
+ *    every line here unchanged.
+ *  - anything a repair does from a lambda spanning several lines. The shape check
+ *    refuses those outright rather than guessing, so introducing one is a
+ *    deliberate change to this test and not a silent loss of cover.
  *
  * In this package rather than beside SplashActivity because every repair it names
  * belongs to `FirstRunSetup` or `ToolchainManager`; the source path is absolute
@@ -39,9 +58,15 @@ class LaunchRepairWiringTest {
     private val source = File("src/main/kotlin/com/vscodroid/SplashActivity.kt")
 
     /**
-     * The full inventory, in call order. It is a checklist rather than a
-     * description: a repair added to `onCreate` and not added here fails the last
-     * test in this class, which is how the two stay in step.
+     * The full inventory, in call order — and the order is checked, by the last
+     * test in this class rather than merely claimed here, which it was until the
+     * check existed. It is a checklist rather than a description: a repair added
+     * to `onCreate` and not added here fails that same test, which is how the two
+     * stay in step.
+     *
+     * The order matters at one place and is worth keeping honest everywhere:
+     * `repairTruncatedSetupFiles` has to precede the three appenders that extend
+     * `.bashrc` only when it already exists.
      */
     private val repairs = listOf(
         "setupToolSymlinks",
@@ -103,6 +128,25 @@ class LaunchRepairWiringTest {
     private fun guardedLines(body: String) =
         body.lines().map { it.trim() }.filter { it.startsWith("repair(") }
 
+    /**
+     * The name a guarded line calls, or null when the line is not a bare call.
+     *
+     * Bare means the whole body is one invocation: an optional receiver -- a
+     * name, or a constructor call, followed by a dot -- then the method and an
+     * empty argument list, then the closing brace. Nothing else fits, and the
+     * exclusions are the point rather than a side effect. `if (false)` in front
+     * of the call does not fit, nor does `?.` on a receiver that may be null,
+     * nor a second statement after a semicolon, nor an argument, since every
+     * repair here takes none and one appearing is a change worth reading rather
+     * than waving through.
+     *
+     * It is a regular expression over source text, so it can be defeated by
+     * anyone who wants to: `repair("x") { alwaysFails() }` parses perfectly. It
+     * closes the accidents, not the deliberate acts.
+     */
+    private fun calledName(line: String): String? =
+        BARE_REPAIR_CALL.find(line)?.groupValues?.get(1)
+
     @Test
     fun `every launch-time repair runs before the first-run early return`() {
         val body = code(onCreateBody())
@@ -142,25 +186,123 @@ class LaunchRepairWiringTest {
     }
 
     /**
-     * The other direction. Without it, a fourteenth repair could be added inside
-     * the shared `try` this class exists to keep dismantled, and every assertion
-     * above would still pass because it names only the thirteen it knows.
+     * The body of a guard has to be a call that runs, not merely a call that is
+     * written.
+     *
+     * `repair("tool symlinks") { if (false) setup.setupToolSymlinks() }` satisfies
+     * every other assertion in this class -- the name is there, it is above the
+     * return, it is inside its own guard -- and calls nothing. So does
+     * `setup?.setupToolSymlinks()` on a receiver that has gone null, and so does a
+     * call handed an argument that turns it into a no-op. Whether the guarded line
+     * can actually reach the method is a different question from whether it
+     * mentions it, and this is the one that asks it.
      */
     @Test
-    fun `the guarded calls contain nothing this test does not name`() {
+    fun `every guarded call is a bare call with nothing in front of it`() {
+        for (line in guardedLines(code(onCreateBody()))) {
+            assertTrue(
+                calledName(line) != null,
+                "this guarded line is not a plain call, so nothing here can say it runs:\n  " +
+                    line +
+                    "\nIf the body genuinely needs to be more than one call, teach calledName() " +
+                    "the new shape deliberately rather than loosening it.",
+            )
+        }
+    }
+
+    /**
+     * The control for the check above, and it is not optional: a shape check that
+     * accepted everything would pass that test on any source at all. Each line
+     * here is a way a guarded repair can be present and dead, taken from the
+     * ways this test was actually defeated or could be.
+     */
+    @Test
+    fun `the shape check rejects a guarded line that cannot run`() {
+        val dead = listOf(
+            """repair("tool symlinks") { if (false) setup.setupToolSymlinks() }""",
+            """repair("tool symlinks") { if (BuildConfig.DEBUG) setup.setupToolSymlinks() }""",
+            """repair("tool symlinks") { setup?.setupToolSymlinks() }""",
+            """repair("tool symlinks") { setup.setupToolSymlinks(dryRun = true) }""",
+            """repair("tool symlinks") { log("x"); setup.setupToolSymlinks() }""",
+            """repair("tool symlinks") { }""",
+        )
+        for (line in dead) {
+            assertEquals(
+                null, calledName(line),
+                "the shape check accepted a body that does not call the repair: $line",
+            )
+        }
+
+        // And the shapes that must keep passing, or the check above would fail
+        // the real source for the wrong reason.
+        assertEquals(
+            "setupToolSymlinks",
+            calledName("""repair("tool symlinks") { setup.setupToolSymlinks() }"""),
+        )
+        assertEquals(
+            "repairInstalledToolchains",
+            calledName("""repair("x") { ToolchainManager(this).repairInstalledToolchains() }"""),
+        )
+    }
+
+    /**
+     * The same mutation, against the real source rather than a string this test
+     * wrote, and it is the one that proves the check is pointed at the file it
+     * claims to read. The line is taken out of `onCreate`, switched off in
+     * memory, and put back through the check -- so the assertion fails if the
+     * check is loosened, and the `check()` above it fails if the line it targets
+     * has been reworded, rather than the whole thing quietly passing on source it
+     * no longer recognises.
+     */
+    @Test
+    fun `switching off a real guarded line is caught`() {
+        val body = code(onCreateBody())
+        val live = """repair("tool symlinks") { setup.setupToolSymlinks() }"""
+        val dead = """repair("tool symlinks") { if (false) setup.setupToolSymlinks() }"""
+        check(body.contains(live)) {
+            "onCreate no longer contains $live, so this mutation is testing nothing; retarget it " +
+                "at a line that is there"
+        }
+
+        val switchedOff = guardedLines(body.replace(live, dead))
+
+        assertTrue(
+            switchedOff.any { calledName(it) == null },
+            "a repair wrapped in `if (false)` reads as guarded and named, and nothing here " +
+                "notices that it never runs",
+        )
+    }
+
+    /**
+     * The other direction, and the order with it. Without this, a fourteenth
+     * repair could be added inside the shared `try` this class exists to keep
+     * dismantled and every assertion above would still pass, because they name
+     * only the thirteen they know.
+     *
+     * Order is checked because the list above says "in call order" and because
+     * one pair genuinely depends on it: `repairTruncatedSetupFiles` clears a
+     * `.bashrc` that an older release left half-written, and the three appenders
+     * behind it extend that file only when it already exists. Reordered, they
+     * would extend the broken one and the clear would then throw their work away.
+     */
+    @Test
+    fun `the guarded calls are these, in this order`() {
         val guarded = guardedLines(code(onCreateBody()))
 
         assertEquals(
-            repairs.size, guarded.size,
-            "onCreate guards ${guarded.size} repairs and this test names ${repairs.size}; " +
-                "add the new one to the list so its placement is checked too:\n" +
-                guarded.joinToString("\n"),
+            repairs,
+            guarded.map { calledName(it) ?: it },
+            "the guards in onCreate no longer match this list, in count, membership or order",
         )
-        for (line in guarded) {
-            assertTrue(
-                repairs.any { line.contains("$it(") },
-                "a guarded call this test does not name: $line",
-            )
-        }
+    }
+
+    private companion object {
+        /**
+         * `repair("...") { <receiver>.<name>() }` and nothing else. The receiver
+         * is optional and may be a constructor call, which is how two of the
+         * thirteen are written.
+         */
+        val BARE_REPAIR_CALL =
+            Regex("""^repair\("[^"]*"\)\s*\{\s*(?:[A-Za-z_]\w*(?:\([^()]*\))?\.)?([A-Za-z_]\w*)\(\)\s*}$""")
     }
 }

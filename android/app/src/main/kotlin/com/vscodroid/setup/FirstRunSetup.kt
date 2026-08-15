@@ -14,8 +14,25 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
 
-class FirstRunSetup(private val context: Context) {
+/**
+ * @param assetBytes how much the APK's asset tree weighs, and [largestAssetBytes]
+ *   the biggest single file in it. Both are measured at build time -- see
+ *   `app/build.gradle.kts` -- and both are parameters rather than direct reads of
+ *   `BuildConfig` so that the storage pre-flight can be exercised against a tree
+ *   of known size. A unit test compiles against whatever `src/main/assets` holds
+ *   on the machine running it: the whole 810 MiB on a developer's checkout, and
+ *   empty directories on the CI runner, which stubs them
+ *   (`.github/workflows/build.yml`, "Create minimal asset stubs"). With an empty
+ *   tree every branch of the pre-flight computes the same number, so a test that
+ *   did not supply its own figures would pass there while distinguishing nothing.
+ */
+class FirstRunSetup(
+    private val context: Context,
+    private val assetBytes: Long = BuildConfig.EXTRACTED_ASSET_BYTES,
+    private val largestAssetBytes: Long = BuildConfig.LARGEST_ASSET_BYTES,
+) {
     private val tag = "FirstRunSetup"
     private val prefs = context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE)
 
@@ -72,17 +89,38 @@ class FirstRunSetup(private val context: Context) {
                 runPreExtractionMigrations(previousVersionCode)
             }
 
-            // Pre-flight: enough room for everything under assets/, plus slack.
+            // Pre-flight: enough room for the part of the tree that is not
+            // already unpacked, plus what rewriting the rest of it costs.
             //
             // The asset total comes from the build rather than from a literal here --
-            // see EXTRACTED_ASSET_BYTES in app/build.gradle.kts for why. The slack on
-            // top covers what extraction does not account for: the per-file rounding
-            // of 23,000-odd files to filesystem blocks, and the handful of small files
-            // written afterwards (settings.json, .bashrc, ssh defaults, git config).
+            // see EXTRACTED_ASSET_BYTES in app/build.gradle.kts for why -- and what is
+            // already on disk is MEASURED rather than inferred from the tree being
+            // there at all. Those two answers differ exactly where it matters: a
+            // complete tree and a tree an interrupted attempt left half-written both
+            // exist, and the first needs almost nothing while the second needs the
+            // rest of itself. [requiredExtractionBytes] carries the arithmetic and
+            // [installedExtractionBytes] the reasons for measuring only `server/`.
+            //
+            // Asking for the whole asset total unconditionally is what this replaced,
+            // and it was survivable only by accident: PIVOT_VERSION_CODE happens to
+            // equal the current versionCode, so every upgrade reaching this line so
+            // far had its old server tree deleted a few lines above and measured a
+            // device with that room already given back. The next release has no such
+            // deletion, and the demand would have been 874 MiB free ON TOP OF the
+            // 810 MiB the install already occupies -- refused on the splash screen,
+            // with a Retry button that measures the same thing for ever and a
+            // MainActivity that never runs, so nothing the app offers can free a byte.
             val available = context.filesDir.usableSpace
-            val required = BuildConfig.EXTRACTED_ASSET_BYTES + EXTRACTION_SLACK_BYTES
+            val installed = installedExtractionBytes(File(context.filesDir, "server"))
+            val required = requiredExtractionBytes(assetBytes, largestAssetBytes, installed)
             if (available < required) {
-                Logger.e(tag, "Insufficient storage: ${available / 1_048_576}MB available, ${required / 1_048_576}MB required")
+                lastRefusedBytes = required
+                Logger.e(
+                    tag,
+                    "Insufficient storage: ${available / 1_048_576}MB available, " +
+                        "${required / 1_048_576}MB required " +
+                        "(${installed / 1_048_576}MB of the tree is already unpacked)",
+                )
                 return@withContext SetupResult.LOW_STORAGE
             }
 
@@ -103,18 +141,28 @@ class FirstRunSetup(private val context: Context) {
             // verify-server-tree.py checks the build, not the install.
             //
             // Aborting was held back on the argument that a single lost file
-            // would send a low-storage device round a full unpack for ever. It
-            // does not, but only because the pre-flight above asks for the whole
-            // asset total: a device still short of room returns LOW_STORAGE
-            // before extracting anything and the user gets the storage error
-            // instead of a silent churn. A device that has since found room
-            // re-extracts once and succeeds.
+            // would send a low-storage device round a full unpack for ever, and
+            // what answers that is the pre-flight above rather than anything
+            // here: it asks for what is MISSING, so every byte this attempt did
+            // write is counted in the device's favour on the next one. An abort
+            // at the 800th MiB leaves a retry asking for the remainder plus the
+            // room to rewrite one file -- a figure the user can act on -- and
+            // not for a second 874 MiB the device has just spent on us. The two
+            // are one mechanism and have to move together.
             //
-            // That gate is load-bearing for this abort, so the two have to move
-            // together -- which is why the pre-flight measures the tree instead
-            // of naming a figure. While it named one, the figure was 500 MB
-            // against a tree over 800 MiB, and this paragraph was describing a
-            // protection that did not reach far enough to give it.
+            // What is NOT promised, spelled out because the missing half of it
+            // was written here as a guarantee and was not one:
+            //
+            //  - the retry is cheap in SPACE, not in time. Nothing skips a file
+            //    because it is already there, so a retry re-copies the whole
+            //    tree; on a phone that is minutes behind a progress bar.
+            //  - a failure that is not about disk repeats exactly. A
+            //    destination the write cannot use fails the same way every
+            //    time, and the user gets "Setup failed" on each attempt with
+            //    nothing telling them the retry is pointless.
+            //  - the partial tree is left on disk when the user gives up, and
+            //    deliberately: it is what makes the retry affordable. Deleting
+            //    it would hand the next attempt the full figure again.
             val incomplete = mutableListOf<String>()
 
             // The reh-web download carries the web client inside this same tree,
@@ -253,17 +301,25 @@ class FirstRunSetup(private val context: Context) {
      *   several are, in builds that skip a download script -- so it answers
      *   true.
      *
-     * Only [extractBundledExtensions] acts on this today, and an earlier version
-     * of this line justified that by saying the other callers lose less. They do
-     * not, and the sentence is worth correcting rather than deleting: the server
-     * tree, the four bootstrap scripts and `usr/` all pass through here too, and
-     * a file missing from any of them leaves a server that cannot start rather
-     * than an extension that is merely stale. They are unchecked because
-     * checking them is a larger change than this one -- a single lost file would
-     * abort a 390 MB unpack that the retry then redoes from the beginning, on
-     * exactly the low-storage devices the abort is meant to protect -- not
-     * because the loss is smaller. Nothing on device verifies those trees are
-     * complete; `verify-server-tree.py` checks the build, not the install.
+     * Two callers act on it, differently, and one ignores it. [runSetupLocked]
+     * collects the server tree, the four bootstrap scripts and `usr/` into a list
+     * and aborts the run when any of them is short, because a file missing from
+     * those leaves a server that cannot start. [extractBundledExtensions] throws
+     * at the point of failure instead, because it also has to remove the
+     * half-unpacked directory it created. [reconcilePythonRuntimeLocked] looks
+     * away and re-asks the filesystem afterwards, which answers the same question
+     * for the one file it cares about.
+     *
+     * This paragraph said the three trees were unchecked, and that checking them
+     * would send a low-storage device round a full unpack for ever. The first
+     * half stopped being true when the abort was added. The second was the reason
+     * the abort was held back, and what answers it is the pre-flight asking for
+     * what is MISSING rather than for the whole tree -- so the retry after an
+     * abort measures a device that keeps the credit for everything it already
+     * wrote.
+     *
+     * Nothing on device verifies those trees are complete;
+     * `verify-server-tree.py` checks the build, not the install.
      */
     private fun extractAssetDir(assetPath: String, destPath: String): Boolean {
         val destDir = File(context.filesDir, destPath)
@@ -1908,8 +1964,8 @@ claude() {
         private const val KEY_VERSION_CODE = "setup_version_code"
 
         /**
-         * Headroom above the asset total for the pre-flight check, and the one
-         * number here that is still a judgement rather than a measurement.
+         * Headroom above the bytes to be written, and the one number here that is
+         * still a judgement rather than a measurement.
          *
          * Two things extraction needs that the asset byte count does not include.
          * The larger is block rounding: the tree is over 23,000 files, and each
@@ -1921,17 +1977,88 @@ claude() {
          * Deliberately a fixed figure rather than a percentage: block rounding
          * scales with the file COUNT, not with the total size, and the count has
          * been stable across pins while the size has not.
+         *
+         * The same figure serves the upgrade path, which asks for far fewer bytes,
+         * and that is not an oversight. Rounding on a rewrite is roughly neutral --
+         * the file already occupies its blocks -- but the credit given for it is
+         * computed from logical file lengths, which under-states the space an
+         * overwrite actually reclaims, and a new file in a new pin rounds like any
+         * other. One over-estimate covering another is worth more here than a
+         * second constant nobody can measure either.
          */
         private const val EXTRACTION_SLACK_BYTES = 64L * 1_048_576L
+
+        /**
+         * What the pre-flight asked for the last time it refused, or 0 if it has
+         * not refused in this process.
+         *
+         * The figure depends on what is already unpacked, so it is no longer
+         * something [requiredStorageMb] can compute on its own -- and that
+         * function cannot take a Context, because `SplashActivity` calls it
+         * statically at the point it has a LOW_STORAGE result and nothing else.
+         * Recording the refusal is what keeps the message naming the number the
+         * user actually has to reach: telling an upgrader to free 874 MB when the
+         * gate wanted 287 sends them to delete photos they did not need to lose,
+         * and telling them 287 when the gate wanted 874 sends them back to the
+         * same screen.
+         *
+         * Volatile because the gate runs on Dispatchers.IO and the message is
+         * built on the main thread.
+         */
+        @Volatile
+        private var lastRefusedBytes: Long = 0
+
+        /**
+         * How much free space the next unpack needs, given what is already there.
+         *
+         * Three terms, and each one answers a different question:
+         *
+         *  - what is missing. Extraction merges into whatever is on disk, so an
+         *    install already holding the tree is not about to write it again from
+         *    nothing. Clamped at zero: `installedBytes` can exceed the asset total
+         *    when a pin drops files that extraction never removes.
+         *  - the room to rewrite one file, charged only when something is already
+         *    there. [writeAtomically] writes `<dest>.tmp~` and renames, so while
+         *    the biggest file is being replaced both copies exist -- 113 MiB of
+         *    Copilot runtime, currently. On an install with nothing on disk there
+         *    is no second copy to hold, and charging for one would refuse fresh
+         *    installs that fit.
+         *  - [EXTRACTION_SLACK_BYTES], for what neither of those counts.
+         *
+         * Takes its figures rather than reading `BuildConfig`, so the decision can
+         * be tested with a tree of known size; see the class doc for why that
+         * matters on a runner whose asset directories are empty.
+         */
+        internal fun requiredExtractionBytes(
+            assetBytes: Long,
+            largestAssetBytes: Long,
+            installedBytes: Long,
+        ): Long {
+            val missing = (assetBytes - installedBytes).coerceAtLeast(0)
+            val rewriteHeadroom = if (installedBytes > 0) largestAssetBytes else 0L
+            return missing + rewriteHeadroom + EXTRACTION_SLACK_BYTES
+        }
 
         /**
          * What the pre-flight requires, in whole MB, for messages shown to the
          * user. Asking [FirstRunSetup] rather than repeating a literal in the UI:
          * a screen telling someone to free 500 MB when 875 is needed sends them
          * to clear space, come back, and fail again in the same place.
+         *
+         * The refusal that has just happened is the honest answer, and the
+         * whole-tree figure is the fallback for a caller asking before any
+         * refusal -- there is none today, and it is the conservative direction
+         * for one that appears.
          */
         fun requiredStorageMb(): Long =
-            (BuildConfig.EXTRACTED_ASSET_BYTES + EXTRACTION_SLACK_BYTES) / 1_048_576L
+            (
+                lastRefusedBytes.takeIf { it > 0 }
+                    ?: requiredExtractionBytes(
+                        BuildConfig.EXTRACTED_ASSET_BYTES,
+                        BuildConfig.LARGEST_ASSET_BYTES,
+                        installedBytes = 0,
+                    )
+                ) / 1_048_576L
 
         /**
          * Bundled extension identifiers as of the last setup. Deliberately not
@@ -2371,6 +2498,48 @@ internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boo
  * 3787 files an extraction writes.
  */
 private val ATOMIC_WRITE_LOCK = Any()
+
+/**
+ * How many bytes of the asset tree are already unpacked under [root], for the
+ * storage pre-flight to subtract from what it asks for.
+ *
+ * Only `server/` is passed in, though extraction also fills `usr/` and the
+ * bundled extensions, and the asymmetry is the design rather than an omission.
+ * `server/` is 700 of the tree's 810 MiB and nothing but extraction writes
+ * there, so every byte counted is a byte the next unpack genuinely writes over.
+ * The other two are shared ground: toolchains install into `usr/` -- Java is
+ * 146 MB unpacked, Go 163 MB -- `npm install -g` lands there too, and
+ * `home/.vscodroid/extensions` fills with whatever the user takes from the
+ * gallery. Crediting those would subtract bytes that overwriting does not give
+ * back, and that failure is the worse one: the gate passes, extraction runs out
+ * of disk partway, and the user is told "Setup failed" rather than how much to
+ * free -- on every retry, because the toolchains stay where they are. Charging
+ * their asset size in full instead over-states the requirement, which costs a
+ * user on a tight device one round of freeing space they did not strictly need
+ * to free.
+ *
+ * Symlinks are skipped rather than followed, and that is not tidiness. The
+ * Copilot alias farm links every entry of `copilot-linux-arm64` -- including the
+ * 113 MiB `runtime.node`, the largest file in the tree -- and the extension side
+ * links a whole `sdk` directory holding another 96 MiB. Following those counts
+ * the same bytes twice and credits the install for space that does not exist,
+ * which is the direction that lets the gate pass a device it should refuse.
+ *
+ * Asks `Files.isSymbolicLink` rather than [isSymlink], which is the same
+ * question -- both are `lstat` on the final component, and `SymlinkPredicateTest`
+ * already leans on that equivalence -- put through the JDK instead of
+ * `android.system.Os`. The difference is only that `Os.lstat` throws in a JVM
+ * unit test and [isSymlink] catches it into "not a link", so the skipping this
+ * walk depends on could be asserted but never measured.
+ *
+ * A `root` that does not exist walks to nothing and answers 0, which is the
+ * fresh-install case.
+ */
+internal fun installedExtractionBytes(root: File): Long =
+    root.walkTopDown()
+        .onEnter { !Files.isSymbolicLink(it.toPath()) }
+        .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
+        .sumOf { it.length() }
 
 /**
  * Names the entries in `usr/lib` that belong to a Python the APK no longer

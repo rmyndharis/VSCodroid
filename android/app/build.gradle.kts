@@ -59,6 +59,26 @@ android {
             "EXTRACTED_ASSET_BYTES",
             "${fileTree("src/main/assets").files.sumOf { it.length() }}L"
         )
+
+        // The biggest single file in that tree, which is what an install that
+        // already holds the tree needs rather than the total. Extraction writes
+        // through <dest>.tmp~ and renames, so re-unpacking over an existing tree
+        // needs room for one more copy of one file at a time -- currently the
+        // 113 MiB Copilot runtime.node -- and not for a second copy of the tree.
+        // FirstRunSetup.requiredExtractionBytes is where the two meet.
+        //
+        // Measured here for the same reason the total is: it moves with every VS
+        // Code pin, and the largest file has changed identity twice already. A
+        // literal would be a figure nobody rechecks.
+        //
+        // maxOfOrNull, because the jobs that build without a real asset tree
+        // (lint, unit tests, R8) have nothing to take a maximum of and maxOf
+        // throws on an empty tree.
+        buildConfigField(
+            "long",
+            "LARGEST_ASSET_BYTES",
+            "${fileTree("src/main/assets").files.maxOfOrNull { it.length() } ?: 0L}L"
+        )
     }
 
     buildTypes {
