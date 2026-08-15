@@ -50,7 +50,9 @@ import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.publishedResourceRoots
+import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.sensitiveLocations
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -406,6 +408,33 @@ class MainActivity : AppCompatActivity() {
                 if (serverPort > 0) {
                     navigateToFolder(serverPort, mirrorDir.absolutePath)
                 }
+            } catch (e: CancellationException) {
+                // Not a folder that failed. This Activity is being destroyed and
+                // took its scope with it, and the handlers below would read that
+                // as a failed sync — `kotlinx.coroutines.CancellationException`
+                // is a `java.util.concurrent` one, which is a plain `Exception`,
+                // so it lands in the catch-all and every non-suspending statement
+                // in it runs.
+                //
+                // What that costs is not a spurious toast. `safManager` belongs
+                // to this Activity and `onDestroy` has already stopped its
+                // watcher and unbound everything; [restoreWatcherAfterFailure]
+                // would then start a FileObserver and the `saf-writeback` thread
+                // again on that same engine, and only `stopWatching()` on that
+                // instance can ever stop them. The replacement Activity builds
+                // its own manager, so its `stopFileWatcher()` does not reach the
+                // old one. Two engines end up watching one mirror, and the
+                // orphaned one reads the `.partial` renames of the next sync as
+                // the user's own edits and pushes them onto the user's documents
+                // — which is the exact damage the stop before the sync exists to
+                // prevent.
+                //
+                // Guarded because the window may already be gone: dismissing a
+                // dialog whose Activity has been destroyed throws, and an
+                // exception raised inside this handler would reach the scope's
+                // handler rather than being the cancellation it is.
+                if (!isFinishing && !isDestroyed) dialog.dismiss()
+                throw e
             } catch (e: SecurityException) {
                 dialog.dismiss()
                 Logger.e(tag, "SAF permission revoked during sync", e)
@@ -945,13 +974,8 @@ class MainActivity : AppCompatActivity() {
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself — the cookie for pages, the
         // query for resource requests, an auth message for the WebSocket.
-        //
-        // Logged without it: this line is the one place the token would otherwise
-        // reach logcat, which is readable by anything holding READ_LOGS.
-        val withoutToken = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
         val token = nodeService?.getConnectionToken()
-        val url = if (token.isNullOrEmpty()) withoutToken
-                  else "$withoutToken&tkn=${Uri.encode(token)}"
+        val url = workbenchUrl(port, folderPath, token)
 
         // Say so when it is missing. Navigating without the token still happens
         // -- a page the user can retry beats no page at all -- but the server
@@ -964,7 +988,14 @@ class MainActivity : AppCompatActivity() {
                 "Expected at ${Environment.getConnectionTokenPath(this)}")
         }
 
-        Logger.i(tag, "Loading VS Code at $withoutToken")
+        // Redacted rather than rebuilt without the token. This used to log a
+        // second string assembled beside the real one, so what kept the token out
+        // of logcat was a person keeping two expressions apart — and the obvious
+        // edit, logging the URL that is actually loaded, put the credential for
+        // every route but `/version` into a release build's logcat, readable by
+        // anything holding READ_LOGS. There is one URL now, and the redactor is
+        // the same one the webview layer uses.
+        Logger.i(tag, "Loading VS Code at ${redactToken(url)}")
         wv.loadUrl(url)
     }
 
@@ -1612,6 +1643,31 @@ internal fun authCallbackIsExpected(
     nowMillis: Long,
     windowMillis: Long
 ): Boolean = openedAtMillis != 0L && (nowMillis - openedAtMillis) in 0..windowMillis
+
+/**
+ * The workbench URL for a folder, with the connection token when there is one.
+ *
+ * One expression, and that is the point of it being a function. The call site
+ * used to build two — the URL it loaded and a token-free twin it logged — so the
+ * token stayed out of logcat only for as long as nobody collapsed them, which is
+ * what a merge does and what anyone wanting the real navigation URL in the log
+ * would do deliberately. With a single URL there is nothing to keep in step:
+ * the log statement redacts, and [com.vscodroid.webview.redactToken] keys on
+ * `tkn=`, which is the parameter this builds.
+ *
+ * That coupling is the fragile part and it is why this is testable at all. A
+ * later rename of the parameter would leave the redactor matching nothing and
+ * the log line looking untouched.
+ *
+ * An empty or absent token yields the bare URL rather than `tkn=`. The server
+ * answers that with "Forbidden." — the caller says so — but a page the user can
+ * retry beats no page, and sending an empty token would be indistinguishable
+ * from sending a wrong one.
+ */
+internal fun workbenchUrl(port: Int, folderPath: String, token: String?): String {
+    val base = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
+    return if (token.isNullOrEmpty()) base else "$base&tkn=${Uri.encode(token)}"
+}
 
 /**
  * Whether a folder switch that failed should leave the previous folder watched.

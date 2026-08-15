@@ -307,7 +307,13 @@ function start(log) {
                 closeWith(clientSocket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
                 return;
             }
+            // Whether the 200 has gone out. It is the only thing separating a
+            // tunnel that could not be built from one that broke, and this leg
+            // had nothing recording it -- the plain-HTTP leg beside it has
+            // res.headersSent for the identical question.
+            let established = false;
             upstream = net.connect(port, host, () => {
+                established = true;
                 clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
                 if (head && head.length) {
                     upstream.write(head);
@@ -316,6 +322,20 @@ function start(log) {
                 clientSocket.pipe(upstream);
             });
             upstream.on('error', (err) => {
+                if (established) {
+                    // Nothing but tunnel bytes may follow a 2xx to CONNECT
+                    // (RFC 9110 9.3.6), and this handler outlives the handshake:
+                    // an origin that dies mid-session -- an RST, routine on a
+                    // mobile network -- used to splice 47 bytes of plain HTTP
+                    // into the middle of the stream. In a TLS session those
+                    // bytes are read as a record with content type 0x48, so the
+                    // client reports a protocol failure instead of the reset
+                    // that actually happened, and a retryable error becomes one
+                    // that is not.
+                    log('warn', `dns-proxy: CONNECT ${host}:${port} tunnel broke: ${reason(err)}`);
+                    clientSocket.destroy();
+                    return;
+                }
                 log('warn', `dns-proxy: CONNECT ${host}:${port} failed: ${reason(err)}`);
                 closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
             });

@@ -109,14 +109,17 @@ class LaunchOutcomeTest {
         val started: Boolean,
         val ready: Boolean = false,
         val alive: Boolean = false,
+        val portHeld: Boolean = false,
     ) {
         var awaitReadyCalls = 0
         var isAliveCalls = 0
+        var portWasHeldCalls = 0
 
         suspend fun run(): LaunchOutcome = launchOutcome(
             start = { started },
             awaitReady = { awaitReadyCalls++; ready },
             isAlive = { isAliveCalls++; alive },
+            portWasHeld = { portWasHeldCalls++; portHeld },
         )
     }
 
@@ -176,6 +179,43 @@ class LaunchOutcomeTest {
         val steps = Steps(started = true, ready = false, alive = false)
         assertEquals(LaunchOutcome.DIED_BEFORE_ANSWERING, runBlocking { steps.run() })
     }
+
+    @Test
+    fun `an alive process that never had a port to bind is not a slow start`() {
+        // The pair that hung the app. Both are alive and neither has answered;
+        // only the port tells them apart. A process spawned onto a port something
+        // else holds prints EADDRINUSE and then does not exit, so the loop that
+        // waits on liveness waits for the life of the app -- no failure, no
+        // restart, nothing on the notification, and a service that believes it is
+        // running so relaunching does nothing either.
+        val doomed = Steps(started = true, ready = false, alive = true, portHeld = true)
+        assertEquals(LaunchOutcome.CANNOT_BIND, runBlocking { doomed.run() })
+
+        val slow = Steps(started = true, ready = false, alive = true, portHeld = false)
+        assertEquals(
+            LaunchOutcome.STILL_COMING_UP, runBlocking { slow.run() },
+            "a server that had its port and is merely slow must keep being waited for",
+        )
+    }
+
+    @Test
+    fun `a process that answered is never called doomed, whatever the port was doing`() {
+        // The port was taken at the spawn and the server answered anyway -- the
+        // holder let go, or it was ours all along. A rule that reads the port
+        // before the answer would kill a server that is serving.
+        val steps = Steps(started = true, ready = true, alive = true, portHeld = true)
+        assertEquals(LaunchOutcome.READY, runBlocking { steps.run() })
+        assertEquals(0, steps.portWasHeldCalls, "a serving server was asked about its port")
+    }
+
+    @Test
+    fun `a process that is already gone stays the crash path's to report`() {
+        // Order, not just outcome. Asking about the port first would take a death
+        // the watchdog has already reported and give it a second recovery.
+        val steps = Steps(started = true, ready = false, alive = false, portHeld = true)
+        assertEquals(LaunchOutcome.DIED_BEFORE_ANSWERING, runBlocking { steps.run() })
+        assertEquals(0, steps.portWasHeldCalls)
+    }
 }
 
 /**
@@ -197,7 +237,7 @@ class LaunchOutcomeTest {
  * callback that can no longer fire". The crash path did it. The two start
  * failures did not.
  */
-class SpawnedNothingTest {
+class EndsUnreportedTest {
 
     @Test
     fun `a spawn that never happened has nothing watching it`() {
@@ -205,7 +245,20 @@ class SpawnedNothingTest {
         // launch path handing this on, nothing in the app would ever try again.
         // That is the state a port held by an orphan reaches -- and an orphan is
         // something that dies, so the attempt is worth repeating.
-        assertTrue(spawnedNothing(LaunchOutcome.NOT_STARTED))
+        assertTrue(endsUnreported(LaunchOutcome.NOT_STARTED))
+    }
+
+    @Test
+    fun `a pair that cannot bind is handed on too, for the opposite reason`() {
+        // Not "no process" but "a process the service has just stopped", which
+        // sets isShuttingDown and makes the watchdog suppress the exit. Answering
+        // false here is the worse half of the two: the pair is alive and stays
+        // alive, so nothing reports anything, and the app sits on a placeholder
+        // with a service that believes it is running.
+        assertTrue(
+            endsUnreported(LaunchOutcome.CANNOT_BIND),
+            "a start stopped by the service reports itself or is never reported at all",
+        )
     }
 
     @Test
@@ -218,7 +271,7 @@ class SpawnedNothingTest {
         // slower one writes its conclusion over the other's -- which is exactly
         // the defect that made this function change shape.
         assertFalse(
-            spawnedNothing(LaunchOutcome.DIED_BEFORE_ANSWERING),
+            endsUnreported(LaunchOutcome.DIED_BEFORE_ANSWERING),
             "a process that existed has a watchdog behind it; recovering it twice " +
                 "is how a restart gets swallowed",
         )
@@ -226,27 +279,27 @@ class SpawnedNothingTest {
 
     @Test
     fun `a serving server needs no recovery`() {
-        assertFalse(spawnedNothing(LaunchOutcome.READY))
+        assertFalse(endsUnreported(LaunchOutcome.READY))
     }
 
     @Test
     fun `a slow start that is still alive needs no recovery`() {
         assertFalse(
-            spawnedNothing(LaunchOutcome.STILL_COMING_UP),
+            endsUnreported(LaunchOutcome.STILL_COMING_UP),
             "a live process has not failed, and its eventual exit is the crash path's to report",
         )
     }
 
     @Test
     fun `every outcome is classified`() {
-        // Control. The cases above prove four values; this proves the function is
+        // Control. The cases above prove five values; this proves the function is
         // total, so an outcome added later cannot fall through to a silent
         // default. The `when` is exhaustive over the enum, so adding one is a
         // compile error too -- belt and braces, because that half disappears the
         // moment someone adds an `else`.
-        LaunchOutcome.entries.forEach { spawnedNothing(it) }
+        LaunchOutcome.entries.forEach { endsUnreported(it) }
         assertEquals(
-            4, LaunchOutcome.entries.size,
+            5, LaunchOutcome.entries.size,
             "an outcome was added; decide whether anything is watching it",
         )
     }
@@ -286,7 +339,7 @@ class RecoverableStopCallSiteTest {
             hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
         }
 
-        val gated = lines.filter { (_, l) -> l.contains("if (spawnedNothing(") }
+        val gated = lines.filter { (_, l) -> l.contains("if (endsUnreported(") }
         assertTrue(
             gated.isNotEmpty(),
             "the launch path must hand a run nothing is watching to the retry budget, " +
@@ -308,6 +361,66 @@ class RecoverableStopCallSiteTest {
             2, owners.size,
             "ending a run has one owner -- enterTerminalState, when the budget is " +
                 "gone. Found ${owners.size} mention(s):\n" + report(owners),
+        )
+    }
+}
+
+/**
+ * That the branch which finds a server unable to bind also gets rid of it.
+ *
+ * [EndsUnreportedTest] pins that the run is handed to the retry budget; this pins
+ * the half that makes the retry mean anything. The pair spawned onto a taken port
+ * does not exit on its own -- measured: it prints `EADDRINUSE` and stays -- and
+ * `ProcessManager.startServer` refuses while a process is alive. So a branch that
+ * reported the failure without stopping the process would turn every remaining
+ * attempt into an instant `NOT_STARTED`, spend the budget in seconds, and still
+ * leave the pair running afterwards.
+ *
+ * Source-reading, and the weaker layer for the usual reason: the branch is inside
+ * a coroutine on a `Service`'s main dispatcher, and this suite can build neither.
+ */
+class CannotBindCleanupTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `the doomed pair is stopped where it is diagnosed`() {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+
+        // The opening brace is what distinguishes the launch branch from the arm
+        // of the same name in [endsUnreported], which is a one-liner.
+        val branch = lines.indexOfFirst { (_, l) -> l.contains("LaunchOutcome.CANNOT_BIND -> {") }
+        check(branch >= 0) {
+            "expected a CANNOT_BIND branch in the launch path; without it a process " +
+                "that can never bind is watched for the life of the app"
+        }
+
+        // Counted in statements rather than in file lines, because the branch is
+        // mostly comment and a window measured in lines would fall short of the
+        // code it is looking for -- and report the absence as a defect.
+        val body = lines.drop(branch + 1).take(8)
+        val shown = body.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+
+        assertTrue(
+            body.any { (_, l) -> l.contains("processManager.stopServer()") },
+            "the branch must stop the process it is giving up on, or the retries it " +
+                "hands the run to are all refused as 'already running'. Statements " +
+                "found in the branch:\n$shown",
+        )
+        assertTrue(
+            body.any { (_, l) -> l.contains("reportFailure(") },
+            "and it must say so, or the user is left with a placeholder and no reason:" +
+                "\n$shown",
         )
     }
 }
@@ -476,14 +589,15 @@ class NoticeGateKeyTest {
     }
 
     @Test
-    fun `both failure outcomes report through the throttle`() {
+    fun `every failure outcome reports through the throttle`() {
         val lines = codeLines()
         val reported = lines.filter { (_, l) -> l.contains("reportFailure(") }
         assertEquals(
-            3, reported.size,
-            "expected the declaration plus both failure outcomes -- a failure that " +
-                "speaks on every attempt is the defect, and so is one that never " +
-                "speaks:\n" + report(reported),
+            4, reported.size,
+            "expected the declaration plus all three failure outcomes -- a spawn that " +
+                "failed, a process that died before answering, and one that could never " +
+                "bind. A failure that speaks on every attempt is the defect, and so is " +
+                "one that never speaks:\n" + report(reported),
         )
     }
 }

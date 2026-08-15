@@ -414,9 +414,12 @@ class NodeService : Service() {
      *  - [onStartCommand], which guards on [isServiceRunning];
      *  - [retryOrGiveUp], reached either from [handleServerCrash] — which the
      *    watchdog raises only after the process has exited — or from the launch
-     *    path's own `spawnedNothing` branch, which by construction spawned no
-     *    process at all. It also calls `cancelLaunch()` before its backoff, so no
-     *    earlier attempt is still in flight when it arrives here.
+     *    path's own [endsUnreported] branch. Of the two outcomes that reach it,
+     *    `NOT_STARTED` spawned no process by construction and `CANNOT_BIND` stops
+     *    the one it spawned before handing the run on, which is the half of that
+     *    branch this precondition depends on. It also calls `cancelLaunch()`
+     *    before its backoff, so no earlier attempt is still in flight when it
+     *    arrives here.
      *
      * [shutdown] and [onDestroy] kill the process rather than reaching this.
      *
@@ -441,6 +444,7 @@ class NodeService : Service() {
                 start = { withContext(Dispatchers.IO) { processManager.startServer() } },
                 awaitReady = { withContext(Dispatchers.IO) { processManager.waitForReady() } },
                 isAlive = { processManager.isRunning() },
+                portWasHeld = { processManager.spawnedOntoHeldPort() },
             )
             when (outcome) {
                 LaunchOutcome.NOT_STARTED -> {
@@ -468,18 +472,49 @@ class NodeService : Service() {
                     reportFailure(getString(R.string.error_server_timeout))
                 }
 
+                // Alive, and that is the trap this branch exists to disarm. The
+                // pair spawned onto a taken port never binds and never exits, so
+                // every question about it answers "still starting" -- and the
+                // branch below, which waits on liveness and nothing else, then
+                // waits for the life of the app. What the user got was a
+                // placeholder, one "taking too long" toast at two minutes, and
+                // then silence: no failure, no restart, no notification, and a
+                // service that believed it was running so relaunching did
+                // nothing. The only ways out were Stop and force-stop.
+                LaunchOutcome.CANNOT_BIND -> {
+                    Logger.e(
+                        tag,
+                        "Server cannot bind port ${processManager.port}; something else " +
+                            "was already holding it when the process spawned",
+                    )
+                    // Killed here rather than left for the retry to trip over.
+                    // [ProcessManager.startServer] refuses while a process is
+                    // alive, so leaving it would turn every remaining attempt
+                    // into an immediate NOT_STARTED and spend the budget without
+                    // ever trying again -- and would leave the pair running after
+                    // the budget was gone. Off the main dispatcher because the
+                    // stop waits on the process; this is not a lifecycle callback,
+                    // so nothing here depends on holding the main thread.
+                    withContext(Dispatchers.IO) { processManager.stopServer() }
+                    // The same message a spawn failure gets, because it is the
+                    // same thing from the user's side: no server, and nothing
+                    // they did caused it. Saying it is what makes the retries
+                    // below visible at all.
+                    reportFailure(getString(R.string.error_server_start))
+                }
+
                 LaunchOutcome.STILL_COMING_UP -> {
                     Logger.w(tag, "Server has not answered yet; still watching a live process")
                     awaitLateReadiness()
                 }
             }
 
-            // A start that produced no process has no watchdog behind it, so
-            // nothing else is going to notice this run ended. Every other outcome
-            // does have one -- `startWatchdog` fires `onServerCrashed` for every
-            // exit code, and only a deliberate stop suppresses it -- so handing
-            // those to the retry chain as well would drive two recoveries for one
-            // death.
+            // A start that produced no process, and one whose process was just
+            // stopped up there, both leave nothing behind that will notice this
+            // run ended. Every other outcome does have something -- `startWatchdog`
+            // fires `onServerCrashed` for every exit code, and only a deliberate
+            // stop suppresses it -- so handing those to the retry chain as well
+            // would drive two recoveries for one death.
             //
             // Saying why it failed is not the same as leaving the app able to try
             // again, and for a long time only the first happened: the branches
@@ -494,7 +529,7 @@ class NodeService : Service() {
             //
             // On a separate job, not this one: [retryOrGiveUp] cancels the launch
             // job, and that is this one, finishing.
-            if (spawnedNothing(outcome)) serviceScope.launch { retryOrGiveUp() }
+            if (endsUnreported(outcome)) serviceScope.launch { retryOrGiveUp() }
         }
     }
 
@@ -575,6 +610,14 @@ class NodeService : Service() {
      * watchdog takes over -- `onServerCrashed` drives the restart, so this loop
      * leaves quietly rather than reporting a failure the crash path is about to
      * report properly.
+     *
+     * That bound is only honest while liveness means something, and there is one
+     * case where it does not: a process spawned onto a port something else holds
+     * stays alive forever without ever binding, so this loop would ask a stranger
+     * for the rest of the app's life. It is not reached from here any more --
+     * [LaunchOutcome.CANNOT_BIND] takes it before this branch is chosen -- and
+     * that is what the paragraph above rests on rather than an assumption that a
+     * live process is a starting one.
      *
      * Separating patience from a verdict is only half of it, though, and the
      * first version of this stopped there. A process that stays alive and never
@@ -977,12 +1020,22 @@ internal enum class LaunchOutcome {
     /** The poll gave up and the process is gone. */
     DIED_BEFORE_ANSWERING,
 
+    /**
+     * The poll gave up, the process is alive, and it never had a port to bind.
+     *
+     * Alive here means nothing, which is what separates this from
+     * [STILL_COMING_UP]. The editor server spawned onto a taken port prints
+     * `EADDRINUSE` and does not exit, so the pair lives on serving nothing and
+     * every liveness question about it answers yes for as long as the app runs.
+     */
+    CANNOT_BIND,
+
     /** The poll gave up, but the process is alive and may still answer. */
     STILL_COMING_UP,
 }
 
 /**
- * Which of the four ends a start attempt reaches.
+ * Which of the five ends a start attempt reaches.
  *
  * Extracted because the branch it replaces lived inside a coroutine on a
  * `Dispatchers.Main` scope owned by a `Service`, and nothing in a plain JVM can
@@ -1003,16 +1056,22 @@ internal suspend fun launchOutcome(
     start: suspend () -> Boolean,
     awaitReady: suspend () -> Boolean,
     isAlive: () -> Boolean,
+    portWasHeld: () -> Boolean,
 ): LaunchOutcome = when {
     !start() -> LaunchOutcome.NOT_STARTED
     awaitReady() -> LaunchOutcome.READY
     !isAlive() -> LaunchOutcome.DIED_BEFORE_ANSWERING
+    // After liveness, not before it. A process that has already exited is the
+    // crash path's to report whatever it was spawned onto, and asking this first
+    // would take that report away from the watchdog and hand the same death two
+    // recoveries.
+    portWasHeld() -> LaunchOutcome.CANNOT_BIND
     else -> LaunchOutcome.STILL_COMING_UP
 }
 
 /**
- * Whether [outcome] means no process was ever created, so no watchdog exists to
- * report that this run ended.
+ * Whether [outcome] means nothing else is going to report that this run ended, so
+ * the launch path has to hand it to the retry budget itself.
  *
  * The distinction decides who owns the recovery, and getting it wrong is what
  * produced a defect worth writing down. `DIED_BEFORE_ANSWERING` looks like a
@@ -1021,16 +1080,23 @@ internal suspend fun launchOutcome(
  * the crash path is already acting. Treating the two alike gives one death two
  * recoveries, and the slower of them writes its conclusion over the other's.
  *
- * Only `NOT_STARTED` is genuinely unreported: no spawn, no watchdog, no callback,
- * so without this nothing would ever try again. That is the case a port held by
- * an orphan reaches, which is exactly the case that has to be able to recover on
- * its own.
+ * Two outcomes are unreported, for two different reasons, and the function is
+ * named after what they share rather than after either one:
+ *
+ *  - `NOT_STARTED`: no spawn, so no watchdog and no callback. That is the case a
+ *    port held by an orphan reaches, which is exactly the case that has to be
+ *    able to recover on its own.
+ *  - `CANNOT_BIND`: a process exists, but the service has just stopped it --
+ *    which sets `isShuttingDown`, and the watchdog suppresses an expected exit.
+ *    Leaving it here would be worse than in the first case: the pair is alive and
+ *    stays alive, so nothing would ever report anything at all.
  *
  * Exhaustive over the enum rather than an `else`, so adding an outcome is a
  * compile error here instead of a silent `false`.
  */
-internal fun spawnedNothing(outcome: LaunchOutcome): Boolean = when (outcome) {
-    LaunchOutcome.NOT_STARTED -> true
+internal fun endsUnreported(outcome: LaunchOutcome): Boolean = when (outcome) {
+    LaunchOutcome.NOT_STARTED,
+    LaunchOutcome.CANNOT_BIND -> true
     LaunchOutcome.READY,
     LaunchOutcome.STILL_COMING_UP,
     LaunchOutcome.DIED_BEFORE_ANSWERING -> false

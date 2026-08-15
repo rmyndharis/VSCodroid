@@ -205,9 +205,49 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `a start onto a held port records that it can never serve`() {
+        // The other half of the test above. Starting anyway is right, but the
+        // process it starts cannot bind: its editor server prints EADDRINUSE and
+        // then does not exit, so liveness answers yes for as long as the app runs
+        // and every caller that waits on liveness waits forever. The one moment
+        // the two cases can be told apart is the spawn, so it is recorded there.
+        val holder = StubServer(null)
+        try {
+            manager.portField = holder.port
+
+            assertTrue(startAndAwaitWatchdog())
+            assertTrue(
+                manager.spawnedOntoHeldPort(),
+                "a spawn onto a port something else holds must be recorded as doomed, " +
+                    "or nothing downstream can stop waiting on it",
+            )
+        } finally {
+            holder.stop()
+        }
+    }
+
+    @Test
+    fun `a start onto a free port is not recorded as doomed`() {
+        // Control. A flag that answered true unconditionally would satisfy the
+        // test above while killing every slow but healthy start after thirty
+        // seconds -- the failure running the other way, and the worse of the two.
+        manager.portField = PortFinder.findAvailablePort()
+
+        assertTrue(startAndAwaitWatchdog())
+        assertFalse(
+            manager.spawnedOntoHeldPort(),
+            "a server that had its port to itself must be allowed to be slow",
+        )
+    }
+
+    @Test
     fun `allocates a port on the first start`() {
         assertTrue(startAndAwaitWatchdog())
         assertNotEquals(0, manager.port, "the first start must allocate a port")
+        assertFalse(
+            manager.spawnedOntoHeldPort(),
+            "a freshly allocated port is free by construction",
+        )
     }
 
     @Test
@@ -1069,6 +1109,32 @@ class AdoptionTest {
         )
         assertFalse(manager.isReady(), "a server that stopped answering is not serving")
         assertFalse(manager.isAdopted(), "and it is no longer ours to serve")
+    }
+
+    @Test
+    fun `adoption says that the surviving server has lost its DNS proxy`() {
+        // The proxy runs inside the bootstrap and its address reaches the editor
+        // server once, in the environment it is forked with. Adopting means that
+        // bootstrap is gone, so the survivor holds the address of a proxy that no
+        // longer exists and nothing can change the environment of a running
+        // process: the Open VSX gallery, the agent host and every git, npm or
+        // curl in a terminal fail to reach the network for the rest of the
+        // session, while the workbench on screen looks healthy.
+        //
+        // The app cannot repair that from here, which is exactly why the line has
+        // to exist -- it is the only thing connecting the symptom to the cause,
+        // and Logger.w is not gated on a debuggable build.
+        val warnings = mutableListOf<String>()
+        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 4242, port = holder.port)
+
+        assertTrue(manager.startServer())
+
+        assertTrue(
+            warnings.any { it.contains("HTTPS_PROXY") },
+            "adoption must record that outbound traffic through the proxy is dead: $warnings",
+        )
     }
 
     @Test

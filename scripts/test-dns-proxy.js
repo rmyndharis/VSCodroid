@@ -323,6 +323,57 @@ async function main() {
     );
     assert.match(badPort, /^HTTP\/1\.1 400 /, `a malformed CONNECT target was not rejected: ${badPort}`);
 
+    // --- an origin that dies after the tunnel is up -----------------------
+    // The upstream error handler is registered once and lives for the whole
+    // tunnel, so a failure AFTER the 200 used to be answered with a 502 written
+    // into the tunnelled byte stream. For a TLS session those 47 bytes are read
+    // as a record with content type 0x48 ('H'), so the client reports a
+    // protocol failure rather than the reset that actually happened -- turning
+    // a retryable error into one that is not.
+    //
+    // A clean close does not reproduce it: the proxy sees 'end', not 'error'.
+    // It takes an RST, which is the routine case on a mobile network.
+    const rude = net.createServer((socket) => {
+        socket.on('error', () => {});
+        socket.write('HELLO');
+        setTimeout(() => socket.resetAndDestroy(), 50);
+    });
+    const rudePort = await listen(rude);
+    const beforeRude = logLines.length;
+    const afterEstablished = await new Promise((resolve) => {
+        const socket = net.connect(proxyPort, '127.0.0.1', () => {
+            socket.write(
+                `CONNECT 127.0.0.1:${rudePort} HTTP/1.1\r\nHost: 127.0.0.1:${rudePort}\r\n` +
+                    `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+            );
+        });
+        let received = '';
+        socket.on('data', (chunk) => (received += chunk));
+        socket.on('error', () => resolve(received));
+        socket.on('close', () => resolve(received));
+        socket.setTimeout(3000, () => {
+            socket.destroy();
+            resolve(received);
+        });
+    });
+    assert.match(afterEstablished, /^HTTP\/1\.1 200 /, `the tunnel was never established: ${afterEstablished}`);
+    assert.ok(
+        afterEstablished.includes('HELLO'),
+        `the origin's bytes never reached the client, so this proves nothing: ${afterEstablished}`,
+    );
+    assert.ok(
+        !/HTTP\/1\.1 5\d\d/.test(afterEstablished.slice('HTTP/1.1 200 Connection Established\r\n\r\n'.length)),
+        `a status line was written into an established tunnel: ${JSON.stringify(afterEstablished)}`,
+    );
+    // The failure still has to be diagnosable; silencing it would satisfy the
+    // assertion above just as well.
+    assert.match(
+        logLines.slice(beforeRude).join('\n'),
+        /CONNECT 127\.0\.0\.1:\d+ tunnel broke/,
+        `a tunnel that broke mid-session said nothing: ${logLines.slice(beforeRude).join('\n') || '(nothing logged)'}`,
+    );
+    rude.close();
+
     // --- a client that walks away mid-flight ------------------------------
     // The error listeners in both handlers exist so an aborted client cannot
     // raise an unhandled 'error' and take the bootstrap down with it.

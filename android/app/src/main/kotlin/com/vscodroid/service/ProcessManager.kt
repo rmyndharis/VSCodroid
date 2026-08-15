@@ -58,6 +58,21 @@ class ProcessManager(private val context: Context) {
     @Volatile
     private var adopted = false
 
+    /**
+     * Whether the process the last [startServer] spawned went onto a port
+     * something else was already holding.
+     *
+     * Recorded at the spawn because that is the only moment the two cases can be
+     * told apart. Afterwards the port is occupied either way, and nothing in a
+     * later probe distinguishes a server of ours holding its own port from a
+     * stranger holding it while our process sits behind it unable to bind.
+     *
+     * Volatile for the same reason as the flags above: it is written on whichever
+     * thread called [startServer] and read from the service's main dispatcher.
+     */
+    @Volatile
+    private var spawnedOntoHeldPort = false
+
     /** The port the server is listening on. Only valid after [startServer] returns true. */
     val port: Int get() = _port
 
@@ -68,6 +83,24 @@ class ProcessManager(private val context: Context) {
      * server", which are the same question only while we started it.
      */
     fun isAdopted(): Boolean = adopted
+
+    /**
+     * Whether the running process was spawned onto a port that was already taken,
+     * and therefore cannot ever serve.
+     *
+     * The editor server it forks prints `EADDRINUSE` and then does **not** exit --
+     * measured on an API 36 emulator, same pids at 0, 5, 15, 30 and 60 seconds --
+     * so the bootstrap does not exit either and [isRunning] answers true for as
+     * long as nothing kills it. Liveness therefore says nothing here, and the
+     * caller that waits on liveness would wait forever: see
+     * `NodeService.awaitLateReadiness`, whose loop is bounded by exactly that.
+     *
+     * Answered from what was true at the spawn rather than from a fresh probe,
+     * because a fresh probe cannot separate the two things it would have to: a
+     * held port looks the same whether the holder is the server we started or the
+     * stranger our server lost the race to.
+     */
+    fun spawnedOntoHeldPort(): Boolean = spawnedOntoHeldPort
 
     /**
      * The connection token the server requires on every route except `/version`,
@@ -178,9 +211,20 @@ class ProcessManager(private val context: Context) {
         // called it.
         // Across cold starts it is the workbench's IndexedDB that is bound to it —
         // see PortFinder.getOrAllocatePort.
-        if (_port == 0) {
+        //
+        // Whether it is free is asked once and held, because two decisions turn
+        // on that one answer: whether to adopt, and whether the spawn further
+        // down has any chance of binding. Asking twice would let the port change
+        // hands in between and record a doomed spawn as a healthy one. A port
+        // this call allocates is free by construction -- PortFinder either
+        // verified the remembered one or scanned for another.
+        val portIsFree = if (_port == 0) {
             _port = PortFinder.getOrAllocatePort(context)
-        } else if (!PortFinder.isPortAvailable(_port) && portHeldByOurEditorServer()) {
+            true
+        } else {
+            PortFinder.isPortAvailable(_port)
+        }
+        if (!portIsFree && portHeldByOurEditorServer()) {
             // A server of ours is already on the port. Serve it instead of
             // spawning a second one that cannot bind.
             //
@@ -207,9 +251,34 @@ class ProcessManager(private val context: Context) {
             // note for falls through and is spawned over, which fails the way it
             // always did rather than the way a refusal would.
             Logger.i(tag, "Port $_port already served by a server of ours; adopting it")
+            // Said out loud because nothing else in the app can see it, and the
+            // symptom it produces points nowhere near here. `assets/dns-proxy.js`
+            // runs INSIDE the bootstrap and hands the child its address once, at
+            // fork time (`assets/server.js`); reaching this branch means that
+            // bootstrap is gone -- a start is refused while ours is alive, so an
+            // adopted server is by construction one whose parent died. The proxy
+            // died with it, and the survivor still has the dead address in its
+            // environment, which nothing can change in a running process. So
+            // everything in it that honours HTTPS_PROXY -- the Open VSX gallery,
+            // the agent host, and git, npm and curl in every terminal, since they
+            // inherit that environment -- fails to reach the network for as long
+            // as this session lasts, while the workbench itself looks perfectly
+            // healthy. Restarting the app is the only cure, and this line is the
+            // only way to tell that is what is wrong. Not fixable from here: it
+            // would take a proxy whose lifetime is not the bootstrap's.
+            Logger.w(
+                tag,
+                "The adopted server inherited the DNS proxy of the bootstrap that forked " +
+                    "it, and that bootstrap is gone; outbound requests honouring " +
+                    "HTTPS_PROXY will fail until the app is restarted",
+            )
             adopted = true
             _isReady = false
             isShuttingDown = false
+            // Nothing was spawned, so the flag describes nothing. Cleared rather
+            // than left, because it survives in this instance across attempts and
+            // a value left over from a previous one is not about this server.
+            spawnedOntoHeldPort = false
             startAdoptionWatch()
             return true
         }
@@ -284,6 +353,17 @@ class ProcessManager(private val context: Context) {
         // consumer, so the line reaches `Logger.d` and stops, which in a release
         // build is nowhere at all.
         //
+        // What the spawn below now does NOT do is last forever. A pair that
+        // cannot bind stays alive indefinitely -- the measurement above is the
+        // proof -- so every question the app asks about it answers "still
+        // starting", and the launch path waits on liveness. [spawnedOntoHeldPort]
+        // is what ends that: the service reads it when the start poll gives up on
+        // a live process, kills the pair and spends a restart instead of watching
+        // it for the life of the app. The port is deliberately not re-derived
+        // here, because the WebView and its client are built around the one this
+        // instance already published; a start that keeps failing therefore ends
+        // in the terminal state, which says so on the notification.
+        //
         // Those are the defects worth fixing, and none of them is fixed by
         // refusing to start. Do not read the list as an argument for putting the
         // refusal back: refusing produced a state the user could not reach the
@@ -314,6 +394,12 @@ class ProcessManager(private val context: Context) {
         //
         // If that watch is ever removed or weakened, adoption stops being safe and
         // the trade comes back. It is the load-bearing half.
+        //
+        // Recorded before the spawn, because this is the last moment it can be
+        // known: from here on the port is occupied whichever case this is. It is
+        // what lets the service tell a slow server from one that will never
+        // answer -- see [spawnedOntoHeldPort] and `NodeService.awaitLateReadiness`.
+        spawnedOntoHeldPort = !portIsFree
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR is a usable directory — Android may clear cache between

@@ -33,11 +33,17 @@ import kotlin.concurrent.thread
  * The token is the whole of the server's authentication: it is required on every
  * route but `/version`, `/delay-shutdown` and `/callback`, so anything holding it
  * can drive the editor — read any file the server can read, and open a terminal.
- * `MainActivity.navigateToFolder` already goes out of its way to log a URL it has
- * stripped the token out of, and the comment there claims that line is the only
- * place it could otherwise escape. This file exists because that claim was false:
- * the same token rides into this class on every intercepted request and is
- * appended, by `withToken`, to URLs that several log statements then print whole.
+ * `MainActivity.navigateToFolder` keeps its own URL out of the log, and the
+ * comment there once claimed that line was the only place the token could
+ * otherwise escape. This file exists because that claim was false: the same token
+ * rides into this class on every intercepted request and is appended, by
+ * `withToken`, to URLs that several log statements then print whole.
+ *
+ * Both sides now answer through the same `redactToken`. That is worth more than
+ * the two hand-written variants it replaced: `navigateToFolder` used to build a
+ * second, token-free copy of its URL purely to have something safe to log, and a
+ * twin maintained by hand is a twin that drifts — the safe copy stayed correct
+ * only for as long as nobody added a parameter to the real one.
  *
  * Written against the log rather than against a redaction helper on purpose. A
  * helper can be perfect and called from nowhere; what a reader of logcat gets is

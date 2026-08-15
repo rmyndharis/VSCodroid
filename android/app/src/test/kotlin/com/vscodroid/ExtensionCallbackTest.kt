@@ -1,9 +1,16 @@
 package com.vscodroid
 
+import android.net.Uri
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.webview.redactToken
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 
@@ -190,6 +197,134 @@ class AuthCallbackCallSiteTest {
 }
 
 /**
+ * That the workbench URL and the redactor agree about where the token lives.
+ *
+ * The connection token is the whole of the server's authentication: it is
+ * required on every route but `/version`, `/delay-shutdown` and `/callback`, so
+ * anything holding it can read what the server can read and open a terminal.
+ * `Logger.i` is not gated on a debuggable build, so a token printed here reaches
+ * a release build's logcat.
+ *
+ * The coupling is the thing worth pinning. `redactToken` keys on the literal
+ * `tkn=`, and nothing but this test connects that to the parameter the URL is
+ * built with — rename the parameter and the redactor matches nothing while every
+ * log statement still reads as redacted.
+ */
+class WorkbenchUrlTest {
+
+    /** Distinctive enough that a match cannot be a coincidence. */
+    private val token = "tkn-8f31c07a-do-not-log-me"
+
+    @BeforeEach
+    fun setUp() {
+        // The token is a UUID in production, so identity encoding is faithful.
+        // Uri is a stub under the unit-test android.jar and throws otherwise.
+        mockkStatic(Uri::class)
+        every { Uri.encode(any()) } answers { firstArg<String>() }
+    }
+
+    @AfterEach
+    fun tearDown() = unmockkAll()
+
+    @Test
+    fun `the token the workbench needs is the token the redactor hides`() {
+        val url = workbenchUrl(13337, "/data/data/com.vscodroid/files/home/projects", token)
+
+        assertTrue(
+            url.contains(token),
+            "the navigation URL must carry the token or the server answers Forbidden: $url",
+        )
+        assertFalse(
+            redactToken(url).contains(token),
+            "the redactor does not recognise where the token is in this URL, so every " +
+                "log statement that trusts it prints the credential: ${redactToken(url)}",
+        )
+    }
+
+    @Test
+    fun `a server that has not written its token yet yields a bare URL`() {
+        // Control, and a real case: the token file does not exist until the
+        // server has started. An empty `tkn=` would be indistinguishable from a
+        // wrong one, and there would be nothing for the redactor to find either.
+        for (missing in listOf(null, "")) {
+            val url = workbenchUrl(13337, "/projects", missing)
+            assertFalse(url.contains("tkn="), "an absent token produced a token parameter: $url")
+            assertTrue(url.endsWith("/?folder=/projects"), url)
+        }
+    }
+}
+
+/**
+ * That the only place the navigation URL reaches the log is a redacted one.
+ *
+ * [WorkbenchUrlTest] pins that the redactor understands the URL; this pins that
+ * it is used, and that there is only one URL for it to be used on. The defect it
+ * replaces was not a leak but the shape of one: the method built two strings, the
+ * URL it loaded and a token-free twin it logged, and what kept the token out of
+ * logcat was a person keeping them apart. Collapsing them is what a merge does,
+ * and it is also the deliberate edit of anyone who wants the real navigation URL
+ * in the log.
+ *
+ * Source reading, and the weaker layer for the usual reason: the statement is
+ * inside an Activity method, and a plain JVM test can build no Activity.
+ */
+class NavigationTokenLoggingTest {
+
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        mainActivity.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `no log statement prints the navigation URL unredacted`() {
+        check(mainActivity.isFile) {
+            "MainActivity.kt not found at ${mainActivity.absolutePath} — this test " +
+                "would otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+
+        val offenders = lines
+            .filter { (_, l) -> l.contains("Logger.") && Regex("""\$\{?url""").containsMatchIn(l) }
+            .filterNot { (_, l) -> l.contains("redactToken") }
+            .map { (i, l) -> "MainActivity.kt:${i + 1}: ${l.trim()}" }
+
+        assertEquals(
+            emptyList<String>(), offenders,
+            "the URL the WebView loads carries the connection token, and Logger.i is " +
+                "not gated on a debuggable build. Print it through redactToken().",
+        )
+
+        // Control. Without this, deleting the log statement altogether — or
+        // renaming the local — satisfies the assertion above by looking at
+        // nothing, which is the shape of the defect being guarded.
+        assertTrue(
+            lines.any { (_, l) -> l.contains("redactToken(url)") },
+            "nothing redacts the navigation URL; either the log statement went or it " +
+                "stopped going through the redactor",
+        )
+    }
+
+    @Test
+    fun `the workbench URL is assembled in exactly one place`() {
+        // The affordance, not the symptom. Two expressions for the same URL is
+        // what made the redaction a matter of discipline; one cannot drift from
+        // itself.
+        val builders = codeLines()
+            .filter { (_, l) -> l.contains("http://127.0.0.1:\$port") }
+            .map { (i, l) -> "MainActivity.kt:${i + 1}: ${l.trim()}" }
+
+        assertEquals(
+            1, builders.size,
+            "the navigation URL must be built once, so that the string logged and the " +
+                "string loaded cannot differ. Found:\n" + builders.joinToString("\n"),
+        )
+    }
+}
+
+/**
  * The second half of that gate: whether anyone here asked for the callback.
  *
  * Shape was the only thing the relay could judge, and shape is exactly what an
@@ -292,6 +427,87 @@ class RestoreWatcherTest {
         // The first folder of a session. Restoring here would ask
         // startFileWatcher for a mirror that does not exist.
         assertFalse(shouldRestorePreviousWatcher(previousUri = null, failedUri = opened))
+    }
+}
+
+/**
+ * That a cancelled scope is not mistaken for a folder that failed.
+ *
+ * [RestoreWatcherTest] pins which folder a failure leaves watched; this pins what
+ * counts as a failure in the first place. The sync runs in `lifecycleScope`, so
+ * destroying the Activity cancels it — a scheduled dark-mode switch, a font-size
+ * or language change, or "Don't keep activities" while the user is in another
+ * app, none of which the manifest's `configChanges` absorbs. Kotlin's
+ * `CancellationException` is a plain `Exception`, so the catch-all sees it and
+ * every statement in that handler runs.
+ *
+ * `restoreWatcherAfterFailure` is the one that matters: it restarts a FileObserver
+ * and the `saf-writeback` thread on the `SafStorageManager` this Activity owns,
+ * *after* `onDestroy` has stopped it. Only that instance can stop them again and
+ * nothing holds it any more, so they run until the process does. When the user
+ * next opens that folder two engines watch one mirror, and the orphaned one reads
+ * the `.partial` renames of the fresh sync as edits and pushes them back onto the
+ * user's own documents.
+ *
+ * Source reading, and the weaker layer: the handler is inside an Activity method
+ * with a `lifecycleScope`, and a plain JVM test can build neither.
+ */
+class SyncCancellationTest {
+
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+
+    private fun codeLines(): List<String> =
+        mainActivity.readLines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `the sync handler answers cancellation before it answers failure`() {
+        check(mainActivity.isFile) {
+            "MainActivity.kt not found at ${mainActivity.absolutePath} — this test " +
+                "would otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+
+        val sync = lines.indexOfFirst { it.contains("safManager.syncToLocal(") }
+        check(sync >= 0) { "the SAF sync is gone; this test is measuring the wrong method" }
+
+        val after = lines.drop(sync)
+        val cancelled = after.indexOfFirst { it.contains("catch (e: CancellationException)") }
+        val failed = after.indexOfFirst { it.contains("catch (e: Exception)") }
+
+        assertTrue(failed >= 0, "the catch-all is gone; this test is measuring nothing")
+        assertTrue(
+            cancelled >= 0,
+            "a cancelled lifecycleScope reaches `catch (e: Exception)` and is handled as " +
+                "a failed folder, which restarts a file watcher on a destroyed Activity's " +
+                "engine that nothing can stop again",
+        )
+        assertTrue(
+            cancelled < failed,
+            "the cancellation handler must come first, or the catch-all takes it",
+        )
+        assertTrue(
+            after.drop(cancelled).take(6).any { it.contains("throw e") },
+            "the cancellation must be rethrown; swallowing it lets the rest of the " +
+                "coroutine run on an Activity that is gone",
+        )
+    }
+
+    @Test
+    fun `the failure handler still restores the watcher it is responsible for`() {
+        // Control. Deleting `restoreWatcherAfterFailure` outright would satisfy
+        // the test above by removing the subject: a real failed switch away from
+        // a healthy folder must still put that folder's write-back back.
+        val lines = codeLines()
+        val restores = lines.count { it.contains("restoreWatcherAfterFailure(previouslyWatched") }
+
+        assertEquals(
+            2, restores,
+            "expected both failure handlers -- permission denied and everything else -- " +
+                "to decide what stays watched; found $restores",
+        )
     }
 }
 
