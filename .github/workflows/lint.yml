@@ -26,8 +26,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 36
+        # This action has no api-level input; the runner image carries the
+        # platform and Gradle provisions any missing one itself, exactly as
+        # build.yml relies on. The `with:` block that used to sit here named
+        # an input the action ignores, so nothing changed when it was removed.
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
