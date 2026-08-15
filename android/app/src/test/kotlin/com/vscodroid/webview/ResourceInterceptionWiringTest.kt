@@ -171,6 +171,42 @@ class ResourceInterceptionWiringTest {
         )
     }
 
+    /**
+     * That the refusal is a refusal, and not a warning printed on the way to
+     * serving the file anyway.
+     *
+     * Every other case here reads the log, because serving and refusing both end
+     * in a `WebResourceResponse` and that class cannot be constructed under the
+     * stub `android.jar` — its constructor is mocked, so nothing about it can be
+     * asserted. A log line is not evidence of a refusal: code that logged and then
+     * served satisfied all four.
+     *
+     * What separates the two without touching the response is whether the file is
+     * opened. The serve branch calls `FileInputStream(file)` with no `try` around
+     * it and nothing catching upstream, so making the key unreadable turns any
+     * attempt to serve it into a thrown `FileNotFoundException`. Refusing never
+     * reaches that line and returns normally.
+     *
+     * [ResourceOutcomeTest] covers the same decision as a value; this is the half
+     * that proves the interceptor obeys it.
+     */
+    @Test
+    fun `a refused resource is never opened`() {
+        check(sshKey.setReadable(false, false)) { "could not make the fixture unreadable" }
+        check(!sshKey.canRead()) {
+            "the fixture is still readable, so this test would pass without proving anything"
+        }
+
+        // Throws if the interceptor reaches FileInputStream on it.
+        intercept(sshKey.path, openFolder = null)
+
+        assertTrue(
+            warnings.any { it.contains(sshKey.path) },
+            "the private key was neither refused nor opened, which is a third outcome " +
+                "this test does not understand: $warnings",
+        )
+    }
+
     private companion object {
         /** Never connected to — every path here is answered from the filesystem. */
         const val PORT = 41234

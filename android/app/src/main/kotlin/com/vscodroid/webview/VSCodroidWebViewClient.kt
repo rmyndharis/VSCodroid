@@ -75,6 +75,40 @@ internal fun publishedResourceRoots(context: Context): List<String> = listOf(
  * The canonical path is what comes back, not the path as asked for, so that the
  * file opened is the file that was checked.
  */
+/**
+ * What the interceptor decided about one webview resource request.
+ *
+ * Separated from building the response because a `WebResourceResponse` cannot be
+ * constructed under the stub `android.jar`, so a test has to mock its constructor
+ * and can then observe nothing about it. That left refusal provable only by the
+ * warning the code logs — and a log line is not a refusal. Code that logged the
+ * warning and served the file anyway satisfied every assertion.
+ */
+internal sealed interface ResourceOutcome {
+    /** Inside a published root and present on disk. */
+    data class Serve(val file: File) : ResourceOutcome
+
+    /** Resolved outside every published root. Nothing is opened. */
+    object Refused : ResourceOutcome
+
+    /** Inside a root, but absent or not a regular file. */
+    object Missing : ResourceOutcome
+}
+
+/**
+ * The decision, as a value: which of the three outcomes [path] reaches against
+ * [resourceRoots].
+ *
+ * `Refused` is the one that matters. `.ssh/id_ed25519` exists on disk and sits in
+ * the app-private tree, so nothing else in the request path would stop it being
+ * read and handed to the page.
+ */
+internal fun resourceOutcome(path: String, resourceRoots: List<String>): ResourceOutcome {
+    val file = resolveWebviewResource(path, resourceRoots) ?: return ResourceOutcome.Refused
+    if (!file.exists() || !file.isFile) return ResourceOutcome.Missing
+    return ResourceOutcome.Serve(file)
+}
+
 internal fun resolveWebviewResource(requestedPath: String, roots: List<String>): File? {
     val canonical = canonicalOrNull(requestedPath) ?: return null
     // Compared with the separator appended: a root's name is also a prefix of
@@ -378,13 +412,21 @@ class VSCodroidWebViewClient(
                 // Local file resource — serve directly from filesystem.
                 // Both "file" and "vscode-remote" schemes use local paths in VSCodroid
                 // since the server runs on the same device.
-                val file = resolveWebviewResource(path, resourceRoots) ?: run {
-                    Logger.w(TAG, "Resource outside the published roots refused: $path")
-                    return notFound("Access denied")
-                }
-                if (!file.exists() || !file.isFile) {
-                    Logger.d(TAG, "Resource not found ($scheme): $path")
-                    return notFound(path)
+                // Through resourceOutcome so the decision is a value rather than a
+                // log line. Refusing and serving both end in a WebResourceResponse,
+                // which a test cannot inspect under the stub android.jar, so
+                // "log the refusal and serve anyway" was indistinguishable from a
+                // refusal to everything that watched this function.
+                val file = when (val outcome = resourceOutcome(path, resourceRoots)) {
+                    ResourceOutcome.Refused -> {
+                        Logger.w(TAG, "Resource outside the published roots refused: $path")
+                        return notFound("Access denied")
+                    }
+                    ResourceOutcome.Missing -> {
+                        Logger.d(TAG, "Resource not found ($scheme): $path")
+                        return notFound(path)
+                    }
+                    is ResourceOutcome.Serve -> outcome.file
                 }
 
                 val mimeType = guessMimeType(path)
