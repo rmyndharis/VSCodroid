@@ -76,6 +76,24 @@ glibc's soname but are built from this repository's own source.
 | zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2 |
 | Zstandard | GPL-2.0 | Python |
 
+## Toolchain Libraries
+
+Shipped inside the on-demand toolchain packs rather than the base app, so they
+reach only devices where that toolchain was installed. Listed separately because
+`scripts/check-library-attribution.py` reads the toolchain manifests for these,
+and the base APK for the table above.
+
+| Component | License | Shipped with |
+|---|---|---|
+| [GMP](https://gmplib.org) | LGPL-3.0 | Ruby |
+| [libyaml](https://pyyaml.org/wiki/LibYAML) | MIT | Ruby |
+| [libruby](https://www.ruby-lang.org) | BSD-2-Clause | Ruby |
+| [libandroid-execinfo](https://github.com/termux/libandroid-execinfo) | BSD-2-Clause | Ruby |
+| [libandroid-shmem](https://github.com/termux/libandroid-shmem) | BSD-3-Clause | Java |
+| [libandroid-spawn](https://github.com/termux/libandroid-spawn) | BSD-2-Clause | Java |
+
+GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest.
+
 ## On-Demand Toolchains
 
 | Software | License | URL |

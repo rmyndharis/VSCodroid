@@ -342,6 +342,7 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **gdbm** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `gdbm`) — linked by Python's `dbm` and `gdbm` modules
 - **xz / liblzma** (LGPL-2.1 / GPL-2.0 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `liblzma`) — linked by Python's `lzma` module
 - **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`) — linked by Python's `zstd` module
+- **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`) — shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
 
 The four entries after readline were absent from this offer until the library
 inventory above was compiled. Each is dynamically linked and shipped as its own
@@ -349,6 +350,31 @@ inventory above was compiled. Each is dynamically linked and shipped as its own
 source offer below applies to all of them regardless.
 
 You may also request a copy of the source code by contacting us (see contact information below). Source code will be provided for a period of three years from the date of distribution of the corresponding binary, for a charge no more than the cost of physically performing the distribution.
+
+---
+
+## Toolchain Libraries
+
+Shipped inside an on-demand toolchain pack rather than the base app, so they reach
+only devices where that toolchain was installed. The obligations are the same;
+only the audience is smaller.
+
+`scripts/check-library-attribution.py` reads these from the toolchain manifests in
+`android/toolchain_*/src/main/assets/`, rather than from disk, because the packs
+are built by CI and are absent from a working tree — a disk scan would find
+nothing and report success.
+
+| Component | Licence | Shipped with | Source |
+|---|---|---|---|
+| GMP | LGPL-3.0 | Ruby | https://github.com/termux/termux-packages (package: `libgmp`) |
+| libyaml | MIT | Ruby | https://pyyaml.org/wiki/LibYAML |
+| libruby | BSD-2-Clause | Ruby | https://www.ruby-lang.org |
+| libandroid-execinfo | BSD-2-Clause | Ruby | https://github.com/termux/libandroid-execinfo |
+| libandroid-shmem | BSD-3-Clause | Java | https://github.com/termux/libandroid-shmem |
+| libandroid-spawn | BSD-2-Clause | Java | https://github.com/termux/libandroid-spawn |
+
+GMP is the only copyleft entry here, and its written source offer sits with the
+others under **GPL Source Code Availability** above.
 
 ---
 

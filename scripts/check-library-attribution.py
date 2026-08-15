@@ -31,6 +31,7 @@ The map below is the licence record. Its source is Termux's own
 `TERMUX_PKG_LICENSE`, which is what these packages are actually built from.
 """
 
+import json
 import pathlib
 import re
 import sys
@@ -39,6 +40,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 USR_LIB = ROOT / "android/app/src/main/assets/usr/lib"
 JNILIBS = ROOT / "android/app/src/main/jniLibs/arm64-v8a"
 NOTICES = ROOT / "docs/LEGAL_NOTICES.md"
+TOOLCHAINS = ROOT / "android"
 
 # Licences carrying a source obligation. Matched case-insensitively as a
 # substring, so "LGPL-2.1, GPL-3.0" trips on either half.
@@ -135,6 +137,41 @@ LIBRARIES = {
     "libcom_err.so.3": ("Kerberos 5", "MIT"),
 }
 
+# Libraries that ship inside an on-demand toolchain pack rather than the base APK.
+#
+# A separate map because they are found a different way: the base tree can be
+# listed on disk, but a toolchain's payload is only present on a machine that ran
+# its download script, so these are read from the manifests the app itself uses.
+# Missing that distinction cost the attribution for four of them, which were
+# deleted from NOTICE.md while still shipping -- one of them LGPL.
+TOOLCHAIN_LIBRARIES = {
+    "libgmp.so": ("GMP", "LGPL-3.0"),
+    "libyaml-0.so": ("libyaml", "MIT"),
+    "libruby.so": ("libruby", "BSD-2-Clause"),
+    "libandroid-execinfo.so": ("libandroid-execinfo", "BSD-2-Clause"),
+    "libandroid-shmem.so": ("libandroid-shmem", "BSD-3-Clause"),
+    "libandroid-spawn.so": ("libandroid-spawn", "BSD-2-Clause"),
+    "libffi.so": ("libffi", "MIT"),
+}
+
+
+def toolchain_libs():
+    """Every library the shipped toolchain manifests declare, by file name.
+
+    Read from the manifests rather than from disk: the packs are built by CI and
+    are not present in a working tree, so a disk scan would find nothing and
+    report success. The manifests are committed, so this answers the same on any
+    machine.
+    """
+    out = []
+    for manifest in sorted(TOOLCHAINS.glob("toolchain_*/src/main/assets/*.json")):
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"FAIL cannot read {manifest}: {exc}")
+        out.extend(data.get("libs", []))
+    return sorted(set(out))
+
 
 def shipped():
     """Every redistributed binary, by file name."""
@@ -175,8 +212,13 @@ def main():
         return 1
 
     unknown, unattributed, unoffered, unlicensed = [], [], [], []
-    for name in names:
-        entry = LIBRARIES.get(name)
+    # Toolchain payloads are checked alongside the base tree. They ship to fewer
+    # devices, not to none, and the obligations do not scale with audience.
+    for_check = [(n, LIBRARIES.get(n)) for n in names]
+    tc = toolchain_libs()
+    for_check += [(n, TOOLCHAIN_LIBRARIES.get(n)) for n in tc]
+
+    for name, entry in for_check:
         if entry is None:
             unknown.append(name)
             continue
@@ -212,8 +254,9 @@ def main():
     if unknown or unattributed or unoffered or unlicensed:
         return 1
 
-    covered = {LIBRARIES[n][0] for n in names} - {"VSCodroid"}
-    print(f"ok -- {len(names)} shipped binaries, {len(covered)} components, all attributed")
+    covered = {c for _, (c, _) in ((n, e) for n, e in for_check if e) } - {"VSCodroid"}
+    print(f"ok -- {len(names)} shipped binaries + {len(tc)} toolchain libraries, "
+          f"{len(covered)} components, all attributed")
     # The names, not just the count. A count alone cannot answer the question that
     # actually matters when two trees disagree -- *which* file is missing -- and
     # some of these are found by `dlopen` at run time rather than through
