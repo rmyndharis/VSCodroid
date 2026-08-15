@@ -117,7 +117,7 @@ class SafSyncEngine(private val context: Context) {
             if (doc.isDirectory) {
                 localPath.mkdirs()
             } else {
-                // Q2: Skip files larger than MAX_FILE_SIZE
+                // Skip files larger than MAX_FILE_SIZE.
                 // Not recorded, because this sync did not fetch the file and so cannot
                 // say what is at that path. Usually there is nothing; but a file that was
                 // under the limit at an earlier sync and has since grown past it leaves a
@@ -547,7 +547,8 @@ class SafSyncEngine(private val context: Context) {
                     // Skip hidden files and common large directories
                     if (shouldSkip(name, isDir)) continue
 
-                    // Q1: Cache docId for fast write-back resolution
+                    // Cache the docId so write-back resolves this path without
+                    // walking the tree again
                     docIdCache[relativePath] = docId
 
                     result.add(DocumentInfo(docUri, docId, relativePath, isDir, size, lastModified))
@@ -897,8 +898,8 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Resolves a document URI within a SAF tree given a relative path.
-     * Q1 optimization: uses [docIdCache] for O(1) lookup when available,
-     * falling back to tree traversal on cache miss.
+     * Uses [docIdCache] for O(1) lookup when available, falling back to tree
+     * traversal on a cache miss.
      */
     private fun resolveDocumentUri(treeUri: Uri, relativePath: String): Uri? {
         if (relativePath.isEmpty()) {
@@ -980,7 +981,7 @@ class SafSyncEngine(private val context: Context) {
          */
         private const val MAX_WATCHED_DIRECTORIES = 2048
 
-        /** Q2: Max file size to sync (50 MB). Larger files are skipped. */
+        /** Max file size to sync (50 MB). Larger files are skipped. */
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
         /**
@@ -1047,7 +1048,12 @@ class SafSyncEngine(private val context: Context) {
 
         /**
          * Directories to skip during sync — auto-generated and too large.
-         * Q3: Removed "build" (legitimate source dir) and ".vscode" (workspace settings).
+         *
+         * "build" and ".vscode" are deliberately absent. build/ holds real
+         * source in many projects (Gradle build scripts, C output kept in
+         * tree), and .vscode/ holds launch.json, settings.json and
+         * extensions.json — the workspace settings users most want synced.
+         * Adding either back silently stops those files reaching the device.
          */
         internal val SKIP_DIRECTORIES = setOf(
             "node_modules",

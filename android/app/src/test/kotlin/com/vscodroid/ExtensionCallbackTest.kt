@@ -143,8 +143,8 @@ class AuthCallbackCallSiteTest {
 
     @Test
     fun `the restart message is decided before the timing gate, not after`() {
-        // A regression that was made and caught in review rather than by any
-        // test. Putting the timing gate first is the obvious ordering and it is
+        // A regression that no test caught, which is why this one exists.
+        // Putting the timing gate first is the obvious ordering and it is
         // wrong: the case the restart message exists for is arriving through
         // onCreate after the process was killed with the browser in front, and a
         // fresh process has openedAt == 0, so the gate returns before the

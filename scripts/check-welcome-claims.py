@@ -168,7 +168,7 @@ def main():
     # Worth checking here because this script asks people to edit these files,
     # and the obvious way to explain a removal is a comment -- which cannot
     # contain two hyphens in a row, exactly what a comment about `--version`
-    # wants to write. That was caught in review rather than by anything.
+    # wants to write. Nothing else in this repository would catch that.
     for svg in sorted(directory.glob("media/*.svg")):
         try:
             ElementTree.parse(svg)
