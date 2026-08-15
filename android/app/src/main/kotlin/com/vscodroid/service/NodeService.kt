@@ -369,6 +369,20 @@ class NodeService : Service() {
                     awaitLateReadiness()
                 }
             }
+
+            // Saying why it failed is not the same as leaving the app able to try
+            // again, and until now only the first happened. The branches above
+            // record a notice and return; the flag [onStartCommand] guards on
+            // stayed true, so every later launch was a no-op and the failure was
+            // permanent for the life of the process.
+            //
+            // Driven by the predicate rather than repeated in the two branches, so
+            // that which outcomes end a run is a decision a test can hold. Note
+            // this is reached after [awaitLateReadiness] returns as well, which is
+            // exactly why the predicate answers false for STILL_COMING_UP: a
+            // process that has finally exited is the crash path's to report, and
+            // it is about to.
+            if (leavesNothingRunning(outcome)) stopServingRecoverably()
         }
     }
 
@@ -546,24 +560,62 @@ class NodeService : Service() {
      */
     private fun enterTerminalState() {
         Logger.e(tag, "Max restarts exceeded ($MAX_RESTARTS)")
-        isServiceRunning = false
         cancelLaunch()
-        val stoppedText = getString(R.string.notification_text_stopped)
+        stopServingRecoverably()
+        // Recorded as well as raised: this is the terminal state, so an activity
+        // that binds after it has to be told too. The notification says the same
+        // thing, but the notification is not on screen while the editor is.
+        reportStartupNotice(getString(R.string.notification_text_stopped))
+    }
+
+    /**
+     * Leaves the service alive, saying it is not serving, and able to be started
+     * again.
+     *
+     * The whole of it is [isServiceRunning] and the notification, and the flag is
+     * the part that matters. [onStartCommand] guards on it, so while it is true a
+     * relaunch is a no-op: `startForegroundService` reaches a body that is
+     * skipped, nothing is started, and the editor waits for a readiness callback
+     * that nothing will fire. That is the state a failed start used to leave --
+     * for the life of the process, with the notification still reading "VSCodroid
+     * is running" and offering to Stop a server that does not exist. The only way
+     * out was to press that Stop, or to force-stop the app.
+     *
+     * Written up as [enterTerminalState]'s reasoning and true of it since; what
+     * this function is for is that the two start failures need exactly the same
+     * treatment and had none of it. Both leave nothing running, so both have to
+     * leave the service able to try again.
+     *
+     * The notification is rewritten through `startForeground` rather than posted
+     * again, because updating the foreground notification needs no notification
+     * permission of its own; a separate `notify()` on API 33+ does. It is then
+     * detached rather than removed: it is the only place this state is visible
+     * once the activity is gone, so it has to outlive the foreground status
+     * instead of disappearing with it.
+     *
+     * The service deliberately does not stop itself. Stopping is not what makes
+     * the state visible, and staying alive is what lets the next `onStartCommand`
+     * recover in place, with the port and the connection token that the
+     * workbench's IndexedDB is already bound to.
+     *
+     * Deliberately does **not** cancel the launch coroutine. One of its two
+     * callers is that coroutine, which is finishing; cancelling from inside itself
+     * would be a no-op dressed as an action. [enterTerminalState], which is
+     * reached from the crash scope instead, cancels separately and has to.
+     */
+    private fun stopServingRecoverably() {
+        isServiceRunning = false
         ServiceCompat.startForeground(
             this,
             VSCodroidApp.NOTIFICATION_ID,
             createNotification(
                 getString(R.string.notification_title_stopped),
-                stoppedText,
+                getString(R.string.notification_text_stopped),
                 serverRunning = false,
             ),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
-        // Recorded as well as raised: this is the terminal state, so an activity
-        // that binds after it has to be told too. The notification says the same
-        // thing, but the notification is not on screen while the editor is.
-        reportStartupNotice(stoppedText)
     }
 
     /**
@@ -735,6 +787,27 @@ internal suspend fun launchOutcome(
     awaitReady() -> LaunchOutcome.READY
     !isAlive() -> LaunchOutcome.DIED_BEFORE_ANSWERING
     else -> LaunchOutcome.STILL_COMING_UP
+}
+
+/**
+ * Whether [outcome] ends the run, leaving no server process behind.
+ *
+ * The two failures do and the two successes do not, which sounds obvious and was
+ * not done: both failure branches recorded a notice and returned, leaving the
+ * service believing it was still running and every later launch a no-op.
+ *
+ * `STILL_COMING_UP` is the one worth being deliberate about. It is false here
+ * even though the caller reaches this point only after the late-readiness loop
+ * has ended -- which it does when the process dies. That exit is the crash
+ * path's to report, through the watchdog and [CrashAction], and reporting it
+ * twice would spend a restart and rewrite the notification behind it.
+ *
+ * Exhaustive over the enum rather than an `else`, so adding an outcome is a
+ * compile error here instead of a silent `false`.
+ */
+internal fun leavesNothingRunning(outcome: LaunchOutcome): Boolean = when (outcome) {
+    LaunchOutcome.NOT_STARTED, LaunchOutcome.DIED_BEFORE_ANSWERING -> true
+    LaunchOutcome.READY, LaunchOutcome.STILL_COMING_UP -> false
 }
 
 /** What a crash report gets. */
