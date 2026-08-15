@@ -263,12 +263,39 @@ class NodeService : Service() {
     private fun shutdown() {
         Logger.i(tag, "Stop requested from the notification")
         isServiceRunning = false
-        launchJob?.cancel()
-        launchJob = null
+        cancelLaunch()
         processManager.stopServer()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         onServerStopped?.invoke()
+    }
+
+    /**
+     * Ends the current start attempt, if there is one.
+     *
+     * The two statements are one operation and exist as a function so that they
+     * cannot be separated again. [enterTerminalState] used to do only the second,
+     * which is worse than doing neither: nulling the handle does not wake the
+     * coroutine, it removes the only reference anything held to it, so the
+     * `launchJob?.cancel()` at the top of [launchServer] -- the line whose whole
+     * job is stopping two attempts from overlapping -- then cancelled null.
+     *
+     * What that cost is not theoretical, because the terminal state deliberately
+     * leaves the service alive so the next `onStartCommand` can recover in place
+     * on the same instance. The abandoned coroutine is usually parked in
+     * [awaitLateReadiness], whose loop is bounded by process liveness and whose
+     * sleep runs to [LATE_READY_SLOW_POLL_MS]; when the new attempt spawns a
+     * process, `isRunning()` answers true again and the old loop simply carries on
+     * against it. It is then free to call [announceReady] -- resetting the restart
+     * budget and firing `onServerReady` for an attempt it is not watching -- and
+     * free to post `status_server_slow_start` at its own ninety-second mark, over
+     * a notice the new attempt had just cleared. `MainActivity` returns without
+     * loading when it finds a notice, so that last one shows the user a healthy
+     * server as a failed one.
+     */
+    private fun cancelLaunch() {
+        launchJob?.cancel()
+        launchJob = null
     }
 
     /**
@@ -310,35 +337,38 @@ class NodeService : Service() {
         // stale verdict from the previous attempt does not exist.
         startupNotice = null
         launchJob = serviceScope.launch {
-            val started = withContext(Dispatchers.IO) { processManager.startServer() }
-            if (!started) {
-                Logger.e(tag, "Failed to start server process")
-                reportStartupNotice(getString(R.string.error_server_start))
-                return@launch
-            }
+            val outcome = launchOutcome(
+                start = { withContext(Dispatchers.IO) { processManager.startServer() } },
+                awaitReady = { withContext(Dispatchers.IO) { processManager.waitForReady() } },
+                isAlive = { processManager.isRunning() },
+            )
+            when (outcome) {
+                LaunchOutcome.NOT_STARTED -> {
+                    Logger.e(tag, "Failed to start server process")
+                    reportStartupNotice(getString(R.string.error_server_start))
+                }
 
-            val ready = withContext(Dispatchers.IO) { processManager.waitForReady() }
-            if (ready) {
-                announceReady()
-                return@launch
-            }
+                LaunchOutcome.READY -> announceReady()
 
-            // The poll is bounded; the server is not obliged to agree. A process
-            // that is still alive here has not failed at anything -- it is slow,
-            // and this project's own device harness budgets 120 seconds for the
-            // same event that this gives up on at 30 (scripts/device-test.sh,
-            // TIMEOUT=120). Reporting a failure for it would be a false alarm,
-            // and, worse, stopping here used to make it permanent: nothing else
-            // in the app ever probes again, so a server that bound its port at
-            // t=35s stayed unreachable for as long as it ran.
-            if (!processManager.isRunning()) {
-                Logger.e(tag, "Server timeout and the process is gone")
-                reportStartupNotice(getString(R.string.error_server_timeout))
-                return@launch
-            }
+                // The poll is bounded; the server is not obliged to agree. A
+                // process that is still alive has not failed at anything -- it is
+                // slow, and this project's own device harness budgets 120 seconds
+                // for the same event that this gives up on at 30
+                // (scripts/device-test.sh, TIMEOUT=120). Reporting a failure for
+                // it would be a false alarm, and, worse, stopping here used to
+                // make it permanent: nothing else in the app ever probes again, so
+                // a server that bound its port at t=35s stayed unreachable for as
+                // long as it ran.
+                LaunchOutcome.DIED_BEFORE_ANSWERING -> {
+                    Logger.e(tag, "Server timeout and the process is gone")
+                    reportStartupNotice(getString(R.string.error_server_timeout))
+                }
 
-            Logger.w(tag, "Server has not answered yet; still watching a live process")
-            awaitLateReadiness()
+                LaunchOutcome.STILL_COMING_UP -> {
+                    Logger.w(tag, "Server has not answered yet; still watching a live process")
+                    awaitLateReadiness()
+                }
+            }
         }
     }
 
@@ -465,13 +495,14 @@ class NodeService : Service() {
         // itself, but a crash already on its way to this scope when Stop was
         // pressed still lands here — and reviving it, or rewriting a notification
         // that has just been taken down, would both be wrong.
-        if (!isServiceRunning) {
+        val action = crashAction(isServiceRunning, restartCount)
+        if (action == CrashAction.IGNORE) {
             Logger.i(tag, "Server exit ($exitCode) after the service stopped; nothing to restart")
             return
         }
 
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
-        if (!hasRestartBudget(restartCount)) {
+        if (action == CrashAction.GIVE_UP) {
             enterTerminalState()
             return
         }
@@ -516,7 +547,7 @@ class NodeService : Service() {
     private fun enterTerminalState() {
         Logger.e(tag, "Max restarts exceeded ($MAX_RESTARTS)")
         isServiceRunning = false
-        launchJob = null
+        cancelLaunch()
         val stoppedText = getString(R.string.notification_text_stopped)
         ServiceCompat.startForeground(
             this,
@@ -661,6 +692,81 @@ internal const val LATE_READY_NOTICE_MS = 90_000L
  */
 internal fun lateReadinessPollMs(elapsedMs: Long): Long =
     if (elapsedMs < LATE_READY_NOTICE_MS) LATE_READY_POLL_MS else LATE_READY_SLOW_POLL_MS
+
+/** Where one start attempt ends up. */
+internal enum class LaunchOutcome {
+    /** The process could not be spawned at all. */
+    NOT_STARTED,
+
+    /** The server answered inside the start poll. */
+    READY,
+
+    /** The poll gave up and the process is gone. */
+    DIED_BEFORE_ANSWERING,
+
+    /** The poll gave up, but the process is alive and may still answer. */
+    STILL_COMING_UP,
+}
+
+/**
+ * Which of the four ends a start attempt reaches.
+ *
+ * Extracted because the branch it replaces lived inside a coroutine on a
+ * `Dispatchers.Main` scope owned by a `Service`, and nothing in a plain JVM can
+ * reach either: `Service` needs a base context and the main dispatcher needs a
+ * Looper. This suite has neither Robolectric nor `kotlinx-coroutines-test`, so
+ * the whole of the start state machine was reached by no test at all -- the same
+ * reason [hasRestartBudget] and [restartBackoffMs] sit out here.
+ *
+ * The steps arrive as suspending suppliers rather than as three booleans, and
+ * that is the point rather than a convenience. Written to take values, every
+ * caller would have to run all three before asking -- so a start that failed to
+ * spawn would still sit through [ProcessManager.waitForReady]'s thirty-second
+ * poll before being told it had failed. Short-circuiting is behaviour, so it is
+ * expressed here where a test can hold it, instead of in the caller where the
+ * previous version of it lived unobserved.
+ */
+internal suspend fun launchOutcome(
+    start: suspend () -> Boolean,
+    awaitReady: suspend () -> Boolean,
+    isAlive: () -> Boolean,
+): LaunchOutcome = when {
+    !start() -> LaunchOutcome.NOT_STARTED
+    awaitReady() -> LaunchOutcome.READY
+    !isAlive() -> LaunchOutcome.DIED_BEFORE_ANSWERING
+    else -> LaunchOutcome.STILL_COMING_UP
+}
+
+/** What a crash report gets. */
+internal enum class CrashAction {
+    /** The service has stopped; the exit describes a process the user asked to be rid of. */
+    IGNORE,
+
+    /** The restart budget is spent. */
+    GIVE_UP,
+
+    /** Another attempt, after a pause. */
+    RESTART,
+}
+
+/**
+ * What to do about a server that has exited.
+ *
+ * [serviceRunning] is checked before the budget, and the order carries the
+ * meaning: a crash already on its way to the service scope when Stop was pressed
+ * still lands here, and spending a restart on it -- or worse, rewriting a
+ * notification that has just been taken down -- would both be wrong. A stopped
+ * service is not a failing one.
+ */
+internal fun crashAction(
+    serviceRunning: Boolean,
+    restartCount: Int,
+    maxRestarts: Int = MAX_RESTARTS,
+): CrashAction = when {
+    !serviceRunning -> CrashAction.IGNORE
+    !hasRestartBudget(restartCount, maxRestarts) -> CrashAction.GIVE_UP
+    else -> CrashAction.RESTART
+}
 
 /**
  * Whether a server that has already crashed [restartCount] times gets another
