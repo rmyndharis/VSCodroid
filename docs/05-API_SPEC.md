@@ -78,12 +78,12 @@ compare.
    `openExternalUrl(url, authToken)`, `installToolchain(name, authToken)`,
    `removeToolchain(name, authToken)` and `cancelToolchainInstall(name, authToken)`.
    Read the signature before calling; the position is not a convention you can rely on.
-3. **Scheme allowlist**: `openExternalUrl()` accepts `https://`, `mailto:`, and `http://`
-   to `localhost` or `127.0.0.1` (the last for dev-server preview). Everything else is
-   refused, logged, **and reported to the caller** as `false`, including unparseable
-   URLs (`SecurityManager.isAllowedUrl`). The report is the recent half: the method
-   returned Unit until it was given a Boolean, so a refusal used to be
-   indistinguishable from a launch.
+3. **No URL filtering.** `openExternalUrl()` hands any URL to the platform — any
+   scheme, any host, including one that is wrong. This is a development tool, and a
+   developer opening `http://192.168.1.5:3000`, a custom scheme, or a typo is doing
+   something ordinary; the app is not the right place to have an opinion about it.
+   Android decides whether an app exists to handle the link, and `false` says none
+   did. There is no scheme list and no host list to keep in step with anything.
 
    Citations in this section name symbols rather than line numbers on purpose. All
    three used to carry ranges and all three had rotted — one of them pointed into a
@@ -187,11 +187,11 @@ fun openExternalUrl(url: String, authToken: String): Boolean  // note: token LAS
 // intent for the rest, which is what the localhost dev-server preview needs.
 // Used by: VS Code "Open in Browser" actions.
 //
-// Returns whether it was opened. THREE different things return false and the
-// caller cannot tell them apart: the token was rejected, the scheme allowlist
-// in §2.2 refused the URL, or no activity took the intent. Only the middle one
-// is a policy decision -- http to a LAN address is refused there, which is the
-// common case a user meets.
+// Returns whether it was opened. TWO things return false and the caller cannot
+// tell them apart: the token was rejected, or no installed app took the intent.
+// The URL itself is never judged -- there is no scheme or host filter on this
+// path, so a LAN address, a custom scheme and a typo are all simply handed to
+// Android. `false` means nothing on the device handles that link.
 //
 // It returned Unit until the fix that gave it this signature, so a refusal was
 // indistinguishable from a launch. The relay reported ok:true because there was
