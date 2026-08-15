@@ -272,3 +272,15 @@ mkdir -p "$JNILIBS_DIR"
 cp "$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg" "$JNILIBS_DIR/libripgrep.so"
 chmod +x "$JNILIBS_DIR/libripgrep.so"
 echo "  rg -> libripgrep.so ($(du -h "$JNILIBS_DIR/libripgrep.so" | cut -f1))"
+
+# The same gate every other binary in jniLibs already gets, and this was the one
+# without it. verify-server-tree.py above reads rg's e_machine and stops there:
+# it does not read LOAD alignment, which Android 16 refuses below 16 KB, and it
+# does not read DT_NEEDED, so an rg linked against something nothing bundles
+# would copy in cleanly and then fail at exec -- with Search returning no
+# results, which is the same thing an empty workspace looks like.
+#
+# This file is also the only bundled ELF whose properties no step here decided:
+# every other one is produced by a download script that checks it, while this is
+# a plain cp out of a tarball built in another workflow on another machine.
+python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$JNILIBS_DIR/libripgrep.so"
