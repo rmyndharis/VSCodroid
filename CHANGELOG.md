@@ -107,6 +107,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- A folder re-granted while the app is tidying up is no longer wiped. On launch
+  the app reclaims the local copies of folders whose permission you have since
+  withdrawn, and it decided what to reclaim from a single reading taken before it
+  started. Reclaiming a large project takes long enough for you to reach the
+  editor and grant a folder again in the meantime, and that folder was missing
+  from a reading older than the grant — so its freshly synced copy was deleted
+  under the editor holding it. Each candidate is now checked against the
+  permissions as they stand at that moment
 - A certificate store interrupted while being written no longer breaks HTTPS
   cloning permanently. It is assembled on first launch from the device's own
   trusted certificates and rebuilt only when those change, so a write cut short —

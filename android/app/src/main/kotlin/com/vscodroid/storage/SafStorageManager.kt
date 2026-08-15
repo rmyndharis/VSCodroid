@@ -189,9 +189,11 @@ class SafStorageManager(private val context: Context) {
      * @return how many entries were removed.
      */
     internal fun reclaimRevokedMirrorsSync(): Int {
-        val live = context.contentResolver.persistedUriPermissions
-            .map { getMirrorDir(it.uri).name }
-            .toSet()
+        fun liveMirrorNames(): Set<String> =
+            context.contentResolver.persistedUriPermissions
+                .map { getMirrorDir(it.uri).name }
+                .toSet()
+
         val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
         var removed = 0
 
@@ -202,8 +204,17 @@ class SafStorageManager(private val context: Context) {
             // is a name we would have set aside.
             val alreadySetAside = name.startsWith(DISCARD_PREFIX) &&
                 MIRROR_ENTRY.matches(name.removePrefix(DISCARD_PREFIX))
+            // Asked per entry rather than from one snapshot taken before the loop,
+            // and the gap between the two is the point. This runs on a detached
+            // thread whose duration is proportional to what it deletes -- a project
+            // mirror is a recursive delete of thousands of files -- and the user
+            // reaches MainActivity while it works. A folder granted during that
+            // window is absent from a snapshot predating the grant, so its freshly
+            // synced mirror was set aside and deleted underneath the editor holding
+            // it. The cost is one binder call per candidate, and a candidate is an
+            // entry that already looks unowned, which is normally none.
             val reclaimable = alreadySetAside ||
-                (MIRROR_ENTRY.matches(name) && name.substringBefore('.') !in live)
+                (MIRROR_ENTRY.matches(name) && name.substringBefore('.') !in liveMirrorNames())
             if (!reclaimable) return@forEach
 
             val discarded: File
