@@ -23,10 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than resolving the tag, which costs no network and does not fail when
   upstream moves a tag — the failure the commit pin exists to avoid
 - A check that sits in the repository while nothing runs it now fails the build.
-  The six JavaScript self-checks — covering the server bootstrap, the DNS proxy,
-  the process monitor and the extension that displays it, the platform fix and
-  the bridge relay — have to be invoked on both the pull-request path and the
-  tag path, because a hotfix tagged straight off the main branch never touches
+  The JavaScript self-checks — covering the server bootstrap, the DNS proxy, the
+  process monitor and the extension that displays it, the platform fix, the
+  bridge relay and the dev-server scan — have to be invoked on both the
+  pull-request path and the tag path, because a hotfix tagged straight off the
+  main branch never touches
   the first, so a check wired into only one is unrun on half the routes that
   reach a user. Every `check-*.py` in the scripts directory now has to be
   invoked by something as well: a workflow, a build script or the Gradle build.
@@ -598,11 +599,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A folder synced from a device now copies only into its own mirror directory. The path for each copy was built from the name the document provider reported, and a name that was not a single path segment could place the file outside the mirror. Names that come from the platform's own provider are derived from real filenames and were never affected; the check matters for providers that relay names from elsewhere
 - Fourteen disagreements between the bridge API documentation and the bridge. The ones that cost a caller most: the SSH key generator's second argument was documented as a key type offering RSA when it is the key's comment and the algorithm is not selectable, so asking for RSA produced an ed25519 key with "rsa" written into its comment and no error anywhere; two methods were documented as returning a value when they return nothing, one of them inviting callers to branch on whether a lapsed folder permission still works; and seven methods the app actually exposes were missing from the documentation entirely
 - The attribution for Code - OSS now reproduces the copyright line exactly as it appears in the licence file shipped inside the app. It read "2015-2024" where the shipped file reads "2015 - present" — a bounded range in place of an open one is a notice that stops being true rather than a formatting difference
-
-### Removed
-- An unused layout and seventeen unused strings, left over from an earlier version of the extra key row. No user-visible change
-
-
 - Extensions maintained by this project now update when the app updates. Previously an extension whose code changed without a change to its version number reached only new installs: what to unpack was decided from the version in the folder name, so a device that already had that folder unpacked nothing and kept the older copy indefinitely. Extensions from the marketplace are unaffected and are not re-copied — their version always changes when their contents do.
 
 - A Python installation left behind by an earlier version is now removed even when the device is short of storage. The clean-up previously ran only once there was already room to unpack the replacement, which is the one situation where it was not needed. On a full device the old files stayed, the space they held was exactly what the new version needed, and Python could remain unavailable indefinitely.
@@ -616,6 +612,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A first run that cannot unpack the editor's own files now stops and offers to retry, instead of finishing and reporting success. Previously a file lost during setup left an app that opened but could never start its server, and it would not try again until the next app update. On a device that is still short of storage the retry now reports the storage problem rather than repeating the whole unpack.
 
 - An installation already left broken by an interrupted setup now repairs itself on the next launch. Where a shell or settings file had been left empty or cut off part-way, nothing would replace it, because every writer checked only whether the file existed. Files that were partly written but still plausible are left untouched, so nothing you edited yourself is overwritten.
+
+### Removed
+
+- An unused layout and seventeen unused strings, left over from an earlier version of the extra key row. No user-visible change
+
+
 - GitLens, which earlier versions bundled, is now cleared from devices that still have it — roughly 22 MB. It stopped being included some releases ago, but the copy already installed was left in place and nothing removed it. Installing GitLens yourself from the marketplace is unaffected.
 
 ## [1.0.0] - 2026-04-21
