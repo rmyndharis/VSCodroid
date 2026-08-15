@@ -566,6 +566,18 @@ private var ProcessManager.portField: Int
     get() = field("_port").getInt(this)
     set(value) = field("_port").setInt(this, value)
 
+/**
+ * Reaches `ProcessManager.cachedToken`, which is private production state.
+ *
+ * Needed because the token is cached on first read and deliberately never
+ * invalidated — correct in production, since the server reuses the file rather
+ * than regenerating it, and inconvenient in a test that wants to change what the
+ * file says after something has already read it.
+ */
+private var ProcessManager.cachedTokenField: String?
+    get() = field("cachedToken").get(this) as String?
+    set(value) = field("cachedToken").set(this, value)
+
 private fun field(name: String) =
     ProcessManager::class.java.getDeclaredField(name).apply { isAccessible = true }
 
@@ -815,6 +827,176 @@ class ServerReadinessTest {
         release.countDown()
         assertTrue(crashed.await(5, TimeUnit.SECONDS), "the watchdog never saw the exit")
         assertFalse(manager.isReady(), "a process that has exited is not serving")
+    }
+}
+
+/**
+ * Adopting a server this instance did not start.
+ *
+ * The case: `assets/server.js` forks the editor server and forwards SIGTERM, but
+ * a SIGKILLed `server.js` — routine here — forwards nothing and `fork()` sets no
+ * PDEATHSIG, so the child outlives its parent still holding the port. Measured
+ * on an emulator, spawning anyway produces a parent whose own child prints
+ * EADDRINUSE and never exits: this class ends up watching a process whose death
+ * means nothing while the process serving the user is untracked.
+ *
+ * Adoption removes the second process and puts the watch on the one that
+ * matters. Both halves are pinned here, because either alone is worse than
+ * neither: adopting without watching trades a loud failure for a silent one,
+ * which is the trade the port refusal was removed for, running the other way.
+ */
+class AdoptionTest {
+
+    @TempDir
+    lateinit var tempDir: File
+
+    private lateinit var manager: ProcessManager
+    private lateinit var contextMock: Context
+    private var stub: StubServer? = null
+
+    /** Written where [Environment.getConnectionTokenPath] is stubbed to look. */
+    private val token = "adopt-2f9c-token"
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any()) } just Runs
+
+        val tokenFile = File(tempDir, "token").apply { writeText(token) }
+
+        mockkObject(Environment)
+        every { Environment.getNodePath(any()) } returns "/bin/echo"
+        every { Environment.getServerScript(any()) } returns "server.js"
+        every { Environment.buildProcessEnvironment(any(), any()) } returns emptyMap()
+        every { Environment.getExtensionsDir(any()) } returns "extensions"
+        every { Environment.getUserDataDir(any()) } returns "data"
+        every { Environment.getLogsDir(any()) } returns "logs"
+        every { Environment.getConnectionTokenPath(any()) } returns tokenFile.path
+
+        contextMock = mockk<Context>(relaxed = true)
+        every { contextMock.cacheDir } returns tempDir
+        every { contextMock.filesDir } returns tempDir
+
+        manager = ProcessManager(contextMock)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        stub?.stop()
+        manager.stopServer()
+        unmockkAll()
+    }
+
+    /** Points the manager at a loopback server answering [status] on every route. */
+    private fun serving(status: Int): StubServer =
+        StubServer(status).also { stub = it; manager.portField = it.port }
+
+    @Test
+    fun `a server that accepts our token is adopted rather than spawned over`() {
+        // 200 to everything, including the tokened `/`, so the ownership probe
+        // sees acceptance. The port is genuinely held by the stub, which is what
+        // sends startServer down this branch at all.
+        serving(200)
+
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertTrue(manager.isAdopted(), "the server on the port is not ours to claim we spawned")
+        assertNull(
+            manager.serverProcessField,
+            "adoption must not spawn a second server onto a port the first still holds",
+        )
+    }
+
+    @Test
+    fun `a holder that refuses our token is not adopted`() {
+        // 403 is the discriminating answer and the only one that means "not ours".
+        // A stranger can hold a loopback port on Android; only our own processes
+        // can read the token file the probe presents.
+        serving(403)
+
+        assertFalse(manager.portHolderAcceptsOurToken(), "403 is a refusal, not an acceptance")
+        manager.startServer()
+        assertFalse(manager.isAdopted(), "a server that refuses our token is not ours to adopt")
+    }
+
+    @Test
+    fun `a redirect counts as acceptance`() {
+        // The server consumes the token on `/` and redirects while turning it into
+        // the vscode-tkn cookie, so pinning 200 alone would call our own server a
+        // stranger. The probe judges by what the answer is NOT.
+        serving(302)
+
+        assertTrue(manager.portHolderAcceptsOurToken())
+    }
+
+    @Test
+    fun `an empty token cannot claim ownership of anything`() {
+        // Kills a probe that treats a missing token as a pass. Before the server
+        // has written one there is nothing to present, and "no answer to the
+        // question" must not read as "yes".
+        serving(200)
+        File(tempDir, "token").writeText("")
+        manager.cachedTokenField = null
+
+        assertFalse(manager.portHolderAcceptsOurToken())
+    }
+
+    @Test
+    fun `an adopted server that stops answering is reported as a crash`() {
+        // The half that makes adoption safe. There is no Process behind an adopted
+        // server, so nothing reports its death for free; without this the class
+        // would report it healthy for as long as it ran.
+        serving(200)
+        assertTrue(manager.startServer())
+        assertTrue(manager.probeReadiness(), "the fixture must start out serving")
+
+        val crashed = CountDownLatch(1)
+        manager.onServerCrashed = { crashed.countDown() }
+
+        stub?.stop()
+
+        assertTrue(
+            crashed.await(30, TimeUnit.SECONDS),
+            "the adopted server went away and nothing noticed",
+        )
+        assertFalse(manager.isReady(), "a server that stopped answering is not serving")
+        assertFalse(manager.isAdopted(), "and it is no longer ours to serve")
+    }
+
+    @Test
+    fun `a restart does not spawn a second server while one is adopted`() {
+        // The start guard's other half. `isRunning()` answers false for an adopted
+        // server because there is no Process, so without consulting adoption this
+        // would spawn onto a port that is still held.
+        serving(200)
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.startServer(), "a second start must be refused while one is adopted")
+        assertNull(manager.serverProcessField)
+    }
+
+    @Test
+    fun `stopping says plainly that an adopted server cannot be stopped`() {
+        // Not cosmetic. Before adoption this case still arrived, and it was worse:
+        // serverProcess referenced a process that never served anything, so the
+        // stop destroyed the wrong one and reported success while the real server
+        // kept running.
+        val warnings = mutableListOf<String>()
+        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
+        serving(200)
+        assertTrue(manager.startServer())
+
+        manager.stopServer()
+
+        assertFalse(manager.isAdopted(), "the stop must at least end our relationship with it")
+        assertTrue(
+            warnings.any { it.contains("adopted") },
+            "a stop that cannot stop anything must say so: $warnings",
+        )
     }
 }
 

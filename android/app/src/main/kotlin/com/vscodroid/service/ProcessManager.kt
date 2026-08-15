@@ -11,6 +11,7 @@ import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -42,8 +43,31 @@ class ProcessManager(private val context: Context) {
     @Volatile
     private var _isReady = false
 
+    /**
+     * Whether the server being served is one this instance found rather than
+     * started.
+     *
+     * Volatile for the same reason the two above are: the watch thread clears it
+     * when the adopted server stops answering, and the main thread reads it.
+     *
+     * There is no [Process] behind an adopted server, so everything that reasons
+     * from `serverProcess` has to consult this too — the start guard, and
+     * [stopServer], which cannot kill what it did not spawn and says so instead
+     * of reporting success.
+     */
+    @Volatile
+    private var adopted = false
+
     /** The port the server is listening on. Only valid after [startServer] returns true. */
     val port: Int get() = _port
+
+    /**
+     * Whether the server on the port was adopted rather than started here.
+     *
+     * Exposed so callers can distinguish "we have a server" from "we control the
+     * server", which are the same question only while we started it.
+     */
+    fun isAdopted(): Boolean = adopted
 
     /**
      * The connection token the server requires on every route except `/version`,
@@ -119,7 +143,12 @@ class ProcessManager(private val context: Context) {
     fun startServer(): Boolean {
         // Liveness, not nullity: the crash path leaves the dead Process referenced,
         // so a null check here refused every automatic restart attempt (issue #3).
-        if (isRunning()) {
+        //
+        // `adopted` is the second half of the same question. There is no Process
+        // behind an adopted server, so `isRunning()` answers false for one that is
+        // serving perfectly well, and without this a restart would spawn a second
+        // server onto a port the first still holds.
+        if (isRunning() || adopted) {
             Logger.w(tag, "Server already running")
             return false
         }
@@ -142,10 +171,41 @@ class ProcessManager(private val context: Context) {
         // see PortFinder.getOrAllocatePort.
         if (_port == 0) {
             _port = PortFinder.getOrAllocatePort(context)
+        } else if (!PortFinder.isPortAvailable(_port) && portHolderAcceptsOurToken()) {
+            // A server of ours is already on the port. Serve it instead of
+            // spawning a second one that cannot bind.
+            //
+            // This is the case the long note below is about, and it is the common
+            // one rather than the exotic one: `assets/server.js` forks the editor
+            // server and forwards SIGTERM, but a SIGKILLed `server.js` -- routine
+            // here, it is what the watchdog's 137 branch exists for -- forwards
+            // nothing and `fork()` sets no PDEATHSIG, so the child outlives its
+            // parent still holding the socket. It is not wreckage: it is a live,
+            // healthy editor server, the one the open WebView is still talking to.
+            //
+            // Measured on an API 36 emulator: spawning anyway produced a parent
+            // that never becomes the server. Its child printed
+            // `code: 'EADDRINUSE'` and did NOT exit, so this class ended up
+            // watching a process whose death means nothing while the process that
+            // serves the user was untracked. Adopting removes that second process
+            // entirely and puts the watch on the one that matters.
+            //
+            // The ownership test is what makes this safe to do at all. Anything
+            // can hold a loopback port on Android; only our own processes can read
+            // the token file that [portHolderAcceptsOurToken] presents. A holder
+            // that refuses it falls through and is spawned over, which fails the
+            // way it always did rather than the way a refusal would.
+            Logger.i(tag, "Port $_port already served by a server of ours; adopting it")
+            adopted = true
+            _isReady = false
+            isShuttingDown = false
+            startAdoptionWatch()
+            return true
         }
-        // Nothing here checks whether the port is still free, and that is a
-        // decision rather than an omission. A check was tried and removed; what
-        // follows is what it cost and what the real problem is, because the idea
+        // Reaching here means the port was free, or was held by something that is
+        // not ours. Nothing refuses to start in either case, and that is a
+        // decision rather than an omission: a refusal was tried and removed. What
+        // follows is what it cost and what the real problem was, because the idea
         // is an obvious one to have again.
         //
         // The situation it aimed at: `assets/server.js` forks the editor server
@@ -218,30 +278,31 @@ class ProcessManager(private val context: Context) {
         // refusal back: refusing produced a state the user could not reach the
         // editor from at all, which is worse than every line above.
         //
-        // The shape most likely to fix them is adoption: when a server already
-        // holding the port is OURS, do not spawn a second one, serve that. It is
-        // the only route that makes `serverProcess` and the thing on the port the
-        // same subject again, which is what all three cost lines come from. The
-        // ownership test needs no change to the readiness probe -- `/version` is
-        // answered before the token gate and must stay a pure liveness probe, but
-        // `GET /` carrying our connection token is a different request, and
-        // answers 200 if the server accepts it and 403 if it does not. Only our
-        // own processes can read that token; it lives in app-private storage at
-        // mode 0600.
+        // ALL THREE ARE ADDRESSED BY THE ADOPTION BRANCH ABOVE, which is why the
+        // list above is written in the past tense of a defect rather than as a
+        // standing one. Adoption makes `serverProcess` and the thing on the port
+        // the same subject again -- by having no second subject at all -- and that
+        // is where all three came from.
         //
-        // The open question, and the reason adoption is not done here: a server
-        // adopted that way has no `Process` behind it, so no watchdog, so its
-        // later death goes unnoticed. Solving that is what makes adoption a piece
-        // of work rather than a patch.
+        // What it does NOT fix, and this is the honest residue: an adopted server
+        // still cannot be killed by this app, because there is no handle to it.
+        // [stopServer] says so now instead of destroying the wrong process and
+        // reporting success, which is a smaller claim than "Stop works" and a true
+        // one. And the IndexedDB loss on a later cold start is unchanged -- that
+        // happens when a fresh instance finds the port taken and `PortFinder`
+        // moves, and adoption does not reach across process lifetimes.
         //
-        // Read that sentence before deciding adoption is cheap, because it is the
-        // SAME TRADE the refusal was removed for, running the other way. Refusing
-        // took a working editor from the user to fix bookkeeping and was rejected
-        // for it; adopting fixes the bookkeeping by giving up the ability to
-        // notice the server dying, which turns a loud failure into a silent one.
-        // Neither direction is free, and whoever takes this should choose
-        // deliberately rather than find out on the next attempt -- this path has
-        // already had four.
+        // The objection that kept adoption out until now was real and had to be
+        // answered rather than accepted: an adopted server has no `Process`, so no
+        // watchdog, so its death would go unnoticed -- trading the loud failure
+        // the refusal was removed for against a silent one, in the other
+        // direction. [startAdoptionWatch] is that answer. It polls, because a
+        // signal a `Process` gives for free has to be asked for here, and reports
+        // through the same `onServerCrashed` the watchdog uses, so recovery is the
+        // path that already exists rather than a second one.
+        //
+        // If that watch is ever removed or weakened, adoption stops being safe and
+        // the trade comes back. It is the load-bearing half.
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR is a usable directory — Android may clear cache between
@@ -350,6 +411,50 @@ class ProcessManager(private val context: Context) {
      * readiness check that counts 403 as healthy reports a successful startup for
      * a server that will serve the user nothing but Forbidden.
      */
+    /**
+     * Whether whatever is listening on our port accepts our connection token.
+     *
+     * The ownership question, and it is answerable only because the server
+     * requires a token at all. That token is generated by the server into
+     * `<server-data-dir>/data/token` with mode 0600 inside app-private storage,
+     * so a process that accepts it either is one of ours or has read a file
+     * nothing outside this app can.
+     *
+     * A DIFFERENT REQUEST FROM THE READINESS PROBE, deliberately, and the
+     * distinction is load-bearing rather than stylistic. [isServerHealthy] asks
+     * `/version`, which the server answers BEFORE the token gate — that is what
+     * keeps it a pure liveness probe and it must stay that way. This asks `/`,
+     * which is behind the gate, and carries the token. Same server, different
+     * question, different moment.
+     *
+     * Judged by what it is NOT rather than by a single expected code. A server
+     * that rejects the token answers 403; one that accepts it answers 200, or
+     * redirects while it turns the token into the `vscode-tkn` cookie, and
+     * pinning either would break on the other. Anything that is not a refusal
+     * counts as acceptance, and an unreachable port counts as no.
+     */
+    fun portHolderAcceptsOurToken(): Boolean {
+        val token = connectionToken
+        if (token.isNullOrEmpty()) {
+            Logger.w(tag, "No connection token; cannot tell whose server holds port $_port")
+            return false
+        }
+        return try {
+            val encoded = URLEncoder.encode(token, "UTF-8")
+            val url = URL("http://127.0.0.1:$_port/?tkn=$encoded")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 1000
+            connection.readTimeout = 1000
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = false
+            val responseCode = connection.responseCode
+            connection.disconnect()
+            responseCode != HTTP_FORBIDDEN
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun isServerHealthy(): Boolean {
         return try {
             val url = URL("http://127.0.0.1:$_port/version")
@@ -399,6 +504,22 @@ class ProcessManager(private val context: Context) {
     fun stopServer() {
         isShuttingDown = true
         _isReady = false
+        if (adopted) {
+            // Said plainly rather than passed over. This class did not spawn the
+            // server on the port and holds no handle to it, so there is nothing
+            // here that can end it — and the honest version of that is a log line
+            // saying so, not a silent return that leaves the caller believing the
+            // stop succeeded. Before adoption existed this case still arrived, and
+            // it was worse: `serverProcess` referenced a process that never served
+            // anything, so the stop destroyed the wrong one and reported success.
+            Logger.w(
+                tag,
+                "The server on port $_port was adopted, not started here, so stopping " +
+                    "this service cannot end it. It keeps running until the system " +
+                    "reclaims it.",
+            )
+            adopted = false
+        }
         Logger.i(tag, "Stopping server...")
         serverProcess?.let { process ->
             try {
@@ -563,6 +684,56 @@ class ProcessManager(private val context: Context) {
      * - 137 (SIGKILL): typically OOM killer or phantom process limit
      * - other: unexpected crash
      */
+    /**
+     * Watches a server nobody here spawned.
+     *
+     * This is the whole answer to the objection that kept adoption out of the
+     * codebase: an adopted server has no [Process], so [startWatchdog]'s
+     * `waitFor()` has nothing to wait on, and its death would go unnoticed while
+     * this class reported it healthy forever. Trading a loud failure for a silent
+     * one is what the removal of the port refusal was avoiding, and adopting
+     * without this would have reintroduced it from the other side.
+     *
+     * Polling because there is nothing else available. The signal a `Process`
+     * gives for free has to be asked for here, and asking is what
+     * [isServerHealthy] already does.
+     *
+     * Two consecutive failures rather than one, because a single refused
+     * connection is not evidence of death — the same reasoning [probeReadiness]
+     * gives for not clearing readiness on one bad answer. The cost of being wrong
+     * in this direction is a restart the user did not need; in the other it is an
+     * editor that stopped working with nothing said.
+     *
+     * Reports through [onServerCrashed] rather than a channel of its own, so the
+     * recovery is the one that already exists. By the time it fires the port is
+     * free, so the restart it triggers spawns a real server rather than another
+     * one that cannot bind.
+     */
+    private fun startAdoptionWatch() {
+        watchdogThread = thread(name = "adopted-watch", isDaemon = true) {
+            var misses = 0
+            try {
+                while (!isShuttingDown && adopted) {
+                    Thread.sleep(ADOPTED_WATCH_INTERVAL_MS)
+                    if (isShuttingDown || !adopted) return@thread
+                    if (isServerHealthy()) {
+                        misses = 0
+                        continue
+                    }
+                    if (++misses < ADOPTED_WATCH_MISSES) continue
+
+                    _isReady = false
+                    adopted = false
+                    Logger.w(tag, "Adopted server stopped answering; treating it as gone")
+                    onServerCrashed?.invoke(ADOPTED_SERVER_LOST)
+                    return@thread
+                }
+            } catch (e: InterruptedException) {
+                Logger.d(tag, "Adoption watch interrupted")
+            }
+        }
+    }
+
     private fun startWatchdog() {
         watchdogThread = thread(name = "node-watchdog", isDaemon = true) {
             try {
@@ -635,6 +806,37 @@ internal const val GRACEFUL_STOP_TIMEOUT_MS = 1_000L
  * remaining twenty-nine.
  */
 internal const val READY_POLL_TIMEOUT_MS = 30_000L
+
+/**
+ * How often an adopted server is asked whether it is still there.
+ *
+ * Slower than a readiness poll because nothing is waiting on the answer — this
+ * is a heartbeat over the life of a session, not a startup check, and it runs
+ * for as long as the adopted server does.
+ */
+internal const val ADOPTED_WATCH_INTERVAL_MS = 5_000L
+
+/**
+ * How many consecutive unanswered probes count as gone.
+ *
+ * Two rather than one, for the reason [ProcessManager.probeReadiness] gives for
+ * not clearing readiness on a single failure: one refused connection is not
+ * evidence of death. Being wrong this way costs a restart nobody needed; being
+ * wrong the other way costs an editor that stopped working with nothing said.
+ */
+internal const val ADOPTED_WATCH_MISSES = 2
+
+/**
+ * The exit code reported when an adopted server stops answering.
+ *
+ * Negative so it cannot collide with a real process exit status, which is what
+ * every other value reaching `onServerCrashed` is. Nothing branches on it today;
+ * it exists so a log line naming it is not mistaken for a signal.
+ */
+internal const val ADOPTED_SERVER_LOST = -1
+
+/** The refusal an unauthenticated request gets from the editor server. */
+internal const val HTTP_FORBIDDEN = 403
 
 /** What every device ran before the ceiling was derived, and the fallback. */
 internal const val HEAP_CEILING_DEFAULT_MB = 512
