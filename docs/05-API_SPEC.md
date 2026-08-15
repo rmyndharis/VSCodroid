@@ -14,8 +14,15 @@ VSCodroid has three interface boundaries:
 flowchart TD
   K["Kotlin Native Shell"] <--> |"A: Android Bridge (JavascriptInterface)"| W["WebView (vscode-web)"]
   W <--> |"B: VS Code Remote Protocol<br/>HTTP + WebSocket"| N["Node.js Process (VS Code Server, vscode-reh)"]
-  K <--> |"C: Process Management<br/>stdin/stdout/HTTP"| N
+  K <--> |"C: Process Management<br/>stdout + HTTP"| N
 ```
+
+Boundary C is one-way for the pipe: `ProcessManager` closes the child's stdin at spawn
+(`start().also { it.outputStream.close() }`) and only ever reads stdout. Nothing is
+written to the process. This said "stdin/stdout/HTTP", which invites a design that
+sends the server a command down the pipe — there is no reader on the other end. Kotlin
+asks the server things over HTTP on the loopback port, and learns of its death from
+`Process.waitFor()`.
 
 ---
 
@@ -24,9 +31,27 @@ flowchart TD
 ### 2.1 Bridge Registration
 
 ```kotlin
-// In MainActivity
-webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
+// In MainActivity.initBridge(), once per server lifecycle
+wv.addJavascriptInterface(bridge, "AndroidBridge")
 ```
+
+The injected name is `AndroidBridge` and that part was always right. The construction
+was not: `AndroidBridge(this)` does not compile. The real constructor takes nine
+parameters, five of them required —
+
+```kotlin
+AndroidBridge(
+    context, security, clipboard,          // required
+    onBackPressed, onMinimize,             // required callbacks
+    onOpenFolderPicker = {}, onOpenRecentFolder = {},
+    onShowAbout = {}, safManager = null,   // defaulted
+)
+```
+
+— and `security` being one of them is the point of the next section rather than a
+detail. A one-argument sketch shows a bridge built without the `SecurityManager` that
+§2.2 describes as the whole access-control mechanism, which is the opposite of what the
+code does.
 
 ### 2.2 Bridge Security Model
 
@@ -630,21 +655,37 @@ end state exists.
 
 ### 5.1 Open VSX Gallery API (used by VS Code UI)
 
-VS Code's built-in extension marketplace UI uses these endpoints (configured in product.json):
+VS Code's built-in extension marketplace UI uses these endpoints. **Configured at
+runtime by `assets/server.js`, not at build time** — this section used to say
+"product.json", which points at the one place changing it does not work:
 
+```js
+// assets/server.js, productOverrides -- rewritten into product.json on EVERY start
+extensionsGallery: {
+    serviceUrl:          'https://open-vsx.org/vscode/gallery',
+    itemUrl:             'https://open-vsx.org/vscode/item',
+    resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}',
+    controlUrl:          '',
+    nlsBaseUrl:          '',
+}
 ```
-Base URL: https://open-vsx.org/vscode
 
-GET /gallery/extensionquery
-  Query extensions by search term, category, etc.
-  Body: VS Code Gallery API format (JSON)
+Two things a reader editing this needs, both of which the old rendering hid:
 
-GET /item?itemName={publisher}.{name}
-  Get extension detail page URL
+- **`branding/product.json` deliberately does not set the gallery**, and its own comment
+  says why: at build time the gallery named in `product.json` is where the bundled
+  js-debug extensions are fetched from, and pointing that at Open VSX breaks the build —
+  Open VSX serves repackaged copies whose checksums no longer match the ones
+  `product.json` pins. Left unset, they come from each extension's own GitHub release.
+- **All five keys must be listed together.** `server.js` applies `productOverrides` with
+  a shallow `Object.assign`, so `extensionsGallery` replaces the built object whole.
+  Dropping `controlUrl` or `nlsBaseUrl` from this block does not inherit them — it
+  removes them.
 
-GET /unpkg/{publisher}/{name}/{version}/{path}
-  Get extension resource (icon, README, VSIX)
-```
+> The request *methods* are not stated here on purpose. VS Code's gallery client decides
+> them and its source is not in this repository, so nothing here can settle whether
+> `extensionquery` is a GET or a POST. The three URLs above are verifiable and verified;
+> the verbs are not.
 
 ### 5.2 Extension Lifecycle
 
@@ -756,6 +797,16 @@ interface Toolchain {
 ```
 
 ### 6.2 Package Manager CLI API
+
+> ⚠️ **Proposed. This CLI does not exist.** There is no `vscodroid` executable and no
+> package-manager script: `assets/usr/` contains `lib` and `share` and **no `bin`
+> directory at all**, and nothing in `jniLibs/arm64-v8a/` is named for it. Every
+> occurrence of `vscodroid pkg` in this repository is in a document.
+>
+> Checked against a built tree rather than a worktree, with a control — `libnode.so`
+> resolves on the same path, so the absence below is a real absence and not a missing
+> build. Tier 3 of the bundling strategy remains a plan; the toolchains that do ship
+> arrive through `ToolchainManager`, not through this.
 
 ```bash
 vscodroid pkg <command> [args]
