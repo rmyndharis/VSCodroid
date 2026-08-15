@@ -120,6 +120,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A server that keeps failing during start-up now says so once instead of once per attempt. The same message could previously appear on every automatic restart — up to five times over several minutes — before the app gave up and said something different
 - A start that cannot succeed no longer leaves the app sitting still behind a notification that says the server is running. It says the start failed, tries again a few times, and if it still cannot start it says so on the notification and lets the next launch try afresh. Previously nothing further happened at all, and the only way out was to stop the server from a notification that claimed it was running
 - Starting the editor again after it had given up no longer leaves it on the loading screen in front of a server that is working. A check belonging to the abandoned attempt went on running and could report the newly started server as not ready yet, which the editor waits on rather than opening
+- A link opened from inside the editor no longer disappears when the bridge
+  declines it. Anything the page called `window.open` on was handed to the
+  Android bridge and then reported as opened whatever happened, so a URL the
+  bridge would not take was swallowed in silence: no browser, no error, no
+  second chance. The click now falls through to the WebView's own handling when
+  the bridge does not take it, which is what puts the page in front of the user
+- **Open in Browser** told you it had worked when it had not. The bridge method
+  behind it returned nothing at all, so the relay carrying the answer back to the
+  extension had no failure to report and answered success unconditionally: the
+  command closed its input box, the extension's own error handler sat unreachable
+  behind a promise that always resolved, and nothing opened. It now reports
+  whether a browser actually took the URL, and a failure says so
+- A browser launch that failed left the sign-in callback window open for ten
+  minutes. The window is opened just before the browser is launched -- deliberately,
+  because a browser that answers instantly would otherwise come back before the
+  window it is judged against exists -- but nothing closed it again when the
+  launch itself threw. For those ten minutes a `vscodroid://callback` from
+  anything on the device was accepted with no sign-in in flight. The window is
+  now put back to its previous state when the launch fails
+- The **Browse Extensions** step on the Get Started screen could never be
+  completed, so the walkthrough stayed permanently unfinished no matter what you
+  did. It waited on a view identifier the workbench does not register, and an
+  unrecognised identifier is not an error there -- the event is accepted, nothing
+  ever matches it, and the step simply waits forever. It now completes on the
+  command its own button runs. The fix also reaches installs that already have
+  the old copy, which the previous extraction rule would have skipped
+
 - Five checks that were supposed to stop earlier defects returning could not fail,
   and now can. Each was confirmed by breaking the thing it guards and watching it
   stay green, then breaking it again after the change and watching it report the
