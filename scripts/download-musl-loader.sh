@@ -38,6 +38,15 @@ MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
 echo "=== musl loader ==="
 mkdir -p "$WORK_DIR" "$JNI_DIR"
 
+# Truncated at the start of the run, the way every resolved-*.tsv in the Termux
+# scripts is, and for a sharper reason here: the loader is installed well before
+# the record is written, so a run that copies a new loader over the old one and
+# then fails -- the ELF gate, an interrupt -- would otherwise leave the PREVIOUS
+# run's record on disk naming a version that is no longer the file in jniLibs.
+# The manifest would then state a loader the build does not contain, which is
+# worse than stating nothing. Absent reads as "-"; wrong reads as fact.
+: > "$WORK_DIR/resolved-musl.tsv"
+
 # The key Alpine signs this branch's index with, pinned in the repository the
 # same way scripts/termux-repo-key.asc is. Pinned rather than fetched: a key
 # taken from the same host as the index it authenticates proves nothing about
@@ -202,10 +211,18 @@ python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libldmusl.so"
 # download whose provenance the manifest could not state.
 #
 # Written last on purpose: after the install and after the ELF gate, so a run
-# that failed either leaves no record claiming success.
-printf '%s\t%s\t%s\n' musl "$MUSL_VERSION" \
-    "$( (sha256sum "$JNI_DIR/libldmusl.so" 2>/dev/null \
-         || shasum -a 256 "$JNI_DIR/libldmusl.so") | cut -d' ' -f1)" \
+# that failed either leaves no record claiming success. The file is emptied at
+# the top of the script, so "no record" is the state a failure actually lands in.
+#
+# The digest goes through a variable rather than straight into printf's argument
+# list. A command substitution that fails inside an argument does not set the
+# surrounding command's status, so set -e would not fire and printf would happily
+# write a two-field line; in an assignment the substitution's status IS the
+# command's, so a host with neither sha256sum nor shasum stops here instead of
+# recording a version with no digest beside it.
+MUSL_SHA="$( (sha256sum "$JNI_DIR/libldmusl.so" 2>/dev/null \
+              || shasum -a 256 "$JNI_DIR/libldmusl.so") | cut -d' ' -f1)"
+printf '%s\t%s\t%s\n' musl "$MUSL_VERSION" "$MUSL_SHA" \
     > "$WORK_DIR/resolved-musl.tsv"
 
 echo ""
