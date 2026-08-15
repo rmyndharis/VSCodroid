@@ -4,6 +4,33 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
+> **Historical document — records the risks as assessed on 2026-02-10, not the ones that
+> materialised.** Every score below is a probability and impact judged before the app existed,
+> and the decision log in §6 is dated to the day those decisions were taken. Both are kept as
+> the record, so two things a reader would otherwise carry away wrong are named here instead.
+>
+> **R02, and the §6 row "Fork code-server, not VS Code directly", describe a mechanism that was
+> never built.** The server that ships is vanilla Code - OSS: `scripts/build-vscode-oss.sh`
+> clones the MIT `microsoft/vscode` source at the commit pinned in `VSCODE_VERSION`, applies the
+> unified diffs in `patches/`, and gulp builds `vscode-reh-web-linux-arm64`; app builds fetch the
+> result with `scripts/fetch-vscode-oss.sh`. No code-server patch set is involved, so there is no
+> code-server upstream to track. The reason is not the patch-maintenance trade-off this document
+> weighs, either: the pre-built server on Microsoft's update CDN carries licence terms that do not
+> permit modifying and redistributing it, which is why the source build exists and why
+> `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one.
+>
+> **The P01 mitigation names five toolchains; three ship.** Go, Ruby and Java 17, and no others
+> (`android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt`,
+> `android/settings.gradle.kts`). Rust and C/C++ were deferred and have no module, no asset pack
+> and no registry entry. Delivery is also not Play-only, which matters to that same compliance
+> argument: an install whose installing package is not `com.android.vending` downloads the same
+> toolchains as ZIPs over HTTPS from this project's GitHub Releases, verified against a published
+> sha256 manifest before install (`ToolchainManager.shouldUseHttpFallback()`,
+> `downloadViaHttp()`). Neither path puts a toolchain in the APK, so T09's contingency — "sideload
+> distribution path with bundled toolchains" — is not the shape the sideload path took.
+>
+> For the risks the project actually carries today, read the code and `CONTRIBUTING.md`.
+
 ---
 
 ## 1. Risk Scoring

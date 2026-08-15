@@ -4,11 +4,25 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
+> **Historical document — describes the product as scoped on 2026-02-10, not the app.**
+> Two of the intentions recorded below did not survive the constraints. The server is not a
+> code-server fork: it is vanilla Code - OSS, built from the MIT `microsoft/vscode` source by
+> `scripts/build-vscode-oss.sh` with the unified diffs in `patches/` applied before the build,
+> and app builds fetch the result with `scripts/fetch-vscode-oss.sh`. Building from source is
+> not a preference — the pre-built server on Microsoft's update CDN carries licence terms that
+> do not permit modifying and redistributing it, so `scripts/verify-server-tree.py` fails any
+> tree whose `LICENSE.txt` is not the MIT one. And the on-demand toolchains are **Go, Ruby and
+> Java 17, those three** (`android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt`,
+> `android/settings.gradle.kts`): Rust and C/C++ were deferred and have no module, no asset pack
+> and no registry entry, so the five-language lists below — §6 P2, and the Language Picker in
+> Flow 1 — each name two that do not exist. Where this document and the code disagree, the code
+> wins. `CONTRIBUTING.md` is the prose kept current alongside it.
+
 ---
 
 ## 1. Executive Summary
 
-VSCodroid is Visual Studio Code ported to Android. It provides a full-featured IDE experience on mobile devices by running the actual VS Code codebase (code-server fork) with a native Android shell. Unlike simplified mobile code editors, VSCodroid runs real VS Code with real extension support, a real terminal, and real Node.js — delivering desktop-grade development power in your pocket.
+VSCodroid is Visual Studio Code ported to Android. It provides a full-featured IDE experience on mobile devices by running the actual VS Code codebase (Code - OSS, built from the MIT source) with a native Android shell. Unlike simplified mobile code editors, VSCodroid runs real VS Code with real extension support, a real terminal, and real Node.js — delivering desktop-grade development power in your pocket.
 
 ## 2. Problem Statement
 

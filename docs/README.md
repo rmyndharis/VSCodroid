@@ -60,9 +60,21 @@ Kept current against the shipping app rather than frozen at plan time.
 Status is expressed by which table above a document sits in, not by a per-document row here.
 
 The **planning suite** (01–12) was written before the app existed and is kept for its reasoning, not
-as a description of the build. Several of them now open with a banner naming what has since been
-overtaken; the rest carry no such note, which is not the same as being current. Where one
-contradicts the code, the code is right.
+as a description of the build. Where one contradicts the code, the code is right. Two forms of note
+appear in them, and they mean different things:
+
+- **A banner at the top** (01, 03, 04, 07, 08, 09, 12 — and on §2 of 10, which is stale where the
+  rest of that document is not) says the document is a dated record and names what has since
+  overtaken it. The body below a banner is mostly left as written, on purpose: a plan, an ADR or a
+  risk score is a record of what was thought at the time, and editing it would destroy the record
+  rather than update it.
+- **A correction inside the text** — a struck-through clause with what shipped beside it (02), or a
+  rewritten definition (11) — is used where a document's job is to describe rather than to
+  remember. 05 and 06 are corrected the same way and carry no banner, because they have been kept
+  against the code rather than frozen.
+
+Neither note is a guarantee about the sentence next to it. The code is still the only source of
+truth.
 
 The **maintained references** are the unnumbered documents: the User Guide and Privacy Policy that
 ship to users, the Legal Notices recording what is redistributed, and the device test checklist run

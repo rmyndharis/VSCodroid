@@ -107,10 +107,17 @@ flowchart TD
 
 ### 3.5 Toolchain Delivery Security
 
+There are two delivery paths, chosen at runtime, and they have different integrity stories.
+`ToolchainManager` reads `getInstallSourceInfo().installingPackageName`: an install that came
+from `com.android.vending` uses Play Asset Delivery, and every other install (sideload, debug
+build, `adb install`) downloads the same toolchains over HTTPS from this project's GitHub
+Releases. Only the first is covered by Play's signing.
+
 | Control             | Implementation                                                                 |
 | ------------------- | ------------------------------------------------------------------------------ |
-| Play Store delivery | Toolchains delivered as on-demand asset packs via Play Store                   |
+| Play delivery       | Toolchains delivered as on-demand asset packs — Go, Ruby and Java 17, those three |
 | Code signing        | Asset packs signed with same key as base APK (Play Store enforced)             |
+| HTTPS delivery      | For non-Play installs, each ZIP is checked against the sha256 the release publishes in `toolchains.sha256` beside it, before anything is extracted. A ZIP the manifest does not name is refused rather than installed unverified |
 | User-initiated only | Toolchains only downloaded when user selects them in Language Picker           |
 | App-private storage | Toolchains extracted to /data/data/com.vscodroid/ — inaccessible to other apps |
 | Sideload integrity  | GitHub Releases APKs include SHA256 checksums for verification                 |
