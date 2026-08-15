@@ -90,7 +90,10 @@ jobs:
         # the download 404s. Refresh the index before installing.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools
+          # gnupg is on the runner image today, but the Termux index check is a
+          # gate: naming it here keeps it from depending on what the image
+          # happens to bake in.
+          sudo apt-get install -y --no-install-recommends libarchive-tools gnupg
 
       # Download and prepare all assets (only if not cached)
       # Built from the MIT source by build-vscode-oss.yml and published as a

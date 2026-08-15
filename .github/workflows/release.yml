@@ -134,7 +134,10 @@ jobs:
         # superseded versions from the pool, so refresh it before installing.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip
+          # gnupg named explicitly: verify-termux-index.sh refuses to run without
+          # it, and a release is the worst place to discover a runner image
+          # changed what it bakes in.
+          sudo apt-get install -y --no-install-recommends libarchive-tools zstd zip gnupg
 
       # Cache downloaded tarballs/debs
       - name: Cache download intermediates

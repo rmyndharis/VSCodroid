@@ -45,6 +45,10 @@ if [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
     curl -sL --fail --show-error -o Packages "$PACKAGES_URL"
 fi
 
+# Checked on every run, not only after a download. A cached index is exactly as
+# unchecked as a fresh one, and every digest read below comes out of this file.
+bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" Packages
+
 # One pass, all three fields from the same stanza: the live index carries
 # duplicate Package stanzas for some packages, and independent scans could
 # pair one stanza's Filename with another's SHA256.

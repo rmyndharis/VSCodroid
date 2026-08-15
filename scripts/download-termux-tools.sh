@@ -111,6 +111,10 @@ else
     echo "  Using cached Packages index (less than 1 hour old)"
 fi
 
+# Checked on every run, not only after a download. A cached index is exactly as
+# unchecked as a fresh one, and every digest read below comes out of this file.
+bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" Packages
+
 # Parse index to find Filename for each required package.
 # Store results in a temp file (one line per pkg: "pkgname filename")
 echo ""

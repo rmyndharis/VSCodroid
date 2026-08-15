@@ -26,6 +26,10 @@ PACKAGES_FILE="$WORK_DIR/Packages"
 if [ ! -f "$PACKAGES_FILE" ] || [ -n "$(find "$PACKAGES_FILE" -mmin +60 2>/dev/null)" ]; then
     curl -L --fail --show-error -o "$PACKAGES_FILE" "$PACKAGES_URL"
 fi
+
+# Checked on every run, not only after a download. A cached index is exactly as
+# unchecked as a fresh one, and every digest read below comes out of this file.
+bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" "$PACKAGES_FILE"
 PYTHON_FULL_VER=$(awk '/^Package: python$/{found=1} found && /^Version:/{print $2; exit}' "$PACKAGES_FILE")
 PYTHON_MAJOR_MINOR=$(echo "$PYTHON_FULL_VER" | grep -oE '^[0-9]+\.[0-9]+')
 
