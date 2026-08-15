@@ -83,7 +83,16 @@ def main(tree):
         if any(part in str(path) for part in
                ("/linux-x64/", "/darwin-", "/win32-", "-x64-", "/x64/")):
             continue
-        head = path.open("rb").read(20)
+        # A file the build cannot read is a failed check, not a crash. Without
+        # this the walk raises straight out of main(), the remaining binaries go
+        # unexamined, and the script exits non-zero having printed no FAIL line
+        # at all -- which makes every caller that says "the line above names what
+        # failed" into a false statement.
+        try:
+            head = path.open("rb").read(20)
+        except OSError as e:
+            check(False, f"{path.relative_to(tree)} could not be read", str(e))
+            continue
         if head[:4] != b"\x7fELF":
             continue
         machine = struct.unpack_from("<H", head, 18)[0]
@@ -98,7 +107,16 @@ def main(tree):
 
     product_path = tree / "product.json"
     if product_path.exists():
-        product = json.loads(product_path.read_text())
+        # Same reason as the read above: unparseable is a verdict this script
+        # should state, not an exception it should die of.
+        try:
+            product = json.loads(product_path.read_text())
+        except (OSError, ValueError) as e:
+            check(False, "product.json is readable JSON", str(e))
+            product = None
+    else:
+        product = None
+    if product is not None:
         check(product.get("nameLong") == "VSCodroid", "product.json is branded",
               f"nameLong = {product.get('nameLong')!r}")
         # workbench.js hardcodes *.vscode-cdn.net and the WebView cannot reach it;
@@ -130,16 +148,22 @@ def main(tree):
     # fetch before packaging — so either end refuses the stale tree.
     wb_css = tree / "out/vs/code/browser/workbench/workbench.css"
     if wb_css.exists():
-        css = wb_css.read_text(errors="replace")
+        try:
+            css = wb_css.read_text(errors="replace")
+        except OSError as e:
+            check(False, "workbench.css is readable", str(e))
+            css = None
+    else:
+        css = None
+        check(False, "out/vs/code/browser/workbench/workbench.css exists",
+              "the packaged web client is missing")
+    if css is not None:
         check("VSCodroid: Mobile-friendly" in css,
               "workbench.css carries the mobile menu overrides",
               "the Mobile CSS append did not run")
         check('aria-label="Manage"' not in css,
               "workbench.css does not hide Accounts/Manage",
               "built from a ref that predates the 2026-08-15 un-hide")
-    else:
-        check(False, "out/vs/code/browser/workbench/workbench.css exists",
-              "the packaged web client is missing")
 
     return 1 if failed else 0
 
