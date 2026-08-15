@@ -19,7 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that a reader is confused -- it is that the file reads as a protection that was lost, which is an
   invitation to put one back. VSCodroid is a development environment and has to reach a LAN dev
   server, a private registry and a staging host; the destination is unjudged on purpose, and the
-  session token is what is checked.
+  session token is what is checked. The same block of the plan asked someone to "restrict cleartext
+  HTTP to localhost only", which is the reverse of what shipped and for a reason worth keeping: the
+  network security config matches domains by hostname and understands neither CIDR nor ranges, so a
+  LAN dev server has no spelling there. Six unchecked boxes had it reading as outstanding work.
+- The contributor documentation describes both toolchain delivery paths, not just one. It introduced
+  `ToolchainManager.kt` as "Play Asset Delivery", and every install that did not come from Play --
+  sideload, debug, adb -- takes an HTTP path instead, downloading ZIPs from `releases/latest`. That
+  is the path developers themselves run on, so the one route a contributor was told about is the one
+  they are least likely to be testing, and a change that works in their build can break every
+  sideloaded install.
 - Berkeley DB is no longer bundled, and every remaining library is attributed.
   It is licensed **AGPL-3.0-only** -- the strongest copyleft in common use -- and
   had shipped in every release since it arrived as a dependency of Kerberos,
