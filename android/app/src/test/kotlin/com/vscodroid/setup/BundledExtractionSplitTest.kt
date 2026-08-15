@@ -115,6 +115,63 @@ class BundledExtractionSplitTest {
         assertEquals(bundled, bundledDirsToExtract(present = emptyList(), bundled = bundled))
     }
 
+    /**
+     * What all three decisions do on a version bump, together.
+     *
+     * Each is tested alone elsewhere; nothing pinned how they compose, and that
+     * is the gap a reader falls into. A bump leaves both directories on disk,
+     * and the obvious reading is that the old one is *retired* -- it carries
+     * this project's publisher and is no longer bundled, which is two of
+     * [retiredOwnExtensionDirs]'s three conditions. The third excludes it: its
+     * base id is still bundled, under a different version. So the old directory
+     * is a supersession, handled by [supersededExtensionDirs], and retirement
+     * is reserved for an id this build stopped shipping altogether.
+     *
+     * The distinction is not cosmetic. Retirement deletes on the strength of
+     * the publisher alone; supersession deletes only after comparing versions
+     * and refuses when the version on disk is newer or unparseable. Routing a
+     * bump through the wrong one would delete a user's newer install of the
+     * same extension.
+     */
+    @Test
+    fun `a version bump is a supersession, not a retirement`() {
+        val old = "vscodroid.vscodroid-welcome-1.2.0"
+        val new = "vscodroid.vscodroid-welcome-1.2.1"
+        val present = listOf(old, new)
+        val bundled = listOf(new)
+
+        assertEquals(
+            listOf(new),
+            bundledDirsToExtract(present = present, bundled = bundled),
+            "only the bundled version is unpacked",
+        )
+        assertEquals(
+            listOf(old),
+            supersededExtensionDirs(present, bundled),
+            "the older directory is what gets removed, and by version comparison",
+        )
+        assertTrue(
+            retiredOwnExtensionDirs(present, bundled).isEmpty(),
+            "the older directory must NOT be read as retired: its base id is still bundled, " +
+                "and retirement deletes on the publisher alone without comparing versions",
+        )
+    }
+
+    @Test
+    fun `an id this build stopped shipping is retired, and only then`() {
+        // The other side of the same line, so the test above cannot pass by
+        // retirement having stopped working altogether.
+        val dropped = "vscodroid.vscodroid-github-auth-1.0.0"
+        val present = listOf(dropped, ourWelcome)
+        val bundled = listOf(ourWelcome)
+
+        assertEquals(listOf(dropped), retiredOwnExtensionDirs(present, bundled))
+        assertTrue(
+            supersededExtensionDirs(present, bundled).isEmpty(),
+            "nothing supersedes it -- no version of that id is bundled at all",
+        )
+    }
+
     @Test
     fun `the two listings are not interchangeable`() {
         // Pins the parameter order itself. With the arguments transposed the
