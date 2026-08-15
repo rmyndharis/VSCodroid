@@ -34,19 +34,43 @@ def main(ext: pathlib.Path, version_file: pathlib.Path) -> int:
     # Only aarch64 ELF payloads are worth reporting: x86-64 and Windows binaries
     # are dead weight the extension never reaches on this device, while an
     # aarch64 one will be loaded and has to be glibc-free to work.
-    natives = []
+    natives, damaged = [], []
     for f in sorted(ext.rglob("*")):
-        if not f.is_file() or f.is_symlink():
+        # stat() and open() were both bare, and either can raise on a file this
+        # walk merely passes over. An unreadable one ended the run in a
+        # PermissionError with the remaining extensions unexamined -- and this
+        # gate runs over every bundled extension in turn.
+        try:
+            if not f.is_file() or f.is_symlink():
+                continue
+            if f.suffix != ".node" and not f.stat().st_mode & 0o111:
+                continue
+            with f.open("rb") as fh:
+                head = fh.read(20)
+        except OSError as exc:
+            damaged.append((f.relative_to(ext), str(exc)))
             continue
-        if f.suffix != ".node" and not f.stat().st_mode & 0o111:
+        if head[:4] != b"\x7fELF":
             continue
-        head = f.open("rb").read(20)
-        if head[:4] == b"\x7fELF" and head[18] == ELF_AARCH64:
+        # Something claiming the ELF magic and stopping before e_machine is a
+        # truncated or half-written file, not a format to skip quietly.
+        # head[18] indexed it directly, so four bytes of magic raised IndexError
+        # straight out of main() with no FAIL line naming the file. The sibling
+        # verify-android-elf.py reports "FAIL <name>: index out of range" for the
+        # same four bytes and carries on; two readers of one header should not
+        # disagree about what a damaged one looks like.
+        if len(head) < 20:
+            damaged.append((f.relative_to(ext),
+                            f"{len(head)} bytes, truncated before e_machine"))
+            continue
+        if head[18] == ELF_AARCH64:
             natives.append(f.relative_to(ext))
     for rel in natives:
         print(f"  note   carries an aarch64 native: {rel}")
+    for rel, why in damaged:
+        print(f"  FAIL   {rel} could not be read as a binary: {why}")
 
-    return 0
+    return 1 if damaged else 0
 
 
 if __name__ == "__main__":
