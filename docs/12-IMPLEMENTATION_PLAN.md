@@ -1261,7 +1261,8 @@ patches/vscodroid/
    - Test: copy in Chrome → paste in VSCodroid and vice versa
 
 3. **IntentBridge.kt**:
-   - `openExternalUrl(url, authToken)` — scheme allowlist (https, mailto only)
+   - `openExternalUrl(url, authToken)` — planned as a scheme allowlist (https, mailto only); shipped
+     without one. The token is checked, the URL is not
    - `onBackPressed()` — close panels/dialogs first, then minimize
    - `minimizeApp()`
 
@@ -2310,7 +2311,8 @@ android/app/src/main/kotlin/com/vscodroid/
 2. Verify no secrets in APK (no API keys, tokens, or private keys bundled)
 3. Review all workbench.js patches for unintended side effects
 4. Confirm Android app sandbox isolation (no world-readable files)
-5. Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns)
+5. Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns) — not what shipped;
+   the allowlist was removed rather than relaxed, and no destination filter replaced it
 6. Fix: restrict cleartext HTTP to localhost only (`network_security_config.xml`)
 7. Fix: use `Uri.parse()` for exact localhost host matching (prevents domain spoofing)
 8. Fix: owner-only execute permissions on extracted binaries
@@ -2319,7 +2321,9 @@ android/app/src/main/kotlin/com/vscodroid/
 
 - [ ] Security review completed (no exposed secrets, sandbox intact)
 - [ ] WebView CSP headers properly configured
-- [ ] All SecurityManager URL allowlist entries validated
+- [x] No URL allowlist in `SecurityManager` — there are no entries to validate. A development
+      environment has to reach a LAN dev server, a private registry and a staging host, so the
+      destination is deliberately unjudged; the session token is what is checked
 - [ ] Cleartext HTTP restricted to localhost only
 - [ ] Localhost matching uses Uri.parse() for exact host comparison
 - [ ] Extracted binaries have owner-only execute permissions

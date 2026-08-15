@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - When a previous editor server is still running, the app now serves that one instead of starting a second it cannot use. Android reclaims background processes individually, so the process the app launches can be killed while the server it started keeps running and keeps the port — and the app would then start another that could never listen, watch that one instead, and lose track of the server you were actually using. It now recognises the surviving server as its own, keeps watching it, and notices if it goes away. It still cannot stop a server it did not start, and now says so instead of reporting that it did
 - Opening a link from the editor no longer depends on which route the editor happened to use. A dev server on the local network, or anything else on plain http to a machine other than this one, was silently dropped when the editor opened it through one path and worked when it opened it through the other — with nothing said either way. VSCodroid is a development environment, so any address it is asked to open now opens
+- The contributor documentation no longer describes a URL allow-list that the app does not have.
+  `CONTRIBUTING.md` introduced `SecurityManager.kt` as "URL allowlist for WebView navigation
+  (localhost only)", and the implementation plan repeated the claim in three more places, one of
+  them an open checkbox asking someone to validate entries that do not exist. Both halves of the
+  contributor-facing sentence were wrong: nothing there judges a destination, and which URLs the WebView
+  itself follows is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading`. The risk is not
+  that a reader is confused -- it is that the file reads as a protection that was lost, which is an
+  invitation to put one back. VSCodroid is a development environment and has to reach a LAN dev
+  server, a private registry and a staging host; the destination is unjudged on purpose, and the
+  session token is what is checked.
 - Berkeley DB is no longer bundled, and every remaining library is attributed.
   It is licensed **AGPL-3.0-only** -- the strongest copyleft in common use -- and
   had shipped in every release since it arrived as a dependency of Kerberos,
