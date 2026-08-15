@@ -1217,20 +1217,29 @@ class ToolchainManager(private val context: Context) {
      * at launch. So a packaging fix reaches new installs only, and the install
      * that was already there stays exactly as wrong as it was.
      *
-     * For Go that is the difference between working and not. The execute bit is
-     * set on the manifest's `binaries` entries and nowhere else -- the recursive
-     * copy grants none, because `copyTo` does not carry modes -- and an earlier
-     * manifest named `go` and `gofmt` alone. `go` compiles nothing by itself; it
-     * forks `compile`, `link` and `asm` out of `pkg/tool`, and those arrived
-     * unrunnable. The user sees a permission error naming a path, with nothing
-     * connecting it to the version they installed under.
+     * The execute bit is set on the manifest's `binaries` entries and nowhere
+     * else -- the recursive copy grants none, because `copyTo` does not carry
+     * modes -- and an earlier Go manifest named `go` and `gofmt` alone, leaving
+     * the `pkg/tool` binaries `go` forks without one.
      *
-     * The payload is already on disk, so this needs no download and no reinstall:
-     * every ELF object under the install root gets the bit, which is the same
-     * rule the packaging gates use to decide what is a binary. Scripts are
-     * deliberately not included -- SELinux refuses to execute anything under
-     * `filesDir` that is not loaded as a library, which is why the manifests
-     * wrap scripts in shell functions instead.
+     * **This is necessary and it is not sufficient, and an earlier version of
+     * this comment claimed otherwise.** It said the bit was "the difference
+     * between working and not" for Go. It is not: SELinux denies
+     * `execute_no_trans` on `app_data_file`, so nothing under `filesDir` can be
+     * `execve`d whatever its mode. Measured from inside the app's own process on
+     * an API 37 emulator, `user` build, enforcing -- a valid ELF there with mode
+     * 0755 fails with EACCES, and fails identically through a symlink, because
+     * the check is on the resolved inode's label rather than the path. What
+     * actually makes a toolchain runnable is the loader indirection
+     * [regenerateEnvFileLocked] writes; this pass only removes a second obstacle
+     * sitting behind it.
+     *
+     * The bit is still worth restoring, because the loader will not run a file
+     * the mode denies either. The payload is already on disk, so this needs no
+     * download and no reinstall: every ELF object under the install root gets
+     * the bit, which is the same rule the packaging gates use to decide what is
+     * a binary. Scripts are deliberately not included -- they are wrapped in
+     * shell functions that route them through their interpreter instead.
      *
      * Runs once per toolchain, recorded in its own state entry. A tree of several
      * thousand files is not something to walk on every launch, and an install

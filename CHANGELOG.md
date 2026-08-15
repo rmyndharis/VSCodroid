@@ -107,6 +107,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The binaries the app ships — the JavaScript runtime, the shell, Git, Python and every on-demand toolchain — are now traced back to a signature from the project that built them, instead of to a checksum published by the same server that hands over the file. Each of those downloads took its expected checksum from a package index served by that host, so a host offering both a modified binary and a checksum to match it satisfied every check there was. The index is now checked against the upstream signing key, recorded in this repository and confirmed against two sources that have nothing to do with the download server. A signed index older than a month is refused as well: a valid signature does nothing to stop a server replaying last year's index and holding every build to whatever was current then
 
 ### Fixed
+- A certificate store interrupted while being written no longer breaks HTTPS
+  cloning permanently. It is assembled on first launch from the device's own
+  trusted certificates and rebuilt only when those change, so a write cut short —
+  by a full disk, or the app being killed — left a partial file carrying a fresh
+  timestamp, which the freshness check then accepted on every later launch. Some
+  certificates were present and the rest were missing, so `git clone` over HTTPS
+  worked for some hosts and failed for others, with nothing pointing at the file.
+  An interrupted write now leaves the previous store in place and rebuilds next
+  time
+- The on-device suite no longer passes git's HTTPS helper when the helper is not
+  there at all. It tested for one specific failure and treated everything else as
+  success, so a helper that had gone missing — one of the two regressions the
+  check exists to catch — reported green, as did a device where the check could
+  not run in the first place
 - Renaming a folder inside a device folder no longer empties it. Android reports a
   rename as an unrelated delete of the old name and creation of the new one, with
   nothing connecting the two, so the delete removed the folder and everything
@@ -192,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **None of the app's own settings ever took effect** — the theme, the terminal profile, the Python interpreter path, and the rest were written to a settings file the editor does not read. There was nothing to notice: the file existed, parsed, and held the right values. They now go where the editor actually reads them
 - **Every folder opened in Restricted Mode**, which stops most extensions from doing anything, and the setting meant to turn that off has never worked on this platform. The server's own switch is now used instead, so extensions activate normally
 - Building from source now reports a missing Android NDK immediately instead of after the downloads, which took about twenty minutes to reach a prerequisite that was knowable at the start. Set `REQUIRE_NDK=0` to check an environment you do not intend to build in
-- A toolchain installed by an earlier version stayed as it was installed, so improvements to how toolchains are packaged never reached it. Go was the visible case: `go build` failed with a permission error because the compiler and linker had arrived without the right to run. Upgrading now repairs that in place, without re-downloading anything. Commands that were never installed at all — `rake` on an older Ruby install — still need the toolchain reinstalled
+- A toolchain installed by an earlier version stayed as it was installed, so improvements to how toolchains are packaged never reached it. Go was the visible case: only the commands its manifest named were marked runnable, and the compiler and linker it starts were not among them. Upgrading now repairs that in place, without re-downloading anything. Commands that were never installed at all — `rake` on an older Ruby install — still need the toolchain reinstalled. This was necessary and, on its own, not enough to make a toolchain run at all: see the separate entry on running toolchain commands through the system loader
 - Following the contributing guide's build steps now produces the same app CI builds. Three steps were missing — copying the server tree into the app, the musl loader, and the compatibility shim — so the documented sequence produced a build that installed and opened with no editor in it, a Claude Code CLI that could not start, and native add-ons that failed to load. The "run it all at once" script ran none of the download steps at all, and the setup script asked for a tool the project does not use before pointing at a component that was abandoned for crashing. A check now fails the build when the documented steps and the ones CI runs stop agreeing
 - A Claude Code wrapper you pointed somewhere yourself was overwritten on every launch; only paths this app wrote are refreshed now. Settings and the bundled-extension list are also written so an interrupted write leaves the previous file intact rather than an empty one
 - Uninstalling the Ruby toolchain no longer removes a library Python depends on. The two share one library directory, and the uninstall deleted everything the toolchain's manifest named — including a file the app itself ships — leaving `import ctypes` and pip broken until the next app update. An uninstall now leaves alone anything the base installation also provides

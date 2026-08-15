@@ -715,10 +715,25 @@ fi
 # pass here is weaker than it looks: it catches the helper going missing or
 # losing its mode bits, not a domain refusal. Only the app's own terminal can
 # answer that, which is why the symlink shape is asserted separately above.
+# The pass needs positive evidence that the helper ran, not merely the absence
+# of one particular failure. Testing only for 126 meant every other way of not
+# running took the pass branch: a helper that is gone answers 127 with "not
+# found", and `run-as` refused on a non-debuggable build answers with its own
+# error and no helper output at all. Both printed PASS while measuring nothing,
+# and "the helper going missing" is one of the two regressions this test names
+# as its reason for existing.
 HELPER_OUT=$(run_tool "files/usr/libexec/git-core/git-remote-https" 2>&1)
 HELPER_RC=$?
 if [ "$HELPER_RC" -eq 126 ] || echo "$HELPER_OUT" | grep -qi "permission denied"; then
     fail "git_remote_helper" "cannot execute git-remote-https (rc=$HELPER_RC): $HELPER_OUT"
+elif [ "$HELPER_RC" -eq 127 ] || echo "$HELPER_OUT" | grep -qiE "not found|no such file"; then
+    fail "git_remote_helper" "git-remote-https is not there (rc=$HELPER_RC): $HELPER_OUT"
+elif echo "$HELPER_OUT" | grep -qi "run-as"; then
+    fail "git_remote_helper" "run-as refused, so nothing was measured: $HELPER_OUT"
+elif [ -z "$HELPER_OUT" ]; then
+    # Invoked with no arguments the helper complains about usage. Silence means
+    # something other than the helper answered.
+    fail "git_remote_helper" "no output at all (rc=$HELPER_RC); the helper did not run"
 else
     pass "git_remote_helper (executed, rc=$HELPER_RC)"
 fi

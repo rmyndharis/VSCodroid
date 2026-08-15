@@ -369,10 +369,23 @@ class FirstRunSetup(private val context: Context) {
         try {
             bundle.parentFile?.mkdirs()
             val certs = caDir.listFiles()?.sortedBy { it.name } ?: return
-            bundle.outputStream().use { out ->
+            // Atomic, and the guard above is why. Writing straight to the final
+            // path leaves a half-written bundle behind on any failure -- a full
+            // disk, a kill mid-copy -- carrying a fresh mtime, and the freshness
+            // check then returns early on every later launch. The result is a
+            // permanently truncated trust store: some certificates present, the
+            // rest missing, so HTTPS clones fail against whichever hosts fell on
+            // the wrong side of the cut, with nothing to suggest the file is the
+            // problem. An interrupted write now leaves the previous bundle, or
+            // no bundle at all, and either one gets rebuilt next time.
+            val written = writeAtomically(bundle) { out ->
                 for (cert in certs) {
                     if (cert.isFile) cert.inputStream().use { it.copyTo(out) }
                 }
+            }
+            if (!written) {
+                Logger.e(tag, "Could not write the CA bundle; the previous one is unchanged")
+                return
             }
             Logger.i(tag, "CA bundle: ${certs.size} certificates from ${caDir.path}")
         } catch (e: Exception) {
