@@ -140,9 +140,18 @@ dependencies {
     testImplementation(libs.junit.jupiter.api)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testImplementation(libs.mockk)
-    // The android.jar stub throws "not mocked" from every org.json method, which puts
-    // any code that parses a manifest out of reach of a JVM test. No unit test parsed
-    // JSON before this, so replacing the stub cannot change an existing verdict.
+    // org.json is on the test classpath, so a JVM test CAN parse JSON. Parse the
+    // manifest and assert on the parsed object. Do not pattern-match its text and do
+    // not stub the parser: both assert on something other than what the code under
+    // test actually reads, and both stay green while the parsing is wrong.
+    //
+    // Why the dependency is here: android.jar's stub throws "not mocked" from every
+    // org.json method, which is what used to put manifest parsing out of reach. That
+    // is the problem this line solved -- past tense -- not a limit still in force.
+    // Check it in seconds rather than by building, and note the :app: -- the
+    // configuration is on the module, not the root project:
+    //   ./gradlew :app:dependencies --configuration debugUnitTestRuntimeClasspath
+    // Adding it changed no existing verdict, because nothing parsed JSON before it.
     testImplementation("org.json:json:20250107")
 
     // Instrumented Testing (JUnit 4, runs on device)
@@ -299,10 +308,10 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
 // Every binary in jniLibs, checked where it is packaged rather than only where
 // it was downloaded.
 //
-// Each download script runs verify-android-elf.py on the one file it just
-// installed, and that is the only time any of them is examined. Nothing asks the
-// question about the directory as a whole at the moment it goes into an APK, and
-// two paths reach that moment without a download having run: a build.yml
+// Until this task, each download script ran verify-android-elf.py on the one file
+// it had just installed and that was the only time any of them was examined:
+// nothing asked the question about the directory as a whole at the moment it went
+// into an APK. Two paths reach that moment without a download having run: a build.yml
 // assets-cache hit restores jniLibs/arm64-v8a/ wholesale with every download step
 // skipped by `if: cache-hit != 'true'`, and a local `./gradlew assembleDebug`
 // after an old fetch never re-downloads anything. scripts/verify-android-elf.py
