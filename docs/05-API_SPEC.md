@@ -454,6 +454,14 @@ and a probe of `/healthz` gets whatever the REH server does with an unknown rout
 
 **Protocol**: VS Code's `IExtHostRpcProtocol` — binary-framed messages with JSON-RPC semantics.
 
+> **Unverified, and flagged rather than reworded.** The `/ws` path and the protocol name
+> above come from the original design notes. Neither can be checked from this repository:
+> the server tree is a build artifact fetched by `scripts/fetch-vscode-oss.sh` and is not
+> committed, and nothing on the Kotlin side names a WebSocket path — the WebView is
+> pointed at the root URL and VS Code's own client opens the socket. Confirm against
+> `src/vs/server/node/` at the pinned tag before relying on either. The rest of this
+> section was checked against shipped code; this table was not.
+
 **Message types** (handled by VS Code internally):
 
 - File system operations (read, write, stat, readdir, watch)
@@ -466,15 +474,50 @@ and a probe of `/healthz` gets whatever the REH server does with an unknown rout
 
 ### 3.3 Server Launch Arguments
 
+**These are `server.js`'s arguments, not the editor server's, and the difference is
+load-bearing.** `ProcessManager.startServer` spawns `server.js`, which then forks
+`vscode-reh/out/server-main.js` with a command line it builds itself.
+
+What Kotlin passes (`ProcessManager.startServer`):
+
 ```
+libnode.so
+--max-old-space-size=N        # V8 heap ceiling, derived from device RAM by
+                              # heapCeilingForDevice() -- not a constant
+server.js
 --host=127.0.0.1              # Localhost only
---port=PORT                   # Dynamic port
+--port=PORT                   # Dynamic port, allocated once and reused across restarts
 --extensions-dir=PATH         # Custom extensions location
 --user-data-dir=PATH          # User settings location
 --server-data-dir=PATH        # Server data location
 --logsPath=PATH               # Log directory
 --log=info                    # Log level
 ```
+
+What reaches the editor server is a different list. `server.js` reads `host`, `port`
+and `log` as its own **defaults** and rebuilds them, adds two flags nobody passed in,
+and then forwards a **whitelist of exactly four keys**:
+
+```js
+// server.js, at the fork
+['extensions-dir', 'user-data-dir', 'server-data-dir', 'logsPath']
+```
+
+Added by `server.js` itself, not passed from Kotlin:
+
+- `--accept-server-license-terms`
+- `--disable-workspace-trust` — without it every folder opens in Restricted Mode and
+  most extensions never activate. The `security.workspace.trust.enabled` setting
+  cannot substitute: it is APPLICATION-scoped and the remote side contributes only
+  machine/window/resource scopes, so the flag is the only route that works.
+
+⚠️ **An argument that is not in that whitelist is dropped silently.** Adding a flag to
+the Kotlin command line and expecting the editor server to see it is the trap here,
+and it is worst for authentication: the server takes its connection token from
+`<server-data-dir>/data/token` precisely because no token flag is passed, and a
+`--connection-token-file` added to the Kotlin list would vanish at the fork and leave
+the server running with nothing in the log to say so. Change the fork in `server.js`,
+not only the spawn in `ProcessManager`.
 
 ---
 
@@ -544,10 +587,15 @@ user nothing but Forbidden.
 **Polling strategy**:
 
 ```
-Initial:   poll every 200ms for up to 30 seconds
-Running:   poll every 5 seconds (background watchdog)
-After crash: poll every 200ms for up to 10 seconds (restart detection)
+Startup: poll every 200ms for up to 30 seconds   (waitForReady defaults)
 ```
+
+That is the only polling there is. This block used to add "Running: poll every 5
+seconds (background watchdog)" and "After crash: poll every 200ms for up to 10
+seconds", and neither exists: the watchdog does not poll at all — it is a daemon
+thread blocked in `Process.waitFor()`, which costs nothing and learns of an exit
+immediately — and the post-crash wait is the same `waitForReady`, so its ceiling is
+30 seconds, not 10.
 
 ### 4.3 Process Death Handling
 
@@ -566,6 +614,15 @@ thread(name = "node-watchdog") {
     }
 }
 ```
+
+**The restart is bounded, which this sketch does not show.** `NodeService` allows
+`MAX_RESTARTS = 5` (`hasRestartBudget`), with exponential backoff from
+`RESTART_DELAY_MS = 2000` shifted up to `MAX_BACKOFF_SHIFT = 4`. When the budget is
+spent the app stops trying and says so: the notification switches to "VSCodroid server
+stopped" / "Server crashed repeatedly. Please restart the app." and loses its Stop
+action, because there is no longer anything to stop. A reader taking the loop above at
+face value would expect an unlimited restart loop and would not know that user-visible
+end state exists.
 
 ---
 
@@ -611,16 +668,23 @@ Deactivate:
 
 ### 5.3 Pre-bundled Extensions
 
-Shipped in assets/extensions/ and extracted to ~/.vscodroid/extensions/ on first run:
+Shipped in `assets/extensions/` and extracted to `~/.vscodroid/extensions/` on first run.
+All four are first-party; no third-party extension is bundled. Run
+`git ls-files android/app/src/main/assets/extensions/` rather than trusting this list —
+it named five third-party extensions for a long time, **none of which was ever here**.
 
 ```mermaid
 flowchart TD
-  ROOT["assets/extensions/"] --> E1["vscode.theme-defaults/ (Default themes)"]
-  ROOT --> E2["pkief.material-icon-theme/ (Material Icon Theme)"]
-  ROOT --> E3["esbenp.prettier-vscode/ (Prettier)"]
-  ROOT --> E4["dbaeumer.vscode-eslint/ (ESLint)"]
-  ROOT --> E5["ms-python.python/ (Python, if available on Open VSX)"]
+  ROOT["assets/extensions/"] --> E1["vscodroid.vscodroid-saf-bridge/ (device folders, browser, SSH keys, storage, about -- the 8 VSCodroid: commands)"]
+  ROOT --> E2["vscodroid.vscodroid-welcome/ (Get Started walkthrough)"]
+  ROOT --> E3["vscodroid.vscodroid-process-monitor/ (phantom-process budget)"]
+  ROOT --> E4["vscodroid.vscodroid-serve-network/ (dev-server preview)"]
 ```
+
+The version is part of each directory name, and that is load-bearing:
+`extractBundledExtensions` copies a bundled extension only when its directory does not
+already exist, so shipping a change without bumping the version leaves every existing
+install on the old copy. `supersededExtensionDirs` is what removes the stale one.
 
 ---
 
@@ -695,6 +759,26 @@ Exit codes:
 ---
 
 ## 7. Error Codes
+
+> ⚠️ **Proposed, and never implemented. Nothing emits, logs, returns or matches any of
+> these seventeen codes.** Swept for each of them across the tree: every hit is in this
+> document. There is no `E001`, no `SERVER_OOM`, no `WEBVIEW_TOO_OLD` constant anywhere
+> in the Kotlin, the JS or the resources.
+>
+> What the app actually surfaces is a small set of user-facing strings —
+> `error_server_start`, `error_server_timeout`, `error_storage_full`,
+> `error_setup_failed`, `status_server_slow_start` — plus log lines. Errors are not
+> classified by code, so nothing can be filed, matched or triaged by one.
+>
+> Two rows are worth naming because they describe detection that does not exist rather
+> than merely a missing label: **E102 WEBVIEW_TOO_OLD** implies a WebView version check,
+> and there is none — no `WebViewCompat`, no `getCurrentWebViewPackage`, no comparison
+> against Chrome 105 — so an out-of-date WebView is not detected at all. **E101
+> WEBVIEW_CRASH** is detected (`onRenderProcessGone` rebuilds the view) but is never
+> reported to the user in any form.
+>
+> Kept as a design record. Do not write code that expects to receive these, and do not
+> cite a code in a bug report — no log line will contain one.
 
 ### 7.1 Server Errors
 
