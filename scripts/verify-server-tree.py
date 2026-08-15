@@ -83,19 +83,27 @@ def main(tree):
         if any(part in str(path) for part in
                ("/linux-x64/", "/darwin-", "/win32-", "-x64-", "/x64/")):
             continue
-        # A file the build cannot read is a failed check, not a crash. Without
-        # this the walk raises straight out of main(), the remaining binaries go
-        # unexamined, and the script exits non-zero having printed no FAIL line
-        # at all -- which makes every caller that says "the line above names what
-        # failed" into a false statement.
+        # A file the build cannot read, or cannot read far enough, is a failed
+        # check rather than a crash. Without this the walk raises straight out of
+        # main(), the remaining binaries go unexamined, and the script exits
+        # non-zero having printed no FAIL line at all -- which makes every caller
+        # that says "the line above names what failed" into a false statement.
+        #
+        # The exception set matches verify-android-elf.py's, deliberately. Both
+        # scripts read the same header off the same files and can meet the same
+        # states, and they disagreed on one: a file that opens fine but is shorter
+        # than the 20 bytes the e_machine field needs. Measured, on a truncated
+        # .node -- 19 bytes raised struct.error out of the unpack below while the
+        # sibling reported "FAIL index out of range" and carried on. A truncated
+        # download or an interrupted copy lands exactly there.
         try:
             head = path.open("rb").read(20)
-        except OSError as e:
+            if head[:4] != b"\x7fELF":
+                continue
+            machine = struct.unpack_from("<H", head, 18)[0]
+        except (OSError, struct.error, IndexError) as e:
             check(False, f"{path.relative_to(tree)} could not be read", str(e))
             continue
-        if head[:4] != b"\x7fELF":
-            continue
-        machine = struct.unpack_from("<H", head, 18)[0]
         checked += 1
         if machine != AARCH64:
             wrong.append((path.relative_to(tree), MACHINES.get(machine, hex(machine))))
