@@ -23,6 +23,22 @@ object PortFinder {
     private const val KEY_PORT = "server_port"
 
     /**
+     * The address the server binds, resolved once.
+     *
+     * A literal rather than `InetAddress.getLoopbackAddress()`, which follows the
+     * `java.net.preferIPv6Addresses` system property and can answer `::1`. The
+     * server is told `127.0.0.1`, so this has to be the same thing and not
+     * whichever loopback the JVM prefers.
+     *
+     * Declared here, above every function that reads it, rather than at the foot
+     * of the object. Property initialisers run in declaration order, so a
+     * property or `init` block added above a later declaration and calling
+     * [isPortAvailable] would have read null. Nothing does that today; the point
+     * is that nothing can.
+     */
+    private val LOOPBACK: InetAddress = InetAddress.getByName("127.0.0.1")
+
+    /**
      * The port this install serves the workbench on, stable across cold starts.
      *
      * The port is part of the WebView's origin, and the browser keys IndexedDB by
@@ -120,14 +136,4 @@ object PortFinder {
             false
         }
     }
-
-    /**
-     * The address the server binds, resolved once.
-     *
-     * A literal rather than `InetAddress.getLoopbackAddress()`, which follows the
-     * `java.net.preferIPv6Addresses` system property and can answer `::1`. The
-     * server is told `127.0.0.1`, so this has to be the same thing and not
-     * whichever loopback the JVM prefers.
-     */
-    private val LOOPBACK: InetAddress = InetAddress.getByName("127.0.0.1")
 }
