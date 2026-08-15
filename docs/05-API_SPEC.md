@@ -39,11 +39,18 @@ compare.
    (`SecurityManager.kt:51-55`). `MainActivity.injectBridgeToken()` writes it to
    `window.__vscodroid.authToken` after the page loads (`MainActivity.kt:564-569`).
 2. **Every method, not a chosen subset**: all 28 `@JavascriptInterface` methods take the
-   token as their first parameter and validate it before doing anything, returning the
-   method's empty value on refusal. `BridgeTokenUniformityTest` enumerates them by
-   reflection and fails the build if one is added without the check, and a second test
-   asserts a refused call touches nothing -- so the rule holds for the class, not for a
-   list that was correct when it was written.
+   token and validate it before doing anything, returning the method's empty value on
+   refusal. `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
+   if one is added without the check, and a second test asserts a refused call touches
+   nothing -- so the rule holds for the class, not for a list that was correct when it was
+   written. Note what that test checks: it calls each method with a token that will be
+   refused and verifies the method *consulted* `validateToken`. It deliberately does not
+   check the signature, because a `String` first parameter proves nothing about whether the
+   method reads it.
+   **The token is not always the first parameter.** Four methods take it last --
+   `openExternalUrl(url, authToken)`, `installToolchain(name, authToken)`,
+   `removeToolchain(name, authToken)` and `cancelToolchainInstall(name, authToken)`.
+   Read the signature before calling; the position is not a convention you can rely on.
 3. **Scheme allowlist**: `openExternalUrl()` accepts `https://`, `mailto:`, and `http://`
    to `localhost` or `127.0.0.1` (the last for dev-server preview). Everything else is
    refused and logged, including unparseable URLs (`SecurityManager.kt:21-49`).
@@ -96,6 +103,23 @@ with a token that does not match is refused and returns the method's empty value
 `BridgeTokenUniformityTest` enumerates the methods by reflection and fails if one is
 added without the check, so this holds for the class rather than for the list below.
 
+**Registered is not the same as reachable, and the difference decides what an extension
+can do.** All 28 methods below live on the `AndroidBridge` object injected into the
+workbench page, so anything running in that page's own realm can call them directly. An
+extension cannot: it runs in the web extension host, which does not see objects added by
+`addJavascriptInterface`. Extensions reach the bridge over the BroadcastChannel relay
+that `MainActivity.injectBridgeRelay` opens, and that relay dispatches a hand-written
+list of **12** command names — grep `d.cmd ===` in `MainActivity.kt` for the current set:
+
+> `clearCaches`, `generateBugReport`, `generateSshKey`, `getRecentFolders`,
+> `getSshPublicKey`, `getStorageBreakdown`, `listSshKeys`, `openExternalUrl`,
+> `openFolderPicker`, `openRecentFolder`, `openToolchainSettings`, `showAboutDialog`
+
+A method absent from that list is unreachable from any extension however correctly it is
+registered — which is the whole of why the toolchain management calls have no callers.
+Adding a method to `AndroidBridge` does not publish it; the relay branch is a second,
+separate edit, and nothing fails if you forget it.
+
 #### Clipboard
 
 ```kotlin
@@ -141,35 +165,36 @@ Custom Tab and the return trip are described in §2.5.
 
 ```kotlin
 @JavascriptInterface
-fun openFilePicker(mimeTypes: String, authToken: String): String?
-// Opens Android file picker (SAF)
-// mimeTypes: comma-separated MIME types (e.g., "text/*,application/*")
-// Returns: content:// URI string or null if cancelled
-// Async: result delivered via callback
-
-@JavascriptInterface
-fun openFolderPicker(authToken: String): String?
-// Opens Android folder picker (SAF)
-// Returns: tree URI string or null
-
-@JavascriptInterface
-fun requestStoragePermission(authToken: String): Boolean
-// Request MANAGE_EXTERNAL_STORAGE (with user explanation dialog)
-// Returns: true if already granted
+fun openFolderPicker(authToken: String)
+// Opens the Android SAF folder picker.
+// Returns NOTHING. The picked folder does not come back through this call:
+// MainActivity receives the activity result, syncs the folder to its mirror
+// and reloads the workbench on the new path.
 ```
+
+There is no `openFilePicker` and no `requestStoragePermission`. Individual files are
+not opened through a picker at all — a `content://` URI has no POSIX path and the
+server only ever sees POSIX paths. And there is no `MANAGE_EXTERNAL_STORAGE` in the
+manifest to request: external storage is reached through SAF, one user-granted folder
+at a time.
 
 #### Storage Management
 
 ```kotlin
 @JavascriptInterface
 fun getRecentFolders(authToken: String): String
-// Returns JSON array of recently opened SAF folder URIs
-// Format: [{"uri": "content://...", "displayName": "MyProject", "lastOpened": 1700000000}]
+// JSON array of previously granted SAF folders. "[]" if refused, and also
+// "[]" when no SAF manager is wired up -- the two are indistinguishable here.
+// Format: [{"uri": "content://...", "name": "MyProject", "lastOpened": 1700000000}]
+// The key is "name", not "displayName", though it is built from the
+// provider's display name.
 
 @JavascriptInterface
-fun openRecentFolder(authToken: String, uriString: String): Boolean
-// Re-opens a previously granted SAF folder by URI
-// Returns: true if URI is still valid and accessible
+fun openRecentFolder(authToken: String, uriString: String)
+// Re-opens a previously granted SAF folder by URI.
+// Returns NOTHING -- it hands the URI to MainActivity and returns. A URI whose
+// grant has lapsed fails later, in the sync, not here. There is no return value
+// to test for validity.
 
 @JavascriptInterface
 fun getStorageBreakdown(authToken: String): String
@@ -296,18 +321,73 @@ fun clearCrashLogs(authToken: String)
 
 ```kotlin
 @JavascriptInterface
-fun generateSshKey(authToken: String, keyType: String): String?
-// Generates an SSH keypair in ~/.ssh/
-// keyType: "ed25519" (default) or "rsa"
-// Returns: public key string, or null on failure
+fun generateSshKey(authToken: String, comment: String): String
+// Generates an ed25519 keypair at ~/.ssh/id_ed25519 using the bundled
+// ssh-keygen. The second argument is the key's COMMENT, not a key type --
+// the algorithm is not selectable, and a value like "rsa" would simply be
+// written into the comment field.
+// Empty passphrase, deliberately: the key is protected by the app sandbox,
+// which is the right trade against typing one on a phone keyboard.
+// Never overwrites an existing key; if one is there, returns it unchanged.
+// Returns a JSON OBJECT string, not a bare key:
+//   {"success": true,  "publicKey": "ssh-ed25519 AAAA... comment"}
+//   {"success": false, "error": "..."}
+
+@JavascriptInterface
+fun getSshPublicKey(authToken: String): String
+// Reads ~/.ssh/id_ed25519.pub. Returns "" if there is no such file --
+// empty string is also what a refused token returns, so it is not evidence
+// that the key is missing.
+
+@JavascriptInterface
+fun listSshKeys(authToken: String): String
+// Every *.pub in ~/.ssh/, as a JSON array. Returns "[]" if the directory
+// does not exist. A key whose file cannot be read is skipped, not reported.
+// Each entry: { name, type, comment }
+//   name    — filename without the .pub suffix
+//   type    — first field of the public key line, e.g. "ssh-ed25519"
+//   comment — third field, "" when absent
+// NOT a fingerprint: nothing here computes one. The KDoc on this method
+// said "fingerprint" while the code wrote "comment".
 ```
 
 #### Toolchain Control
 
+`ToolchainRegistry.available` is the source for what these can name. It lists Go, Ruby
+and Java 17 today.
+
 ```kotlin
 @JavascriptInterface
-fun cancelToolchainInstall(authToken: String)
-// Cancels an in-progress toolchain download/installation
+fun getAvailableToolchains(authToken: String): String
+// Every registry entry, installed or not, as a JSON array. "[]" if refused.
+// Each entry: { packName, displayName, description, estimatedSize, installed }
+// packName carries the "toolchain_" prefix; `installed` is computed against
+// the short name with that prefix stripped.
+
+@JavascriptInterface
+fun getInstalledToolchains(authToken: String): String
+// JSON array of installed SHORT names, e.g. ["go","ruby"]. "[]" if refused.
+
+@JavascriptInterface
+fun installToolchain(name: String, authToken: String)   // note: token LAST
+// Starts an async download + install. Accepts a pack name or a short name.
+// Returns immediately and reports nothing; progress arrives through the
+// manager's own state callbacks, not through a return value.
+
+@JavascriptInterface
+fun removeToolchain(name: String, authToken: String)    // note: token LAST
+// Deletes the toolchain's files, symlinks and env entries.
+
+@JavascriptInterface
+fun cancelToolchainInstall(name: String, authToken: String)  // note: token LAST
+// Cancels an in-progress download. Takes the pack NAME -- this was documented
+// for a long time as taking only a token, which would not compile.
+
+@JavascriptInterface
+fun openToolchainSettings(authToken: String)
+// Starts ToolchainActivity. Reachable over the relay as `openToolchainSettings`,
+// and NO BUNDLED EXTENSION SENDS IT -- the route users actually take to that
+// screen is the launcher shortcut. See SplashActivity's publishToolchainShortcut.
 ```
 
 #### About
