@@ -30,8 +30,9 @@ import java.lang.reflect.Method
  * the second.
  *
  * Both enumerate the annotated methods by reflection rather than by a written list, so a
- * method added later is covered too: the rule holds for the class, not for the set that
- * existed when this was written.
+ * method added later is covered too — and by the same reflection the page's own exposure
+ * uses, so a method added to a base class is covered as well. Which reflection that is, and
+ * why the obvious one is wrong, is in `bridgeMethods`.
  */
 class BridgeTokenUniformityTest {
 
@@ -135,7 +136,28 @@ class BridgeTokenUniformityTest {
         else -> null
     }
 
-    private fun bridgeMethods(): List<Method> = AndroidBridge::class.java.declaredMethods
+    /**
+     * Every entry point the page can call, which is not the set this class declares.
+     *
+     * `.methods`, NOT `.declaredMethods`. `addJavascriptInterface` exposes a class's
+     * *public* methods, inherited ones included, so an annotated method sitting on a base
+     * class is callable from the page; `declaredMethods`, which this used, returns only
+     * what AndroidBridge itself declares. Both tests below would then run over a set that
+     * excludes exactly the method nobody thought to guard, and pass — a guard reporting on
+     * a smaller surface than the one it guards, which is the failure it exists to prevent.
+     *
+     * AndroidBridge has no supertype today, so this changes no count; it changes what
+     * happens on the day one is added.
+     *
+     * Public-only is the right set rather than a side effect: a private annotated method
+     * is unreachable from the page and needs no check, and invoking one here would report
+     * a violation that cannot be exploited.
+     *
+     * Filtering `Any` states what the set is meant to be; `java.lang.Object` declares
+     * nothing annotated, so it removes nothing today.
+     */
+    private fun bridgeMethods(): List<Method> = AndroidBridge::class.java.methods
+        .filter { it.declaringClass != Any::class.java }
         .filter { it.isAnnotationPresent(JavascriptInterface::class.java) }
         .sortedBy { it.name }
 

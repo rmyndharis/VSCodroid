@@ -4,6 +4,8 @@ set -euo pipefail
 # Cross-compiles the native addons the VS Code server needs into Bionic ARM64
 # .node files. Every build — ours or Microsoft's — ships these compiled against
 # glibc, and Android's loader cannot open them, so each one has to be replaced.
+# Three are recompiled here; @vscode/spdlog is replaced by a JavaScript
+# implementation instead, for the reason given at its stage at the bottom.
 #
 # Compiles by invoking NDK clang directly rather than going through node-gyp.
 # node-gyp's generator injects host-specific flags (on macOS, -arch) that NDK
@@ -309,6 +311,251 @@ mkdir -p "$(dirname "$SQLITE_OUT")"
 verify "$SQLITE_OUT" @vscode/sqlite3 || failed=1
 check_pair @vscode/sqlite3 "$SQLITE_VERSION" \
     "$OUTPUT_ROOT/node_modules/@vscode/sqlite3/package.json" || failed=1
+
+# @vscode/spdlog — the file logger, and the one addon here that is replaced
+# rather than rebuilt. Its published spdlog.node links libstdc++.so.6, which
+# Bionic does not have and nothing in this repo bundles, so the dlopen fails on
+# every device this ships to. The cost is invisible from the failure: the
+# server's SpdLogLogger catches the import error, keeps every message in an
+# in-memory buffer that only the addon-loaded path ever drains, and reports
+# nothing — so no server, ptyHost, agentHost or extension-host log file is ever
+# written, and the buffer grows for the life of the Node process.
+#
+# Replaced rather than rebuilt because spdlog's value is fast async C++ logging
+# and what the server asks of it here is appending lines to a file. The JS below
+# does that with no third-party C++ tree in the build, no NODE_MODULE_VERSION to
+# keep paired against libnode.so, and 650 KB less ELF in the APK.
+#
+# Replaced outright rather than wrapped, for two reasons. On the only platform
+# this tree ships to the native branch of a "try native, fall back to JS"
+# wrapper can never be taken, so it is dead code that still has to be reasoned
+# about; and a runtime choice leaves nothing in the artifact saying which logger
+# is live, where a build-time replacement can be read off the tree. The .node is
+# deleted with it so nothing keeps a loader that cannot run — which also empties
+# the "CANNOT help: spdlog.node needs libstdc++.so.6" line that
+# build-glibc-shim.sh --scan prints, instead of teaching readers to skip it.
+echo ""
+echo "@vscode/spdlog..."
+SPDLOG_DIR="$OUTPUT_ROOT/node_modules/@vscode/spdlog"
+if [ ! -f "$SPDLOG_DIR/package.json" ]; then
+    # Fail closed for the same reason check_pair does: a tree with no
+    # @vscode/spdlog is not a tree this shim belongs in. Fetch the server first.
+    echo "ERROR: @vscode/spdlog not at $SPDLOG_DIR; cannot install the JS logger" >&2
+    failed=1
+else
+    cat > "$SPDLOG_DIR/index.js" <<'JSEOF'
+// VSCodroid: pure-JavaScript stand-in for the @vscode/spdlog native addon.
+//
+// Installed by scripts/build-native-addons.sh, which also deletes
+// build/Release/spdlog.node. Do not restore the published index.js: it loads
+// that addon, the addon links libstdc++.so.6, and Bionic has no libstdc++, so
+// the load fails on every device. The server catches that failure and buffers
+// log messages in memory forever instead, writing no log file at all.
+//
+// Covers the surface the packaged bundles call and no more. spdlog's pattern
+// language is NOT parsed: the server asks for one fixed pattern or for none,
+// and those two shapes are the whole vocabulary here, so setPattern() with any
+// other pattern still logs, in the default shape. Writes are synchronous --
+// which is what the server's own setFlushOn(0) asks for, and what keeps the
+// last lines before a SIGKILL on disk.
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+// spdlog's level numbering, which is what the caller maps its own levels onto:
+// 0 trace .. 5 critical, 6 off.
+const LEVEL_NAMES = ['trace', 'debug', 'info', 'warning', 'error', 'critical'];
+
+let globalLevel = 0;
+
+function pad(value, width) {
+	return String(value).padStart(width, '0');
+}
+
+// "%Y-%m-%d %H:%M:%S.%e" in local time, the one pattern the server asks for.
+function stamp() {
+	const d = new Date();
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1, 2)}-${pad(d.getDate(), 2)} ` +
+		`${pad(d.getHours(), 2)}:${pad(d.getMinutes(), 2)}:${pad(d.getSeconds(), 2)}.` +
+		`${pad(d.getMilliseconds(), 3)}`;
+}
+
+class Logger {
+	// loggerType and name are upstream's signature. Neither is used: both
+	// logger types rotate the same way here, and the pattern the server asks
+	// for has no %n, so the name never appears in a line.
+	constructor(loggerType, name, filepath, maxFileSize, maxFiles) {
+		this._filepath = filepath;
+		this._maxFileSize = maxFileSize > 0 ? maxFileSize : Infinity;
+		this._maxFiles = maxFiles > 0 ? maxFiles : 1;
+		this._level = globalLevel;
+		this._raw = false;
+		this._reported = false;
+		// Deliberately not caught: a logger that cannot open its file must
+		// reject, so the caller's own catch prints why. Swallowing here is
+		// what turns an unwritable log directory back into silence.
+		fs.mkdirSync(path.dirname(filepath), { recursive: true });
+		this._fd = fs.openSync(filepath, 'a');
+		this._size = fs.fstatSync(this._fd).size;
+	}
+
+	// Once, then quiet. The caller's log() has no try/catch around these level
+	// methods, so throwing from here would turn a full disk into a crash in
+	// whatever code happened to be logging.
+	_report(err) {
+		if (this._reported) return;
+		this._reported = true;
+		console.error(`[spdlog-shim] ${this._filepath}: ${err && err.message}`);
+	}
+
+	// spdlog's rotating_file_sink naming: base.log, base.1.log .. base.N.log.
+	_rotated(index) {
+		if (index === 0) return this._filepath;
+		const ext = path.extname(this._filepath);
+		return `${this._filepath.slice(0, this._filepath.length - ext.length)}.${index}${ext}`;
+	}
+
+	_rotate() {
+		try {
+			fs.closeSync(this._fd);
+			this._fd = null;
+			// The rename into the last slot is what drops the oldest file.
+			// maxFiles === 1 has no slot to rename into, so the base file is
+			// truncated instead -- also what spdlog does.
+			for (let i = this._maxFiles - 1; i > 0; i--) {
+				if (fs.existsSync(this._rotated(i - 1))) {
+					fs.renameSync(this._rotated(i - 1), this._rotated(i));
+				}
+			}
+			this._fd = fs.openSync(this._filepath, this._maxFiles > 1 ? 'a' : 'w');
+			this._size = fs.fstatSync(this._fd).size;
+		} catch (err) {
+			this._report(err);
+		}
+	}
+
+	_write(level, message) {
+		if (level < this._level || this._fd === null) return;
+		const line = this._raw
+			? `${message}\n`
+			: `${stamp()} [${LEVEL_NAMES[level]}] ${message}\n`;
+		const bytes = Buffer.byteLength(line);
+		if (this._size + bytes > this._maxFileSize) this._rotate();
+		if (this._fd === null) return;
+		try {
+			fs.writeSync(this._fd, line);
+			this._size += bytes;
+		} catch (err) {
+			this._report(err);
+		}
+	}
+
+	trace(message) { this._write(0, message); }
+	debug(message) { this._write(1, message); }
+	info(message) { this._write(2, message); }
+	warn(message) { this._write(3, message); }
+	error(message) { this._write(4, message); }
+	critical(message) { this._write(5, message); }
+
+	getLevel() { return this._level; }
+	setLevel(level) { this._level = level; }
+
+	// Nothing to do: every write above is a writeSync, so there is never
+	// anything buffered for flush() to push out.
+	flush() {}
+
+	setPattern() { this._raw = false; }
+	clearFormatters() { this._raw = true; }
+
+	drop() {
+		if (this._fd === null) return;
+		try { fs.closeSync(this._fd); } catch (err) { this._report(err); }
+		this._fd = null;
+	}
+}
+
+async function createLogger(loggerType, name, filepath, maxFileSize, maxFiles) {
+	return new Logger(loggerType, name, filepath, maxFileSize, maxFiles);
+}
+
+exports.version = 'vscodroid-js-shim';
+exports.Logger = Logger;
+exports.setLevel = function (level) { globalLevel = level; };
+// Accepted and ignored: writes are synchronous, so every message is already on
+// disk whatever threshold the caller names.
+exports.setFlushOn = function () {};
+exports.createRotatingLogger = function (name, filepath, maxFileSize, maxFiles) {
+	return createLogger('rotating', name, filepath, maxFileSize, maxFiles);
+};
+exports.createAsyncRotatingLogger = function (name, filepath, maxFileSize, maxFiles) {
+	return createLogger('rotating_async', name, filepath, maxFileSize, maxFiles);
+};
+JSEOF
+    rm -f "$SPDLOG_DIR/build/Release/spdlog.node"
+    rmdir "$SPDLOG_DIR/build/Release" "$SPDLOG_DIR/build" 2>/dev/null || true
+
+    cat > "$WORK_DIR/spdlog-shim-check.mjs" <<'JSEOF'
+// Proves the shim writes. The failure it replaces was silent, so a shim that is
+// merely present and broken would be the same silence with more steps -- and
+// nothing downstream would catch it: verify-server-tree.py only reads e_machine
+// from binaries, and the server itself treats an unusable logger as normal.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const shim = process.argv[2];
+let failed = false;
+const fail = (message) => { console.error(`  FAIL @vscode/spdlog: ${message}`); failed = true; };
+
+// Imported, not required: all five server entry points reach it as
+// `await import("@vscode/spdlog")`, so this also proves the named exports
+// survive the CommonJS-to-ESM interop that a require() here would not exercise.
+const spdlog = await import(pathToFileURL(shim).href);
+
+for (const name of ["version", "Logger", "setLevel", "setFlushOn",
+	"createRotatingLogger", "createAsyncRotatingLogger"]) {
+	if (spdlog[name] === undefined) fail(`no export named ${name}`);
+}
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "spdlog-shim-check-"));
+
+// The nested directory is the real case, not a corner of it: the server hands
+// createAsyncRotatingLogger a logsHome that does not exist yet.
+const logFile = path.join(dir, "logs", "check.log");
+spdlog.setFlushOn(0);
+const logger = await spdlog.createAsyncRotatingLogger("check", logFile, 30 * 1024 * 1024, 1);
+logger.setPattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
+logger.setLevel(0);
+logger.info("shim-writes-this");
+logger.flush();
+logger.drop();
+if (!fs.existsSync(logFile) || !fs.readFileSync(logFile, "utf8").includes("shim-writes-this")) {
+	fail(`nothing reached ${logFile}`);
+}
+
+// A rotating logger that never rotates would move the unbounded growth this
+// replaces from memory onto the phone's disk, so the size limit is measured
+// rather than assumed.
+const rollFile = path.join(dir, "roll.log");
+const roller = await spdlog.createAsyncRotatingLogger("roll", rollFile, 64, 3);
+roller.clearFormatters();
+roller.setLevel(0);
+for (let i = 0; i < 12; i++) roller.info(`line-${i}-padded-to-force-a-roll`);
+roller.drop();
+if (!fs.existsSync(path.join(dir, "roll.1.log"))) fail("the 64-byte limit did not roll the file");
+
+fs.rmSync(dir, { recursive: true, force: true });
+if (failed) process.exit(1);
+JSEOF
+    if node "$WORK_DIR/spdlog-shim-check.mjs" "$SPDLOG_DIR/index.js"; then
+        printf '  ok   %-24s %8s bytes (JavaScript, no addon)\n' "@vscode/spdlog" \
+            "$(wc -c < "$SPDLOG_DIR/index.js" | tr -d ' ')"
+    else
+        failed=1
+    fi
+fi
 
 echo ""
 [ "$failed" -eq 0 ] || { echo "=== FAILED ==="; exit 1; }
