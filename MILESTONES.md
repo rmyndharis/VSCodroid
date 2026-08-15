@@ -451,6 +451,7 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Validate that every `@JavascriptInterface` method checks the session token (`BridgeTokenUniformityTest` fails the build if one is added without it)
    - [x] Decided against a URL allowlist, and removed the one that existed: this is a development tool, so any protocol and any address must open, including a wrong one. It had refused `http://192.168.1.x:PORT` — a LAN dev server, the most ordinary thing the product is for. `UrlAllowlistWiringTest` now pins the absence so a filter cannot return unnoticed
    - [x] Decided against restricting cleartext, for the same reason: a dev server answers over plain HTTP at whatever address the device's network gives it, and `network-security-config` matches hostnames only — it can spell neither CIDR nor an address unknown at build time
+   - [x] Exact host matching keeps the WebView inside its own origin: `VSCodroidWebViewClient.isLocalhost` compares `uri.host` against `127.0.0.1`/`localhost` and requires the allocated port, so `localhost.evil.com` is handed to the browser instead of being served as if it were the local server — which would put a remote page inside the origin holding the session token. Still in force, and deliberately NOT a URL filter: it decides which navigations the WebView keeps, not which addresses may be opened
    - [x] Fix: owner-only execute permissions on extracted binaries
 
 5. **Release build & signing**
