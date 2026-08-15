@@ -8,6 +8,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The server build now refuses a pinned commit whose own source declares a
+  different VS Code version. The version and the commit live in separate files
+  and nothing compared them, and the existing check only proved the checkout was
+  the commit that had been asked for — which any commit satisfies, including the
+  one the previous version pinned. A missing commit file already stopped the
+  build; a file that was present and out of date did not, so bumping the version
+  and forgetting the commit built the previous release's source and published it
+  under the new version's name, with the bundled Node runtime and every bundled
+  extension's editor requirement decided against a tree that was not the one
+  being shipped. Nothing downstream could notice: the tarball digest and the
+  patch fingerprints both describe what was built, never what it was supposed to
+  be built from. The comparison reads what the checked-out source calls itself
+  rather than resolving the tag, which costs no network and does not fail when
+  upstream moves a tag — the failure the commit pin exists to avoid
+- A check that sits in the repository while nothing runs it now fails the build.
+  The six JavaScript self-checks — covering the server bootstrap, the DNS proxy,
+  the process monitor and the extension that displays it, the platform fix and
+  the bridge relay — have to be invoked on both the pull-request path and the
+  tag path, because a hotfix tagged straight off the main branch never touches
+  the first, so a check wired into only one is unrun on half the routes that
+  reach a user. Every `check-*.py` in the scripts directory now has to be
+  invoked by something as well: a workflow, a build script or the Gradle build.
+  All of them run today; what was missing was anything enforcing it, so one
+  added and never wired, or one whose only invocation disappeared in an
+  unrelated edit, would go on reading as coverage while running nowhere. The
+  rule counts an invocation rather than a mention, which is not a fine
+  distinction — one workflow file names a self-check in a comment as well as
+  running it, so a rule matching text alone would have kept passing after the
+  line that runs it was deleted
+- Every bundled extension must now name the version it ships, and the build
+  stops when the marketplace serves a different one. All five are pinned today
+  and nothing that ships changes. What changes is that an entry with no version,
+  or one pointing at a moving alias, can no longer be added quietly: what
+  shipped would then depend on the date of the build rather than on anything
+  written down. It would also have broken the build's own housekeeping in a way
+  nothing else caught — the sweep that removes extensions no longer in the set
+  works each directory name out from the entry, and for an unpinned one it works
+  out a name no download ever produces, so it would have deleted the real
+  extracted copy on every run, taking with it the verified copy the build falls
+  back on when the marketplace cannot be reached, and turning an unreachable
+  marketplace from a note into a failed build. An entry with no version, an
+  empty version, or more than one version marker is now refused before anything
+  is read or deleted
+- The loopback bind on the editor server's command line is now pinned by a test.
+  The server has always started bound to 127.0.0.1 and still does; what was
+  missing was anything holding it there. The two neighbouring values on the same
+  command line, the memory ceiling and the port, are both covered, and this is
+  the one whose loss could not be walked back after a release: a server bound to
+  every interface puts the editor on whatever network the phone has joined,
+  including the routes it answers before asking for a connection token. It would
+  not have announced itself either — the search for a free port probes loopback
+  specifically, and a loopback probe reports free a port a wildcard holder
+  already occupies, so widening the bind would have quietly reintroduced a port
+  collision in a different file rather than failing anything. The test asserts
+  both halves: the loopback flag is on the spawned command line, and the
+  wildcard address appears nowhere on it
 - When a previous editor server is still running, the app now serves that one instead of starting a second it cannot use. Android reclaims background processes individually, so the process the app launches can be killed while the server it started keeps running and keeps the port — and the app would then start another that could never listen, watch that one instead, and lose track of the server you were actually using. It now recognises the surviving server as its own, keeps watching it, and notices if it goes away. It still cannot stop a server it did not start, and now says so instead of reporting that it did
 - Opening a link from the editor no longer depends on which route the editor happened to use. A dev server on the local network, or anything else on plain http to a machine other than this one, was silently dropped when the editor opened it through one path and worked when it opened it through the other — with nothing said either way. VSCodroid is a development environment, so any address it is asked to open now opens
 - The contributor documentation no longer describes a URL allow-list that the app does not have.
@@ -142,6 +198,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor server's connection token no longer reaches the Android system log. That token is what authenticates the editor to its own server, and the system log can be read by other software on the device, so a value that gates the whole editor was leaving the app's private storage as a side effect of ordinary use. Nothing changes in day-to-day use: the token is still generated on first start, still kept in private storage, and still supplied for you
 
 ### Fixed
+- The check that verifies the editor server tree now runs on the copy packaged
+  into the app, not only on the copy the build downloads. Those are two
+  different trees — the download is copied into the app's assets, and the native
+  add-ons for the terminal, the file watcher and the database engine are written
+  into that copy afterwards — and the packaged one was reached only by checks
+  that answer narrower questions, none of which asks whether the tree as a whole
+  is the one this app can run. Two ordinary routes arrive there with no download
+  having happened: a CI assets-cache hit restores the tree whole and skips every
+  download step, and a local build repeats for days off a single fetch. On a
+  working checkout the two copies disagreed in the same second — the packaged
+  stylesheet still carried the rule that hid the Accounts and Manage icons,
+  dropped on 2026-08-15 from the block appended when the server is built. What
+  that ships is an editor carrying the adaptations of an older server build, and
+  it is invisible because the version does not move with them: the server
+  tarball is rebuilt in place under the same name
+- A check that examined nothing no longer reports a clean result. The
+  architecture check over the server tree announced how many native binaries it
+  had found to be correct, and printed that line unchanged when the number was
+  zero — which reads exactly like a verdict and is reachable, because on a cache
+  hit the tree is restored whole with the steps that populate it skipped. It now
+  fails instead. Two rules about whether checks are wired up had the same shape:
+  one matched the workflow files as raw text, so an invocation commented out in
+  place still satisfied it while deleting the line went red, and a step left in
+  the file with its condition set to a literal false counted as one more check
+  present rather than as one not running. Comments are now stripped before
+  matching and a disabled step counts as unrun
+- Every binary in the app's native library directory is now checked again at the
+  moment it is packaged, rather than only by the step that installs it. Nothing
+  had asked the question about that directory as a whole at the point it goes
+  into an APK, and two paths reach that point with no install step having run —
+  a CI assets-cache hit, and a local build after an old fetch. Search's ripgrep
+  had been asked least of all: it arrives as a plain copy out of the server
+  tarball, built by another workflow on another machine, and the one check it
+  passed read its architecture, so nothing here had ever decided whether it
+  carries the page alignment Android 16 requires or whether the libraries it
+  needs are present. That is the quietest failure this project has — a binary
+  that installs perfectly and makes Search return nothing, which is
+  indistinguishable from a project that contains no matches. The check also
+  stopped being stricter than the steps it was modelled on: it now resolves
+  dependencies against the same two directories the Node, Python and Termux
+  installers pass, so it no longer refuses a binary those steps accept
+- The manifest published with each release can no longer name a version that the
+  run did not install. The line for the JavaScript runtime was written from the
+  package index before anything had verified the bytes, so a run that stopped at
+  the digest comparison or the extraction left behind a record naming a runtime
+  that never reached the app; it is now written last, after the download has
+  been checked, extracted, installed and examined. The musl loader — resolved
+  fresh from a signed index while the release is built rather than pinned, and
+  the component every Claude Code CLI start goes through — is recorded the same
+  way, so a published build can afterwards be asked which loader is inside it.
+  Both records are emptied when their step begins, so a failed attempt cannot
+  leave the previous version's answer standing in the file the release manifest
+  is generated from. The toolchains and the bundled Termux tools still record
+  each package as the index is read
+- The build's checks now say what they found wrong instead of ending in a stack
+  trace. The Gradle steps that run two of them tell the reader that the line
+  above names the file and what it failed, and on several inputs there was no
+  such line: a native binary in the server tree that cannot be read or is cut
+  short, a stylesheet or product configuration the check cannot open or parse, a
+  bundled extension holding a half-written payload, an app bundle that is not a
+  readable archive, and a library directory that cannot be listed all ended the
+  run with an exception escaping the script. The build stopped either way, so
+  nothing bad reached a release; what it cost is stopping while pointing at a
+  diagnosis that was never printed. Worse, the checks that walk a tree abandoned
+  every file after the one they choked on, so one damaged file could hide every
+  file behind it. One case was not a failure at all: a named pipe or a device
+  node in a swept directory left the check reading from it with no output and no
+  time limit, so the build never finished, and a job that never finishes is not
+  a verdict. Each of these now names the file and records a failed check, and
+  where the check walks a tree it carries on to the end of it — including a
+  sweep holding a single binary, which used to print the fault with nothing
+  attached to say which file it belonged to
 - Stopping the editor server and starting it again no longer leaves the new start unable to finish. A retry left over from before the stop could wake up during the new start, cancel it, and report a failure — leaving a server running that the editor never opened until the app was stopped and started once more
 - When the editor server stopped for good after repeated crashes, its notification said so and offered nothing to do about it, and the app could not be started again until it was swiped from recents or force-stopped. That notification now carries a Stop button that clears it and lets the next launch start the server
 - A server that keeps failing during start-up now says so once instead of once per attempt. The same message could previously appear on every automatic restart — up to five times over several minutes — before the app gave up and said something different
