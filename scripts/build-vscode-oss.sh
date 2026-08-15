@@ -186,6 +186,49 @@ EOF
 fi
 
 echo "  HEAD    : $(git rev-parse --short HEAD)  (matches VSCODE_COMMIT)"
+
+# The pin is two files and they move independently. The comparison above proves
+# the checkout is the commit that was asked for, which any commit satisfies --
+# including the one the previous version pinned. So a bump that edits
+# VSCODE_VERSION and forgets VSCODE_COMMIT builds the old source and publishes it
+# as server-<new version>, and nothing downstream can tell: the tarball digest
+# and the patch fingerprints both describe what was built, never what it was
+# supposed to be built from.
+#
+# Read from the source rather than by resolving refs/tags/$VSCODE_VERSION.
+# Resolving the tag would catch this too, and would additionally fail every time
+# upstream moved a tag -- including a rebuild of a release already published,
+# which is the exact failure the commit pin exists to avoid (see the Source stage
+# above). package.json at the commit states which version that commit is, which
+# is the question being asked, and it costs no network and no extra ref.
+SRC_VERSION="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
+if [ "$SRC_VERSION" != "$VSCODE_VERSION" ]; then
+    cat >&2 <<EOF
+
+  ERROR: the pinned commit is not this version's source.
+
+    VSCODE_VERSION : $VSCODE_VERSION
+    VSCODE_COMMIT  : $VSCODE_COMMIT
+    that commit is : $SRC_VERSION  (its own package.json)
+
+  Almost always: VSCODE_VERSION was bumped and VSCODE_COMMIT was left behind.
+  Building on would publish $SRC_VERSION's source as server-$VSCODE_VERSION, and
+  no later check could notice -- every one of them describes the artifact rather
+  than where it came from.
+
+  Resolve the tag and write the SHA into VSCODE_COMMIT:
+
+      git ls-remote https://github.com/microsoft/vscode.git 'refs/tags/$VSCODE_VERSION*'
+
+  Take the ^{} line if there is one. Resolving it is half the job: the pin
+  asserts that every patch in patches/ applies to that commit, so let the
+  Patches stage run before treating the new SHA as good.
+
+EOF
+    exit 1
+fi
+echo "  version : $SRC_VERSION  (package.json agrees with VSCODE_VERSION)"
+
 echo "  .nvmrc  : $(cat .nvmrc)"
 [ "v$(cat .nvmrc)" = "$(node --version)" ] || echo "  WARNING: node does not match .nvmrc"
 
