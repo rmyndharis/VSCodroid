@@ -668,18 +668,41 @@ Deactivate:
 
 ### 5.3 Pre-bundled Extensions
 
-Shipped in `assets/extensions/` and extracted to `~/.vscodroid/extensions/` on first run.
-All four are first-party; no third-party extension is bundled. Run
-`git ls-files android/app/src/main/assets/extensions/` rather than trusting this list —
-it named five third-party extensions for a long time, **none of which was ever here**.
+Extensions reach a device from **two** places, and conflating them is why this section
+was wrong for a long time.
+
+**1. Code - OSS builtins** — 96 directories inside the built server tree at
+`assets/vscode-reh/extensions/`. Themes and basic language support come from here:
+`theme-defaults`, `theme-monokai`, a `python` grammar extension, and so on. They are
+part of the server build, not of `assets/extensions/`, and nothing in this repository
+lists them — count them with
+`ls android/app/src/main/assets/vscode-reh/extensions/`.
+
+**2. `assets/extensions/`** — nine directories, extracted to `~/.vscodroid/extensions/`
+on first run:
 
 ```mermaid
 flowchart TD
-  ROOT["assets/extensions/"] --> E1["vscodroid.vscodroid-saf-bridge/ (device folders, browser, SSH keys, storage, about -- the 8 VSCodroid: commands)"]
-  ROOT --> E2["vscodroid.vscodroid-welcome/ (Get Started walkthrough)"]
-  ROOT --> E3["vscodroid.vscodroid-process-monitor/ (phantom-process budget)"]
-  ROOT --> E4["vscodroid.vscodroid-serve-network/ (dev-server preview)"]
+  ROOT["assets/extensions/"] --> T["5 from Open VSX, fetched at build time"]
+  ROOT --> O["4 first-party, source in git"]
+  T --> T1["PKief.material-icon-theme"]
+  T --> T2["esbenp.prettier-vscode"]
+  T --> T3["ms-python.python"]
+  T --> T4["dbaeumer.vscode-eslint"]
+  T --> T5["bradlc.vscode-tailwindcss"]
+  O --> O1["vscodroid.vscodroid-saf-bridge (the 8 VSCodroid: commands)"]
+  O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
+  O --> O3["vscodroid.vscodroid-process-monitor"]
+  O --> O4["vscodroid.vscodroid-serve-network (dev-server preview)"]
 ```
+
+⚠️ **`git ls-files` answers a different question than `ls` here, and the gap is
+deliberate.** `.gitignore` ignores `assets/extensions/*` and un-ignores only
+`vscodroid.vscodroid-*/`, because this project's own extensions are source and the rest
+are downloads. So a worktree shows **four** directories and a built tree shows **nine** —
+the five Open VSX ones are fetched by `scripts/download-extensions.sh`, whose
+`EXTENSIONS` array is the tracked, authoritative list of what a build pulls. Read that
+array plus the four `vscodroid.*` directories; do not enumerate this set from git.
 
 The version is part of each directory name, and that is load-bearing:
 `extractBundledExtensions` copies a bundled extension only when its directory does not
