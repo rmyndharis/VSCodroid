@@ -72,7 +72,7 @@
               "svg": "media/extensions.svg"
             },
             "completionEvents": [
-              "onView:extensions.listView"
+              "onCommand:workbench.view.extensions"
             ]
           }
         ]
