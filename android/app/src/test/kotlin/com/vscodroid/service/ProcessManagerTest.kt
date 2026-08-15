@@ -110,68 +110,50 @@ class ProcessManagerTest {
         // The WebView's loaded URL and the WebViewClient are bound to the port and are
         // not rebuilt on restart, so it has to stay put. (This named the bridge's
         // allowed-origin check as the second binding until #144 removed that check.)
-        // A port that is genuinely free, rather than a literal. A restart now
-        // refuses to spawn onto a port something else holds, so a hardcoded number
-        // would quietly make this test depend on nothing else on the machine
-        // having taken it.
-        val free = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
-        manager.portField = free
+        manager.portField = 45678
         manager.serverProcessField = mockk<Process>(relaxed = true) {
             every { isAlive } returns false
         }
 
         assertTrue(startAndAwaitWatchdog())
-        assertEquals(free, manager.port, "restart must reuse the original port")
+        assertEquals(45678, manager.port, "restart must reuse the original port")
     }
 
     @Test
-    fun `a restart refuses to spawn onto a port something else is holding`() {
-        // The hole this closes. Only the cold path checked availability:
-        // PortFinder.getOrAllocatePort tests the remembered port before reusing
-        // it, while the restart branch reuses `_port` unconditionally. The health
-        // probe cannot cover for that, because it reads a response code and
-        // nothing else -- so a stale server answering 200 on our port sets
-        // _isReady, and NodeService.announceReady then resets the restart budget.
-        // The budget meant to end a crash loop could be refilled by the thing
-        // causing it.
+    fun `a restart does not care whether the port is still free`() {
+        // Deliberate, and the opposite of what it looks like. A restart used to
+        // refuse when something already held the port, on the reasoning that the
+        // holder would satisfy the health probe and refill the restart budget.
+        // The reasoning about the budget was right; the conclusion was not, and
+        // this pins the behaviour that replaced it so nobody restores the check
+        // without reading why it went.
         //
-        // Reaching that state needs no stranger on the device: assets/server.js
-        // forks the editor server and forwards SIGTERM, but a SIGKILLed server.js
-        // forwards nothing and fork() sets no PDEATHSIG, so the grandchild
-        // outlives it still holding the socket.
+        // The holder in the case that matters is not a stranger. It is our own
+        // editor server, surviving a SIGKILL of the parent that forked it -- a
+        // live, working server that the open WebView is still talking to.
+        // Refusing to start took that editor away from the user to fix
+        // bookkeeping, and could not recover afterwards: the port is resolved only
+        // while it is zero, so the refusal repeated for the life of the instance.
         //
-        // StubServer(null) is the right fixture precisely because it does not
-        // serve: it accepts and drops, which holds the port without answering.
-        // The refusal has to come from the port being taken, not from anything
-        // the holder says.
+        // StubServer(null) holds the port without serving on it, so this asserts
+        // the start proceeds because of the port's state and not because of
+        // anything the holder answers.
         val holder = StubServer(null)
         try {
             manager.portField = holder.port
 
-            assertFalse(
-                manager.startServer(),
-                "a restart onto a held port must refuse rather than spawn a server " +
-                    "that cannot bind",
+            assertTrue(
+                startAndAwaitWatchdog(),
+                "a held port must not stop a restart; the surviving server is usually " +
+                    "ours, and the user is still using it",
             )
-            assertNull(
-                manager.serverProcessField,
-                "the refusal must happen before anything is spawned",
+            assertEquals(
+                holder.port, manager.port,
+                "and the port must still be the one the WebView is bound to",
             )
         } finally {
             holder.stop()
         }
-
-        // Positive control, and it is the half that makes the assertion above mean
-        // something. Without it a startServer() broken so that it always returns
-        // false would pass everything above.
-        manager.portField = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
-            .use { it.localPort }
-
-        assertTrue(
-            startAndAwaitWatchdog(),
-            "a restart onto a free port must still start; the refusal is about the " +
-                "port being held, not about restarts",
-        )
     }
 
     @Test
