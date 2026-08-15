@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
-"""Keep the documented build sequence in agreement with the one CI runs.
+"""Keep what CI runs in agreement with what this repository declares.
 
     check-build-steps.py
 
-Two assertions, both about scripts nobody notices are missing until an app is
-built without them:
+Three assertions, all about scripts nobody notices are missing until an app is
+built without them, or shipped without them having run:
 
-  * every script a workflow runs is mentioned in CONTRIBUTING.md, so following
-    the documentation produces the tree CI produces;
-  * every script the PR build's asset-preparation job runs is also run by
+  * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
+    following the documentation produces the tree CI produces;
+  * every shell script the PR build's asset-preparation job runs is also run by
     build-all.sh, so the "run them all at once" shortcut is not a shorter path
     to a different tree. Scoped to that one job on purpose: other jobs in the
     same workflow run things -- a device test harness, for one -- that
-    build-all.sh has no business invoking.
+    build-all.sh has no business invoking;
+  * every scripts/test-*.js runs in both lint.yml and release.yml, so a
+    self-check cannot be added to the tree and then run by nothing.
+
+The first two are about `.sh` and say so. The third is deliberately not folded
+into them: those two pair three sources -- the workflow, build-all.sh and
+CONTRIBUTING.md -- and the JavaScript self-checks have no build-all.sh
+equivalent, so widening the shell pattern to reach them would leave two thirds of
+that rule vacuous while the output went on claiming a coverage it was no longer
+performing. A two-set comparison over a glob is the shape of the omission, so it
+is written as one.
 
 The lists are read from the files rather than restated here. A hand-maintained
 fourth copy would be one more thing to drift, which is the defect this exists to
@@ -41,6 +51,19 @@ BUILD_ALL = ROOT / "scripts/build-all.sh"
 # should follow.
 IN_WORKFLOW = re.compile(r"bash\s+scripts/([\w-]+\.sh)")
 IN_BUILD_ALL = re.compile(r"\$SCRIPT_DIR/([\w-]+\.sh)")
+
+# An invocation, not a mention. CONTRIBUTING.md is matched on the bare name above
+# because being described there is the whole point; a workflow has to actually run
+# the thing. The distinction is not academic here: lint.yml carries a paragraph
+# explaining why test-dns-proxy.js matters, so a substring test counts that script
+# as covered even with its `node` line deleted -- measured, the first version of
+# this rule passed a workflow that no longer ran it.
+RUNS_SELFCHECK = re.compile(r"node\s+scripts/(test-[\w.-]+\.js)")
+
+# Both, not either. lint.yml runs on pull_request only and release.yml on tags,
+# so a self-check in just one of them is unrun on half the paths that reach a
+# user -- and a hotfix pushed straight to main and tagged never sees lint at all.
+SELFCHECK_WORKFLOWS = ("lint.yml", "release.yml")
 
 
 def named_by(pattern, path):
@@ -125,6 +148,37 @@ def main() -> int:
         failed = True
     else:
         print(f"  ok     build-all.sh runs all {len(ci_pr)} scripts the PR build runs")
+
+    # A self-check that nothing runs is indistinguishable from no self-check, and
+    # costs more, because its presence in the tree reads as coverage. The glob is
+    # the left-hand side here, so an empty one would make the comparison below
+    # vacuously true in exactly the way the ci_all guard above exists to prevent:
+    # "all covered" prints identically whether every script is wired or the glob
+    # matched nothing at all.
+    selfchecks = {p.name for p in (ROOT / "scripts").glob("test-*.js")}
+    if not selfchecks:
+        print("  FAIL   no scripts/test-*.js matched; the glob stopped matching")
+        return 1
+
+    unrun = {}
+    for wf_name in SELFCHECK_WORKFLOWS:
+        wf = WORKFLOWS / wf_name
+        if not wf.is_file():
+            print(f"  FAIL   {wf_name} is missing; the workflow layout changed")
+            return 1
+        missing = selfchecks - set(RUNS_SELFCHECK.findall(wf.read_text()))
+        if missing:
+            unrun[wf_name] = missing
+
+    if unrun:
+        for wf_name, missing in sorted(unrun.items()):
+            report(f"JavaScript self-checks {wf_name} does not run",
+                   missing, wf_name,
+                   "A self-check nothing runs is the same as no self-check.")
+        failed = True
+    else:
+        print(f"  ok     all {len(selfchecks)} JavaScript self-checks run in "
+              f"{' and '.join(SELFCHECK_WORKFLOWS)}")
 
     return 1 if failed else 0
 
