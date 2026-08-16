@@ -860,12 +860,17 @@ Exit codes:
 > `error_setup_failed`, `status_server_slow_start` — plus log lines. Errors are not
 > classified by code, so nothing can be filed, matched or triaged by one.
 >
-> Two rows are worth naming because they describe detection that does not exist rather
-> than merely a missing label: **E102 WEBVIEW_TOO_OLD** implies a WebView version check,
-> and there is none — no `WebViewCompat`, no `getCurrentWebViewPackage`, no comparison
-> against Chrome 105 — so an out-of-date WebView is not detected at all. **E101
-> WEBVIEW_CRASH** is detected (`onRenderProcessGone` rebuilds the view) but is never
-> reported to the user in any form.
+> One row is worth naming because it describes detection that does not exist rather than
+> merely a missing label: **E101 WEBVIEW_CRASH** is detected (`onRenderProcessGone`
+> rebuilds the view) but is never reported to the user in any form.
+>
+> **E102 WEBVIEW_TOO_OLD** was in the same position until 2026-08-16, when the check it
+> implies was added: `MainActivity.checkWebViewVersion` reads
+> `WebView.getCurrentWebViewPackage()` and compares it against
+> `WebViewVersion.MINIMUM_CHROME_MAJOR`. There is still no code named `E102` and no log
+> line carrying it, so the row remains a design record like the rest; what changed is
+> that the condition behind it is now detected, and reported as a toast rather than a
+> code. A version the app cannot parse is not treated as an old one.
 >
 > Kept as a design record. Do not write code that expects to receive these, and do not
 > cite a code in a bug report — no log line will contain one.

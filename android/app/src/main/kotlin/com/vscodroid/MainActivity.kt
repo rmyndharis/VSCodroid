@@ -27,6 +27,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
+import com.vscodroid.util.WebViewVersion
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -205,6 +206,7 @@ class MainActivity : AppCompatActivity() {
         startAndBindService()
         checkPreviousCrash()
         checkStorageHealth()
+        checkWebViewVersion()
         // Reading it here, and not only in onNewIntent, is what makes a sign-in
         // survive the app being killed while the browser had the screen. See
         // receiveCallbackIntent.
@@ -1452,6 +1454,42 @@ class MainActivity : AppCompatActivity() {
             Toast.LENGTH_LONG
         ).show()
         Logger.w(tag, "Storage low: $available available")
+    }
+
+    /**
+     * Warns when the installed WebView is older than the version this project
+     * is tested against.
+     *
+     * `minSdk` is 33, which ships Chrome 105 or newer, so a stock device passes
+     * and sees nothing. What this catches are the cases a user cannot diagnose:
+     * a System WebView disabled or downgraded by hand or by an OEM image, a
+     * device where WebView updates are blocked so the component ages while the
+     * OS does not, and emulators or custom ROMs carrying an older WebView than
+     * their API level implies. On those the workbench loads against something it
+     * was never tested on, and the failure is missing CSS or a blank editor
+     * rather than a clean refusal. `onReceivedError` only logs, so nothing else
+     * would reach the user.
+     *
+     * It warns and continues rather than refusing to start. The floor is a
+     * tested one, not a hard incompatibility, and an editor that degrades is
+     * worth more than one that will not open. A version that cannot be read is
+     * not treated as an old one; see [WebViewVersion.majorVersionOf].
+     */
+    private fun checkWebViewVersion() {
+        val pkg = WebView.getCurrentWebViewPackage()
+        val version = pkg?.versionName
+        if (!WebViewVersion.isBelowMinimum(version)) {
+            Logger.i(tag, "WebView: ${pkg?.packageName ?: "unknown"} ${version ?: "unknown version"}")
+            return
+        }
+        Toast.makeText(
+            this,
+            "Android System WebView is version $version. VSCodroid is tested against " +
+                "${WebViewVersion.MINIMUM_CHROME_MAJOR} and newer, so parts of the editor " +
+                "may not work. Update it from the Play Store.",
+            Toast.LENGTH_LONG
+        ).show()
+        Logger.w(tag, "WebView $version is below the tested minimum ${WebViewVersion.MINIMUM_CHROME_MAJOR}")
     }
 
 

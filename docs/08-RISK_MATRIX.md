@@ -206,7 +206,7 @@ These plans cover risks that did not yet have dedicated sections above.
 
 | Risk | Mitigation Plan | Contingency |
 |------|------------------|-------------|
-| T04 — WebView fragmentation | Enforce runtime minimum WebView check (Chrome 105+), maintain compatibility matrix in CI/device lab, gate release on WebView smoke tests | Show blocking upgrade dialog for outdated WebView; limit supported devices |
+| T04 (WebView fragmentation) | **Done:** a runtime check reads the installed WebView at launch and warns when it is below Chrome 105 (`MainActivity.checkWebViewVersion`). **Not done:** no compatibility matrix in CI or a device lab, and no release gate on WebView smoke tests | Deliberately a warning, not a blocking dialog: the floor is a tested one rather than a hard incompatibility, and an editor that degrades beats one that will not open |
 | T05 — Memory pressure/OOM | Keep V8 heap cap (`--max-old-space-size=512`), lazy-load extensions/LSP, add memory watchdog and pressure-based cleanup | Auto-disable heavy extensions and reduce concurrent LSP to 1 |
 | T06 — node-pty failure | Build node-pty in CI for each Node.js bump, run PTY integration tests on physical device, keep pinned known-good node-pty version | Fallback terminal mode with reduced features until PTY patch is fixed |
 | T07 — 16KB page alignment | Enforce linker flags in all native build scripts, validate with `readelf` checks in CI | Block release for API 36 target until all binaries pass alignment checks |

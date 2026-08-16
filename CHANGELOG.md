@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- VSCodroid warns when the installed Android System WebView is older than Chrome 105, the version it is tested against. It warns and continues rather than refusing to start, and a version it cannot read is not treated as an old one.
 - **Serve on Network**: lists the ports your dev servers are listening on, shows the address other devices can reach them at, and copies it. Loopback-only servers are called out.
 - You can preview your own dev server at the device's network address from inside the editor, not only at `localhost`.
 - `Simple Browser: Show` opens any loopback address in a tab beside your code. It shipped all along and was documented nowhere.
