@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Server lifecycle**
 
+- A session that adopted a surviving server now says on its notification that extensions, git and npm cannot reach the network, and that restarting fixes it. It failed silently.
 - Reopening the app while the server is still coming up no longer lands on a connection-refused page. Readiness now comes from the health check rather than from whether a process exists.
 - A start that fails while no window is open is reported to the next window that opens, instead of leaving a loading screen that never changes.
 - A server that is merely slow is no longer treated as failed. At two minutes the app says the start is taking longer than usual and keeps waiting.

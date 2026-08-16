@@ -591,6 +591,13 @@ class NodeService : Service() {
         endFailureEpisode()
         startupNotice = null
         Logger.i(tag, "Server is ready on port ${processManager.port}")
+        // Deliberately not [reportStartupNotice], which is the path that reads
+        // "the server is not serving": MainActivity toasts one of those and
+        // returns WITHOUT loading the editor. An adopted server is serving, and
+        // the user should get their editor. What is wrong is narrower than the
+        // startup path can express, so it goes on the card instead, where it
+        // lasts as long as the condition does rather than for a toast.
+        if (processManager.isAdopted()) refreshNotification()
         onServerReady?.invoke(processManager.port)
     }
 
@@ -898,9 +905,22 @@ class NodeService : Service() {
      * relay and nothing else. With no Stop on the card there was no way back at
      * all short of force-stopping the app.
      */
+    /**
+     * The running card's line, derived rather than remembered.
+     *
+     * Adoption is discovered after the first `startForeground`, so the card is
+     * built once before the answer exists and again after. Holding the answer in
+     * a field would mean [refreshNotification] rebuilding with defaults and
+     * quietly reverting it, which is the shape of bug that outlives whoever
+     * wrote it. Asking [ProcessManager] each time cannot drift.
+     */
+    private fun degradableNotificationText(): String =
+        if (processManager.isAdopted()) getString(R.string.notification_text_adopted)
+        else getString(R.string.notification_text)
+
     private fun createNotification(
         title: String = getString(R.string.notification_title),
-        text: String = getString(R.string.notification_text),
+        text: String = degradableNotificationText(),
         serverRunning: Boolean = true,
     ): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {

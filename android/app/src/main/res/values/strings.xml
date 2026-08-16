@@ -5,6 +5,14 @@
     <string name="notification_channel_description">Keeps the local development server running</string>
     <string name="notification_title">VSCodroid is running</string>
     <string name="notification_text">Local development server active</string>
+    <!-- Replaces the line above when the server was adopted rather than started.
+         An adopted server outlived the bootstrap that forked it, and the DNS
+         proxy died with that bootstrap while the survivor kept the dead address
+         in its environment. Everything honouring HTTPS_PROXY then fails for the
+         rest of the session: the extension marketplace, the agent host, and git,
+         npm and curl in every terminal, which inherit it. The editor looks
+         healthy throughout, so this card is the only thing a user can see. -->
+    <string name="notification_text_adopted">No network for extensions, git or npm. Restart the app to fix it.</string>
     <string name="action_stop">Stop Server</string>
 
     <!-- Shown once the automatic restart budget is spent. Replaces the two

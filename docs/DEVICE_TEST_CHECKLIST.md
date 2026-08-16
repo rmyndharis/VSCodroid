@@ -94,6 +94,13 @@
 | BG-4 | Server process killed | `adb shell kill <node PID>` | Server auto-restarts, notification shows | | |
 | BG-5 | Foreground notification | Check notification shade while app runs | "VSCodroid running" notification visible | | |
 | BG-6 | Return after screen off | Lock screen, wait 2min, unlock | App resumes without crash | | |
+| BG-7 | Adopted session says its network is gone | Kill the **bootstrap** `server.js` only (`adb shell ps -A \| grep server.js`, kill the parent, leave the child holding the port), then relaunch the app | Editor loads against the surviving server, and the foreground notification reads "No network for extensions, git or npm". Confirm the claim: the marketplace and `npm view express` both fail in that session, and both work again after a full restart | | |
+
+BG-7 is the one case where the editor being healthy is the problem. An adopted
+server outlived the bootstrap that forked it, and the DNS proxy died with that
+bootstrap while the survivor kept the dead address in its environment. Nothing in
+the editor looks wrong; only the card says so. If the card reads "Local
+development server active" here, the degradation is silent again.
 
 ## 8. Low Memory & Stress
 
