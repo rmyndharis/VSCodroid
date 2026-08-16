@@ -19,12 +19,32 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Grouped so twelve actions do not arrive as twelve pull requests, each
-    # re-running the full matrix. A single branch is one review and one CI pass.
+    # Two groups, split by update type, because they are different decisions
+    # wearing the same shape.
+    #
+    # Measured on the first run of this config: every one of the twelve actions
+    # was several majors behind, and a single group proposed checkout v4 to v7,
+    # download-artifact v4 to v8 and action-gh-release v2 to v3 in one pull
+    # request titled "bump the actions group with 12 updates". That reads as
+    # routine and is twelve breaking-risk changes, in the workflows that hold the
+    # signing keystore. upload-artifact and download-artifact in particular have
+    # broken across majors before.
+    #
+    # Splitting them keeps the routine branch routine, which is what restores the
+    # freshness a floating tag used to give, and leaves majors visible rather
+    # than either hidden by an ignore rule or smuggled in beside patches.
     groups:
-      actions:
+      actions-patch:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
+      actions-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
     commit-message:
       prefix: ci
     labels:
