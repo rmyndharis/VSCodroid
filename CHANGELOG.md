@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Toolchain downloads on non-Play installs no longer fail. A server build release could take over the `latest` release pointer, and that release carries no toolchains.
+
+### Changed
+
+- The build manifest now records the app version, versionCode and commit, so a published artifact can be traced to the build that produced it.
+- Release runs for one tag now queue rather than run concurrently, so two runs can no longer interleave asset uploads onto the same release.
+- Every workflow step is pinned to a verified commit, and the release build no longer holds write access or a push token while running third-party code.
+- Lint and the repository self-checks now run on pushes to main, not only on pull requests.
+
 ## [1.1.0] - 2026-08-16
 
 ### Changed
