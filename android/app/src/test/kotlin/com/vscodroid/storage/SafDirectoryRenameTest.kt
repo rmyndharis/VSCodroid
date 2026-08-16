@@ -69,6 +69,7 @@ class SafDirectoryRenameTest {
         every { DocumentsContract.deleteDocument(any(), any()) } returns true
         every { DocumentsContract.renameDocument(any(), any(), any()) } returns mockk(relaxed = true)
         every { DocumentsContract.createDocument(any(), any(), any(), any()) } returns mockk(relaxed = true)
+        every { DocumentsContract.moveDocument(any(), any(), any(), any()) } returns mockk(relaxed = true)
 
         resolver = mockk(relaxed = true)
         val context = mockk<Context>(relaxed = true)
@@ -103,6 +104,53 @@ class SafDirectoryRenameTest {
         }
     }
 
+    /**
+     * A device folder with real structure, for the cases that turn on *where* a name is.
+     *
+     * [deviceFolderHolding] answers the same child list under every parent, which is fine
+     * while a case only cares whether a name exists somewhere. It is not fine for a move:
+     * claiming the pair requires the destination path to resolve to nothing, and a flat
+     * answer makes `lib/util` resolve the moment both `lib` and `util` exist anywhere. A
+     * case written against the flat mock therefore passes with no move attempted at all.
+     *
+     * [tree] maps a parent's document id to the names directly under it, with `root` as
+     * the tree's own document id.
+     */
+    private fun deviceTree(tree: Map<String, List<String>>) {
+        every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
+            val parent = secondArg<String>()
+            mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:$parent" }
+        }
+        // A document URI has to carry which document it is, and getDocumentId has to
+        // agree with it. The flat setUp answers "root" for every URI, which made the
+        // create-fallback case look at the wrong parent: it asked whether `lib` already
+        // held `util`, was answered from `root`, found the old copy still standing there
+        // and skipped the create it was supposed to perform.
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            val docId = secondArg<String>()
+            mockk<Uri>(relaxed = true).also { every { it.toString() } returns "doc-uri:$docId" }
+        }
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            firstArg<Uri>().toString().removePrefix("doc-uri:")
+        }
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val parent = firstArg<Uri>().toString().removePrefix("children:")
+            val names = tree[parent] ?: emptyList()
+            val cursor = mockk<Cursor>(relaxed = true)
+            var row = -1
+            every { cursor.moveToNext() } answers { ++row < names.size }
+            every {
+                cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            } returns 0
+            every {
+                cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            } returns 1
+            every { cursor.getString(0) } answers { "doc:${names[row]}" }
+            every { cursor.getString(1) } answers { names[row] }
+            cursor
+        }
+    }
+
     /** Delivers one event, without letting the write-back queue run. */
     private fun observe(event: Int, entry: String) {
         engine.handleMirrorEvent(event, File(mirror, entry), mirror, treeUri)
@@ -131,6 +179,80 @@ class SafDirectoryRenameTest {
         // the second copy left standing under the old name.
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
         verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+    }
+
+    /**
+     * The case the same-parent rule used to refuse. Dragging `util` into `lib/` is a move,
+     * not a rename, and leaving it unclaimed meant the old copy stayed on the device and
+     * came back down beside the new one on the next reopen.
+     *
+     * The name is unchanged here, so no rename should follow the move: asking a provider
+     * to rename a document to the name it already has is a request that can be answered
+     * with `util (1)`.
+     */
+    @Test
+    fun `a directory dragged into another folder is moved on the device`() {
+        deviceTree(mapOf("root" to listOf("util", "lib"), "doc:lib" to emptyList()))
+        File(mirror, "lib").mkdirs()
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "util")
+        deliver(FileObserver.MOVED_TO or isDirFlag, "lib/util")
+
+        verify(exactly = 1) { DocumentsContract.moveDocument(any(), any(), any(), any()) }
+        verify(exactly = 0) { DocumentsContract.renameDocument(any(), any(), any()) }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+    }
+
+    /** `mv util lib/helpers`: the move relocates it, the rename gives it the new name. */
+    @Test
+    fun `a move that also renames does both, in that order`() {
+        deviceTree(mapOf("root" to listOf("util", "lib"), "doc:lib" to emptyList()))
+        File(mirror, "lib").mkdirs()
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "util")
+        deliver(FileObserver.MOVED_TO or isDirFlag, "lib/helpers")
+
+        verify(exactly = 1) { DocumentsContract.moveDocument(any(), any(), any(), any()) }
+        verify(exactly = 1) { DocumentsContract.renameDocument(any(), any(), "helpers") }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    /**
+     * `moveDocument` sits behind `FLAG_SUPPORTS_MOVE`, which a provider may withhold while
+     * still offering rename. The fallback has to be what the code did before there was a
+     * move at all: build the new name from the mirror and leave the old copy alone, rather
+     * than deleting a subtree the mirror cannot fully replace.
+     */
+    @Test
+    fun `a provider that will not move still gets the new name`() {
+        deviceTree(mapOf("root" to listOf("util", "lib"), "doc:lib" to emptyList()))
+        File(mirror, "lib").mkdirs()
+        every { DocumentsContract.moveDocument(any(), any(), any(), any()) } returns null
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "util")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib/util")
+        File(mirror, "lib/util").mkdirs()
+        drain()
+
+        verify(exactly = 1) { DocumentsContract.createDocument(any(), any(), any(), "util") }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    /**
+     * A rename staying inside one directory must not start reaching for `moveDocument`.
+     * It is a second provider call behind a second flag, and a provider offering rename
+     * but not move would go from working to falling back.
+     */
+    @Test
+    fun `a rename within one directory does not call move`() {
+        deviceFolderHolding("util")
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "util")
+        deliver(FileObserver.MOVED_TO or isDirFlag, "helpers")
+
+        verify(exactly = 1) { DocumentsContract.renameDocument(any(), any(), "helpers") }
+        verify(exactly = 0) { DocumentsContract.moveDocument(any(), any(), any(), any()) }
     }
 
     @Test

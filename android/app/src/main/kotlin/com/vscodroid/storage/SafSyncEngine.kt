@@ -824,6 +824,32 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
+     * Moves an existing device document into a different parent, in place.
+     *
+     * The counterpart to [renameInSaf] for the half of the problem a rename cannot
+     * express. It carries the subtree for the same reason: the provider relocates the
+     * document itself, so the `.git` and `node_modules` the mirror never held travel with
+     * it. Without this, dragging `src/util` into `src/legacy/` left the old copy standing
+     * on the device, and reopening the folder copied it back down beside the new one.
+     *
+     * `moveDocument` is a different call from `renameDocument` behind a different flag
+     * (`FLAG_SUPPORTS_MOVE` rather than `FLAG_SUPPORTS_RENAME`), so a provider may offer
+     * one and not the other. A null return puts the caller back on the pre-existing
+     * fallback: build the new name from the mirror and leave the old copy alone.
+     *
+     * @return the document's URI in its new parent, or null when the provider would not
+     *   move it.
+     */
+    private fun moveInSaf(safDocUri: Uri, sourceParentUri: Uri, targetParentUri: Uri): Uri? = try {
+        DocumentsContract.moveDocument(
+            context.contentResolver, safDocUri, sourceParentUri, targetParentUri
+        )
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not move a document between directories: ${e.message}")
+        null
+    }
+
+    /**
      * Deletes a document from the SAF tree.
      */
     private fun deleteFromSaf(safDocUri: Uri) {
@@ -885,8 +911,27 @@ class SafSyncEngine(private val context: Context) {
                 // reported them. Those stay mirror-only. They were mirror-only before the
                 // rename too — this does not lose them, it just stops incidentally
                 // rescuing them.
+                //
+                // A move to a different directory is a second call and has to come first:
+                // `moveDocument` returns the document's URI in its new home, and renaming
+                // before moving would rename in the old one and then move a URI this code
+                // no longer holds. Where the parents match, `safSourceParentUri` is null
+                // and nothing here changes.
                 val localFile = File(job.localPath)
-                val renamed = job.safDocUri != null && renameInSaf(job.safDocUri, localFile.name)
+                val moved = if (job.safDocUri != null && job.safSourceParentUri != null &&
+                    job.safParentUri != null
+                ) {
+                    moveInSaf(job.safDocUri, job.safSourceParentUri, job.safParentUri)
+                } else {
+                    job.safDocUri
+                }
+                // Renaming is skipped when the name did not change, which is the common
+                // shape of a move: dragging `src/util` into `src/legacy/` keeps the name.
+                // Decided from the two paths rather than from the moved document's URI,
+                // because a document ID is not required to be a path and reading a name
+                // out of one is only right on the providers where it happens to be.
+                val nameUnchanged = job.previousName == localFile.name
+                val renamed = moved != null && (nameUnchanged || renameInSaf(moved, localFile.name))
                 if (!renamed && localFile.exists() &&
                     job.safParentUri != null && job.safTreeUri != null
                 ) {
@@ -1021,6 +1066,15 @@ class SafSyncEngine(private val context: Context) {
         val renamedFromUri = renamedFrom?.let { resolveDocumentUri(safTreeUri, it) }
         if (renamedFrom != null && renamedFromUri != null) forgetCachedSubtree(renamedFrom)
 
+        // Only for a pair that crosses directories, and resolved from where the document
+        // actually is rather than from the destination: `moveDocument` refuses a source
+        // parent the document is not in. Resolving it unconditionally would ask the
+        // provider on every ordinary rename for a value nothing would read.
+        val sourceParentUri =
+            if (renamedFrom != null && renamedFromUri != null &&
+                parentPathOf(renamedFrom) != parentPathOf(relativePath)
+            ) resolveDocumentUri(safTreeUri, parentPathOf(renamedFrom)) else null
+
         writeBackQueue.offer(
             SyncJob(
                 type = if (renamedFromUri != null) SyncType.RENAME else type,
@@ -1028,7 +1082,9 @@ class SafSyncEngine(private val context: Context) {
                 safDocUri = renamedFromUri ?: safDocUri,
                 safParentUri = safParentUri,
                 safTreeUri = safTreeUri,
-                timestamp = now
+                timestamp = now,
+                safSourceParentUri = sourceParentUri,
+                previousName = renamedFrom?.let { File(it).name }
             )
         )
     }
@@ -1162,11 +1218,18 @@ class SafSyncEngine(private val context: Context) {
          * - **Exactly one candidate.** Two directories in flight at once cannot be told
          *   apart by arrival order alone once their events interleave, and pairing the
          *   wrong two would put each subtree under the other's name.
-         * - **Same parent.** A move between directories is not a rename;
-         *   `renameDocument` cannot express one, and it is `moveDocument` — a different
-         *   call, with its own provider flag — that would. Such a move falls back to the
-         *   old behaviour rather than being half-performed.
          * - **Recent.** See [RENAME_PAIR_WINDOW_MS].
+         *
+         * A third rule required the two halves to share a parent, and it was dropped once
+         * the write-back learned `moveDocument`. It was never about pairing being less
+         * certain across parents; it was that `renameDocument` cannot express a move, so a
+         * pair the engine could not act on was better left unclaimed. Dragging `src/util`
+         * into `src/legacy/` is an ordinary thing to do and used to leave the old copy on
+         * the device, reappearing beside the new one on every reopen. Removing the rule
+         * does widen the mis-pair window: an unrelated arrival anywhere in the mirror can
+         * now be joined to a departure, where before it had to arrive in the same
+         * directory. The two surviving rules are what bound it, and the cost of being
+         * wrong is unchanged, because nothing is deleted either way.
          *
          * Declining costs exactly what the code did before there was any pairing: the
          * device keeps the copy under the old name.
@@ -1175,16 +1238,13 @@ class SafSyncEngine(private val context: Context) {
             vanished: List<VanishedDirectory>,
             newRelativePath: String,
             now: Long
-        ): String? {
-            val candidate = vanished
-                .filter { now - it.atMillis <= RENAME_PAIR_WINDOW_MS }
-                .singleOrNull() ?: return null
-            if (parentPathOf(candidate.relativePath) != parentPathOf(newRelativePath)) return null
-            return candidate.relativePath
-        }
+        ): String? = vanished
+            .filter { now - it.atMillis <= RENAME_PAIR_WINDOW_MS }
+            .singleOrNull()
+            ?.relativePath
 
         /** The directory part of a mirror-relative path; empty for a top-level entry. */
-        private fun parentPathOf(relativePath: String): String =
+        internal fun parentPathOf(relativePath: String): String =
             File(relativePath).parent ?: ""
 
         /**
@@ -1493,7 +1553,21 @@ internal data class SyncJob(
     val safDocUri: Uri?,
     val safParentUri: Uri?,
     val safTreeUri: Uri?,
-    val timestamp: Long
+    val timestamp: Long,
+    /**
+     * For a RENAME, the parent the document sits under *now*, which is what
+     * `moveDocument` needs alongside the destination and is not recoverable from
+     * the other fields: [safDocUri] names the document and [safParentUri] names
+     * where it is going. Null on every other job type, and on a rename that
+     * stays inside one directory.
+     */
+    val safSourceParentUri: Uri? = null,
+    /**
+     * For a RENAME, the name the document currently carries on the device, so
+     * the write-back can tell a move that keeps its name from one that does not
+     * without reading a name out of a document ID. Null on every other type.
+     */
+    val previousName: String? = null
 )
 
 internal enum class SyncType {

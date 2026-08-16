@@ -8,10 +8,14 @@ import org.junit.jupiter.api.Test
  * Which vanished directory a newly arrived one is allowed to claim.
  *
  * inotify pairs the two halves of a rename with a cookie and `FileObserver` does not
- * expose it, so `renameSourceFor` is a heuristic: arrival time and parent are all that is
- * left. What it decides is which device document gets renamed, so the interesting cases
- * are the ones where it has to refuse — a wrong pair puts one directory's subtree under
- * another's name on the user's device.
+ * expose it, so `renameSourceFor` is a heuristic: arrival time and how many are in flight
+ * are all that is left. What it decides is which device document gets renamed, so the
+ * interesting cases are the ones where it has to refuse. A wrong pair puts one directory's
+ * subtree under another's name on the user's device.
+ *
+ * A third rule once required both halves to share a parent. It went when the write-back
+ * learned `moveDocument`, and its absence is itself pinned below: the two remaining rules
+ * now carry a wider set of arrivals than they used to.
  *
  * The rule is pinned here rather than through the engine because the two refusals that
  * matter most cannot be driven from an event: expiry needs a clock the engine reads for
@@ -66,12 +70,38 @@ class SafRenamePairingTest {
     }
 
     @Test
-    fun `a directory that arrives in another parent is not a rename`() {
-        // `renameDocument` cannot express a move between parents -- that is
-        // `moveDocument`, a different call behind a different provider flag -- so this
-        // falls back to the old behaviour rather than being half-performed.
-        assertNull(sourceFor("lib/util", vanished("util", ago = 5)))
-        assertNull(sourceFor("util", vanished("lib/util", ago = 5)))
+    fun `a directory that arrives in another parent is still a rename`() {
+        // This used to be refused, because `renameDocument` cannot express a move between
+        // parents and a pair the engine could not act on was better left unclaimed. The
+        // write-back now reaches for `moveDocument` when the parents differ, so the pair
+        // is claimable in both directions: down into a subdirectory and back out of one.
+        assertEquals("util", sourceFor("lib/util", vanished("util", ago = 5)))
+        assertEquals("lib/util", sourceFor("util", vanished("lib/util", ago = 5)))
+    }
+
+    @Test
+    fun `a move that also changes the name pairs`() {
+        // `mv src/util src/legacy/helpers`: both halves change, which is the case needing
+        // a move followed by a rename rather than either alone.
+        assertEquals("src/util", sourceFor("src/legacy/helpers", vanished("src/util", ago = 5)))
+    }
+
+    /**
+     * The parent no longer gates pairing, so the two surviving rules are the only thing
+     * bounding a mis-pair. Pinned here because widening the pairing widened what they have
+     * to carry: before, an unrelated arrival had to land in the same directory to be
+     * joined to a departure; now it can land anywhere in the mirror.
+     */
+    @Test
+    fun `dropping the parent rule did not weaken the other two`() {
+        assertNull(
+            sourceFor("lib/b", vanished("a", ago = 10), vanished("c", ago = 5)),
+            "two live candidates stay ambiguous across parents",
+        )
+        assertNull(
+            sourceFor("lib/helpers", vanished("util", ago = window + 1)),
+            "an expired candidate stays expired across parents",
+        )
     }
 
     @Test

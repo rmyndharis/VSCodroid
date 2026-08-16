@@ -145,7 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renaming a folder inside a device folder no longer empties it. Android reports a rename as an unrelated delete and create, and the delete used to remove the subtree.
 - A folder that appears is copied across with its contents, which also covers creating a folder that already has files in it. Symbolic links are not followed, since a synced folder is routinely a checked-out repository, and very large moves stop at a bound and say so.
 - Renaming a folder no longer leaves a second copy behind. The two halves are joined where possible and the device folder is moved, carrying everything under it.
-- Where the halves cannot be joined, a move to a different parent or a provider without rename support, the old copy still stays, because losing it would cost files that exist nowhere else.
+- Moving a folder into a different folder is carried across too, not just renaming one in place. Dragging `src/util` into `src/legacy/` used to leave the old copy on the device, reappearing beside the new one every time the folder was reopened.
+- Where the halves still cannot be joined, a provider that supports neither move nor rename, a folder moved out of the workspace, or the second half of a two-step swap such as `mv dist dist.old; mv dist.new dist`, the old copy stays, because losing it would cost files that exist nowhere else.
 - **Edits you had not saved back to a device folder are kept.** The guard compared size before timestamps, and almost every edit changes length, so almost every unsaved edit was overwritten.
 - Reopening a folder no longer discards edits made since it was opened. Files are replaced only when the device copy differs in size, carries no timestamp, or is newer.
 - Saving a file inside a subfolder of a device folder reaches the device. The mirror was watched at its top level only.
