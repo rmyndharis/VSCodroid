@@ -67,20 +67,36 @@ def app_version(field: str) -> str:
 
 
 def git_head() -> str:
-    """The commit this build came from, or `-` outside a checkout.
+    """The commit THIS tree came from, or `-` when it did not come from one.
 
-    The gap this closes was measured on the v1.1.0 draft: ten assets, and no way
+    The gap this closes was measured on a release draft: ten assets, and no way
     to tell which commit produced them. The tag had been moved, so reading it
     back answered for the new target rather than for the build, and this file
     recorded VS Code's commit but never the app's. Recovering it took the run's
     headSha from the Actions API, which outlives neither the run nor the repo.
+
+    The toplevel is compared rather than trusted, because `git rev-parse` walks
+    up. Measured 2026-08-16: from a directory with no `.git` of its own, sitting
+    inside another repository, it reports that repository's HEAD and exits 0. A
+    source tarball unpacked anywhere under `~/Codes` would therefore have
+    recorded an unrelated project's commit as this build's provenance, which is
+    worse than the `-` it replaced: wrong rather than absent, and silently so.
     """
     try:
-        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
-                             capture_output=True, text=True, check=True)
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel", "HEAD"],
+                             cwd=ROOT, capture_output=True, text=True, check=True)
     except (OSError, subprocess.CalledProcessError):
         return "-"
-    return out.stdout.strip() or "-"
+    lines = out.stdout.split()
+    if len(lines) != 2:
+        return "-"
+    toplevel, head = lines
+    try:
+        if pathlib.Path(toplevel).resolve() != ROOT.resolve():
+            return "-"
+    except OSError:
+        return "-"
+    return head or "-"
 
 
 def version_from_filename(filename: str) -> str:

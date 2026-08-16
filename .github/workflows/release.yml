@@ -12,13 +12,27 @@ on:
 permissions:
   contents: read
 
-# Queued, never cancelled. A tag that moves starts a second run against the same
-# draft release, and assets there are replaced one file at a time, so a run
-# killed midway leaves some files from this build and some from the last with
-# nothing on the release saying which is which. Measured 2026-08-16: a cancelled
-# re-run left a release holding a versionCode the store had already consumed,
-# and the only way to tell was to ask the Actions API which commit each run
-# built. cancel-in-progress would turn that accident into the normal case.
+# Serialised, so two runs for one tag cannot interleave. A tag that moves starts
+# a second run against the same release, and assets are replaced one file at a
+# time, so a run killed midway leaves some files from this build and some from
+# the last with nothing on the release saying which is which. Measured
+# 2026-08-16: a cancelled re-run left a release holding a versionCode the store
+# had already consumed, and the only way to tell which commit each run built was
+# to ask the Actions API. cancel-in-progress would make that the normal case.
+#
+# Two things this does NOT do, both worth stating because the setting's name
+# invites the opposite reading.
+#
+# It does not make the half-written state invisible. No `draft:` input is passed
+# to the publish step below, and the action defaults it to false, so a release
+# interrupted partway through uploading is public and downloadable. The one in
+# the incident above was a draft for an unrelated reason.
+#
+# It does not mean nothing in this group is ever cancelled. Per GitHub's
+# documented behaviour, a group holds at most one pending run: a third push
+# cancels the one already waiting, in progress or not. So a rapid sequence of
+# force-pushed tags can still skip a build. Not measured here, unlike the rest
+# of this comment.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false

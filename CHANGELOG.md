@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Toolchain downloads on non-Play installs no longer fail. A server build release could take over the `latest` release pointer, and that release carries no toolchains.
+- A server build release could take over the `latest` release pointer, which breaks toolchain downloads for every non-Play install. It is now kept out of that pointer permanently.
 
 ### Changed
 

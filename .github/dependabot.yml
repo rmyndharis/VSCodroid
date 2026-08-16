@@ -1,0 +1,31 @@
+# Exists because pinning actions to commit SHAs took away the thing a floating
+# tag was quietly providing.
+#
+# Every `uses:` in .github/workflows is pinned to a full 40-character commit,
+# which is what stops a compromised tag from being resolved at run time inside
+# the job that holds the signing keystore and publishes the release assets. The
+# cost is that a pin never moves on its own: before, `@v4` picked up a security
+# fix on the next run; after, it stays where it was written until somebody
+# rewrites it. Nothing in the repository proposed those rewrites, so the pins
+# would have aged silently, which is a slower version of the problem they were
+# added to solve.
+#
+# Only github-actions. Gradle and npm dependencies here are resolved by lockfiles
+# and by scripts that verify their own digests, and opening that surface is a
+# separate decision with a separate review burden.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Grouped so twelve actions do not arrive as twelve pull requests, each
+    # re-running the full matrix. A single branch is one review and one CI pass.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+    labels:
+      - enhancement

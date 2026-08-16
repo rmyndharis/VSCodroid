@@ -16,14 +16,22 @@ because that workflow is `workflow_dispatch` only and runs perhaps once per VS
 Code bump. The failure would have arrived a month later, on the one job whose
 output every app build depends on.
 
-Two assertions:
+Three assertions:
 
+  * at least one workflow, carrying at least one step, was actually read. A
+    checker that finds nothing reports nothing, and CI reads the exit code
+    rather than the log, so an empty glob is indistinguishable from a clean
+    tree without this;
   * every step has exactly one of `uses` or `run`. Neither is the bare-name
     case above. Both at once is also rejected by the runner;
   * every `uses` reference is pinned to a full 40-character commit SHA. A
     floating tag is resolved at run time by whoever controls it, and these
     workflows publish the release assets, including the digest manifest that
     non-Play toolchain installs verify against.
+
+Both extensions are read. GitHub Actions runs `.yml` and `.yaml` alike, and a
+checker that knows only one of them would go on printing a healthy count while
+the file it could not see carried exactly the defect this exists to catch.
 
 Deliberately not a general workflow linter. `actionlint` is that, and it is a
 Go binary this repository would have to fetch, pin and verify to run one check.
@@ -53,7 +61,9 @@ def main() -> int:
     checked_files = 0
     checked_steps = 0
 
-    for path in sorted(WORKFLOWS.glob("*.yml")):
+    paths = sorted(p for p in WORKFLOWS.iterdir()
+                   if p.suffix in (".yml", ".yaml") and p.is_file())
+    for path in paths:
         checked_files += 1
         doc = yaml.safe_load(path.read_text())
         for job, i, step in steps_of(doc):
@@ -77,14 +87,22 @@ def main() -> int:
                     f"pinned to a 40-character commit SHA"
                 )
 
+    # Asserted, not merely printed. Printing the count was the first attempt at
+    # this and it does not work: CI reads the exit code, so an empty
+    # .github/workflows still went green with "all 0 steps in 0 workflows".
+    if not checked_files or not checked_steps:
+        print(f"::error::read {checked_files} workflow file(s) and "
+              f"{checked_steps} step(s) under {WORKFLOWS}; this checker has "
+              f"nothing to check, which is a broken checkout or a moved "
+              f"directory rather than a clean tree")
+        return 1
+
     for f in failures:
         print(f"::error::{f}")
     if failures:
         print(f"  FAILED  {len(failures)} problem(s) across {checked_steps} steps")
         return 1
 
-    # The counts are printed on success too. A checker that says only "ok" is
-    # indistinguishable from one whose glob stopped matching anything.
     print(f"  ok     all {checked_steps} steps in {checked_files} workflows "
           f"have exactly one of uses/run")
     print(f"  ok     every uses reference is pinned to a full commit SHA")
