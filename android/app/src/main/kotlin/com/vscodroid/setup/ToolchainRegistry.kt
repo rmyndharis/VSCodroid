@@ -25,7 +25,18 @@ object ToolchainRegistry {
             packName = "toolchain_go",
             displayName = "Go",
             shortLabel = "Go",
-            description = "Go programming language (CGO_ENABLED=0)",
+            // The second sentence is not padding, and removing it would put the
+            // picker back to selling 179 MB for something the user cannot use as
+            // advertised. Android refuses to execute a file under the app's data
+            // directory, so binaries are reached through a bash function that
+            // hands them to the system loader. A function reaches only as far as
+            // the shell: `go build` and `go run` start the compiler, assembler
+            // and linker themselves, those forks hit the binaries directly, and
+            // they are refused. The card renders this text verbatim
+            // (ToolchainPickerAdapter), so it is the only place a user is told
+            // before choosing.
+            description = "Go programming language (CGO_ENABLED=0). Runs on device, " +
+                "but cannot compile: go build and go run are refused by Android.",
             estimatedSize = 179_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_go.zip",
         ),

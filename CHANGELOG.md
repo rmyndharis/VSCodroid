@@ -275,6 +275,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Documentation**
 
 - The white-screen fix no longer sends readers to Clear Data without saying it deletes every project, and now lists how to rescue unsaved work first.
+- The Go toolchain card and the user guide now say Go cannot compile on device. The guide demonstrated `go run`, and the limit was stated only in this changelog.
 - The user guide's list of bundled extensions matches what ships. It named two that are not included and listed an included one under "extensions to install".
 - The on-device toolchain checklist can be followed. Its five rows pointed at a Settings screen that does not exist, and expected `go build` to succeed.
 - Fourteen disagreements between the bridge API documentation and the bridge, including an SSH argument documented as a key type when it is the comment, and seven methods missing entirely.

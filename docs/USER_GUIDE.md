@@ -427,12 +427,12 @@ it.
 New terminals automatically pick up toolchain PATH changes. No app restart is needed.
 
 ```bash
-# Go
+# Go: the toolchain installs and runs, but it cannot compile on Android.
+# `go build` and `go run` are refused. See Known Limitations below.
 go version
+go env GOROOT
 mkdir hello && cd hello
 go mod init hello
-# edit main.go
-go run main.go
 
 # Ruby
 ruby -v
@@ -512,6 +512,29 @@ The status bar shows a phantom process count. This tells you how many background
 ### Native npm Packages
 
 Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because there is no C compiler on the device. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
+
+### Toolchains Run Only From the Terminal, and Go Cannot Compile
+
+Android refuses to execute any file inside an app's data directory, which is
+where installed toolchains live. VSCodroid works around this by defining a shell
+function for each toolchain binary that hands the file to the system loader, so
+typing `go`, `ruby` or `javac` in a terminal works.
+
+A shell function reaches only as far as the shell. Anything that launches a
+binary itself gets the file rather than the function, and is refused:
+
+- `make`, `bash -c "..."` and shell scripts
+- processes started by an extension, including language servers
+- a compiler that starts its own sub-tools
+
+That last case is why **Go cannot compile on VSCodroid**. `go build` and `go run`
+start the compiler, assembler and linker as separate programs, and those starts
+do not go through the shell function. `go version`, `go env` and `go mod` work;
+building does not.
+
+Ruby and Java are reached the same way and hit the same wall whenever something
+other than your terminal starts them, an extension or a Makefile for example.
+Typing `ruby` or `javac` yourself goes through the shell function and works.
 
 ### Android Phantom Process Limit
 
