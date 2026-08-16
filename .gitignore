@@ -163,3 +163,11 @@ toolchain-zips/
 # Written by scripts/write-build-manifest.py. It belongs on a release as a record
 # of what that build resolved, not in the tree, where it would change every run
 /build-manifest.txt
+
+# Both are staging directories for the native debug symbols release.yml attaches:
+# it unpacks the bundle's BUNDLE-METADATA into pulled/ and assembles the .sym
+# files under symbols/ before zipping them. Reproducing that step locally leaves
+# roughly 9 MB of ELF symbol data in the tree, untracked and, until now, not
+# ignored, so a `git add -A` would have committed build output.
+/pulled/
+/symbols/
