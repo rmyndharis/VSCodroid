@@ -69,6 +69,13 @@ jobs:
       - name: Check the documented build steps match the workflows
         run: python3 scripts/check-build-steps.py
 
+      # Beside it because it asks the other half of the question: that one checks
+      # which scripts the workflows run, this one checks that every step is a
+      # step the runner will accept at all. Valid YAML is not valid workflow, and
+      # a step carrying only a name loads cleanly and is rejected at dispatch.
+      - name: Check every workflow step is runnable and pinned
+        run: python3 scripts/check-workflow-steps.py
+
       # Same reasoning, one file further: reads two committed sources and no
       # assets. The contract an extension author writes against had never been
       # held to the bridge it describes, and one pass found fourteen

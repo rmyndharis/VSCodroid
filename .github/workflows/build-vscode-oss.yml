@@ -173,7 +173,6 @@ jobs:
       # can promote this. Nothing reads the pointer to find this tarball:
       # fetch-vscode-oss.sh asks for server-$VSCODE_VERSION by name.
       - name: Publish the server tarball
-      - name: Publish the server tarball
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: server-${{ steps.pin.outputs.version }}

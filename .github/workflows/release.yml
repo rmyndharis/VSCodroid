@@ -133,6 +133,12 @@ jobs:
       - name: Check the documented build steps match the workflows
         run: python3 scripts/check-build-steps.py
 
+      # Reaches workflows this trigger never runs, which is the point:
+      # build-vscode-oss.yml is workflow_dispatch only, so a malformed step in it
+      # would otherwise surface once per VS Code bump, long after the commit.
+      - name: Check every workflow step is runnable and pinned
+        run: python3 scripts/check-workflow-steps.py
+
       - name: Check the bridge API spec matches the registered signatures
         run: python3 scripts/check-bridge-api-spec.py
 
