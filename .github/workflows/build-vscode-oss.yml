@@ -32,7 +32,13 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      # Write permission is real here and cannot be dropped: this job publishes
+      # its own release. What it does not need is a push token sitting in
+      # .git/config while it clones the VS Code source and runs a full npm
+      # install against it. The release is created through the API.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Resolve the pinned version
         id: pin
@@ -102,7 +108,7 @@ jobs:
           echo "node=$node_version" >> "$GITHUB_OUTPUT"
           echo "Building with Node $node_version"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ steps.pin.outputs.node }}
 
@@ -114,7 +120,7 @@ jobs:
             libxkbfile-dev pkg-config python3 python3-setuptools
 
       - name: Cache npm
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.npm
           key: codeoss-npm-${{ steps.pin.outputs.version }}-${{ runner.arch }}
@@ -136,7 +142,7 @@ jobs:
           du -sh "${{ runner.temp }}/codeoss"/* 2>/dev/null || true
 
       - name: Upload server tree
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}
           path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
@@ -147,13 +153,28 @@ jobs:
       # fetch from here, so the tree a release ships is the one this job built
       # rather than whatever a maintainer happened to have on disk.
       #
-      # make_latest is false and the tag is deliberately not v-prefixed. Both
-      # matter: ToolchainRegistry sends every non-Play install to
-      # releases/latest/download/toolchain_*.zip, so making this the latest
-      # release would 404 every toolchain download; and release.yml triggers on
-      # v*, so a v-prefixed tag here would start an app release build.
+      # Three settings keep this out of the app release channel, and the tag is
+      # deliberately not v-prefixed because release.yml triggers on v*.
+      #
+      # ToolchainRegistry sends every non-Play install to
+      # releases/latest/download/toolchain_*.zip, and this release carries no
+      # toolchain, so it must never be what that path resolves to.
+      #
+      # make_latest: false alone does not achieve that, measured 2026-08-16: it
+      # governs the moment of creation, not candidacy afterwards. This release
+      # was created with it and still became the answer to /releases/latest,
+      # because the app release that held the pointer was withdrawn to a draft
+      # and GitHub had to choose again. That second choice takes the newest
+      # non-draft non-prerelease by created_at, which was this one, and every
+      # sideload toolchain download 404ed until someone noticed.
+      #
+      # prerelease: true is what makes it durable. A prerelease is excluded from
+      # the latest pointer permanently rather than once, so no later withdrawal
+      # can promote this. Nothing reads the pointer to find this tarball:
+      # fetch-vscode-oss.sh asks for server-$VSCODE_VERSION by name.
       - name: Publish the server tarball
-        uses: softprops/action-gh-release@v2
+      - name: Publish the server tarball
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: server-${{ steps.pin.outputs.version }}
           name: Code - OSS server ${{ steps.pin.outputs.version }}
@@ -164,4 +185,5 @@ jobs:
 
             Consumed by `scripts/fetch-vscode-oss.sh`. Not an app release.
           make_latest: false
+          prerelease: true
           files: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
