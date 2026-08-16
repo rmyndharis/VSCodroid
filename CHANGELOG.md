@@ -7,21 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- A server build release could take over the `latest` release pointer, which breaks toolchain downloads for every non-Play install. It is now kept out of that pointer permanently.
-
 ### Changed
 
 - The build manifest now records the app version, versionCode and commit, so a published artifact can be traced to the build that produced it.
 - Release runs for one tag now queue rather than run concurrently, so two runs can no longer interleave asset uploads onto the same release.
 - Every workflow step is pinned to a verified commit, and the release build no longer holds write access or a push token while running third-party code.
 - Lint and the repository self-checks now run on pushes to main, not only on pull requests.
-
-## [1.1.0] - 2026-08-16
-
-### Changed
-
 - **The VS Code server is now built from MIT-licensed Code - OSS source** instead of Microsoft's pre-built server, which could not legally be modified and redistributed inside an APK.
 - VS Code upgraded 1.96.4 to 1.133.0.
 - Node.js runtime upgraded to 24.18.0, taken from Termux's `nodejs-lts`. The previous hand-cross-compiled 20.18.1 segfaulted inside several CLI tools.
@@ -264,6 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Build and release**
 
+- A server build release could take over the `latest` release pointer, which breaks toolchain downloads for every non-Play install. It is now kept out of that pointer permanently.
 - A release can no longer be published with one of its files missing. Upload and publish both defaulted to warning rather than failing.
 - Builds no longer re-download every bundled package. The cache pointed one directory above where packages are written, so it matched none of the 72 files there.
 - The release manifest can no longer name a version the run did not install; the runtime and musl loader lines are written after verification, and cleared when their step begins.
