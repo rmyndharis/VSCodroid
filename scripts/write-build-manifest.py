@@ -27,6 +27,8 @@ are reported, never enforced.
 import argparse
 import hashlib
 import pathlib
+import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -46,6 +48,39 @@ def sha256(path: pathlib.Path) -> str:
 def read_text(rel: str) -> str:
     p = ROOT / rel
     return p.read_text().strip() if p.is_file() else "-"
+
+
+def app_version(field: str) -> str:
+    """`versionCode` or `versionName` as android/app/build.gradle.kts declares it.
+
+    Read here rather than passed in by the caller so that a manifest written on a
+    developer's machine says the same things a released one does. release.yml
+    greps the same two values for its own gate; that gate answers "may this tag
+    be built", this answers "what was built", and only the second survives the
+    run.
+    """
+    gradle = ROOT / "android/app/build.gradle.kts"
+    if not gradle.is_file():
+        return "-"
+    m = re.search(rf'^\s*{field}\s*=\s*"?([^"\s]+)"?', gradle.read_text(), re.M)
+    return m.group(1) if m else "-"
+
+
+def git_head() -> str:
+    """The commit this build came from, or `-` outside a checkout.
+
+    The gap this closes was measured on the v1.1.0 draft: ten assets, and no way
+    to tell which commit produced them. The tag had been moved, so reading it
+    back answered for the new target rather than for the build, and this file
+    recorded VS Code's commit but never the app's. Recovering it took the run's
+    headSha from the Actions API, which outlives neither the run nor the repo.
+    """
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                             capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return "-"
+    return out.stdout.strip() or "-"
 
 
 def version_from_filename(filename: str) -> str:
@@ -113,6 +148,9 @@ def collect() -> list[str]:
         "# What this build resolved. A record, not a lock -- see",
         "# scripts/write-build-manifest.py for why.",
         "",
+        f"app-version\t{app_version('versionName')}",
+        f"app-versioncode\t{app_version('versionCode')}",
+        f"app-commit\t{git_head()}",
         f"vscode-version\t{read_text('VSCODE_VERSION')}",
         f"vscode-commit\t{read_text('VSCODE_COMMIT')}",
     ]
