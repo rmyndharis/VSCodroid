@@ -778,14 +778,31 @@ class ServerReadinessTest {
         // The cold-start window itself: a port is allocated and the process is
         // spawning, but nothing is bound to it yet. This is the state the
         // Activity used to navigate into.
-        val server = StubServer(200)
-        manager.portField = server.port
-        server.stop()
+        //
+        // The port is held rather than freed, for the reason already written out
+        // in `a probe against a server that is not serving leaves the answer
+        // alone`. Stopping the stub first would make this assert that nothing
+        // else on the machine is listening on that port, which is not this
+        // test's to guarantee: on a shared runner something else takes the freed
+        // port between the stop and the probe, the probe gets its 200, and the
+        // assertion fails for a reason that has nothing to do with readiness.
+        // Measured on CI 2026-08-16, one failure out of 909 tests.
+        //
+        // It still tests what it says it does. The probe cannot tell a refused
+        // connection from one that is accepted and dropped; both are "not
+        // serving" in the only sense it can observe, and only the second cannot
+        // be taken by someone else.
+        val server = StubServer(null)
+        try {
+            manager.portField = server.port
 
-        val ready = runBlocking { manager.waitForReady(timeoutMs = 400, pollIntervalMs = 25) }
+            val ready = runBlocking { manager.waitForReady(timeoutMs = 400, pollIntervalMs = 25) }
 
-        assertFalse(ready)
-        assertFalse(manager.isReady())
+            assertFalse(ready)
+            assertFalse(manager.isReady())
+        } finally {
+            server.stop()
+        }
     }
 
     @Test
