@@ -178,7 +178,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 105+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~500 MB minimum (core + workspace) |
+| Storage      | ~875 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -232,13 +232,26 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 
 ## 📦 Size Estimates
 
-| Metric                             | Size                   |
-| ---------------------------------- | ---------------------- |
-| Play Store download (core)         | ~135 MB                |
-| + Each toolchain (on-demand)       | 9-53 MB per language   |
-| Installed storage (core)           | ~400 MB                |
-| Installed storage (all toolchains) | ~750 MB                |
-| RAM usage (typical)                | ~400-700 MB            |
+| Metric                                 | Size                 |
+| -------------------------------------- | -------------------- |
+| Play Store download (core)             | ~135 MB              |
+| + Each toolchain (on-demand)           | 9-53 MB per language |
+| Free space required to install         | ~875 MB              |
+| Extracted to internal storage (core)   | ~810 MB              |
+| Extracted, plus all three toolchains   | ~1.15 GB             |
+| RAM usage (typical)                    | ~400-700 MB          |
+
+The install figure is larger than what the app ends up occupying because extraction
+needs room to work: it is the asset tree plus 64 MB of headroom, and it is the number
+the app itself quotes when it refuses to start for lack of space. Freeing only what the
+extracted size suggests is what leaves setup failing partway.
+
+These move with every VS Code bump. Re-measure rather than trusting them:
+
+```bash
+# what the app will extract, and therefore what the storage gate demands
+find android/app/src/main/assets -type f -exec stat -f %z {} + | awk '{s+=$1} END {printf "%.0f MB assets, gate demands %.0f MB\n", s/1048576, s/1048576+64}'
+```
 
 ## 🤝 Contributing
 

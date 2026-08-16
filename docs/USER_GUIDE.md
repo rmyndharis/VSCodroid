@@ -23,7 +23,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 ### What Happens on First Open
 
-1. **Install** -- Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 150-200 MB.
+1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 135 MB, and you need about 875 MB free for the extraction that follows.
 2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. This takes 5-10 seconds and only happens once.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
@@ -550,7 +550,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation uses approximately 300-400 MB. With all toolchains installed, expect 600-800 MB. Keep at least 500 MB free for comfortable use (node_modules, build artifacts, caches).
+Core installation extracts approximately 810 MB to internal storage. With all three toolchains installed, expect around 1.15 GB. Setup needs about 875 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

@@ -203,10 +203,17 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
 | NFR-RES-03 | Phantom process count | ≤ 5 in typical use | P0 |
 | NFR-RES-04 | AAB base download size | < 200 MB (core); toolchains 20-100 MB each (on-demand) | P1 |
-| NFR-RES-05 | Runtime storage (core extracted) | < 400 MB; up to ~800 MB with all toolchains | P1 |
+| NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~1.15 GB with all toolchains | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
-| NFR-RES-07 | V8 heap limit | max-old-space-size=512MB | P1 |
+| NFR-RES-07 | V8 heap limit | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
+
+> NFR-RES-05 and NFR-RES-07 carry measured figures, not targets. Both once stated a
+> goal the build no longer meets: storage was written as `< 400 MB` against a tree that
+> now extracts ~810 MB, and the heap as a flat `512MB` against a ceiling that has been
+> derived per device since the limit started leaving 3-4 GB phones nothing to work with.
+> Verify against `ProcessManager.heapCeilingMb` and `BuildConfig.EXTRACTED_ASSET_BYTES`
+> rather than this table.
 
 ### 4.3 Reliability (NFR-REL)
 
@@ -297,7 +304,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Constraint | Details |
 |-----------|---------|
 | RAM on low-end devices | 4GB devices must work without OOM |
-| Storage on 64GB devices | Total installation < 500MB for core |
+| Storage on 64GB devices | ~810 MB extracted for core, and ~875 MB free needed to install |
 | CPU throttling | Android may throttle background processes |
 | Battery optimization | Doze mode may affect background server |
 

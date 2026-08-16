@@ -12,6 +12,12 @@ M5 (Toolchain) → On-demand languages, Language Picker, Play Asset Delivery
 M6 (Release)   → Play Store release
 ```
 
+> A ticked box records what was true when it was ticked, not what is true now. Several
+> carry figures the build has since moved past: the V8 heap is no longer the flat 512 MB
+> under M4, and the size measurements under M5 predate later asset growth. Six boxes are
+> still open, so this is a live checklist rather than a historical document; treat the
+> ticked ones as dated entries and verify any number against the code before quoting it.
+
 ---
 
 ## M0 — Proof of Concept
