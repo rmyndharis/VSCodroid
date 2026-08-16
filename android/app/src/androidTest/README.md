@@ -4,10 +4,12 @@
 project has measured can.**
 
 That is a measured conclusion, not an omission, and it is written here because a
-populated `androidTest/` directory otherwise reads as coverage. The wording is
-deliberately narrower than "nothing can": what was measured is two Linux runner
-families, which is not every runner GitHub offers. See *The route nobody has
-measured* below.
+populated `androidTest/` directory otherwise reads as coverage.
+
+The wording was once narrower than "nothing can", because only two Linux runner
+families had been measured and that is not every runner GitHub offers. The third
+has since been measured too, and it fails for the same underlying reason. See
+*The route that has now been measured* below.
 
 Because nothing schedules them, the cadence is a person's. `CONTRIBUTING.md`
 names the moments; the one that belongs to this directory is **after touching
@@ -29,28 +31,47 @@ So an arm64 image would run under pure software emulation, for a 340 MB APK
 that boots a Node server. This is the same wall `scripts/device-test.sh`
 documents for the same reason.
 
-## The route nobody has measured
+## The route that has now been measured
 
 GitHub's `macos-14` / `macos-15` runners are Apple silicon, so an arm64 system
-image there would run under HVF rather than software emulation. **Nobody has
-tried it here**, and this section exists to price it honestly rather than to
-recommend it, because "nothing can" was overstating a measurement of two Linux
-runners.
+image there would in principle run under HVF rather than software emulation.
+This section used to say nobody had tried it. Somebody has, on 2026-08-16, and
+the answer is no.
 
-What such a job would have to solve first, one item of which is checkable
-without a runner and is true today:
+| Runner | Architecture | Hardware acceleration |
+|---|---|---|
+| `macos-15` | arm64, reported as `Apple M1 (Virtual)` | `kern.hv_support` absent; `HVF error: HV_UNSUPPORTED` |
 
-- the assets cache key in `build.yml` is `assets-${{ hashFiles(...) }}` with no
-  `runner.os` in it, so a macOS job would restore a tree built on Linux and save
-  its own forward under the same key — verified by reading the workflow;
-- the 874 MB asset tree would have to build on macOS, where `sed -i` is not the
-  GNU one (`scripts/download-*.sh` already use `python3` for in-place edits for
-  exactly this reason);
-- installing a 340 MB APK over the emulator's adb, then two `SplashActivityTest`
-  cases that wait on first-run extraction.
+The runner is itself a virtual machine, and nested virtualisation is not exposed
+to it, so QEMU cannot initialise HVF at all:
 
-None of that says it will not work. It says the cost is a day, not an
-afternoon, and that nobody should quote this section as evidence either way.
+```
+qemu-system-aarch64-headless: failed to initialize HVF: Invalid argument
+```
+
+The emulator never reaches adb, and the job ends in `Timeout waiting for
+emulator to boot`. Measured on API 34 and API 36, identically, from a job that
+built and installed nothing so that a dead route cost nothing to find.
+
+So it is the same wall as `ubuntu-24.04-arm`, under a different name: no
+accessible hardware virtualisation for an arm64 guest. All three runner families
+GitHub offers have now been measured, and the sentence at the top of this file no
+longer rests on a gap.
+
+What that leaves, none of it tried here:
+
+- self-hosted hardware, where the virtualisation is real;
+- a physical device attached to a runner;
+- nothing else. Software emulation of a 340 MB APK that boots a Node server was
+  never a serious option, and it is the only thing these runners can offer.
+
+One item from the old estimate is worth keeping, because it stays true and is
+cheap: `build.yml`'s asset cache key is `assets-${{ hashFiles(...) }}` with no
+`runner.os` in it, so any future non-Linux job would restore a tree built on
+Linux and save its own forward under the same key. Verified by reading the
+workflow. Another item from that estimate was wrong and is worth recording as
+wrong: it assumed such a job would have to build the 874 MB asset tree on macOS,
+when the APKs can be built on Linux and only installed on the other runner.
 
 ## What CI does instead
 

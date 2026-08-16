@@ -283,12 +283,20 @@ jobs:
       # Compiles the instrumented tests without running them, which is the only
       # thing CI can do for them and is better than the nothing that was here.
       #
-      # They cannot be RUN on any runner GitHub offers, and that is measured
-      # rather than assumed: the app is arm64-v8a only, so the emulator has to
-      # be arm64 too; ubuntu-latest has /dev/kvm but only accelerates x86_64,
-      # and ubuntu-24.04-arm reports no /dev/kvm and no virtualisation flag at
-      # all. An arm64 image there would be pure software emulation, for a 340 MB
-      # APK that boots a Node server.
+      # They cannot be RUN on any runner GitHub offers, and all three families
+      # have now been measured rather than assumed. The app is arm64-v8a only,
+      # so the emulator has to be arm64 too; ubuntu-latest has /dev/kvm but only
+      # accelerates x86_64, and ubuntu-24.04-arm reports no /dev/kvm and no
+      # virtualisation flag at all.
+      #
+      # macos-15 was the open question until 2026-08-16, because Apple silicon
+      # should mean HVF. It is itself a virtual machine, reporting
+      # "Apple M1 (Virtual)" with kern.hv_support absent, so nested
+      # virtualisation is not exposed and qemu fails with HV_UNSUPPORTED before
+      # the emulator reaches adb. Measured on API 34 and 36 alike.
+      #
+      # So an arm64 image would be pure software emulation everywhere, for a
+      # 340 MB APK that boots a Node server.
       #
       # What this does catch is the second way they were rotting: nothing
       # compiled them either, so they could drift out of the app's API and stay
