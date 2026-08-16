@@ -132,6 +132,13 @@ class ProcessManager(private val context: Context) {
      */
     private var procDir = File("/proc")
 
+    /**
+     * How [reapRecordedEditorServer] signals a process. A `var` for the same reason
+     * [procDir] is one: the suite runs on a JVM where `android.os.Process` is a stub, so a
+     * test calling through to it could only ever assert that nothing happened.
+     */
+    internal var killRecordedProcess: (Int) -> Unit = { android.os.Process.killProcess(it) }
+
     // Cached on the first successful read and never invalidated, which is correct
     // rather than merely convenient: the server generates the token only when the
     // file is absent and otherwise reuses what is there, so the value survives its
@@ -289,6 +296,21 @@ class ProcessManager(private val context: Context) {
             startAdoptionWatch()
             return true
         }
+        // An editor server of ours that is alive, holds the port, and answers nothing is
+        // the one shape worth ending before spawning over it. Adoption already declined it
+        // just above, and leaving it there guarantees the spawn below hits EADDRINUSE:
+        // that child does not exit, so the run ends in CANNOT_BIND with two processes
+        // where the user wanted one, and the survivor outlives every retry.
+        //
+        // The judgement is `/version` not answering within a second, which a server still
+        // starting up could fail. Ending it is still the better error: the alternative is
+        // not "wait for it to come up" but a failed launch, because nothing here can bind
+        // the port while it is held. A server killed a second early is restarted by the
+        // line below; one left alone is not.
+        if (!portIsFree && portHeldByOurEditorServer()) {
+            reapRecordedEditorServer("holding port $_port without serving")
+        }
+
         // Reaching here means the port was free, or was held by something that is
         // not ours. Nothing refuses to start in either case, and that is a
         // decision rather than an omission: a refusal was tried and removed. What
@@ -603,6 +625,76 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
+     * Ends the editor server the note names, when it is still one of ours.
+     *
+     * The gap this closes: `assets/server.js` forwards SIGTERM to the editor server it
+     * forked, but a SIGKILLed bootstrap forwards nothing and `fork()` sets no PDEATHSIG,
+     * so the child outlives its parent. [stopServer] cannot end that one, because it holds
+     * a `Process` handle only for a child it spawned itself. The survivor then keeps its
+     * heap for the life of the app and counts against the 32-process limit
+     * `assets/process-monitor.js` exists to stay under.
+     *
+     * Killing by a recorded pid has an obvious hazard: pids are recycled, so the process
+     * at that number may no longer be the one the note described. Three things bound it,
+     * and the first is doing most of the work:
+     *
+     *  - **The kernel refuses across uids.** `kill(2)` needs a matching uid, and every
+     *    other app on the device runs as a different one, so a pid recycled outside this
+     *    app cannot be killed here at all: the call fails rather than hitting a stranger.
+     *    What remains reachable is this app's own processes, which is a much smaller set.
+     *  - **The cmdline is re-read immediately before the signal**, so a pid recycled into
+     *    one of our terminals or a language server does not match [EDITOR_ENTRY_POINT] and
+     *    is left alone. The window between that read and the signal is what cannot be
+     *    closed from userspace; it is microseconds wide and needs a recycle landing inside
+     *    it onto another editor server of ours.
+     *  - **The note is consumed either way**, so a pid this declines to kill is not
+     *    reconsidered on the next call.
+     *
+     * @return whether a process was signalled. False covers no note, a note for another
+     *   port, a pid already gone, and a pid that is no longer an editor server.
+     */
+    internal fun reapRecordedEditorServer(reason: String): Boolean {
+        val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
+        val recorded = try {
+            if (!note.isFile) return false
+            JSONObject(note.readText())
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not read the editor server note: ${e.message}")
+            return false
+        }
+        val pid = recorded.optInt("pid", 0)
+        val port = recorded.optInt("port", 0)
+        if (pid <= 0 || port != _port) return false
+
+        // Deliberately the last thing before the signal. Re-reading here rather than
+        // trusting the check adoption already made is the whole mitigation: that one may
+        // be minutes old, and this one is the only thing standing between a recycled pid
+        // and a process of ours that has nothing to do with the editor.
+        val cmdline = try {
+            File(File(procDir, pid.toString()), "cmdline").takeIf { it.isFile }?.readText()
+        } catch (e: Exception) {
+            null
+        }
+        note.delete()
+        if (cmdline == null) {
+            Logger.i(tag, "Editor server $pid is already gone; nothing to reap ($reason)")
+            return false
+        }
+        if (!cmdline.contains(EDITOR_ENTRY_POINT)) {
+            Logger.w(tag, "Pid $pid is no longer an editor server; leaving it alone ($reason)")
+            return false
+        }
+        return try {
+            killRecordedProcess(pid)
+            Logger.i(tag, "Ended the editor server $pid still holding port $_port ($reason)")
+            true
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not end the editor server $pid: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Whether the port is answering right now.
      *
      * The second half of the adoption test, and it is not a restatement of the
@@ -695,19 +787,25 @@ class ProcessManager(private val context: Context) {
         isShuttingDown = true
         _isReady = false
         if (adopted) {
-            // Said plainly rather than passed over. This class did not spawn the
-            // server on the port and holds no handle to it, so there is nothing
-            // here that can end it — and the honest version of that is a log line
-            // saying so, not a silent return that leaves the caller believing the
-            // stop succeeded. Before adoption existed this case still arrived, and
-            // it was worse: `serverProcess` referenced a process that never served
-            // anything, so the stop destroyed the wrong one and reported success.
-            Logger.w(
-                tag,
-                "The server on port $_port was adopted, not started here, so stopping " +
-                    "this service cannot end it. It keeps running until the system " +
-                    "reclaims it.",
-            )
+            // No `Process` handle exists for a server this class did not spawn, which is
+            // why this used to be a log line saying the stop could not end it. The note
+            // the bootstrap wrote is the way in: it names the pid, and killing by pid is
+            // what [reapRecordedEditorServer] bounds. Leaving it running cost an idle Node
+            // process for the life of the app, holding its heap and one of the 32 slots
+            // the phantom-process limit allows.
+            //
+            // Still reported when it cannot be ended, because that outcome has not gone
+            // away: a note that has been consumed, a pid already recycled, or a kill the
+            // kernel refuses all land here, and a silent return would leave the caller
+            // believing the stop succeeded.
+            if (!reapRecordedEditorServer("service stopping")) {
+                Logger.w(
+                    tag,
+                    "The server on port $_port was adopted, not started here, and could " +
+                        "not be ended from its recorded pid. It keeps running until the " +
+                        "system reclaims it.",
+                )
+            }
             adopted = false
         }
         Logger.i(tag, "Stopping server...")

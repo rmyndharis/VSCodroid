@@ -1218,24 +1218,111 @@ class AdoptionTest {
     }
 
     @Test
-    fun `stopping says plainly that an adopted server cannot be stopped`() {
-        // Not cosmetic. Before adoption this case still arrived, and it was worse:
-        // serverProcess referenced a process that never served anything, so the
-        // stop destroyed the wrong one and reported success while the real server
-        // kept running.
-        val warnings = mutableListOf<String>()
-        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
+    fun `stopping ends the adopted server rather than leaving it running`() {
+        // This used to be "say plainly that it cannot be stopped", which was honest and
+        // still cost an idle Node process for the life of the app, holding its heap and
+        // one of the 32 slots the phantom-process limit allows. No Process handle exists
+        // for a server this instance did not spawn; the note names its pid, which is the
+        // way in.
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
         val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
         assertTrue(manager.startServer())
 
         manager.stopServer()
 
-        assertFalse(manager.isAdopted(), "the stop must at least end our relationship with it")
-        assertTrue(
-            warnings.any { it.contains("adopted") },
-            "a stop that cannot stop anything must say so: $warnings",
+        assertEquals(listOf(4242), killed, "the stop must end the process the note names")
+        assertFalse(manager.isAdopted(), "the stop must also end our relationship with it")
+    }
+
+    /**
+     * The direction that costs someone else something. A pid is recycled the moment its
+     * process exits, and the kernel refuses a kill across uids, so what stays reachable is
+     * this app's own processes: a terminal the user is typing in, a language server.
+     * Nothing but the cmdline separates those from the server this means to end.
+     */
+    @Test
+    fun `a recycled pid that is no longer an editor server is left alone`() {
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        // Recycled between adoption and the stop, into something of ours that is not it.
+        File(tempDir, "proc/4242/cmdline").writeText("/lib/libbash.so -i ")
+
+        manager.stopServer()
+
+        assertTrue(killed.isEmpty(), "a pid that is not an editor server must not be signalled")
+    }
+
+    @Test
+    fun `a pid that has already gone is not signalled`() {
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        File(tempDir, "proc/4242/cmdline").delete()
+
+        manager.stopServer()
+
+        assertTrue(killed.isEmpty(), "nothing to signal once the process is gone")
+    }
+
+    @Test
+    fun `the note is consumed even when nothing is killed`() {
+        // Otherwise a pid this declines to kill is reconsidered on every later call, and
+        // the note goes on vouching for a process that is not there.
+        manager.killRecordedProcess = { }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        File(tempDir, "proc/4242/cmdline").writeText("/lib/libbash.so -i ")
+
+        manager.stopServer()
+
+        assertFalse(
+            File(tempDir, "server/editor-server.pid").exists(),
+            "the note must not survive the attempt",
         )
+    }
+
+    /**
+     * The other call site. A server of ours that holds the port and answers nothing is
+     * refused adoption just above, and leaving it there guarantees the spawn hits
+     * EADDRINUSE: that child does not exit, so the launch ends with two processes where
+     * the user wanted one and the survivor outlives every retry.
+     */
+    @Test
+    fun `a server of ours holding the port without serving is ended before spawning`() {
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = holdingPortSilently()
+        recordEditorServer(pid = 7311, port = holder.port)
+
+        manager.startServer()
+
+        assertEquals(
+            listOf(7311),
+            killed,
+            "a recorded server that answers nothing must be ended, not spawned over",
+        )
+    }
+
+    @Test
+    fun `a healthy adopted server is not killed on the way in`() {
+        // The reap belongs to the stop and to the unresponsive case. Adoption itself must
+        // leave the server serving the user exactly where it is.
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+
+        assertTrue(manager.startServer())
+
+        assertTrue(killed.isEmpty(), "adopting a working server must not end it")
     }
 }
 

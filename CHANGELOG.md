@@ -123,6 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A server that is merely slow is no longer treated as failed. At two minutes the app says the start is taking longer than usual and keeps waiting.
 - The app no longer hangs forever when something else holds its port. A start that cannot bind is detected, reported, and the processes behind it shut down.
 - The editor no longer adopts a server that is not answering. The app asks the port whether anything responds before reusing what its record names.
+- Stopping the app now ends an adopted server instead of leaving it running. A bootstrap killed by the system leaves its editor server behind, and that survivor used to hold its memory and one of the 32 process slots Android allows until the app was force-stopped.
+- A server of ours that holds the port without answering is ended before a new one starts, rather than being spawned over into a launch that cannot bind.
 - An emergency port taken from the ephemeral range is no longer remembered, which used to move the workbench to a new address and empty its stored state.
 - **Everything you set was forgotten on every cold start**, because the port changed each launch and the browser keys storage to the address. The port is now kept between launches.
 - Stopping the server and starting again no longer leaves the new start unable to finish, and stopping the editor can no longer restart it.
