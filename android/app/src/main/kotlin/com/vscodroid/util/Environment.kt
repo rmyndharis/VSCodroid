@@ -121,8 +121,22 @@ object Environment {
         "${context.filesDir}/server/server.js"
 
     fun getProjectsDir(context: Context): String {
-        // App-external storage: no permissions needed, visible in file managers
+        // App-external storage, which needs no permission.
         // Path: /storage/emulated/0/Android/data/<pkg>/files/projects
+        //
+        // "visible in file managers" is what this comment claimed until
+        // 2026-08-16, and it is not something to rely on. Android 11 closed
+        // Android/data to other apps and to the system Files app, and minSdk
+        // here is 33, so no supported device has the unrestricted access the
+        // claim assumed. Some routes remain (MTP over USB, a few OEM managers),
+        // which is how the projects folder gets deleted from outside at all;
+        // see the CHANGELOG entry about surviving exactly that.
+        //
+        // The consequence that matters is the one for Clear Data: it wipes this
+        // directory, and a user cannot count on being able to copy anything out
+        // first. docs/USER_GUIDE.md carries the warning and the rescue steps
+        // where it recommends clearing. Work that has to stay reachable from
+        // outside the app belongs in a folder opened through the SAF picker.
         val externalDir = context.getExternalFilesDir(null)
         return if (externalDir != null) {
             File(externalDir, "projects").absolutePath

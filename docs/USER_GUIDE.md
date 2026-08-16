@@ -562,7 +562,25 @@ If the app shows a white screen after opening:
 
 1. Wait 10-15 seconds -- the Node.js server may still be starting.
 2. If it persists, force-close the app and reopen it.
-3. If the issue continues, clear app data (Settings > Apps > VSCodroid > Clear Data) and relaunch. This triggers a fresh extraction.
+3. If the issue continues, clearing app data forces a fresh extraction. **Read the
+   warning below before you do it.**
+
+> **Clearing app data deletes every project in `~/projects/`.**
+>
+> Android's Clear Data removes the app's external files directory as well as its
+> internal storage, and `~/projects/` lives in the first of those. Nothing is
+> backed up, and on Android 11 and later that directory is not reachable from
+> most file managers, so the files cannot be recovered afterwards.
+
+Rescue anything unsaved first:
+
+- Push to a remote, if the project is a git repository.
+- Or run **VSCodroid: Open Folder from Device** from the Command Palette
+  (**Ctrl+Shift+P**), choose a folder outside the app such as Documents, and copy
+  your work there. A folder opened that way lives outside the app's storage, so
+  Clear Data does not touch it.
+
+Then clear app data from Settings > Apps > VSCodroid > Clear Data and relaunch.
 
 ### Terminal Commands Not Found
 
