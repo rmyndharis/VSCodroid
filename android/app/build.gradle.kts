@@ -79,6 +79,30 @@ android {
             "LARGEST_ASSET_BYTES",
             "${fileTree("src/main/assets").files.maxOfOrNull { it.length() } ?: 0L}L"
         )
+
+        // The two subtrees extraction writes into ground it does not own alone.
+        // `usr/` also holds installed toolchains and anything `npm install -g`
+        // leaves; the extensions directory also holds whatever the user took
+        // from the gallery. So neither directory's size on disk answers "how
+        // much of what we are about to write is already there", and the gate
+        // used to charge both in full on every update: about 334 MB asked of a
+        // device that needed roughly 180.
+        //
+        // Measured from the same tree as the two figures above so they cannot
+        // drift apart, and used by FirstRunSetup.sharedTreeCredit as the ceiling
+        // on what an existing directory may be credited for. A build with no
+        // real asset tree gets zero, which credits nothing and is the safe
+        // direction.
+        buildConfigField(
+            "long",
+            "BUNDLED_USR_BYTES",
+            "${fileTree("src/main/assets/usr").files.sumOf { it.length() }}L"
+        )
+        buildConfigField(
+            "long",
+            "BUNDLED_EXTENSION_BYTES",
+            "${fileTree("src/main/assets/extensions").files.sumOf { it.length() }}L"
+        )
     }
 
     buildTypes {

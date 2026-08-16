@@ -101,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Setup and storage**
 
 - First run asks for as much free space as unpacking needs, measured from what the app carries. The old figure was 500 MB against a tree now over 800 MB, so devices in between failed partway with "Setup failed".
-- Updating no longer asks for room the install already occupies. What is unpacked is credited, so an update asks roughly 334 MB instead of 874 MB.
+- Updating no longer asks for room the install already occupies. What is unpacked is credited, so an update asks about 177 MB instead of 874 MB.
+- That credit now covers `usr/` and the extensions directory too, not just the server tree. Both are shared with installed toolchains and gallery extensions, which are subtracted, so a device with 177 MB free is no longer refused an update that needed 334 MB only on paper.
 - A setup interrupted partway can be retried. The retry now counts what is already on disk rather than demanding the full amount again.
 - A first run that cannot unpack the editor stops and offers to retry instead of reporting success, which previously left an app that opened but could never start its server.
 - An installation left broken by an interrupted setup repairs itself on the next launch. Files partly written but still plausible are left untouched.

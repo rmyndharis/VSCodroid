@@ -57,6 +57,47 @@ class FirstRunSetup(
         runSetupLocked()
     }
 
+    /**
+     * How much of `usr/` belongs to installed toolchains rather than to the APK.
+     *
+     * Read from `ToolchainRegistry` rather than by measuring the directories a
+     * toolchain occupies, and the imprecision is the point. The registry's
+     * figures are the ones shown to a user before a download and run a little
+     * over what lands on disk (Go is listed at 179 MB against about 163 MB
+     * unpacked), so this over-states what is foreign, which under-states the
+     * credit. That is the direction [sharedTreeCredit] needs to be wrong in.
+     *
+     * Null when the record cannot be read, which [sharedTreeCredit] turns into
+     * no credit at all. Answering zero there would have been the opposite of
+     * safe: zero means "nothing in `usr/` is foreign", so an unreadable record
+     * would have credited the directory in full, which is exactly the direction
+     * that lets the gate pass a device it should refuse. A record that is simply
+     * absent is different and does answer zero, because the file is written by
+     * the first install and its absence means none has run.
+     *
+     * Reads `toolchains.json` directly rather than through `ToolchainManager`,
+     * whose constructor builds an `AssetPackManagerFactory` and therefore cannot
+     * be instantiated in a JVM unit test. Routing the gate through it took four
+     * existing storage tests down with `NoClassDefFoundError` before this was a
+     * plain file read.
+     */
+    private fun installedToolchainBytes(): Long? = try {
+        val record = File(context.filesDir, "home/.vscodroid/toolchains.json")
+        if (!record.exists()) {
+            // Written by the first install; absent means none has run.
+            0L
+        } else {
+            val state = JSONArray(record.readText())
+            (0 until state.length()).sumOf { i ->
+                val name = state.optJSONObject(i)?.optString("name").orEmpty()
+                ToolchainRegistry.find(name)?.estimatedSize ?: 0L
+            }
+        }
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not read installed toolchains; crediting none of usr/: ${e.message}")
+        null
+    }
+
     private suspend fun runSetupLocked(): SetupResult = withContext(Dispatchers.IO) {
         val previousVersionCode = getPreviousVersionCode()
         val currentVersionCode = getCurrentVersionCode()
@@ -111,7 +152,19 @@ class FirstRunSetup(
             // with a Retry button that measures the same thing for ever and a
             // MainActivity that never runs, so nothing the app offers can free a byte.
             val available = context.filesDir.usableSpace
-            val installed = installedExtractionBytes(File(context.filesDir, "server"))
+            val installed = installedExtractionBytes(File(context.filesDir, "server")) +
+                sharedTreeCredit(
+                    installedBytes = installedExtractionBytes(File(context.filesDir, "usr")),
+                    bundledBytes = BuildConfig.BUNDLED_USR_BYTES,
+                    foreignBytes = installedToolchainBytes(),
+                ) +
+                sharedTreeCredit(
+                    installedBytes = installedExtractionBytes(
+                        File(context.filesDir, "home/.vscodroid/extensions")
+                    ),
+                    bundledBytes = BuildConfig.BUNDLED_EXTENSION_BYTES,
+                    foreignBytes = 0,
+                )
             val required = requiredExtractionBytes(assetBytes, largestAssetBytes, installed)
             if (available < required) {
                 lastRefusedBytes = required
@@ -2037,6 +2090,47 @@ claude() {
             val missing = (assetBytes - installedBytes).coerceAtLeast(0)
             val rewriteHeadroom = if (installedBytes > 0) largestAssetBytes else 0L
             return missing + rewriteHeadroom + EXTRACTION_SLACK_BYTES
+        }
+
+        /**
+         * How much of a directory extraction shares with something else may be
+         * credited as already unpacked.
+         *
+         * `server/` can be measured and believed, because nothing but extraction
+         * writes there. `usr/` and the extensions directory cannot: toolchains
+         * install into the first, `npm install -g` lands there too, and the
+         * second fills with whatever the user takes from the gallery. Their size
+         * on disk is therefore not an answer to "how much of what we are about
+         * to write is already here", and charging them in full instead was
+         * asking an updater for about 334 MB where roughly 180 would do.
+         *
+         * Two clamps, both pointing the same way:
+         *
+         *  - subtract [foreignBytes], what is known to belong to something else.
+         *    An over-estimate here credits less, which is the safe direction.
+         *  - cap at [bundledBytes]. Extraction writes exactly the bundled tree,
+         *    so nothing beyond it can be a byte we are about to write over, and
+         *    without this cap a directory swollen by toolchains would credit the
+         *    install for space that overwriting never gives back.
+         *
+         * A null [foreignBytes] means the share could not be determined and
+         * yields no credit. It is not the same as zero: zero asserts the
+         * directory is ours alone, which is the assumption that would credit a
+         * toolchain-filled `usr/` in full.
+         *
+         * Getting it wrong upward is the failure worth avoiding: the gate passes,
+         * extraction runs out of disk partway, and the user is told "Setup
+         * failed" with no figure, on every retry, because the toolchains stay
+         * where they are. Getting it wrong downward costs one round of freeing
+         * space that was not strictly needed.
+         */
+        internal fun sharedTreeCredit(
+            installedBytes: Long,
+            bundledBytes: Long,
+            foreignBytes: Long?,
+        ): Long {
+            if (foreignBytes == null) return 0
+            return minOf(bundledBytes, (installedBytes - foreignBytes).coerceAtLeast(0))
         }
 
         /**
