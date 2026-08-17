@@ -110,6 +110,12 @@ if [ ! -d "$NODE_INCLUDE" ]; then
     [ -f "$HEADERS_PATH" ] || curl -fsSL --show-error \
         "https://nodejs.org/dist/v$NODE_VERSION/$HEADERS_TARBALL" -o "$HEADERS_PATH"
 
+    # A sidecar written by an earlier run survives in the cache long after the
+    # code that wrote it, naming an expected value nothing reads. Globbed for
+    # the same reason as in download-npm.sh: the ones already on disk carry
+    # version names this build no longer uses.
+    rm -f "$WORK_DIR"/node-*-headers.tar.gz.sha256
+
     published=$(curl -sL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" 2>/dev/null \
         | awk -v f="$HEADERS_TARBALL" '$2 == f { print $1; exit }' || true)
     if [ -n "$published" ] && [ "$published" != "$NODE_HEADERS_SHA256" ]; then

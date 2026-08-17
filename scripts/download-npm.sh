@@ -54,8 +54,11 @@ NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
 # that it stops changing after that. A first fetch of a substituted tarball
 # would have pinned the substitution.
 #
-# Bound to NODE_VERSION above; bump the two together. The published file is
-# still fetched below, as the cross-check that says which of the two is stale.
+# Bound to the NODE_VERSION authored in build-native-addons.sh, which is where
+# the headers digest sits too. A version move is three edits across two files,
+# and this is the one furthest from the number, so it is the one that gets
+# forgotten. The published file is still fetched below, as the cross-check that
+# says which of the two is stale.
 NODE_TARBALL_SHA256="58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6"
 
 DEST_DIR="$ASSETS_DIR/usr/lib/node_modules/npm"
@@ -83,6 +86,14 @@ fi
 # file that matches nothing has either been substituted in transit or is the
 # right file for a NODE_VERSION the pin has not caught up with, and those want
 # opposite responses from whoever is reading.
+#
+# The cache is restored across CI runs by restore-keys, so a sidecar written by
+# an earlier run outlives the code that wrote it and sits in the work directory
+# naming an expected value nothing reads. Globbed rather than named, because
+# work directories in use today still hold the sidecar of a Node release this
+# app no longer ships, which the current name would walk past.
+rm -f "$WORK_DIR"/node-*.tar.xz.sha256
+
 published=$(curl -sL "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt" 2>/dev/null \
     | awk -v f="$NODE_TARBALL" '$2 == f { print $1; exit }' || true)
 if [ -n "$published" ] && [ "$published" != "$NODE_TARBALL_SHA256" ]; then
@@ -187,6 +198,7 @@ find "$NPM_SRC" -name "Makefile" -delete 2>/dev/null || true
 
 AFTER_SIZE=$(du -sk "$NPM_SRC" | cut -f1)
 echo "  Before: $((BEFORE_SIZE / 1024))M -> After: $((AFTER_SIZE / 1024))M (saved $((( BEFORE_SIZE - AFTER_SIZE ) / 1024))M)"
+
 
 # --- Step 4: Verify entry points ---
 echo ""
