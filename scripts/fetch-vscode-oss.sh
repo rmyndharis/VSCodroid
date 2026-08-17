@@ -12,7 +12,7 @@ set -euo pipefail
 # from the MIT source by .github/workflows/build-vscode-oss.yml, with this
 # repository's patches and branding applied before the build.
 #
-# The expensive part — cloning VS Code and running gulp — happens once per VS
+# The expensive part (cloning VS Code and running gulp) happens once per VS
 # Code version in that workflow, not on every app build. What is left here is a
 # download and a check.
 #
@@ -89,7 +89,7 @@ tarball_sha256() {
 # A cached file only counts as the artifact while it still matches the digest
 # the release carries NOW. The server tarball is rebuilt in place when a patch
 # changes, without the version moving, and CI's restore-keys will happily hand
-# back the pre-rebuild bytes — which is exactly how a stale 190M tarball met the
+# back the pre-rebuild bytes, which is exactly how a stale 190M tarball met the
 # verify gate that its own commit had introduced, and lost. The VSCODE_OSS_URL
 # path has no release to compare against; it is checked further down, against a
 # digest the caller names.
@@ -152,7 +152,7 @@ EOF
         actual="sha256:$(tarball_sha256)"
         if [ "$actual" != "$expected" ]; then
             echo "  stale   : cached tarball digest $actual"
-            echo "            release now carries  $expected — refetching"
+            echo "            release now carries  $expected, refetching"
             rm -f "$TARBALL"
         fi
     fi
@@ -204,17 +204,40 @@ EOF
     # gh handing over the asset says the transfer ended, not that it ended
     # intact.
     release_digest
-    if [ "$gh_ok" -eq 0 ] || [ -z "$expected" ] || [ "$expected" = "null" ]; then
+    if [ "$gh_ok" -eq 0 ]; then
         cat >&2 <<EOF
 
-  Downloaded $TARBALL_NAME but cannot check it against the release.
+  Downloaded $TARBALL_NAME but cannot check it against the release:
+
+      $TARBALL
+
+  gh could not report what server-$VSCODE_VERSION carries:
 
 $gh_message
-  gh served the asset and then named no digest for it, so nothing here can tell
-  whether these bytes are the ones the release records. Run this again; if it
-  keeps happening, name the digest you trust:
 
-      VSCODE_OSS_SHA256=<digest> $0
+  gh served the asset and then failed to answer, so this is a fault of the run,
+  not of the bytes. Run it again. If it keeps happening, pin the file to a
+  digest you have already decided to trust -- both halves are needed, because
+  the digest is only read on the URL path:
+
+      VSCODE_OSS_SHA256=<digest> VSCODE_OSS_URL=file://$TARBALL $0
+EOF
+        exit 1
+    fi
+
+    if [ -z "$expected" ] || [ "$expected" = "null" ]; then
+        cat >&2 <<EOF
+
+  The server-$VSCODE_VERSION release names no digest for the asset it just
+  served, so there is nothing to check these bytes against:
+
+      $TARBALL
+
+  Every release in this repository carries one, so an asset without one is
+  worth understanding before trusting it. Republish it -- run the "Build
+  Code - OSS server" workflow -- or, if you trust this file, name its digest:
+
+      VSCODE_OSS_SHA256=<digest> VSCODE_OSS_URL=file://$TARBALL $0
 EOF
         exit 1
     fi
@@ -273,7 +296,7 @@ EOF
     fi
     echo "  digest  : matches VSCODE_OSS_SHA256"
 elif [ -n "${VSCODE_OSS_URL:-}" ]; then
-    echo "  digest  : UNCHECKED — VSCODE_OSS_URL has no release to compare against;"
+    echo "  digest  : UNCHECKED, VSCODE_OSS_URL has no release to compare against;"
     echo "            set VSCODE_OSS_SHA256 to check this tarball"
 fi
 
@@ -395,7 +418,7 @@ echo "=== ripgrep ==="
 # path VS Code's search service looks for. That path moved in 1.133 -- the
 # package used to be @vscode/ripgrep with a single bin/rg.
 #
-# libripgrep.so is gitignored, so this is its only source in a clean checkout —
+# libripgrep.so is gitignored, so this is its only source in a clean checkout:
 # without it Search returns nothing and nothing else fails.
 JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNILIBS_DIR"
