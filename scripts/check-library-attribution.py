@@ -431,12 +431,12 @@ def nested_pattern(rel):
     return None
 
 
-def subtree_present(pattern):
-    """Whether the directory a pattern covers is on disk.
+def subtree_present(prefix):
+    """Whether a directory prefix is on disk.
 
-    The pattern minus its trailing `/*`, resolved with `Path.glob` rather than
-    tested as a literal, because `usr/lib/python*` has to find whichever version
-    the Termux index resolved to at build time.
+    Resolved with `Path.glob` rather than tested as a literal, because
+    `usr/lib/python*` has to find whichever version the Termux index resolved to
+    at build time.
 
     Resolving it matters, and the literal-prefix version of this got it wrong:
     truncating `usr/lib/python*/*` at its first glob leaves `usr/lib`, which
@@ -444,18 +444,70 @@ def subtree_present(pattern):
     not also run download-python.sh was then told its Python entry was stale,
     when Python was simply not there. Measured on exactly that tree.
     """
-    return any(p.is_dir() for p in ASSETS.glob(pattern.rsplit("/*", 1)[0]))
+    return any(p.is_dir() for p in ASSETS.glob(prefix))
+
+
+def inner_patterns(pattern):
+    """The entries nested strictly inside this one.
+
+    Every pattern is `<prefix>/*`, so containment is a string prefix test on
+    `<prefix>/` -- the same relation the longest-match ordering resolves.
+    """
+    return [p for p in NESTED_LIBRARIES if p != pattern and p.startswith(pattern[:-1])]
+
+
+def outer_pattern(pattern):
+    """The entry that would claim this one's files if it stopped matching them,
+    or None if nothing contains it.
+
+    The innermost such entry, because that is the one the longest-match ordering
+    would hand the files to.
+    """
+    outer = [p for p in NESTED_LIBRARIES if p != pattern and pattern.startswith(p[:-1])]
+    return max(outer, key=len) if outer else None
+
+
+def stale_anchor(pattern):
+    """The directory whose presence on disk makes this entry's silence worth
+    reporting.
+
+    For an entry that nothing contains, that is its own directory. A tree can
+    hold `usr/` without `vscode-reh/` or the reverse, because two scripts fetch
+    them and a checkout may have run only one, so an entry whose package is
+    simply not here is not stale; it is not this tree's business. Nothing else in
+    the map could have claimed its files either, so if the package IS here and
+    moved, the files surface at the `not classified` check instead.
+
+    For an override -- an entry nested inside a broader one -- it is the
+    CONTAINING package's directory instead, and the difference is the whole
+    reason this function exists. An override goes silent exactly when its files
+    move out from under it, and the move takes its own directory with it. Anchor
+    on that directory and the check goes quiet at the one moment it is needed:
+    the files are still in the tree, still shipped, now swallowed by the broader
+    entry and attributed to the wrong component, with nothing reported. The
+    containing directory survives the move, so it is what the question has to be
+    asked about.
+
+    Concretely: Copilot ships ripgrep at `.../copilot-linux-arm64/ripgrep/rg`,
+    and the override there records it as ripgrep/MIT rather than as the
+    proprietary CLI around it. Move it to `.../copilot-linux-arm64/bin/rg` and
+    the container wins it; anchored on `ripgrep/` nothing would notice, anchored
+    on `copilot-linux-arm64/` the override is reported as claiming nothing.
+    """
+    return (outer_pattern(pattern) or pattern).rsplit("/*", 1)[0]
 
 
 def stale_patterns(nest):
-    """Allowlist entries whose subtree is on disk but which claim nothing.
+    """Allowlist entries that claim nothing in a tree that should have work for
+    them.
 
     An entry that matches no file is not harmless. It is the state a rename
     leaves behind, and the rename is what makes the binaries invisible: the
     package moves, its files stop matching, they arrive at the classifier as
     unknown paths -- or, worse, are swallowed by a broader entry that still
-    matches and attributed to the wrong component. Either way the entry that
-    should have caught the move sits there matching nothing and saying nothing.
+    matches and attributed to the wrong component. The first half fails the build
+    on its own, at the `not classified` check. The second half is silent, and it
+    is what `stale_anchor` is built around.
 
     So an entry has to earn its place by WINNING for at least one file, not
     merely by being satisfiable. The difference is the whole point of the
@@ -463,13 +515,21 @@ def stale_patterns(nest):
     around it, and if the longest-first ordering were lost it would still
     "match" every one of those files while never being consulted.
 
-    Anchored on the subtree's presence, because a tree can hold `usr/` without
-    `vscode-reh/` or the reverse: two scripts fetch them and a checkout may have
-    run only one. A pattern whose anchor is absent is not stale, it is just not
-    this tree's business.
+    One exemption, for the opposite error. A container whose every file was taken
+    by an override inside it wins nothing either, and it is not stale: that is
+    the ordering working as designed, and failing there would refuse a tree whose
+    attribution is complete and correct.
     """
     won = {nested_pattern(rel) for rel in nest}
-    return [p for p in sorted(NESTED_LIBRARIES) if p not in won and subtree_present(p)]
+    stale = []
+    for pattern in sorted(NESTED_LIBRARIES):
+        if pattern in won:
+            continue
+        if any(inner in won for inner in inner_patterns(pattern)):
+            continue  # shadowed by its own overrides, not left behind
+        if subtree_present(stale_anchor(pattern)):
+            stale.append(pattern)
+    return stale
 
 
 def attributed_in(text):

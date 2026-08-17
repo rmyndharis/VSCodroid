@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Asking the terminal host or extension host to stop immediately no longer gets the graceful path instead. Nothing escalates today, which is why this was invisible.
 - Berkeley DB (AGPL-3.0-only) is no longer bundled. Nothing linked it. Four libraries that are used were added to the source offer, and `NOTICE.md` now lists all 39 components.
 - Attribution is now checked against every binary in the asset tree, not just the top two directories: 195 more files, including the WebAssembly, Windows and macOS objects an ELF-only scan walks past.
+- A binary that moves can no longer be recorded under the wrong licence in silence. An attribution entry that stops matching is reported even when the move took its own directory with it.
 - The About dialog's Source Code link moved onto the new licenses screen, beside the offer of source it answers.
 
 - Builds now verify the packaged server tree carries every patch this repository applies, not just the downloaded copy. The two trees had already diverged on a working checkout.
