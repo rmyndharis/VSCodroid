@@ -281,19 +281,35 @@ class VSCodroidWebViewClient(
             // nothing. The bridge is the route the workbench normally takes, but
             // `MainActivity.injectWindowOpenOverride` falls through to a plain
             // navigation whenever the page holds no session token yet or the
-            // bridge reports no launch, and a subframe's `window.open` becomes
-            // one too because this WebView does not support multiple windows. A
-            // sign-in leaving this way returns by the same `vscodroid://callback`
-            // and was judged against a window nobody had opened, so it was
-            // refused in the log and the sign-in hung with nothing said.
+            // bridge reports no launch, and the workbench's own opener assigns
+            // `location.href` for every scheme that is not http or https. A
+            // sign-in leaving either way returns by the same
+            // `vscodroid://callback` and was judged against a window nobody had
+            // opened, so it was refused in the log and the sign-in hung with
+            // nothing said.
+            //
+            // Main frame only, and that is the boundary rather than a detail.
+            // Both routes above navigate the top-level frame: the injected
+            // override patches the main window's `window.open`, and the opener
+            // assigns the main window's `location`. Nothing else here is our
+            // own page. Every other frame renders content this app does not
+            // vouch for, including the remote site the bundled simple browser
+            // puts in an iframe, and a frame may always navigate itself whatever
+            // its sandbox says. Arming on those would let a page the user merely
+            // opened choose which callback ids this app accepts, and evict the
+            // sign-in actually in flight from a record that keeps the most
+            // recent few. The bridge route is gated by the session token; this
+            // one has no token to check, so the frame is what stands in for it.
             //
             // What is armed is the request ids the address carries, never the
             // fact that a browser opened: a documentation link carries none and
             // so opens nothing, which is what keeps this from widening the
             // window every external link is followed.
-            armed = AuthTabWindow.arm(
-                authRequestIdsIn(url.toString()), SystemClock.elapsedRealtime()
-            )
+            if (request.isForMainFrame) {
+                armed = AuthTabWindow.arm(
+                    authRequestIdsIn(url.toString()), SystemClock.elapsedRealtime()
+                )
+            }
             view.context.startActivity(intent)
             Logger.i(tag, "Opened external URL: ${redactToken(url.toString())}")
         } catch (e: Exception) {

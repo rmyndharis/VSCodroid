@@ -99,7 +99,8 @@ class ExternalUrlHandoffTest {
     }
 
     private fun request(
-        scheme: String, host: String, port: Int, address: String = ""
+        scheme: String, host: String, port: Int, address: String = "",
+        fromMainFrame: Boolean = true
     ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.scheme } returns scheme
@@ -111,6 +112,9 @@ class ExternalUrlHandoffTest {
         every { uri.toString() } returns address
         val req = mockk<WebResourceRequest>(relaxed = true)
         every { req.url } returns uri
+        // Stated rather than left to the relaxed mock, which would answer false
+        // and quietly make every case below a subframe case.
+        every { req.isForMainFrame } returns fromMainFrame
         return req
     }
 
@@ -210,12 +214,11 @@ class ExternalUrlHandoffTest {
      *
      * The bridge is the route the workbench normally takes, and it records the
      * launch. This one is the fallback underneath it, reached when the page
-     * holds no session token yet, when the bridge reports no launch, and when a
-     * subframe calls `window.open`, which this WebView turns into a navigation
-     * because it does not support multiple windows. It recorded nothing, so the
-     * `vscodroid://callback` that came back was judged against a window nobody
-     * had opened and refused in the log, with no message anywhere: the sign-in
-     * simply never completed.
+     * holds no session token yet, when the bridge reports no launch, and when
+     * the workbench's own opener assigns `location.href` for a scheme that is
+     * not http or https. It recorded nothing, so the `vscodroid://callback` that
+     * came back was judged against a window nobody had opened and refused in the
+     * log, with no message anywhere: the sign-in simply never completed.
      *
      * Asserted on the acceptance decision itself rather than on the arming call,
      * because the arming is only interesting for what it lets back in.
@@ -261,6 +264,45 @@ class ExternalUrlHandoffTest {
             callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
             "a launch that failed left the callback window armed for a sign-in that never " +
                 "started, and nothing on the way back can tell the difference",
+        )
+    }
+
+    /**
+     * A frame that is not our own page may leave for a browser, but may not
+     * decide which callbacks come back.
+     *
+     * This callback receives subframe navigations as well as top-level ones, and
+     * a frame may always navigate itself whatever its sandbox permits. The frames
+     * here render content this app does not vouch for: the bundled simple browser
+     * puts an arbitrary remote site in an iframe, and previews and notebook
+     * output are built from whatever the workspace holds. The other route to
+     * arming, `AndroidBridge.openExternalUrl`, refuses a caller without the
+     * session token; there is no token to check here, so the frame is what
+     * carries that weight.
+     *
+     * Both routes this hand-off exists to serve navigate the top-level frame, so
+     * nothing real is lost: `MainActivity.injectWindowOpenOverride` patches the
+     * main window's `window.open`, and the workbench opener assigns the main
+     * window's `location`.
+     *
+     * The cost of getting this wrong is not only a forged callback. The record
+     * keeps the most recent 32 launches, one address can carry many ids, and the
+     * oldest goes when it overflows, so a page able to arm at will can push out
+     * the sign-in the user has open in the browser right now.
+     */
+    @Test
+    fun `a sign-in address in a subframe opens no callback window`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("https", "github.com", -1, SIGN_IN, fromMainFrame = false)
+        )
+
+        assertTrue(handled, "a subframe's external link still leaves for a browser")
+        verify(exactly = 1) { context.startActivity(any()) }
+        assertFalse(
+            callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
+            "a frame this app does not vouch for chose which vscodroid://callback the app " +
+                "will accept. The filter is exported and BROWSABLE, so that is a sign-in " +
+                "the user never started being taken from whatever is on the device.",
         )
     }
 

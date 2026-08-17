@@ -87,9 +87,12 @@ private const val MAX_TRACKED_SIGN_INS = 32
  * arms nothing, so the callback that comes back for it is refused in the log and
  * nowhere else: the message for a late arrival sits on the other side of that
  * branch, and `openExternalUrl` still reports the launch as made, so the sign-in
- * fails quietly. An id it invents is not reachable: the value has to come out of
- * a URL the workbench asked this app to open, which already requires the session
- * token.
+ * fails quietly. An id it invents has to have come out of a URL this app was
+ * asked to open, and there are two askers rather than one. [openExternalUrl]
+ * refuses a caller without the session token. `VSCodroidWebViewClient`'s
+ * `shouldOverrideUrlLoading` has no token to check, so it arms only for a
+ * main-frame navigation: the main frame is our own page, while the other frames
+ * carry content this app does not vouch for. Widening this pattern widens both.
  */
 private val AUTH_REQUEST_ID = Regex("""vscode-reqid(?:=|%(?:25)*3[Dd])(\d+)""")
 
