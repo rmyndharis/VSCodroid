@@ -157,7 +157,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 ```mermaid
 flowchart TD
   A["Install from Play Store"] --> B["Open App"]
-  B --> C["Splash Screen: Setting up VSCodroid<br/>Extract binaries (~5-10s)<br/>Initialize workspace directory"]
+  B --> C["Splash Screen: Setting up VSCodroid<br/>Extract binaries<br/>Initialize workspace directory"]
   C --> D["Language Picker<br/>What do you code in? [Go] [Rust] [Java] [C/C++] [Ruby] [Skip]<br/>Selected toolchains download via Play Store"]
   D --> E["Welcome Tab<br/>Quick actions: Open Folder, Clone Repo, New File<br/>Tools ready: node, python, git + selected toolchains"]
   E --> F["Start Coding"]

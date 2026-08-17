@@ -185,7 +185,7 @@ flowchart TD
 ### Install from Google Play
 
 1. **Install** from [Google Play](https://play.google.com/store/apps/details?id=com.vscodroid).
-2. Open the app. Core binaries extract automatically (~5-10 seconds).
+2. Open the app. Core binaries extract automatically the first time, behind a progress bar.
 3. Pick your languages (Go, Ruby, Java). They install automatically.
 4. Start coding. Editor, terminal, and tools are ready.
 
