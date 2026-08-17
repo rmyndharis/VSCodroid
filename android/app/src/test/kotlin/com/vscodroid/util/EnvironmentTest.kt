@@ -108,7 +108,10 @@ class EnvironmentTest {
         }
 
         @Test
-        fun `each bundled binary getter names its own file`() {
+        fun `each path getter names its own destination`() {
+            // Renamed from `each bundled binary getter names its own file`, which
+            // stopped describing the case once the filesDir-relative getters were
+            // added below: only the first two assertions name a binary.
             // The nine per-getter cases that used to sit above restated the string
             // concatenation each getter performs: change the implementation and the
             // test is edited to match, which is a restatement rather than a verdict.
@@ -132,6 +135,21 @@ class EnvironmentTest {
             assertEquals("server", under(Environment.getServerDir(context)))
             assertEquals("home", under(Environment.getHomeDir(context)))
             assertEquals("home/.vscodroid", under(Environment.getUserDataDir(context)))
+
+            // These two were still missing, and they are the ones the server is
+            // handed on its command line: --extensions-dir and --logsPath, both
+            // in ProcessManager.startServer. Measured: shortening getLogsDir's
+            // tail from data/logs to data/log left every case in this class
+            // green, because "under userDataDir" and "starts with /" are true of
+            // any tail at all.
+            //
+            // The destination is not a detail either getter is free to move. The
+            // extensions directory already holds whatever the user installed, so
+            // pointing the server at a different one empties the workbench's
+            // extension list with nothing to explain it, and the logs directory
+            // is the only place the server's own logs can be looked for.
+            assertEquals("home/.vscodroid/extensions", under(Environment.getExtensionsDir(context)))
+            assertEquals("home/.vscodroid/data/logs", under(Environment.getLogsDir(context)))
         }
     }
 }
