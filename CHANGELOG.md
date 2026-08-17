@@ -103,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The on-device editor server requires a connection token, generated on first start and kept in private storage. Binding to `127.0.0.1` is not access control on Android.
 - The connection token no longer reaches the Android system log, which other software on the device can read.
+- Crash logs leaving the app now have the connection token taken out. The bug report copied to the clipboard and the crash dialog both carried it verbatim.
 - The address the editor is opened at is redacted by the shared routine before logging, replacing a hand-maintained token-free copy that could drift from the real one.
 - Deciding whether the server on the port is ours no longer sends it the connection token. Ownership is settled from a record this app writes; a holder we have no record for is treated as a stranger.
 - Startup readiness is judged by the one endpoint answered before the token check. The previous check treated any non-error reply as healthy, including "forbidden".

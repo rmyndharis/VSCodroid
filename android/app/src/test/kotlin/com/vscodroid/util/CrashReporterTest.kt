@@ -1,13 +1,16 @@
 package com.vscodroid.util
 
+import android.content.Context
 import io.mockk.every
 import io.mockk.just
+import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import io.mockk.Runs
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -155,6 +158,30 @@ class CrashReporterTest {
             val lastCrash = CrashReporter.getLastCrash()
             assertEquals("Newer crash", lastCrash, "Should return the most recent crash log")
         }
+
+        @Test
+        fun `the crash offered on screen does not carry the connection token`() {
+            // Two callers share this one return value: the dialog
+            // MainActivity.checkPreviousCrash shows, and AndroidBridge.getLastCrash,
+            // which hands it to the page.
+            val crashDir = initCrashDir()
+            val token = "7f3a2b1c-9d8e-4f60-b5a4-2c1d0e9f8a7b"
+            val crash = File(crashDir, "crash_20260214_120000.txt")
+            crash.writeText(
+                "Thread: main (id=1)\n" +
+                    "java.io.IOException: GET http://127.0.0.1:41234/?tkn=$token failed\n"
+            )
+            check(crash.readText().contains(token)) {
+                "the fixture has to hold a token, or redacting nothing passes"
+            }
+
+            val shown = CrashReporter.getLastCrash()
+
+            assertNotNull(shown, "there is a crash log on disk to read")
+            assertFalse(shown!!.contains(token), "the token must not be shown or handed out:\n$shown")
+            assertTrue(shown.contains("tkn=<redacted>"), "the parameter stays visible:\n$shown")
+            assertTrue(shown.contains("java.io.IOException"), "the failure itself has to survive:\n$shown")
+        }
     }
 
     @Nested
@@ -208,6 +235,94 @@ class CrashReporterTest {
             assertTrue(File(crashDir, "crash_15.txt").exists(), "Newest log should be kept")
         }
     }
+
+    /**
+     * The bundle behind **Copy Report**, which `MainActivity.checkPreviousCrash`
+     * puts on the clipboard and `AndroidBridge.generateBugReport` hands back to
+     * the page. Nothing here reads `android.os.Build`: those fields answer null
+     * and 0 on a plain JVM, so asserting on them would describe the stub.
+     */
+    @Nested
+    inner class BugReportTest {
+
+        /**
+         * A shape a real crash log carries, not a value the app holds: the URL
+         * the WebView was loading when it failed goes into the stack trace.
+         */
+        private val token = "7f3a2b1c-9d8e-4f60-b5a4-2c1d0e9f8a7b"
+
+        private val context = mockk<Context>(relaxed = true)
+
+        @BeforeEach
+        fun pointTheServerLogSomewhereEmpty() {
+            mockkObject(Environment)
+            every { Environment.getLogsDir(any()) } returns File(tempDir, "logs").absolutePath
+        }
+
+        @Test
+        fun `the copied bug report does not carry the connection token`() {
+            val crashDir = initCrashDir()
+            val crash = File(crashDir, "crash_20260214_120000.txt")
+            crash.writeText(
+                "Crash at 2026-02-14 12:00:00 +0700\n" +
+                    "Thread: main (id=1)\n\n" +
+                    "java.io.IOException: GET " +
+                    "http://127.0.0.1:41234/vscode-remote-resource?tkn=$token failed\n" +
+                    "\tat com.vscodroid.webview.VSCodroidWebViewClient.proxy(VSCodroidWebViewClient.kt:554)\n"
+            )
+            // Without this the test would be green against a report that simply
+            // never reached the crash log, which is the failure it exists to rule out.
+            check(crash.readText().contains(token)) {
+                "the fixture has to hold a token, or redacting nothing passes"
+            }
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertFalse(
+                report.contains(token),
+                "the clipboard is readable by anything the user pastes into:\n$report",
+            )
+            assertTrue(
+                report.contains("tkn=<redacted>"),
+                "the parameter has to stay visible, so the reader knows what was taken out:\n$report",
+            )
+            assertTrue(
+                report.contains(
+                    "at com.vscodroid.webview.VSCodroidWebViewClient.proxy(VSCodroidWebViewClient.kt:554)"
+                ),
+                "this is the only diagnostic channel there is; the trace has to survive:\n$report",
+            )
+        }
+
+        @Test
+        fun `the bug report counts every crash log and embeds the newest three`() {
+            val crashDir = initCrashDir()
+            for (i in 1..4) {
+                File(crashDir, "crash_0$i.txt").apply {
+                    writeText("crash number $i")
+                    setLastModified(i * 1000L)
+                }
+            }
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(report.contains("--- Crash Logs (4) ---"), "all four exist:\n$report")
+            assertTrue(report.contains("crash number 4"), "the newest has to be there:\n$report")
+            assertTrue(report.contains("crash number 3"), "$report")
+            assertTrue(report.contains("crash number 2"), "$report")
+            assertFalse(report.contains("crash number 1"), "only three are embedded:\n$report")
+        }
+
+        @Test
+        fun `the crash section says so when there is nothing to report`() {
+            initCrashDir()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(report.contains("--- No crash logs ---"), "$report")
+        }
+    }
+
 }
 
 /**

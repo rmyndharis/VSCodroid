@@ -1,6 +1,7 @@
 package com.vscodroid.util
 
 import android.content.Context
+import com.vscodroid.webview.redactToken
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -39,13 +40,20 @@ object CrashReporter {
 
     /**
      * Returns the most recent crash log, or null if no crashes have been recorded.
+     *
+     * The text goes through [redactToken] on the way out. This is the boundary
+     * the log crosses: it reaches the dialog `MainActivity.checkPreviousCrash`
+     * puts on screen and the `AndroidBridge.getLastCrash` method the page can
+     * call, and redacting here covers both without either caller having to
+     * remember. `MainActivity` cuts its preview at 500 characters after this
+     * returns, so the substitution shifts where that cut lands.
      */
     fun getLastCrash(): String? {
         if (!::crashDir.isInitialized) return null
         return crashDir.listFiles()
             ?.sortedByDescending { it.lastModified() }
             ?.firstOrNull()
-            ?.readText()
+            ?.let { redactToken(it.readText()) }
     }
 
     /**
@@ -61,6 +69,13 @@ object CrashReporter {
      * - Device info (model, Android version, app version)
      * - Recent crash logs
      * - Last 200 lines of Node.js server output
+     *
+     * The report is copied to the clipboard and handed back across the JS
+     * bridge, so everything read off disk goes through [redactToken] first: the
+     * server's connection token authenticates every route but `/version`,
+     * `/delay-shutdown` and `/callback`. The containment stops where that
+     * function's does, at the literal `tkn=` parameter, so a bare token in no
+     * parameter at all still passes through.
      */
     fun generateBugReport(context: Context): String {
         val sb = StringBuilder()
@@ -96,7 +111,7 @@ object CrashReporter {
                 sb.appendLine("--- Crash Logs (${logs.size}) ---")
                 for (log in logs.take(3)) {
                     sb.appendLine()
-                    sb.appendLine(log.readText())
+                    sb.appendLine(redactToken(log.readText()))
                     sb.appendLine("---")
                 }
             } else {
@@ -105,13 +120,15 @@ object CrashReporter {
         }
         sb.appendLine()
 
-        // Node.js server log (last 200 lines)
+        // Node.js server log (last 200 lines). Nothing in this repository writes
+        // that file, so the block never fires today; it is redacted with the
+        // rest so it is not the one raw path left if something starts to.
         val serverLog = File(Environment.getLogsDir(context), "server.log")
         if (serverLog.exists()) {
             sb.appendLine("--- Server Log (last 200 lines) ---")
             val lines = serverLog.readLines()
             val tail = if (lines.size > 200) lines.takeLast(200) else lines
-            tail.forEach { sb.appendLine(it) }
+            tail.forEach { sb.appendLine(redactToken(it)) }
         }
 
         return sb.toString()
