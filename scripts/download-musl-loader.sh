@@ -56,8 +56,9 @@ MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
 # APKINDEX carries no expiry, so a signature alone does not stop a host serving
 # an old index for ever and holding every build to whatever musl was current
 # then. Measured 2026-08-17, and it is why this is not hypothetical: the v3.20
-# index still verified against the pinned key four months after that branch
-# went end of life, and was 32 days old.
+# index still verified against the pinned key four months after that branch went
+# end of life, carrying a signed mtime of 2026-07-16 (31 days old that day, and a
+# day older every day since).
 #
 # The date is read from the APKINDEX tar member's mtime, which lives inside the
 # bytes the signature covers, so it cannot be set by whoever serves the file.
