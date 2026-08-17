@@ -28,9 +28,15 @@ look like they should carry it do not:
 demonstrably the line the table was transcribed from: liblzma's reads
 `"LGPL-2.1, GPL-2.0, GPL-3.0"`, byte for byte what LIBRARIES records. So that is
 what this reads, over HTTPS, one small file per package, cached for a week
-beside the package index. release.yml carries that cache file in its download
-cache, so a release does not open forty-odd connections to one host in a burst,
-which is the shape that draws a rate limit.
+beside the package index, and only from a run that read enough of the map to
+compare it. That cache spares a second run on the same machine, nothing more,
+and release.yml deliberately leaves it out of the download cache it restores. A
+workflow cache is scoped to the ref that saved it, so what one tag writes the
+next tag cannot read; and the key that tag restores under is the one build.yml
+writes on the default branch, where this never runs, so the file would not be
+there to restore. A release therefore reads every package cold. Forty-odd small
+requests in one burst is the ordinary shape of a release, and a rate limit
+inside it ends the run in a printed skip rather than a failure.
 
 A report, not a gate, with one exception.
 

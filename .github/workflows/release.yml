@@ -218,7 +218,6 @@ jobs:
             server/*.tar.gz
             toolchains/termux-packages/debs/*.deb
             toolchains/termux-packages/Packages
-            toolchains/termux-packages/licenses.tsv
             toolchains/build/npm/
             toolchains/extensions/
             toolchains/musl/
@@ -384,7 +383,11 @@ jobs:
       # and a gate that failed on it would be switched off. A host that will not
       # answer at all, an outage or a rate limit, ends in a printed skip rather
       # than a failure; a run that could read hardly any of the map fails, since
-      # that is the package names having moved and not the network.
+      # that is the package names having moved and not the network. Its answers
+      # are cached on disk but stay out of the download cache above on purpose:
+      # a cache belongs to the ref that wrote it, so no tag can restore another
+      # tag's, and the key this job restores under is written on the default
+      # branch, where nothing runs this. Every release reads upstream cold.
       - name: Compare recorded licences against Termux
         run: python3 scripts/check-termux-licenses.py
 
