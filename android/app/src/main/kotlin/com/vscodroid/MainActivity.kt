@@ -18,6 +18,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.view.View
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -627,14 +628,7 @@ class MainActivity : AppCompatActivity() {
             wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
             // viewport-fit=cover enables rendering into display cutout area
-            wv.loadData(
-                """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
-                   <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
-                   display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-                   <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
-                   <p>Starting server...</p></div></body></html>""",
-                "text/html", "utf-8"
-            )
+            wv.loadData(LOADING_PAGE, "text/html", "utf-8")
         }
     }
 
@@ -659,6 +653,26 @@ class MainActivity : AppCompatActivity() {
      * intercept.
      */
     private fun bootstrapClient() = object : WebViewClient() {
+        /**
+         * The one URL this client acts on, and the reason the error page uses a
+         * link rather than a script.
+         *
+         * The page it serves is a `data:` URL with no bridge on it: `initBridge`
+         * runs once per WebView for the editor, and registering a second
+         * JavaScript interface here to carry one button would widen the surface
+         * that the session token exists to gate. A navigation the client
+         * recognises costs nothing and reaches the same place.
+         */
+        override fun shouldOverrideUrlLoading(
+            view: WebView,
+            request: WebResourceRequest,
+        ): Boolean {
+            if (request.url.toString() != RETRY_URL) return false
+            Logger.i(tag, "Retrying the server from the error page")
+            retryServerStart()
+            return true
+        }
+
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
             Logger.e(tag, "Render process gone before the workbench loaded: " +
                 "didCrash=${detail.didCrash()}")
@@ -782,6 +796,13 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show()
             }
         }
+        // A toast lasts three and a half seconds; this state lasts until the app
+        // is killed. What was on screen behind it read "Starting server...", and
+        // went on reading that for ever, so the one thing the screen said was the
+        // one thing that was no longer true.
+        nodeService?.onServerGaveUp = {
+            runOnUiThread { showServerGaveUp() }
+        }
         // Stopping the server from the notification leaves this activity showing
         // an editor whose backend is gone, and — because the binding it holds is
         // what keeps a started service alive — leaves the service unable to
@@ -848,6 +869,50 @@ class MainActivity : AppCompatActivity() {
             }
             BindDecision.Wait -> Unit
         }
+    }
+
+    /**
+     * Replaces the loading placeholder with what actually happened.
+     *
+     * Deliberately not a dialog. A dialog is dismissed and leaves the same lie
+     * underneath it; this is the page, so there is nothing to fall back to and
+     * nothing that can be missed by looking away.
+     *
+     * The retry is real rather than decorative: [NodeService.enterTerminalState]
+     * calls `stopServingRecoverably` before raising this, so `isServiceRunning`
+     * is false and the next `startForegroundService` reaches a body that starts
+     * again. The binding is untouched, so readiness arrives through the callbacks
+     * already installed.
+     */
+    private fun showServerGaveUp() {
+        val message = getString(R.string.error_server_gave_up)
+        val retry = getString(R.string.error_server_retry)
+        webView?.loadDataWithBaseURL(
+            null,
+            """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
+               <body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;
+               display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+               <div style="text-align:center;max-width:32em;padding:1.5em">
+               <h2 style="color:#ccc;margin:0 0 .6em">VSCodroid</h2>
+               <p style="color:#aaa;line-height:1.5">${escapeHtml(message)}</p>
+               <p><a href="$RETRY_URL" style="display:inline-block;margin-top:.8em;padding:.6em 1.4em;
+               background:#0e639c;color:#fff;text-decoration:none;border-radius:4px">${escapeHtml(retry)}</a></p>
+               </div></body></html>""",
+            "text/html", "utf-8", null,
+        )
+    }
+
+    /**
+     * Starts the service again without rebinding.
+     *
+     * `bindService` is not repeated: this activity never unbound, so the
+     * connection and every callback on it are still live, and binding a second
+     * time with the same `ServiceConnection` would not deliver `onServiceConnected`
+     * again anyway. Only the start is missing, and only the start is sent.
+     */
+    private fun retryServerStart() {
+        webView?.loadData(LOADING_PAGE, "text/html", "utf-8")
+        startForegroundService(Intent(this, NodeService::class.java))
     }
 
     private fun loadVSCode(port: Int, folderPath: String? = null) {
@@ -1494,6 +1559,28 @@ class MainActivity : AppCompatActivity() {
 
 
     companion object {
+
+        /**
+         * The page shown while the server starts, in one place.
+         *
+         * Two callers load it now: the first setup, and a retry from the error
+         * page. Written twice they would drift, and the second copy is the one a
+         * user sees only after something has already gone wrong.
+         */
+        private const val LOADING_PAGE =
+            """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
+               <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
+               display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+               <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
+               <p>Starting server...</p></div></body></html>"""
+
+        /**
+         * The navigation the error page's button makes.
+         *
+         * A scheme nothing else answers, so it cannot collide with a workbench
+         * URL, and the bootstrap client is the only place it is recognised.
+         */
+        private const val RETRY_URL = "vscodroid://retry-server"
         /** Run health check if backgrounded longer than this. */
         private const val HEALTH_CHECK_THRESHOLD_MS = 60_000L   // 1 minute
 
@@ -1760,3 +1847,18 @@ internal fun connectionHealthProbe(): String =
         return 'ok';
     })()
     """.trimIndent()
+
+/**
+ * The five characters that change the meaning of surrounding HTML.
+ *
+ * The strings this escapes come from this app's own resources, so nothing
+ * hostile reaches it today. It is here because the page is built by string
+ * interpolation, and the next person to interpolate something into it may be
+ * carrying a filename or an exception message.
+ */
+internal fun escapeHtml(s: String): String = s
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#39;")

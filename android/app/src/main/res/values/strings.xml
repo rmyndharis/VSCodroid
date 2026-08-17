@@ -43,6 +43,13 @@
          failed in the same place. See FirstRunSetup.requiredStorageMb(). -->
     <string name="error_storage_full">Not enough storage space. Free at least %1$d MB and try again.</string>
     <string name="error_setup_failed">Setup failed. Tap Retry or reinstall the app.</string>
+
+    <!-- Shown on the page itself, not in a toast, when the restart budget is
+         spent. The screen behind it read "Starting server..." and went on
+         reading that for ever, so the only thing it said was the only thing
+         that was no longer true. -->
+    <string name="error_server_gave_up">The development server stopped and could not be restarted. Your files are safe. Trying again usually works; if it does not, close and reopen the app.</string>
+    <string name="error_server_retry">Try again</string>
     <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
 
     <!-- About dialog -->

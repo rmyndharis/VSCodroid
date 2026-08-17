@@ -117,6 +117,21 @@ class NodeService : Service() {
      */
     var onServerStopped: (() -> Unit)? = null
 
+    /**
+     * Invoked when the restart budget is spent and nothing further will be tried.
+     *
+     * Separate from [onServerError], which fires for a single failed attempt with
+     * retries still to come, and separate from [onServerStopped], which is the
+     * user asking. A client cannot tell those apart from the message alone, and
+     * they call for opposite responses: wait, close, or say the server is not
+     * coming and offer a way to try again.
+     *
+     * Reached only from [enterTerminalState], which has already called
+     * [stopServingRecoverably], so the service is alive and startable. That is
+     * what makes a retry an honest offer rather than a button that does nothing.
+     */
+    var onServerGaveUp: (() -> Unit)? = null
+
     // -- Binder --
 
     inner class LocalBinder : Binder() {
@@ -819,6 +834,7 @@ class NodeService : Service() {
         // that binds after it has to be told too. The notification says the same
         // thing, but the notification is not on screen while the editor is.
         reportStartupNotice(getString(R.string.notification_text_stopped))
+        onServerGaveUp?.invoke()
     }
 
     /**
