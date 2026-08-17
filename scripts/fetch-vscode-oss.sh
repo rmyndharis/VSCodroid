@@ -19,7 +19,7 @@ set -euo pipefail
 # Sources, in the order tried:
 #   VSCODE_OSS_URL        a direct URL, for a private mirror or a local test
 #   server/<name>.tar.gz  an existing cache, checked against the release digest
-#   gh release download   the server-<version> release in this repository
+#   gh release download   the server-<version> release, checked against the same
 #
 # VSCODE_OSS_SHA256 checks the tarball against a digest you name, whatever source
 # it came from. It exists for the VSCODE_OSS_URL path, which has no release to be
@@ -52,6 +52,37 @@ echo "  tarball : $TARBALL_NAME"
 
 mkdir -p "$ROOT_DIR/server"
 
+# What the release says this tarball should hash to, into `expected`.
+#
+# `|| true` collapsed three outcomes into one empty string: gh not installed, gh
+# unable to answer, and the release genuinely carrying no such asset. All three
+# then skipped the comparison in silence and the next line printed "cached",
+# which is how an unchecked tarball became a verified one. Status and value are
+# read separately for that reason, and both callers below decide on `gh_ok`
+# rather than on emptiness.
+#
+# One lookup, two callers. The cache path asks whether the file on disk is still
+# what the release carries; the download path asks whether the bytes that just
+# arrived are what it carries at all. Those are different questions with the same
+# answer key, and only the first was ever asked.
+release_digest() {
+    local gh_err
+    gh_err="$(mktemp)"
+    if expected="$(gh release view "server-$VSCODE_VERSION" --repo "$REPO" \
+            --json assets \
+            -q ".assets[] | select(.name==\"$TARBALL_NAME\") | .digest" 2>"$gh_err")"; then
+        gh_ok=1
+    else
+        gh_ok=0
+    fi
+    gh_message="$(cat "$gh_err")"
+    rm -f "$gh_err"
+}
+
+tarball_sha256() {
+    (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1
+}
+
 # Kept under server/ so CI's existing server/*.tar.gz cache path covers it, and a
 # rerun on a warm cache skips the download entirely.
 #
@@ -63,21 +94,7 @@ mkdir -p "$ROOT_DIR/server"
 # path has no release to compare against; it is checked further down, against a
 # digest the caller names.
 if [ -f "$TARBALL" ] && [ -z "${VSCODE_OSS_URL:-}" ]; then
-    # `|| true` collapsed three outcomes into one empty string: gh not
-    # installed, gh unable to answer, and the release genuinely carrying no such
-    # asset. All three then skipped the comparison in silence and the next line
-    # printed "cached", which is how an unchecked tarball became a verified one.
-    # Status and value are read separately now.
-    gh_err="$(mktemp)"
-    if expected="$(gh release view "server-$VSCODE_VERSION" --repo "$REPO" \
-            --json assets \
-            -q ".assets[] | select(.name==\"$TARBALL_NAME\") | .digest" 2>"$gh_err")"; then
-        gh_ok=1
-    else
-        gh_ok=0
-    fi
-    gh_message="$(cat "$gh_err")"
-    rm -f "$gh_err"
+    release_digest
 
     if [ "$gh_ok" -eq 0 ]; then
         cat >&2 <<EOF
@@ -132,7 +149,7 @@ EOF
 EOF
         exit 1
     else
-        actual="sha256:$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
+        actual="sha256:$(tarball_sha256)"
         if [ "$actual" != "$expected" ]; then
             echo "  stale   : cached tarball digest $actual"
             echo "            release now carries  $expected — refetching"
@@ -179,6 +196,50 @@ EOF
         exit 1
     fi
     mv "$tmp/$TARBALL_NAME" "$TARBALL"
+
+    # The same comparison the cache path runs, on the path that had none. A
+    # cached tarball was held to the release digest while a freshly downloaded
+    # one was taken on trust, which is backwards: the cache was at least checked
+    # once when it was written, and these bytes have been checked by nothing.
+    # gh handing over the asset says the transfer ended, not that it ended
+    # intact.
+    release_digest
+    if [ "$gh_ok" -eq 0 ] || [ -z "$expected" ] || [ "$expected" = "null" ]; then
+        cat >&2 <<EOF
+
+  Downloaded $TARBALL_NAME but cannot check it against the release.
+
+$gh_message
+  gh served the asset and then named no digest for it, so nothing here can tell
+  whether these bytes are the ones the release records. Run this again; if it
+  keeps happening, name the digest you trust:
+
+      VSCODE_OSS_SHA256=<digest> $0
+EOF
+        exit 1
+    fi
+
+    actual="sha256:$(tarball_sha256)"
+    if [ "$actual" != "$expected" ]; then
+        # Left on disk rather than deleted. The cache path deletes on a mismatch
+        # so the next run refetches, but here the refetch is what just happened,
+        # and deleting would drop the only evidence of what arrived -- then fall
+        # through to `du -h` on a path that no longer exists. The next run's
+        # cache check reaches the same verdict and does the deleting.
+        cat >&2 <<EOF
+
+  The downloaded tarball is not what server-$VSCODE_VERSION records.
+
+      file     $TARBALL
+      got      $actual
+      expected $expected
+
+  A transfer that ended is not a transfer that arrived intact. Run this again;
+  the file is left in place for inspection and the next run refetches it.
+EOF
+        exit 1
+    fi
+    echo "  digest  : matches server-$VSCODE_VERSION"
 fi
 
 echo "  size    : $(du -h "$TARBALL" | cut -f1)"
@@ -198,7 +259,7 @@ if [ -n "${VSCODE_OSS_SHA256:-}" ]; then
     # survive the strip and be reported as a content mismatch it is not.
     want="$(printf '%s' "$VSCODE_OSS_SHA256" | tr 'A-Z' 'a-z')"
     want="${want#sha256:}"
-    actual="$( (sha256sum "$TARBALL" 2>/dev/null || shasum -a 256 "$TARBALL") | cut -d' ' -f1)"
+    actual="$(tarball_sha256)"
     if [ "$actual" != "$want" ]; then
         cat >&2 <<EOF
 
