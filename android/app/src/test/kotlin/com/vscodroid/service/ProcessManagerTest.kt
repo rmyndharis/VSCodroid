@@ -1183,7 +1183,11 @@ class AdoptionTest {
         val crashed = CountDownLatch(1)
         manager.onServerCrashed = { crashed.countDown() }
 
-        stub?.stop()
+        // Stops answering without releasing the port, for the reason
+        // StubServer.status documents. Freeing it here was the same dependency
+        // `nothing listening is not ready` was fixed for, and it was missed
+        // because the sweep matched `x.stop()` and this site reads `stub?.stop()`.
+        stub?.status = null
 
         assertTrue(
             crashed.await(30, TimeUnit.SECONDS),
@@ -1427,7 +1431,17 @@ class AdoptionTest {
  * It records the request line so a test can assert *which* route was asked for,
  * which is half of what the probe's contract says.
  */
-private class StubServer(status: Int?) {
+private class StubServer(initialStatus: Int?) {
+
+    /**
+     * What this answers with, or null for a port it holds without serving on.
+     *
+     * Mutable so a test can stop a server answering WITHOUT freeing its port.
+     * Freeing it and then requiring that nothing answers there asserts something
+     * about the whole machine, which a shared runner does not honour.
+     */
+    @Volatile
+    var status: Int? = initialStatus
 
     private val socket = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
     private val requestLine = AtomicReference<String?>(null)

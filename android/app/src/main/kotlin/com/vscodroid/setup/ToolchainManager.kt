@@ -696,7 +696,7 @@ class ToolchainManager(private val context: Context) {
                 // Once, before either request, so the manifest and the payload
                 // name the same release however long the transfer takes. Falls
                 // back to the unpinned URL, which is what shipped before this.
-                val pinnedUrl = pinLatest(url)
+                val pinnedUrl = pinLatest(url, download)
 
                 // Resolved before the payload, not after. A release that cannot
                 // vouch for this ZIP should cost a few hundred bytes and a clear
@@ -914,13 +914,30 @@ class ToolchainManager(private val context: Context) {
      * and involves no asset, which is why it is asked rather than the asset URL:
      * that one redirects twice and ends at a signed CDN address carrying no tag.
      *
-     * **Falls back to the unpinned URL on any failure, deliberately.** A wrong
-     * pin would 404 every toolchain for everyone, while the unpinned URL is what
-     * shipped before this existed. So the floor here is the old behaviour and
-     * the ceiling is a closed window, and nothing in between can be worse than
-     * where it started.
+     * **Falls back to the unpinned URL when the resolution fails, deliberately.**
+     * A wrong pin would 404 every toolchain for everyone, while the unpinned URL
+     * is what shipped before this existed.
+     *
+     * That floor covers a failure to resolve and nothing more, which is narrower
+     * than this once claimed. Once a pin IS returned, both requests use it and
+     * neither falls back: a 404 on the pinned release becomes
+     * [MissingFromRelease], which [retrying] rethrows on the first attempt, and
+     * the install is refused. So a release published inside the one request
+     * between the HEAD and the manifest fetch pins to the older one and fails
+     * where the unpinned path would have taken both files from the newer.
+     *
+     * That window is one request wide against a transfer measured in minutes,
+     * it fails closed, and retrying succeeds, so it is the price of closing the
+     * wide window rather than a defect in the trade. It is written down because
+     * the sentence it replaces asserted the price could not exist, and the next
+     * reader would have believed it.
      */
-    private fun pinLatest(zipUrl: String): String {
+    private fun pinLatest(zipUrl: String, download: HttpDownload): String {
+        // Before the request, for the reason the check above this call records: a
+        // pack cancelled while queued must not spend one, and this one carries a
+        // 30 s connect and a 30 s read timeout that nothing else here would
+        // interrupt.
+        if (download.cancelled) return zipUrl
         val latestUrl = latestReleaseUrlFor(zipUrl) ?: return zipUrl
         val pinned = try {
             val conn = URL(latestUrl).openConnection() as HttpURLConnection
