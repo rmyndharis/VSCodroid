@@ -218,6 +218,7 @@ jobs:
             server/*.tar.gz
             toolchains/termux-packages/debs/*.deb
             toolchains/termux-packages/Packages
+            toolchains/termux-packages/licenses.tsv
             toolchains/build/npm/
             toolchains/extensions/
             toolchains/musl/
@@ -378,9 +379,12 @@ jobs:
       # and prints the differences. It fails on one of them only: a component
       # recorded permissive where Termux declares copyleft ships with no offer
       # of source, and the step above cannot see it, because it reads the same
-      # table. Everything else is reported, including a package it could not
-      # reach at all, because Termux repackaging is ordinary upstream activity
-      # and a gate that failed on it would be switched off.
+      # table. Everything else is reported, including a package upstream has no
+      # build.sh for, because Termux repackaging is ordinary upstream activity
+      # and a gate that failed on it would be switched off. A host that will not
+      # answer at all, an outage or a rate limit, ends in a printed skip rather
+      # than a failure; a run that could read hardly any of the map fails, since
+      # that is the package names having moved and not the network.
       - name: Compare recorded licences against Termux
         run: python3 scripts/check-termux-licenses.py
 

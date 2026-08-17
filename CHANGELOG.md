@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Berkeley DB (AGPL-3.0-only) is no longer bundled. Nothing linked it. Four libraries that are used were added to the source offer, and `NOTICE.md` now lists all 39 components.
 - Attribution is now checked against every binary in the asset tree, not just the top two directories: 195 more files, including the WebAssembly, Windows and macOS objects an ELF-only scan walks past.
 - A binary that moves can no longer be recorded under the wrong licence in silence. An attribution entry that stops matching is reported even when the move took its own directory with it.
-- Recorded Termux licences are now compared against Termux's own. A release stops on a component recorded permissive where upstream declares copyleft, which ships with no source offer.
+- Termux's licence field is now read back per package. When upstream answers, a release stops on a component recorded permissive but declared copyleft, which ships with no source offer.
 - The check that the licences screen's documents are packaged now runs when the build script changes, which is the edit that can drop them.
 - The About dialog's Source Code link moved onto the new licenses screen, beside the offer of source it answers.
 

@@ -28,7 +28,9 @@ look like they should carry it do not:
 demonstrably the line the table was transcribed from: liblzma's reads
 `"LGPL-2.1, GPL-2.0, GPL-3.0"`, byte for byte what LIBRARIES records. So that is
 what this reads, over HTTPS, one small file per package, cached for a week
-beside the package index.
+beside the package index. release.yml carries that cache file in its download
+cache, so a release does not open forty-odd connections to one host in a burst,
+which is the shape that draws a rate limit.
 
 A report, not a gate, with one exception.
 
@@ -43,12 +45,20 @@ source, and the attribution gate cannot notice, because it asks the same wrong
 table. That fails. It cannot fire on a reword, a version bump, or a second
 licence being added to an already copyleft field, because all of those leave the
 copyleft verdict alone and land in the reported half. It cannot fire when
-upstream could not be read either: no network, or a package whose build.sh is
-not where it should be, ends in a printed note and exit 0. Failing closed on an
-unsigned HTTPS fetch would turn an outage at raw.githubusercontent.com into a
-licence problem, and that fetch is advisory here precisely because it is
-unsigned; every payload this project ships is still anchored to Termux's own
-signature by verify-termux-index.sh.
+upstream could not be read either: a package whose build.sh is not where it
+should be is a printed note, and a host that will not serve the file at all, no
+network or a rate limit, ends the whole run in a printed skip and exit 0.
+Failing closed on an unsigned HTTPS fetch would turn an outage at
+raw.githubusercontent.com into a licence problem, and that fetch is advisory
+here precisely because it is unsigned; every payload this project ships is still
+anchored to Termux's own signature by verify-termux-index.sh.
+
+Which is why the run has to say loudly when it read almost nothing. A skip names
+itself, but a report that compared four packages of forty-four reads exactly
+like one that compared all forty-four, and the failing branch above cannot fire
+for a package nobody read. So a floor under that count fails. It answers a
+different question from the paragraph above: upstream answering for hardly any
+of the map means these package names have moved, not that the network is down.
 
 Two things this must not do, both of which would damage the gate it checks.
 
@@ -70,6 +80,7 @@ runs on a fresh checkout that has downloaded nothing.
 
 import fnmatch
 import importlib.util
+import os
 import pathlib
 import re
 import sys
@@ -89,6 +100,14 @@ BUILD_SH = ("https://raw.githubusercontent.com/termux/termux-packages/"
 # than in a name it can spell. Not the same statement as a permissive licence,
 # which is why it is routed away from the comparison instead of into it.
 UNSTATED = "custom"
+
+# The share of the mapped packages upstream has to answer for before the report
+# is worth reading. subjects() counts its own population twice because a
+# narrowed report is the failure mode that reads like a clean one; this is the
+# same floor under the other half. 43 of 44 are read today, so the value leaves
+# room for a handful of subpackages that have no build.sh of their own without
+# leaving room for the package names here to have quietly stopped resolving.
+MIN_COMPARED_SHARE = 2 / 3
 
 # Binaries a download script renames on the way into jniLibs, and the package
 # each arrives from.
@@ -138,6 +157,8 @@ def attribution():
     plain import; nothing at its module level runs anything.
     """
     spec = importlib.util.spec_from_file_location("check_library_attribution", GATE)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load the licence record from {GATE}")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -201,10 +222,11 @@ def fold(licence):
 
 
 def read_cache():
-    """What upstream answered last time, as `package -> (licence, why not)`.
+    """What upstream answered last time, as `(package -> (licence, why not), age)`.
 
     An aged-out cache is dropped whole rather than per entry: the question it
-    answers, what does Termux declare today, has one age.
+    answers, what does Termux declare today, has one age. That age is returned
+    beside the answers so a partial rewrite can put it back.
 
     A refusal is cached beside an answer, and the empty licence beside its reason
     is what records one. Caching only the successes would leave one package
@@ -212,24 +234,33 @@ def read_cache():
     is enough to send the whole report down the offline path when it is not.
     """
     if not CACHE.is_file():
-        return {}
-    if time.time() - CACHE.stat().st_mtime > CACHE_MAX_AGE_DAYS * 86400:
-        return {}
+        return {}, None
+    mtime = CACHE.stat().st_mtime
+    if time.time() - mtime > CACHE_MAX_AGE_DAYS * 86400:
+        return {}, None
     out = {}
     for line in CACHE.read_text(encoding="utf-8").splitlines():
         fields = line.split("\t")
         if len(fields) == 3:
             out[fields[0]] = (fields[1], fields[2])
-    return out
+    return out, mtime
 
 
-def write_cache(found):
-    """Keep only what this run asked about, so a dropped package leaves no line."""
+def write_cache(found, keep_mtime=None):
+    """Keep only what this run asked about, so a dropped package leaves no line.
+
+    One new package rewrites the whole file, so the mtime the surviving answers
+    were already carrying is put back. Without that, adding one library on day
+    six stamps the other forty-three fresh, and repeating the pattern keeps an
+    answer alive past every expiry it was supposed to meet.
+    """
     try:
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         CACHE.write_text("".join(f"{pkg}\t{lic}\t{why}\n"
                                  for pkg, (lic, why) in sorted(found.items())),
                          encoding="utf-8")
+        if keep_mtime is not None:
+            os.utime(CACHE, (keep_mtime, keep_mtime))
     except OSError:
         pass  # a report that cannot cache is still a report
 
@@ -237,9 +268,13 @@ def write_cache(found):
 def fetch(pkg):
     """`TERMUX_PKG_LICENSE` for one package, as `(licence, why not)`.
 
-    An HTTP answer, 404 included, is upstream speaking and is recorded against
-    the package. Anything else means this machine could not get there, which is
-    a fact about the run and not about the package, so it stops the fetching.
+    Exactly two answers are upstream speaking about the package: the file, and
+    404 for a package that has none. Both are recorded against it. Every other
+    status is upstream speaking about this machine or this minute, 429 for a
+    rate limit and 5xx for a bad day, and it is a fact about the run rather than
+    about the package, so it stops the fetching instead. Recording one would
+    answer a question nobody asked, and because answers are cached, that wrong
+    answer would then stand in for a week of runs with the network healthy.
 
     A 404 is the ordinary answer for a subpackage: ncurses-ui-libs is built from
     ncurses and has no `build.sh` of its own. Its parent is not guessed from its
@@ -252,7 +287,9 @@ def fetch(pkg):
         with urllib.request.urlopen(url, timeout=30) as response:
             text = response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
-        return "", f"HTTP {exc.code} for packages/{pkg}/build.sh"
+        if exc.code != 404:
+            raise Unreachable(exc) from exc
+        return "", f"HTTP 404 for packages/{pkg}/build.sh"
     except (urllib.error.URLError, OSError) as exc:
         raise Unreachable(exc) from exc
     field = LICENSE_FIELD.search(text)
@@ -290,7 +327,7 @@ def main():
     # so a run whose cache already holds every answer reports in full with the
     # network down and a run that is short of one reports nothing at all rather
     # than a partial tally that reads like a complete one.
-    cache = read_cache()
+    cache, cached_age = read_cache()
     fetched = False
     try:
         for pkg, _ in mapped:
@@ -298,15 +335,15 @@ def main():
                 cache[pkg] = fetch(pkg)
                 fetched = True
     except Unreachable as exc:
-        print(f"skip -- could not reach raw.githubusercontent.com ({exc}); "
-              "no licence was compared")
+        print("skip -- could not read TERMUX_PKG_LICENSE from "
+              f"raw.githubusercontent.com ({exc}); no licence was compared")
         return 0
     if fetched:
         # Only when something was actually fetched. Rewriting the file on a run
         # that answered entirely from it would touch its mtime, and the mtime is
         # what expires it, so a cache refreshed by its own reader would never be
         # refetched and the report would freeze at whatever it first saw.
-        write_cache(cache)
+        write_cache(cache, cached_age)
 
     agree, differ, understated, unstated, unread = [], [], [], [], []
     for pkg, hits in mapped:
@@ -324,7 +361,8 @@ def main():
         else:
             differ.append((pkg, ours, theirs))
 
-    print(f"termux licences: {len(mapped) - len(unread)} of {len(mapped)} packages "
+    compared = len(mapped) - len(unread)
+    print(f"termux licences: {compared} of {len(mapped)} packages "
           f"compared against TERMUX_PKG_LICENSE, {len(agree)} agree")
     for pkg, ours, theirs in differ:
         print(f"   differs   {pkg}: recorded {', '.join(ours)}; termux says {theirs}")
@@ -345,6 +383,7 @@ def main():
     if orphans:
         print(f"   not termux {len(orphans)}: {', '.join(orphans)}")
 
+    failed = False
     if understated:
         print(f"FAIL {len(understated)} recorded permissive where Termux declares "
               "copyleft:", file=sys.stderr)
@@ -355,8 +394,23 @@ def main():
               "component under '## GPL Source Code Availability' in "
               "docs/LEGAL_NOTICES.md; until then the binary ships with no offer "
               "of source", file=sys.stderr)
-        return 1
-    return 0
+        failed = True
+
+    # The floor. Upstream answering "no such file" for most of the map is not an
+    # outage; an outage left earlier, as a skip. It is these package names or the
+    # termux-packages layout having moved. The comparison is then meaningless
+    # while the report above still reads as an orderly one, and the copyleft
+    # branch cannot fire for a package nobody read.
+    if mapped and compared < len(mapped) * MIN_COMPARED_SHARE:
+        print(f"FAIL only {compared} of {len(mapped)} packages could be read "
+              f"upstream, under the {MIN_COMPARED_SHARE:.0%} this comparison "
+              "needs to mean anything", file=sys.stderr)
+        print("  -> upstream answered, so this is not an outage: the package "
+              "names in RENAMED and in each download script's get_sonames(), or "
+              "the termux-packages layout, have moved. Every unread package is "
+              "a licence nobody checked", file=sys.stderr)
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
