@@ -208,7 +208,8 @@ VSCodroid/
 | `bridge/AndroidBridge.kt` | JS interface: clipboard, file picker, OAuth, SSH, storage, toolchains |
 | `bridge/SecurityManager.kt` | The bridge session token: issues it, and validates it on every `@JavascriptInterface` call. It judges the caller, never the destination — there is no URL allow-list, and WebView navigation is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading` |
 | `keyboard/ExtraKeyRow.kt` | Multi-page key bar with ViewPager2 and dot indicators |
-| `keyboard/GestureTrackpad.kt` | 3-speed drag-to-cursor-navigate widget |
+| `keyboard/GestureTrackpad.kt` | 3-speed drag-to-cursor-navigate widget: touch plumbing and drawing |
+| `keyboard/TrackpadGesture.kt` | The gears and the arrows a drag earns, with no Android types, so it can be tested on the JVM |
 | `keyboard/KeyInjector.kt` | Injects KeyboardEvent into WebView via JS |
 | `service/NodeService.kt` | Foreground Service (specialUse) to keep Node.js alive |
 | `service/ProcessManager.kt` | Node.js process lifecycle, health check, auto-restart |
@@ -307,7 +308,15 @@ place. This one costs more precisely because it passes every gate first.
 
 `scripts/device-test.sh` installs the APK and checks that what shipped actually
 runs: the server answers, every bundled tool starts, and Python imports the ten
-modules that need a bundled library behind them.
+modules that need a bundled library behind them. It also reads what a toolchain
+install left behind and how the terminal is configured to start.
+
+Two limits are worth knowing before reading a green run. Almost everything goes
+through `run-as`, which is a different SELinux domain than the app and may
+execute files the app itself is refused, so no result there says a command works
+in the app's own terminal. And a default run clears app data, which removes any
+installed toolchain: the toolchain checks then report skipped, and only
+`--skip-install` on a device that has one makes them measure anything.
 
 **Nothing runs it automatically, and that is a measured conclusion rather than an
 oversight.** GitHub's arm64 runners expose no `/dev/kvm`, so an emulator there

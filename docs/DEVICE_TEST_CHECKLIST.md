@@ -46,7 +46,7 @@
 | KB-6 | Extra Key Row — Esc | Press Esc with menu open | Menu/dialog closes | | |
 | KB-7 | Extra Key Row — Ctrl+S | Press Ctrl on EKR then S on keyboard | File saves (no error) | | |
 | KB-8 | Extra Key Row — Ctrl+P | Press Ctrl on EKR then P | Quick Open dialog appears | | |
-| KB-9 | Extra Key Row — arrows | Press arrow keys on EKR | Cursor moves in editor | | |
+| KB-9 | Extra Key Row trackpad | Drag on the trackpad: slowly first, then keep going without lifting, then diagonally | Cursor steps character by character at first and speeds up the longer the drag gets; a diagonal drag moves on both axes. There are no arrow buttons to press: the trackpad replaced them, so it is the only way a touch user moves the cursor | | |
 | KB-10 | Extra Key Row — brackets | Press {, }, (, ) on EKR | Characters inserted in editor | | |
 
 ## 4. Screen & Orientation
@@ -210,13 +210,13 @@ as a known outcome keeps an unchecked box meaning "not tested" rather than
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 8 | | | |
 | Extensions | 6 | | | |
-| Background/Foreground | 6 | | | |
+| Background/Foreground | 7 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
-| Toolchains | 6 | | | |
+| Toolchains | 7 | | | |
 | Terminal & Tools | 10 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **82** | | | |
+| **Total** | **84** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

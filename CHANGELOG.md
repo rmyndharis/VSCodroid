@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The loopback bind on the editor server's command line is pinned by a test. A wildcard bind would have put the editor on the phone's network without failing anything.
 - Test suites stopped reporting results they had not measured: skipped device tests read as passing, one slept a minute and asserted nothing, and the four toolchain delivery functions had no test at all.
 - The on-device suite states when it is meant to run, checks that what shipped actually runs, and reads versions from the build rather than from literals two releases stale.
+- The on-device suite now checks toolchain installs and the terminal's shell configuration, and reports skipped rather than passed where adb cannot reach, instead of leaving both to a human checklist.
+- The extra key row's trackpad now has tests covering its speed gears and arrow output. It is the only way a touch user moves the cursor, and nothing guarded it.
 - Removed twenty-six tracked files that nothing built, ran or opened, including the cross-compilation scripts replaced when binaries began coming from Termux.
 - Six releases that shipped without a changelog entry now have one, reconstructed from commit history and marked as such. Two footer links named a tag that never existed.
 

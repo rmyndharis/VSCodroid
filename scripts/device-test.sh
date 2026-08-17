@@ -45,6 +45,24 @@
 # are now read from the tree instead of written here, and --self-check verifies
 # those readings still resolve -- but neither of those is a substitute for
 # running it.
+#
+# WHAT IT CANNOT ANSWER
+#
+# Every check below either runs through `run-as` or reads a file. `run-as` is a
+# different SELinux domain (runas_app, not untrusted_app) and is allowed to
+# execute files the app itself is refused, so no result here is evidence that a
+# command works in the app's own terminal. Phase 7 measures the app's own exec
+# path once, indirectly, by looking for a bash process the app spawned.
+#
+# Nothing here can drive the workbench: it lives in a WebView, and the editor,
+# the terminal's contents, the extension marketplace and the SAF picker are all
+# out of reach. Those are what docs/DEVICE_TEST_CHECKLIST.md is for. Where a
+# check cannot run, it reports SKIP and says why -- a phase that reports PASS
+# for something it did not run is worse than one that admits it.
+
+# The blank line above is what -h stops at: its `sed -n '2,/^$/'` had no empty
+# line to find and printed every commented line in the file, header and phase
+# notes alike.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,6 +102,15 @@ derive_py_expected() {
     # library that actually shipped.
     ls "$ROOT_DIR"/android/app/src/main/assets/usr/lib/libpython3.*.so 2>/dev/null \
         | head -1 | sed 's/.*libpython\(3\.[0-9]*\)\.so/\1/'
+}
+
+derive_toolchain_release_urls() {
+    # Where a non-Play install gets its toolchains. Read from the registry the
+    # app itself ships rather than written here, for the same reason as every
+    # other expectation above: these URLs are the only copy that matters, and a
+    # second one in this file would be free to drift from it.
+    sed -n 's/.*downloadUrl = "\(https:[^"]*\)".*/\1/p' \
+        "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt"
 }
 
 # Auto-detect adb if not in PATH
@@ -255,6 +282,19 @@ if $SELF_CHECK; then
     else
         skip "python expectation" \
             "no assets tree in this checkout; resolvable only where the build ran"
+    fi
+
+    # Not reachability -- that needs a network and belongs to a device run. This
+    # is the reading itself: a rename or a reformat of ToolchainRegistry.kt would
+    # otherwise leave the toolchain phase checking an empty list of URLs and
+    # calling it clean.
+    TC_URLS=$(derive_toolchain_release_urls)
+    TC_URL_COUNT=$(printf '%s\n' "$TC_URLS" | grep -c 'https' || true)
+    if [ "$TC_URL_COUNT" -gt 0 ]; then
+        pass "toolchain release URLs ($TC_URL_COUNT, from ToolchainRegistry.kt)"
+    else
+        fail "toolchain release URLs" \
+            "no downloadUrl readable in ToolchainRegistry.kt; the toolchain phase would check nothing"
     fi
 
     printf "\n  ${GREEN}%d passed${RESET}, ${RED}%d failed${RESET}, ${YELLOW}%d skipped${RESET}\n\n" \
@@ -785,6 +825,353 @@ if echo "$FILE_CHECK" | grep -q "EXISTS"; then
     $ADB shell "run-as $PKG rm $TEST_FILE" 2>/dev/null
 else
     fail "file_creation" "Could not create/verify file"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS 24-29: Toolchains
+# ═══════════════════════════════════════════════════════════════════
+printf "\n${BOLD}Phase 6: Toolchains${RESET}\n"
+
+# What this phase answers, and what it deliberately does not:
+#
+#   * It can read what an install left behind -- the record, the generated
+#     environment, and whether the payload those name is still on disk -- and it
+#     can ask whether the screen that installs one is reachable at all.
+#   * It cannot run a toolchain. `go`, `ruby` and `java` are bash *functions*
+#     defined in toolchain-env.sh, which only an interactive shell has sourced,
+#     and `run-as` is a different SELinux domain (runas_app, not untrusted_app)
+#     that may execute files the app itself is refused. A version string
+#     obtained through it would be evidence about run-as. Checklist rows TC-4
+#     and TC-5 stay a person's job.
+#   * It cannot drive an install. ToolchainActivity is not exported, so `am
+#     start` from the shell uid is refused, and the first-run picker is shown
+#     once per install.
+#
+# Consequence for a default run: `pm clear` empties filesDir, so nothing is
+# installed and the installed-state checks report SKIP with that reason. To make
+# them measure anything, install a toolchain by hand and re-run with
+# --skip-install.
+
+# Test 24: the toolchain screen has a way in.
+#
+# It has exactly one: the dynamic launcher shortcut publishToolchainShortcut()
+# pushes from launchMain(). The activity is not exported and no bundled
+# extension sends openToolchainSettings, so if the push is refused -- rate
+# limiting is the documented case -- the screen becomes unreachable and only a
+# log line says so. Read rather than launched, because the shortcut cannot be
+# started from the shell uid either.
+#
+# The control is the dump having any Package section at all: without one, this
+# cannot tell "no shortcut" from "cannot see shortcuts on this Android version".
+SHORTCUT_DUMP=$($ADB shell dumpsys shortcut 2>/dev/null | tr -d '\r')
+if ! echo "$SHORTCUT_DUMP" | grep -q "Package:"; then
+    skip "toolchain_shortcut" \
+        "dumpsys shortcut listed no packages here, so an empty result proves nothing"
+else
+    PKG_SHORTCUTS=$(echo "$SHORTCUT_DUMP" | awk -v pkg="$PKG" '
+        /Package:/ { inpkg = ($2 == pkg) }
+        inpkg { print }
+    ')
+    if echo "$PKG_SHORTCUTS" | grep -q "id=toolchains"; then
+        pass "toolchain_shortcut (the launcher shortcut is published)"
+    else
+        fail "toolchain_shortcut" \
+            "no id=toolchains shortcut for $PKG; the toolchain screen has no entry point"
+    fi
+fi
+
+# Test 25: the release still carries the ZIPs a non-Play install downloads.
+#
+# ToolchainRegistry points every sideloaded install at releases/latest, so a
+# release published without the toolchain assets breaks installation for every
+# non-Play user, including ones who already have the app. Nothing on the device
+# can detect that; it is a property of the release, checked from the host.
+#
+# A range request rather than a HEAD, so a redirect to a signed asset URL is
+# followed without pulling 179 MB. No network means SKIP: this is the one check
+# here that can fail for a reason that has nothing to do with the build.
+TC_URLS=$(derive_toolchain_release_urls)
+if [ -z "$TC_URLS" ]; then
+    fail "toolchain_release_assets" \
+        "no downloadUrl readable in ToolchainRegistry.kt"
+elif ! command -v curl >/dev/null 2>&1; then
+    skip "toolchain_release_assets" "no curl on this host"
+else
+    TC_URL_BAD=""
+    TC_URL_UNREACHED=""
+    TC_URL_OK=0
+    for url in $TC_URLS; do
+        CODE=$(curl -sL -o /dev/null -r 0-0 --max-time 30 -w "%{http_code}" "$url" 2>/dev/null)
+        RC=$?
+        if [ $RC -ne 0 ] || [ "$CODE" = "000" ]; then
+            TC_URL_UNREACHED="$TC_URL_UNREACHED $(basename "$url")"
+        elif [ "$CODE" = "200" ] || [ "$CODE" = "206" ]; then
+            TC_URL_OK=$((TC_URL_OK + 1))
+        else
+            TC_URL_BAD="$TC_URL_BAD $(basename "$url")=$CODE"
+        fi
+    done
+    if [ -n "$TC_URL_BAD" ]; then
+        fail "toolchain_release_assets" \
+            "the current release does not serve:$TC_URL_BAD"
+    elif [ -n "$TC_URL_UNREACHED" ]; then
+        skip "toolchain_release_assets" \
+            "could not reach github.com for:$TC_URL_UNREACHED"
+    else
+        pass "toolchain_release_assets ($TC_URL_OK served by releases/latest)"
+    fi
+fi
+
+# Tests 26-29: what an install left on this device.
+TC_STATE=$($ADB shell run-as "$PKG" cat files/home/.vscodroid/toolchains.json 2>/dev/null | tr -d '\r')
+TC_NAMES=""
+TC_STATE_OK=false
+if [ -n "$TC_STATE" ]; then
+    TC_NAMES=$(printf '%s' "$TC_STATE" | python3 -c "
+import json, sys
+try:
+    entries = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print(' '.join(e.get('name', '?') for e in entries))
+" 2>/dev/null)
+    if [ $? -eq 0 ]; then
+        TC_STATE_OK=true
+    fi
+fi
+
+if [ -z "$TC_STATE" ]; then
+    # Absence, not damage. Either nothing was ever installed or this run cleared
+    # app data, and neither is a defect.
+    skip "toolchain_record" \
+        "no toolchains.json on this device; install one and re-run with --skip-install"
+    skip "toolchain_env_file" "no toolchain installed"
+    skip "toolchain_env_sourced" "no toolchain installed"
+    skip "toolchain_payload" "no toolchain installed"
+elif ! $TC_STATE_OK; then
+    # Damage is a different thing, and the app treats it as one: a toolchains.json
+    # it cannot parse makes it keep the last good toolchain-env.sh rather than
+    # delete it, because the file on disk is the only working record of how to
+    # run what is still installed.
+    fail "toolchain_record" "toolchains.json is present but is not readable JSON"
+    skip "toolchain_env_file" "the record is unreadable"
+    skip "toolchain_env_sourced" "the record is unreadable"
+    skip "toolchain_payload" "the record is unreadable"
+elif [ -z "$TC_NAMES" ]; then
+    skip "toolchain_record" \
+        "toolchains.json is an empty list; install one and re-run with --skip-install"
+    skip "toolchain_env_file" "no toolchain installed"
+    skip "toolchain_env_sourced" "no toolchain installed"
+    skip "toolchain_payload" "no toolchain installed"
+else
+    pass "toolchain_record ($TC_NAMES)"
+
+    # The record without the environment is an install nothing can use: the
+    # commands simply are not names any terminal knows.
+    TC_ENV=$($ADB shell run-as "$PKG" cat files/home/.vscodroid/toolchain-env.sh 2>/dev/null | tr -d '\r')
+    if [ -n "$TC_ENV" ]; then
+        pass "toolchain_env_file (toolchain-env.sh regenerated)"
+    else
+        fail "toolchain_env_file" \
+            "toolchains.json names $TC_NAMES but toolchain-env.sh is missing or empty"
+    fi
+
+    # And the environment nothing sources is the same install, one layer out.
+    BASHRC=$($ADB shell run-as "$PKG" cat files/home/.bashrc 2>/dev/null | tr -d '\r')
+    if echo "$BASHRC" | grep -q "toolchain-env.sh"; then
+        pass "toolchain_env_sourced (.bashrc sources it)"
+    else
+        fail "toolchain_env_sourced" \
+            ".bashrc does not source toolchain-env.sh; no terminal gets the toolchain environment"
+    fi
+
+    # Every wrapper hands a file under filesDir to the system loader. A wrapper
+    # whose file is gone is a command that reports a loader error instead of
+    # running, which is what a half-removed or partly-copied install looks like.
+    # PREFIX is filesDir/usr (Environment.kt), so $PREFIX/.. is filesDir.
+    TC_TARGETS=$(printf '%s\n' "$TC_ENV" \
+        | sed -n 's|.*"\$PREFIX/\.\./\([^"]*\)".*|\1|p' | sort -u)
+    TC_TARGET_TOTAL=$(printf '%s\n' "$TC_TARGETS" | grep -c . || true)
+    if [ "$TC_TARGET_TOTAL" -eq 0 ]; then
+        skip "toolchain_payload" "toolchain-env.sh defines no wrappers to check"
+    else
+        # Capped: the whole list goes onto one adb command line, and Java alone
+        # contributes dozens. Checking a bounded prefix of it is enough to catch
+        # a payload that is gone, and the count says how much was looked at.
+        TC_CHECKED=$(printf '%s\n' "$TC_TARGETS" | head -20)
+        TC_CHECK_COUNT=$(printf '%s\n' "$TC_CHECKED" | grep -c . || true)
+        TC_ARGS=$(printf '%s\n' "$TC_CHECKED" | sed "s|^|$DATA_DIR/files/|" | tr '\n' ' ')
+        TC_MISSING=$($ADB shell "run-as $PKG sh -c 'for f in $TC_ARGS; do [ -e \$f ] || echo \$f; done'" 2>/dev/null | tr -d '\r')
+        if [ -z "$TC_MISSING" ]; then
+            pass "toolchain_payload ($TC_CHECK_COUNT of $TC_TARGET_TOTAL wrapper targets present)"
+        else
+            fail "toolchain_payload" \
+                "toolchain-env.sh names files that are not on disk: $(echo "$TC_MISSING" | tr '\n' ' ')"
+        fi
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS 30-33: The terminal, as the app opens it
+# ═══════════════════════════════════════════════════════════════════
+printf "\n${BOLD}Phase 7: Terminal Through The App${RESET}\n"
+
+# Phase 4 runs the bundled tools through `run-as`, which answers "is the binary
+# there and does it work", and cannot answer "does the app's own terminal open".
+# Those are different questions with different failure modes, and the second one
+# is the one a user meets. What is reachable from adb:
+#
+#   * the profile the workbench will use, and whether the shell it names is
+#     still on disk -- a dangling path means every terminal fails to open, and
+#     it dangles for a mundane reason (a reinstall moves nativeLibraryDir);
+#   * whether the two files a new shell sources still parse, because a syntax
+#     error in either takes out every terminal at once rather than one command;
+#   * whether a terminal can actually be opened, which is attempted rather than
+#     assumed, and reports SKIP when it cannot be confirmed.
+#
+# What stays out of reach: everything inside the terminal. TT-1 through TT-10 on
+# the checklist need a person, because the output only exists inside the WebView.
+
+TERM_PROFILE_PATH=""
+SETTINGS_JSON=$($ADB shell run-as "$PKG" cat files/home/.vscodroid/data/Machine/settings.json 2>/dev/null | tr -d '\r')
+if [ -n "$SETTINGS_JSON" ]; then
+    # JSONC once the workbench has rewritten it, so a plain parse is tried first
+    # and a regex is the fallback rather than the method.
+    TERM_PROFILE_PATH=$(printf '%s' "$SETTINGS_JSON" | python3 -c "
+import json, re, sys
+raw = sys.stdin.read()
+try:
+    profiles = json.loads(raw).get('terminal.integrated.profiles.linux', {})
+    print(profiles.get('bash', {}).get('path', ''))
+except Exception:
+    m = re.search(r'\"bash\"\s*:\s*\{[^}]*?\"path\"\s*:\s*\"([^\"]+)\"', raw, re.S)
+    print(m.group(1) if m else '')
+" 2>/dev/null)
+fi
+
+# Test 30: the workbench is pointed at a shell that exists.
+if [ -z "$TERM_PROFILE_PATH" ]; then
+    fail "terminal_profile" \
+        "no terminal.integrated.profiles.linux.bash.path in settings.json; the terminal has no shell to start"
+else
+    SHELL_THERE=$($ADB shell "run-as $PKG sh -c 'test -e $TERM_PROFILE_PATH && echo EXISTS'" 2>/dev/null | tr -d '\r')
+    if echo "$SHELL_THERE" | grep -q "EXISTS"; then
+        pass "terminal_profile ($TERM_PROFILE_PATH)"
+    else
+        # updateSettingsNativeLibPaths() rewrites this on every launch precisely
+        # because a reinstall moves nativeLibraryDir underneath it. `test -e`
+        # follows the symlink, so a dangling usr/bin/bash fails here too.
+        fail "terminal_profile" \
+            "$TERM_PROFILE_PATH does not resolve; no terminal can open"
+    fi
+fi
+
+# Test 31: shell integration can still recognise the shell.
+#
+# The ptyHost picks injection arguments from a table keyed by the *basename* of
+# the profile's executable: `bash` matches, `libbash.so` matches nothing and the
+# injection is skipped in silence. That is why the profile names the symlink and
+# not the library it points at (Environment.getTerminalShellPath), and pointing
+# it at the library is a change that breaks nothing visibly.
+if [ -z "$TERM_PROFILE_PATH" ]; then
+    skip "terminal_shell_basename" "no profile path to read"
+elif [ "$(basename "$TERM_PROFILE_PATH")" = "bash" ]; then
+    pass "terminal_shell_basename (bash)"
+else
+    fail "terminal_shell_basename" \
+        "the profile names $(basename "$TERM_PROFILE_PATH"); shell integration is keyed on the basename and would be skipped in silence"
+fi
+
+# Test 32: the files every new shell sources still parse.
+#
+# `bash -n` parses without executing, so the answer does not depend on which
+# SELinux domain asks -- unlike anything that runs a toolchain. It is worth its
+# own test because the blast radius is not one command: toolchain-env.sh is
+# generated from manifests regenerated at build time, and one name bash cannot
+# use as a function is a parse error that takes out every terminal.
+PARSE_FAILURES=""
+PARSE_CHECKED=0
+for rc_file in files/home/.bashrc files/home/.vscodroid/toolchain-env.sh; do
+    RC_PRESENT=$($ADB shell "run-as $PKG sh -c 'test -f $rc_file && echo EXISTS'" 2>/dev/null | tr -d '\r')
+    echo "$RC_PRESENT" | grep -q "EXISTS" || continue
+    PARSE_CHECKED=$((PARSE_CHECKED + 1))
+    PARSE_OUT=$(run_tool "files/usr/bin/bash" -n "$DATA_DIR/$rc_file")
+    PARSE_RC=$?
+    if [ "$PARSE_RC" -ne 0 ]; then
+        PARSE_FAILURES="$PARSE_FAILURES $rc_file(rc=$PARSE_RC: $PARSE_OUT)"
+    fi
+done
+if [ "$PARSE_CHECKED" -eq 0 ]; then
+    fail "terminal_startup_files" \
+        "neither .bashrc nor toolchain-env.sh is present; a terminal would open with no environment"
+elif [ -z "$PARSE_FAILURES" ]; then
+    pass "terminal_startup_files ($PARSE_CHECKED parsed)"
+else
+    fail "terminal_startup_files" "syntax error in:$PARSE_FAILURES"
+fi
+
+# Test 33: a terminal actually opens, and bash runs in the app's own domain.
+#
+# This is the only check in the suite that measures the exec path the app itself
+# takes rather than the one run-as takes. It is also the least certain to run:
+# Ctrl+backtick has to reach the workbench inside the WebView, and nothing here
+# can confirm the workbench received a keystroke.
+#
+# So the result is PASS on positive evidence -- a bash process under this
+# package -- and SKIP otherwise, never FAIL. A failure to drive the UI and a
+# broken terminal look identical from out here, and reporting the first as the
+# second is how a suite starts lying in the other direction.
+#
+# ARGS is the command line with argv[0]'s directory stripped, which is what makes
+# both spellings visible: node-pty may name the usr/bin/bash symlink or the
+# libbash.so it resolves to, and "bash" occurs in either.
+APP_UID=$($ADB shell run-as "$PKG" id -u 2>/dev/null | tr -d '\r')
+app_process_lines() {
+    $ADB shell ps -A -o UID,ARGS 2>/dev/null | tr -d '\r' \
+        | awk -v uid="$APP_UID" '$1 == uid'
+}
+bash_process_count() {
+    app_process_lines | grep -c "bash" || true
+}
+
+# The control, and it has to come first: an empty answer below means "no bash"
+# only if this can see the app's processes at all. The server was reported ready
+# in Phase 2, so its Node process is there to be found -- if that is not visible
+# either, the reading is about `ps`, not about the terminal.
+APP_PROCS=$(app_process_lines)
+if [ -z "$APP_UID" ] || ! echo "$APP_PROCS" | grep -q "node"; then
+    skip "terminal_opens" \
+        "could not read this app's processes out of ps (uid='$APP_UID'), so an empty result would prove nothing"
+else
+    BASH_BEFORE=$(bash_process_count)
+    if [ "$BASH_BEFORE" -gt 0 ]; then
+        pass "terminal_opens ($BASH_BEFORE bash process(es) running under $PKG)"
+    else
+        FOCUS=$($ADB shell "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'" 2>/dev/null | tr -d '\r')
+        if [ -z "$FOCUS" ]; then
+            skip "terminal_opens" \
+                "could not read which app is in front, so a keystroke would go somewhere unknown"
+        elif ! echo "$FOCUS" | grep -q "$PKG"; then
+            skip "terminal_opens" \
+                "$PKG is not the focused app; a keystroke would land elsewhere"
+        else
+            # keycombination is Android 12+. An older `input` answers with usage
+            # text rather than a non-zero exit, so the output is what gets read.
+            COMBO_OUT=$($ADB shell input keycombination KEYCODE_CTRL_LEFT KEYCODE_GRAVE 2>&1 | tr -d '\r')
+            if echo "$COMBO_OUT" | grep -qiE "error|unknown command|usage"; then
+                skip "terminal_opens" "input keycombination is unavailable here: $COMBO_OUT"
+            else
+                sleep 6
+                BASH_AFTER=$(bash_process_count)
+                if [ "$BASH_AFTER" -gt "$BASH_BEFORE" ]; then
+                    pass "terminal_opens (bash spawned in the app's own domain)"
+                else
+                    skip "terminal_opens" \
+                        "no bash appeared after Ctrl+backtick; the workbench may not have had keyboard focus. Not evidence of a broken terminal -- open one by hand (checklist TT-1)"
+                fi
+            fi
+        fi
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════
