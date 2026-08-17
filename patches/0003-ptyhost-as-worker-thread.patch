@@ -27,6 +27,13 @@ non-zero code without a signal as a crash. kill() takes that signal and honours
 SIGKILL by terminating at once; it used to take none, so a caller escalating past
 the graceful path silently got the graceful path.
 
+The graceful path itself waits for the worker's exit event. It used to pause for a
+fixed 200ms and terminate whatever the module was doing, which is shorter than the
+Pty Host's own teardown: that host writes a terminal's remaining output on its way
+out, and anything still buffered was cut off mid-write with nothing logged. The
+wait is still bounded, by WORKER_EXIT_GRACE_MS, because a Worker keeps its host
+process alive and a module that never exits would otherwise hold the server open.
+
 ipc.cp.ts picks between them on serverName. Only the Pty Host moves in this
 change; the file watcher keeps forking, and the Extension Host is a separate step
 because it also has to stop passing sockets over its channel.
@@ -74,10 +81,10 @@ index a92290a..282873b 100644
  
 diff --git a/src/vs/base/node/workerAsChildProcess.ts b/src/vs/base/node/workerAsChildProcess.ts
 new file mode 100644
-index 0000000..5ffcd93
+index 0000000..e4fc8ae
 --- /dev/null
 +++ b/src/vs/base/node/workerAsChildProcess.ts
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,200 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -86,6 +93,23 @@ index 0000000..5ffcd93
 +import { ChildProcess, ForkOptions } from 'child_process';
 +import { EventEmitter } from 'events';
 +import { Worker } from 'worker_threads';
++
++/**
++ * How long an asked-for shutdown has before the thread is stopped anyway.
++ *
++ * An upper bound on a hang, not a budget a shutdown is expected to spend: the
++ * disconnect below is answered in milliseconds when the module is healthy, and
++ * this is only reached when it is not. It exists at all because a Worker keeps
++ * its host process alive, so a module that never exits would hold the whole
++ * server open rather than merely leaking a thread.
++ *
++ * Three seconds is chosen against what the wait is protecting. The Pty Host
++ * writes the terminal's remaining output on its way out, and the previous fixed
++ * 200ms pause was shorter than that write rather than longer than it. A deliberate
++ * app stop cannot be delayed by this either way: ProcessManager gives the whole
++ * server one second before it kills the process outright.
++ */
++const WORKER_EXIT_GRACE_MS = 3_000;
 +
 +/**
 + * Runs a module that expects to be a `child_process.fork` child inside a
@@ -225,14 +249,27 @@ index 0000000..5ffcd93
 +		}
 +
 +		// Give the module the disconnect it would get from a closing IPC channel,
-+		// so its own shutdown runs, then stop the thread. terminate() alone would
++		// so its own shutdown runs, then wait for it to go. terminate() alone would
 +		// drop pending work -- for the Pty Host that means orphaned shells.
 +		try {
 +			this._worker.postMessage({ __vsc_disconnect: true });
 +		} catch {
-+			// The thread may already be gone; terminate below covers it.
++			// The thread may already be gone; the deadline below covers it.
 +		}
-+		setTimeout(() => { this._worker.terminate(); }, 200);
++
++		// Waited on, not timed. This used to terminate() 200ms later whatever the
++		// module was doing, which is a deadline wearing a shutdown's clothes: the
++		// Pty Host writes a terminal's remaining output as it tears down, and
++		// anything still buffered at 200ms was cut off mid-write with nothing said.
++		// The exit event is the module reporting that its teardown finished, and
++		// waiting for it costs nothing in the normal case, where it arrives first.
++		//
++		// The bound stays, because a wait with no bound is a hang: a Worker keeps
++		// its host process alive, so a module that never exits would keep the
++		// server open for good. It is stated as WORKER_EXIT_GRACE_MS rather than
++		// buried here, and it is a ceiling rather than a pause.
++		const deadline = setTimeout(() => { this._worker.terminate(); }, WORKER_EXIT_GRACE_MS);
++		this._worker.once('exit', () => clearTimeout(deadline));
 +	}
 +}
 +

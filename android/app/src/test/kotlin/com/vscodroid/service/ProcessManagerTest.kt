@@ -997,6 +997,15 @@ class AdoptionTest {
     /** Written where [Environment.getConnectionTokenPath] is stubbed to look. */
     private val token = "adopt-2f9c-token"
 
+    /**
+     * The commit the packaged tree records, which is what the real `/version`
+     * answers with: the route ends the response with `productService.commit`.
+     *
+     * Written into a `product.json` fixture below, so a holder of the port has to
+     * produce it before adoption will hand it the WebView and the token.
+     */
+    private val commit = "a5b500951314efd502d07465bd138dfbd714a960"
+
     @BeforeEach
     fun setUp() {
         mockkObject(Logger)
@@ -1008,6 +1017,8 @@ class AdoptionTest {
         every { Logger.e(any(), any()) } just Runs
 
         val tokenFile = File(tempDir, "token").apply { writeText(token) }
+        File(tempDir, "server/vscode-reh").mkdirs()
+        File(tempDir, "server/$REH_PRODUCT_FILE").writeText("""{"commit":"$commit"}""")
 
         mockkObject(Environment)
         every { Environment.getNodePath(any()) } returns "/bin/echo"
@@ -1032,9 +1043,16 @@ class AdoptionTest {
         unmockkAll()
     }
 
-    /** Points the manager at a loopback server answering [status] on every route. */
-    private fun serving(status: Int): StubServer =
-        StubServer(status).also { stub = it; manager.portField = it.port }
+    /**
+     * Points the manager at a loopback server answering [status] on every route,
+     * and reporting [reports] as the build it is.
+     *
+     * The default is this app's own commit, so the fixture stands for the case
+     * adoption is for: the editor server that survived its bootstrap. A test that
+     * wants a stranger passes something else.
+     */
+    private fun serving(status: Int, reports: String = commit): StubServer =
+        StubServer(status, reports).also { stub = it; manager.portField = it.port }
 
     /**
      * Writes the note `assets/server.js` leaves naming the editor server it
@@ -1137,6 +1155,85 @@ class AdoptionTest {
         // Awaited for the reason ProcessManagerTest's helper gives: /bin/echo exits
         // at once, and a watchdog thread outliving the test logs through a Logger
         // mock that unmockkAll() has already torn down.
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `a holder serving some other build is not adopted`() {
+        // The path that was left open. The note proves an editor server of ours is
+        // alive; the port proves something is serving there. Neither says they are
+        // the same process, and the read that would say so, /proc/net/tcp, is
+        // refused to an app outright. A child that lost the race for the port wedges
+        // on EADDRINUSE without exiting, so it goes on matching the note perfectly
+        // while a foreign process holds the socket.
+        //
+        // A bare 200 was the whole of the second half, and everything that accepts a
+        // connection and answers something satisfies it. Adopting then points the
+        // WebView at that holder with the connection token in the URL. Asking which
+        // build answered costs the same request and no disclosure.
+        val holder = serving(200, reports = "0000000000000000000000000000000000000000")
+        recordEditorServer(pid = 4242, port = holder.port)
+        manager.killRecordedProcess = { }
+        assertTrue(
+            manager.portHeldByOurEditorServer(),
+            "the note has to pass the ownership test, or the refusal below proves nothing",
+        )
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "declining to adopt still has to start something")
+
+        assertFalse(
+            manager.isAdopted(),
+            "a holder that is not this build is not ours to hand the token to",
+        )
+        assertNotNull(
+            manager.serverProcessField,
+            "declining to adopt has to fall through to a spawn",
+        )
+        val asked = holder.lastRequestLine()
+        assertEquals(
+            "GET /version", asked?.substringBeforeLast(' '),
+            "the identity question is asked on the one route answered before the token check",
+        )
+        assertFalse(
+            asked!!.contains("tkn"),
+            "asking who the holder is must never present the token to it: $asked",
+        )
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `a holder that answers without naming a build is not adopted`() {
+        // 200 and an empty body is what a web server on the port gives for free, and
+        // it is exactly what the test accepted before it asked for an identity.
+        val holder = serving(200, reports = "")
+        recordEditorServer(pid = 4242, port = holder.port)
+        manager.killRecordedProcess = { }
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted(), "answering is not the same as being ours")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `a tree that records no commit declines to adopt rather than accepting anyone`() {
+        // Fail closed. With nothing to compare against, the identity test would be a
+        // bare 200 again, so a build that cannot say what it is does not adopt at
+        // all. That costs a spawn; the other direction costs the session.
+        File(tempDir, "server/$REH_PRODUCT_FILE").delete()
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        manager.killRecordedProcess = { }
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted(), "an unidentifiable build must not adopt on a status line")
         assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
     }
 
@@ -1465,7 +1562,7 @@ class AdoptionTest {
  * It records the request line so a test can assert *which* route was asked for,
  * which is half of what the probe's contract says.
  */
-private class StubServer(initialStatus: Int?) {
+private class StubServer(initialStatus: Int?, initialBody: String = "") {
 
     /**
      * What this answers with, or null for a port it holds without serving on.
@@ -1476,6 +1573,18 @@ private class StubServer(initialStatus: Int?) {
      */
     @Volatile
     var status: Int? = initialStatus
+
+    /**
+     * The body it answers with, which for `/version` is the commit the holder
+     * claims to be.
+     *
+     * It exists because a status line stopped being the whole answer: adoption
+     * compares this against the commit the packaged tree records, so a stub that
+     * always framed an empty body could only ever stand for a holder that is not
+     * ours.
+     */
+    @Volatile
+    var body: String = initialBody
 
     private val socket = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
     private val requestLine = AtomicReference<String?>(null)
@@ -1507,11 +1616,14 @@ private class StubServer(initialStatus: Int?) {
                             val line = reader.readLine()
                             if (line.isNullOrEmpty()) break
                         }
+                        val payload = body.toByteArray()
                         client.getOutputStream().apply {
                             write(
                                 ("HTTP/1.1 $status Stub\r\n" +
-                                    "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray()
+                                    "Content-Length: ${payload.size}\r\n" +
+                                    "Connection: close\r\n\r\n").toByteArray()
                             )
+                            write(payload)
                             flush()
                         }
                     }

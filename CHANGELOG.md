@@ -116,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crash text reaching the clipboard, the crash dialog and the page now has the connection token stripped from the `tkn=` parameter it travels in.
 - The address the editor is opened at is redacted by the shared routine before logging, replacing a hand-maintained token-free copy that could drift from the real one.
 - Deciding whether the server on the port is ours no longer sends it the connection token. Ownership is settled from a record this app writes; a holder we have no record for is treated as a stranger.
+- A server already on the port must now report the build it is before the app reuses it. Answering at all used to be enough, so a stranger holding the port could be handed the session token.
 - Startup readiness is judged by the one endpoint answered before the token check. The previous check treated any non-error reply as healthy, including "forbidden".
 - The session token is compared in constant time. Nothing was reachable through the old comparison; the point is that the property belongs in the comparison rather than in the token length.
 - Every one of the twenty-eight editor-to-Android calls now requires the session token. Six took none, and a test enumerates them so a new one cannot skip it.
@@ -207,6 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Terminal, keyboard and layout**
 
+- Shutting down the terminal host waits for it to finish, up to three seconds, instead of stopping it after 200 ms. Output still being written was lost mid-write.
 - Shortcuts using a punctuation key work from the on-screen keyboard. Both input routes now answer from one key table, which gained comma, full stop, hyphen, plus, asterisk, percent, question mark, caret and dollar.
 - Tapping Shift on the key row and then typing on the soft keyboard inserts the character. The interceptor now takes over for Ctrl and Alt chords only.
 - Ctrl+comma opens Settings and Ctrl+space asks for suggestions; both were previously unreachable by touch.
@@ -294,6 +296,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Build and release**
 
+- Unit tests re-run when the bootstrap script or a server patch changes. Neither was a declared input, so an incremental run served the previous run's verdict for a file it had not read.
 - A server build release could take over the `latest` release pointer, which breaks toolchain downloads for every non-Play install. It is now kept out of that pointer permanently.
 - A release can no longer be published with one of its files missing. Upload and publish both defaulted to warning rather than failing.
 - Builds no longer re-download every bundled package. The cache pointed one directory above where packages are written, so it matched none of the 72 files there.

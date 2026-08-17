@@ -310,6 +310,20 @@ tasks.withType<Test> {
     //   grep -rn 'File("src/main/AndroidManifest.xml")' android/app/src/test/kotlin
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
         .withPropertyName("appManifest")
+    // Two suites read files no Kotlin compiles against, because the things they
+    // check cross a language boundary that has no compiler: the bootstrap's
+    // adoption note (assets/server.js) and the shutdown the worker hosts get
+    // (patches/). Gradle knows nothing about either, so it answered UP-TO-DATE
+    // for a run that had to notice one of them change, and served the previous
+    // run's results. Measured here: the patch was reverted in place and the guard
+    // reported green without running. Declaring them makes the answer follow the
+    // question. A clean CI checkout was never affected; an incremental run always
+    // was.
+    inputs.files(fileTree("src/main/assets") { include("*.js") })
+        .withPropertyName("bootstrapScripts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(fileTree(rootProject.projectDir.parentFile.resolve("patches")))
+        .withPropertyName("serverPatches")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

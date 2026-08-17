@@ -10,6 +10,7 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
@@ -538,19 +539,6 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
-     * Performs a synchronous HTTP GET to `http://127.0.0.1:{port}/version`.
-     *
-     * `/version` is answered before the connection-token check — the server
-     * handles it and returns, then gates everything else — so this stays a pure
-     * liveness probe and does not need the token.
-     *
-     * It also has to be `/version` rather than `/`. This accepted anything below
-     * 500, which was fine while every route answered 200, and became wrong the
-     * moment the server started requiring a token: `/` then answers 403, and a
-     * readiness check that counts 403 as healthy reports a successful startup for
-     * a server that will serve the user nothing but Forbidden.
-     */
-    /**
      * Whether the process holding our port is an editor server this app started.
      *
      * Answered from a note the bootstrap left, not by asking the port holder.
@@ -729,10 +717,27 @@ class ProcessManager(private val context: Context) {
      *
      * Asking the port is safe in the way the ownership test that preceded it was
      * not: `/version` is answered before the connection-token check, so the probe
-     * carries no token and discloses nothing to whoever is on the other end. What
-     * it establishes is only that the port serves, attributing that answer to the
-     * recorded pid would need the /proc/net/tcp read SELinux refuses, which is
-     * why both halves are required and neither is sufficient.
+     * carries no token and discloses nothing to whoever is on the other end. That
+     * direction is not negotiable. The credential is what the WebView is about to
+     * carry to this port, and handing it to the party the test exists to identify
+     * is the mistake that was taken out of here once already.
+     *
+     * What the port is asked for is its identity, not merely a status line. The
+     * route answers `productService.commit` as `text/plain`, so a holder that is
+     * this build's editor server returns the commit
+     * `<server-dir>/vscode-reh/product.json` records, and one that is not returns
+     * something else, or nothing, or 403. A bare 200 was the whole test until now,
+     * which every process that accepts a connection and answers anything at all
+     * satisfies, and binding a loopback port on Android needs no permission.
+     *
+     * Read what this does and does not settle, because the difference decides
+     * what may be built on it. It settles that the holder serves this exact build,
+     * which no ordinary stranger on the port does. It does NOT settle that the
+     * holder is the recorded pid: the commit is public, so a process written to
+     * imitate this app can answer it, and attributing a socket to a pid would need
+     * the `/proc/net/tcp` read SELinux refuses an app outright. The two halves
+     * therefore still narrow rather than prove, and the note stays the ownership
+     * half.
      *
      * Refusing here is not final and deletes nothing, so a recorded server that
      * was merely slow to answer is adopted by a later attempt. Being wrong in this
@@ -740,30 +745,126 @@ class ProcessManager(private val context: Context) {
      * held port did before adoption existed; being wrong in the other costs the
      * session.
      */
-    private fun recordedServerIsServing(): Boolean = isServerHealthy().also { serving ->
-        if (!serving) {
+    private fun recordedServerIsServing(): Boolean {
+        // Answered first, because a build that cannot say what it is cannot
+        // recognise itself on a port either. That is the fail-closed direction:
+        // adoption is an optimisation, and declining it costs a spawn.
+        val expected = bundledServerCommit()
+        if (expected == null) {
+            Logger.w(
+                tag,
+                "The packaged server records no commit, so nothing answering on port " +
+                    "$_port can be identified as this build; spawning rather than adopting",
+            )
+            return false
+        }
+
+        val served = probeVersion()
+        if (served == null) {
             Logger.w(
                 tag,
                 "An editor server of ours is recorded on port $_port but nothing is " +
                     "answering there; spawning rather than adopting it",
             )
+            return false
         }
+        if (served != expected) {
+            Logger.w(
+                tag,
+                "Port $_port is held by something reporting \"$served\" rather than this " +
+                    "build's $expected; spawning rather than adopting it",
+            )
+            return false
+        }
+        return true
     }
 
-    fun isServerHealthy(): Boolean {
-        return try {
-            val url = URL("http://127.0.0.1:$_port/version")
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 1000
-            connection.readTimeout = 1000
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = false
-            val responseCode = connection.responseCode
-            connection.disconnect()
-            responseCode == 200
-        } catch (e: Exception) {
-            false
+    /**
+     * The commit the packaged server tree was built from, or null if it does not
+     * say.
+     *
+     * The same file the server itself answers `/version` from: `server.js`
+     * rewrites `product.json` on every start, but its overrides do not include
+     * `commit`, so what is on disk is what the running server reports.
+     *
+     * Null covers an absent file, unreadable JSON, and a tree built without a
+     * commit. All three mean the same thing here, that this build cannot be told
+     * apart from anything else, and all three decline adoption rather than falling
+     * back to accepting whoever answers.
+     */
+    private fun bundledServerCommit(): String? = try {
+        File(Environment.getServerDir(context), REH_PRODUCT_FILE)
+            .takeIf { it.isFile }
+            ?.let { JSONObject(it.readText()).optString("commit") }
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not read the packaged server's commit: ${e.message}")
+        null
+    }
+
+    /**
+     * Whether `http://127.0.0.1:{port}/version` answers 200.
+     *
+     * `/version` is answered before the connection-token check: the server handles
+     * it and returns, then gates everything else, so this stays a pure liveness
+     * probe and does not need the token.
+     *
+     * It also has to be `/version` rather than `/`. This accepted anything below
+     * 500, which was fine while every route answered 200, and became wrong the
+     * moment the server started requiring a token: `/` then answers 403, and a
+     * readiness check that counts 403 as healthy reports a successful startup for
+     * a server that will serve the user nothing but Forbidden.
+     *
+     * Liveness only, deliberately. Which build answered is [probeVersion]'s
+     * business and only adoption asks it, because a readiness poll runs every
+     * 200 ms for thirty seconds and has no use for the answer.
+     */
+    fun isServerHealthy(): Boolean = probeVersion() != null
+
+    /**
+     * What `/version` answers, or null if the port did not answer 200.
+     *
+     * One request serves both questions the class asks of the port. Liveness only
+     * needs the status, so [isServerHealthy] discards the body; adoption needs to
+     * know which build answered, and reading it costs one more read on a socket
+     * that is already open.
+     *
+     * The body is taken up to [VERSION_BODY_MAX_CHARS] and no further. The read
+     * timeout bounds each read rather than the total, so an unbounded reader would
+     * let whatever holds the port keep this thread as long as it kept sending, and
+     * the point of the call is that the holder may be a stranger.
+     */
+    private fun probeVersion(): String? = try {
+        val connection = (URL("http://127.0.0.1:$_port/version").openConnection()
+            as HttpURLConnection).apply {
+            connectTimeout = 1000
+            readTimeout = 1000
+            requestMethod = "GET"
+            instanceFollowRedirects = false
         }
+        try {
+            if (connection.responseCode == 200) {
+                connection.inputStream.reader().use { readBounded(it) }
+            } else {
+                null
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun readBounded(reader: Reader): String {
+        val buffer = CharArray(VERSION_BODY_MAX_CHARS)
+        var filled = 0
+        while (filled < buffer.size) {
+            val read = reader.read(buffer, filled, buffer.size - filled)
+            if (read < 0) break
+            filled += read
+        }
+        return String(buffer, 0, filled).trim()
     }
 
     /**
@@ -852,6 +953,21 @@ class ProcessManager(private val context: Context) {
      * heap, ICU data and loaded addons all sit outside it, and what actually
      * ends the process is Android's low-memory killer, which does not read
      * flags. On a large device the extra RAM went unused.
+     *
+     * It reaches the worker hosts as well, which is worth writing down because
+     * the code invites the opposite conclusion: the flag is on the command line
+     * of the main isolate only, while the Extension Host and the Pty Host run as
+     * `worker_threads` Workers, so handing it to them as a Worker resource limit
+     * looks like a missing step. It is not one, twice over. Measured on Node
+     * 22.17.1, which is a major behind the runtime that ships here:
+     * `--max-old-space-size` is process-wide in V8, so a Worker created with no
+     * resource limits at all still died at the ceiling, and a Worker given an
+     * explicit, smaller limit ran past it to the ceiling instead, because the
+     * command-line flag overrides `resourceLimits` rather than the other way
+     * round. Separately, `fork()` passes the parent's `execArgv` on by default,
+     * so the flag is already in `process.execArgv` at both places a host Worker
+     * is created, and `workerAsChildProcess.ts` turns it into a resource limit
+     * there. Adding a pass-through would change no number.
      */
     private fun heapCeilingForDevice(): Int = try {
         val am = context.getSystemService(ActivityManager::class.java)
@@ -1155,6 +1271,27 @@ internal const val EDITOR_PID_FILE = "editor-server.pid"
  * process reads as absent rather than as a match, and the check fails closed.
  */
 internal const val EDITOR_ENTRY_POINT = "server-main.js"
+
+/**
+ * Where the packaged server records which build it is, relative to the server
+ * directory.
+ *
+ * Read for one purpose: `/version` answers `productService.commit` from this
+ * file, so it is the value a holder of the port has to produce before adoption
+ * will hand it the WebView. Nothing here writes it; the build does, and
+ * `assets/server.js` leaves the key alone when it rewrites the file.
+ */
+internal const val REH_PRODUCT_FILE = "vscode-reh/product.json"
+
+/**
+ * How much of a `/version` answer is read before the reader stops.
+ *
+ * A commit is forty characters; this is room for that and a newline several times
+ * over. It is a bound rather than a size because the party answering may be the
+ * one adoption is trying to rule out, and the socket's read timeout limits each
+ * read rather than the total, so nothing else stops a holder that keeps sending.
+ */
+internal const val VERSION_BODY_MAX_CHARS = 128
 
 /** What every device ran before the ceiling was derived, and the fallback. */
 internal const val HEAP_CEILING_DEFAULT_MB = 512
