@@ -179,6 +179,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Switching to another app no longer kills your language servers. Android's window-hidden signal numerically outranks its real out-of-memory warning.
 - A script of yours whose name merely contains a language server's, such as `run-eslint.js`, is no longer classed as one and killed under memory pressure.
 - Low-memory warnings now reach the background server after the app is swiped away, so idle language servers are still reclaimed instead of holding memory and process slots.
+- The toolchain picker states download and installed size separately. It showed only the unpacked figure, so every toolchain read as three times what it costs to fetch.
 - Stopping the app from its notification no longer freezes the screen for several seconds or shows the "isn't responding" dialog.
 
 **Device folders (SAF)**

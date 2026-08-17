@@ -44,6 +44,28 @@ class ToolchainRegistryTest {
         }
 
         @Test
+        fun `a download is smaller than what it unpacks to`() {
+            // The two figures are hand-written and both go stale when a payload
+            // is rebuilt, so this cannot check either against reality. What it
+            // can check is the one relation that holds by construction: a
+            // compressed archive is smaller than its unpacked tree. That is
+            // enough to catch the mistake worth catching, which is the two being
+            // swapped or one being copied into the other, because the picker
+            // shows them side by side and a swap reads as plausible.
+            //
+            // The single figure was the unpacked size and the picker presented
+            // it as the download, so every toolchain was advertised at roughly
+            // three times what it costs to fetch.
+            for (tc in ToolchainRegistry.available) {
+                assert(tc.downloadSize > 0) { "downloadSize must be positive: ${tc.packName}" }
+                assert(tc.downloadSize < tc.estimatedSize) {
+                    "downloadSize (${tc.downloadSize}) must be under estimatedSize " +
+                        "(${tc.estimatedSize}); the ZIP cannot exceed what it unpacks to: ${tc.packName}"
+                }
+            }
+        }
+
+        @Test
         fun `all toolchains have HTTPS download URLs`() {
             for (tc in ToolchainRegistry.available) {
                 assertNotNull(tc.downloadUrl, "downloadUrl must not be null: ${tc.packName}")

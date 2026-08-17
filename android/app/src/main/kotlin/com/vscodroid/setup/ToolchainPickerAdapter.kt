@@ -79,7 +79,15 @@ class ToolchainPickerAdapter(
 
         holder.name.text = info.shortLabel
         holder.description.text = info.description
-        holder.size.text = "~${ToolchainRegistry.formatSize(info.estimatedSize)}"
+        // Both, because they answer different questions and only one of them
+        // used to be here. The single figure was the unpacked size, so a card
+        // offered "179 MB" for a 59 MB download, and the person most likely to
+        // read it is the one deciding whether to spend mobile data.
+        holder.size.text = ctx.getString(
+            R.string.toolchain_size_download_and_installed,
+            ToolchainRegistry.formatSize(info.downloadSize),
+            ToolchainRegistry.formatSize(info.estimatedSize),
+        )
 
         when (mode) {
             Mode.PICKER -> bindPickerMode(holder, info)

@@ -107,4 +107,5 @@
          which is what the Get Started walkthrough now does. -->
     <string name="shortcut_toolchains_short">Toolchains</string>
     <string name="shortcut_toolchains_long">Manage toolchains</string>
+    <string name="toolchain_size_download_and_installed">%1$s download, %2$s installed</string>
 </resources>

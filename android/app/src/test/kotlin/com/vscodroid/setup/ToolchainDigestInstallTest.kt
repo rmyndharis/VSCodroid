@@ -271,7 +271,12 @@ class ToolchainDigestInstallTest {
             displayName = "Test",
             shortLabel = "Test",
             description = "loopback fixture",
+            // The fixture serves the ZIP itself, so the two figures coincide
+            // here in a way they never do for a real toolchain: nothing unpacks
+            // it. The space gate reads estimatedSize, which is what this test
+            // drives, and downloadSize only reaches the picker.
             estimatedSize = zipBytes.size.toLong(),
+            downloadSize = zipBytes.size.toLong(),
             downloadUrl = zipUrl,
         )
 

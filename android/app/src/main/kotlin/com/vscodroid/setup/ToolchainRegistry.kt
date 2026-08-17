@@ -14,8 +14,27 @@ object ToolchainRegistry {
         /** Short label for the toolchain card (e.g. "Go", "Ruby", "Java 17"). */
         val shortLabel: String,
         val description: String,
-        /** Approximate asset pack size in bytes (shown to user before download) */
+        /**
+         * Approximate size on disk once unpacked, in bytes.
+         *
+         * This is the free-space figure: `downloadViaHttp` gates on it plus a
+         * buffer, because the unpacked tree is what has to fit. It is not what
+         * the user is choosing about on mobile data, which is [downloadSize],
+         * and telling them this number alone overstated every toolchain by
+         * roughly three times.
+         */
         val estimatedSize: Long,
+        /**
+         * Approximate size of the ZIP fetched over HTTP, in bytes.
+         *
+         * Measured from the release assets rather than computed: a payload is
+         * rebuilt whenever its source moves, so both figures here are
+         * hand-written and go stale the same way. `downloadFile` deliberately
+         * prefers the length the server actually sent and falls back to a
+         * constant only when there is none, so nothing depends on this being
+         * exact; it exists so the picker can say what a download will cost.
+         */
+        val downloadSize: Long,
         /** Fallback URL for sideloaded installs (no Play Store). Null = Play-only. */
         val downloadUrl: String? = null,
     )
@@ -38,6 +57,7 @@ object ToolchainRegistry {
             description = "Go programming language (CGO_ENABLED=0). Runs on device, " +
                 "but cannot compile: go build and go run are refused by Android.",
             estimatedSize = 179_000_000,
+            downloadSize = 59_800_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_go.zip",
         ),
         ToolchainInfo(
@@ -46,6 +66,7 @@ object ToolchainRegistry {
             shortLabel = "Ruby",
             description = "Ruby with irb, gem, bundler",
             estimatedSize = 34_000_000,
+            downloadSize = 9_900_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
         ToolchainInfo(
@@ -54,6 +75,7 @@ object ToolchainRegistry {
             shortLabel = "Java 17",
             description = "OpenJDK 17 (javac, jar, jshell)",
             estimatedSize = 146_000_000,
+            downloadSize = 55_400_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
     )
