@@ -41,7 +41,7 @@
 | KB-1 | GBoard typing | Open file, type code with GBoard | Characters appear correctly, no duplication | | |
 | KB-2 | Samsung keyboard | Open file, type code with Samsung KB | Characters appear correctly | | |
 | KB-3 | SwiftKey | Open file, type with SwiftKey | Characters appear correctly | | |
-| KB-4 | Hardware keyboard | Connect BT/USB keyboard, type | All keys work including modifiers | | |
+| KB-4 | Hardware keyboard | Connect BT/USB keyboard, type | All keys work including modifiers. Only hardware answers this row: the automated suite's `hardware_key_chord_reaches_workbench` injects a virtual device, which exercises dispatch but not pairing, layout mapping or how a real HID keyboard reports its modifiers | | |
 | KB-5 | Extra Key Row — Tab | Press Tab in editor | Indentation inserted | | |
 | KB-6 | Extra Key Row — Esc | Press Esc with menu open | Menu/dialog closes | | |
 | KB-7 | Extra Key Row — Ctrl+S | Press Ctrl on EKR then S on keyboard | File saves (no error) | | |

@@ -1313,6 +1313,9 @@ bash_process_count() {
 # in Phase 2, so its Node process is there to be found -- if that is not visible
 # either, the reading is about `ps`, not about the terminal.
 APP_PROCS=$(app_process_lines)
+# Set only where a chord is actually injected, so that Test 34 below can tell
+# "the chord went nowhere" from "no chord was sent", which most runs are.
+CHORD_VERDICT=""
 if [ -z "$APP_UID" ] || ! echo "$APP_PROCS" | grep -q "node"; then
     skip "terminal_opens" \
         "could not read this app's processes out of ps (uid='$APP_UID'), so an empty result would prove nothing"
@@ -1339,14 +1342,47 @@ else
                 BASH_AFTER=$(bash_process_count)
                 if [ "$BASH_AFTER" -gt "$BASH_BEFORE" ]; then
                     pass "terminal_opens (bash spawned in the app's own domain)"
+                    CHORD_VERDICT="delivered"
                 else
                     skip "terminal_opens" \
                         "no bash appeared after Ctrl+backtick; the workbench may not have had keyboard focus. Not evidence of a broken terminal -- open one by hand (checklist TT-1)"
+                    CHORD_VERDICT="silent"
                 fi
             fi
         fi
     fi
 fi
+
+# Test 34: a hardware-style chord is delivered to the workbench.
+#
+# The same injection Test 33 uses, read for the other thing it proves. `input
+# keycombination` goes through InputDispatcher, which is the path a physical
+# keyboard's keys take, so a terminal appearing after Ctrl+backtick is evidence
+# that a chord crossed the whole stack -- system, activity, WebView, workbench --
+# with nothing swallowing it on the way. That property, that no key event is
+# intercepted, is the entirety of this app's hardware keyboard support, and this
+# is the only automated reading of it on a device. It gets its own name because
+# nobody looking for keyboard coverage looks under terminal_opens.
+#
+# It does not satisfy checklist KB-4. `input` injects a virtual device: it
+# exercises dispatch and says nothing about pairing, layout mapping, or how a
+# real HID device reports its modifiers.
+#
+# PASS or SKIP only, never FAIL, for the reason Test 33 gives above: a workbench
+# that never had focus and a keystroke that was eaten look identical from here.
+case "$CHORD_VERDICT" in
+    delivered)
+        pass "hardware_key_chord_reaches_workbench (Ctrl+backtick was acted on)"
+        ;;
+    silent)
+        skip "hardware_key_chord_reaches_workbench" \
+            "the chord was injected and nothing acted on it, which is what a lost keystroke and an unfocused workbench both look like. Type on a real keyboard instead (checklist KB-4)"
+        ;;
+    *)
+        skip "hardware_key_chord_reaches_workbench" \
+            "no chord was injected, so nothing was measured; the terminal_opens result above says why"
+        ;;
+esac
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary
