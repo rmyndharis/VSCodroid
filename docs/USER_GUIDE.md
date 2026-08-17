@@ -82,7 +82,7 @@ To edit settings as JSON, use the Command Palette: `Preferences: Open User Setti
 ### Extra Key Row
 
 When the soft keyboard is visible, a row of extra keys appears above it. The row
-holds four pages. Swipe it left or right to change page; the dots underneath show
+holds five pages. Swipe it left or right to change page; the dots underneath show
 which page you are on.
 
 **Page 1, essential coding keys:**
@@ -105,10 +105,17 @@ you and leaves the cursor between the two.
 
 **Page 3, brackets and operators:** `[` `]` `<` `>` `=` `!` `#` `@`
 
-**Page 4, function and navigation keys:** `F1` through `F12`, `Home`, `End`,
-`PgUp`, `PgDn`. This is the only place a touch user can reach them: no other page
-carries a function key, and the trackpad sends arrows only. Any shortcut the
-editor or an extension binds to one is now a tap away.
+**Page 4, function keys:** `F1` through `F8`
+
+**Page 5, the rest of the function keys and navigation:** `F9` through `F12`,
+`Home`, `End`, `PgUp`, `PgDn`
+
+Pages 4 and 5 are the only place a touch user can reach any of those keys: no
+other page carries a function key, and the trackpad sends arrows only. Any
+shortcut the editor or an extension binds to one is now a tap away. They are
+split over two pages rather than crowded onto one because the row divides its
+width evenly among whatever a page holds, and sixteen keys on one page would put
+every one of them below the size a finger can reliably hit.
 
 #### The trackpad
 

@@ -100,20 +100,30 @@ class KeyPageConfigTest {
     }
 
     @Nested
-    inner class Page4Test {
+    inner class FunctionAndNavigationPageTest {
 
-        private val page = KeyPages.defaults[3]
+        // Pinned as whole ordered lists rather than searched for a few members.
+        // These two pages are the only route to any of these keys, so one
+        // dropped entry is a shortcut that cannot be typed at all on a
+        // touchscreen.
 
         @Test
-        fun `carries every function key and the four navigation keys`() {
-            val buttons = page.items.filterIsInstance<KeyItem.Button>()
-            // Pinned as a whole list rather than searched for a few members.
-            // This page is the only route to any of these keys, so one dropped
-            // entry is a shortcut that cannot be typed at all on a touchscreen.
+        fun `page 4 carries F1 to F8`() {
+            val buttons = KeyPages.defaults[3].items.filterIsInstance<KeyItem.Button>()
             assertEquals(
-                (1..12).map { "F$it" } + listOf("Home", "End", "PageUp", "PageDown"),
+                (1..8).map { "F$it" },
                 buttons.map { it.value },
-                "Page 4 carries F1 to F12 then Home, End and the two page keys"
+                "Page 4 carries F1 to F8 in order"
+            )
+        }
+
+        @Test
+        fun `page 5 carries F9 to F12 and the four navigation keys`() {
+            val buttons = KeyPages.defaults[4].items.filterIsInstance<KeyItem.Button>()
+            assertEquals(
+                (9..12).map { "F$it" } + listOf("Home", "End", "PageUp", "PageDown"),
+                buttons.map { it.value },
+                "Page 5 carries F9 to F12 then Home, End and the two page keys"
             )
         }
     }
@@ -139,6 +149,34 @@ class KeyPageConfigTest {
                     KeyMapping.getKeyDef(value),
                     "'$value' is on the key row with no KeyMapping entry, so it is sent " +
                         "as whatever letter its first character names"
+                )
+            }
+        }
+
+        @Test
+        fun `no page divides the row more finely than page 1 already does`() {
+            // KeyPageAdapter gives every button LayoutParams(0, MATCH_PARENT,
+            // 1f) and the trackpad 1.5f, so LinearLayout measures each child
+            // with an EXACTLY spec at its share of the row and
+            // ExtraKeyButton's own 48dp minWidth cannot widen it back. Page 1
+            // is the densest today at 8.5 weight units, roughly 41dp a unit on
+            // a 360dp portrait row. Sixteen keys on one page works out at
+            // 18.5dp, under Android's 48dp minimum touch target, and
+            // four-character labels such as PgDn clip rather than shrink.
+            // Weights are counted in tenths to keep the arithmetic exact.
+            for ((pageIndex, page) in KeyPages.defaults.withIndex()) {
+                val tenths = page.items.sumOf { item ->
+                    val weight: Int = when (item) {
+                        is KeyItem.Button -> 10
+                        is KeyItem.GesturePad -> 15
+                    }
+                    weight
+                }
+                assertTrue(
+                    tenths <= 85,
+                    "Page ${pageIndex + 1} claims ${tenths / 10.0} weight units. The row is " +
+                        "divided exactly, so past 8.5 every key on the page gets narrower " +
+                        "than page 1 already makes them; split the page instead"
                 )
             }
         }

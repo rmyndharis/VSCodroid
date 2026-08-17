@@ -25,12 +25,16 @@ class KeyPageAdapter(
      *
      * They used to be two values, and the copy here was only ever written in one
      * direction: releasing a modifier reached it, switching one on did not, so it
-     * said "off" for the whole time a modifier was held. Nothing rebinds a page
-     * as the row stands, four pages with `offscreenPageLimit = 1` leaves at
-     * most two detached at a time, and RecyclerView returns a detached page
-     * from its two-entry view cache already bound, so the gap never
-     * surfaced. Enough pages to overflow that cache, or a different limit, turns
-     * it into a Ctrl repainted idle while the next key still arrives as Ctrl+key.
+     * said "off" for the whole time a modifier was held. That stayed invisible
+     * while the row had three pages: `offscreenPageLimit = 1` left at most one
+     * detached, and RecyclerView handed a single detached page back from its
+     * two-entry view cache still bound, so nothing was ever repainted from the
+     * stale copy. Five pages no longer fit that argument. Sitting on page 1
+     * leaves three detached, one more than the view cache holds, so a page
+     * really does go to the pool and come back through [onBindViewHolder].
+     * That is harmless only because this map is now the single answer and the
+     * bind repaints from it; splitting it in two again would show up as a Ctrl
+     * painted idle while the next key still arrives as Ctrl+key.
      */
     private val toggleState = mutableMapOf<String, Boolean>()
 
