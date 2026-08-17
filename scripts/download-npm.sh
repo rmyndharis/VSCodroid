@@ -199,6 +199,72 @@ find "$NPM_SRC" -name "Makefile" -delete 2>/dev/null || true
 AFTER_SIZE=$(du -sk "$NPM_SRC" | cut -f1)
 echo "  Before: $((BEFORE_SIZE / 1024))M -> After: $((AFTER_SIZE / 1024))M (saved $((( BEFORE_SIZE - AFTER_SIZE ) / 1024))M)"
 
+# What the sweep above was allowed to keep, counted rather than asserted.
+#
+# The licences survive by four -not clauses inside one find, and the tree they
+# produce is gitignored, so it appears in no diff and nothing else in this
+# repository reads it. A later tidy-up that drops a clause would put the notices
+# back in the bin with every gate still green, which is how they were lost the
+# first time. Counting them here makes the measurement the build's.
+#
+# The ceiling is 4, not 0: npm 11.16.0 has four package roots carrying no
+# licence text of any kind, and a pristine extraction of the same tarball has
+# the same four, so that residue is upstream's rather than this script's. An
+# NPM_VERSION bump that moves the number is meant to stop here and be read
+# rather than waved through.
+UNLICENSED_MAX=4
+
+# A package root is an immediate child of a node_modules directory, or of an
+# @scope inside one. Nested node_modules count, since those copies are
+# redistributed too.
+package_roots() {
+    find "$NPM_SRC" -type d -name node_modules \
+        -exec find {} -mindepth 1 -maxdepth 1 -type d \; |
+    while IFS= read -r dir; do
+        case "${dir##*/}" in
+            @*) find "$dir" -mindepth 1 -maxdepth 1 -type d ;;
+            *)  printf '%s\n' "$dir" ;;
+        esac
+    done
+}
+
+roots=0
+unlicensed=0
+while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    roots=$((roots + 1))
+    # Substituted rather than piped into a reader that stops early: with
+    # pipefail set, a reader closing the pipe first would report the find as
+    # failed and count a package that does carry its licence.
+    if [ -z "$(find "$pkg" -maxdepth 1 -type f \
+            \( -iname "licen[sc]e*" -o -iname "copying*" -o -iname "notice*" \))" ]; then
+        unlicensed=$((unlicensed + 1))
+    fi
+done <<EOF
+$(package_roots)
+EOF
+
+if [ "$roots" -eq 0 ]; then
+    echo "  ERROR: no package roots found under $NPM_SRC/node_modules" >&2
+    echo "         The count below would be vacuously fine, so it is refused" >&2
+    echo "         instead: the layout changed and this check stopped seeing" >&2
+    echo "         what it counts." >&2
+    exit 1
+fi
+if [ ! -f "$NPM_SRC/LICENSE" ]; then
+    echo "  ERROR: $NPM_SRC/LICENSE was removed" >&2
+    echo "         npm is Artistic-2.0 and that file is the notice the licence" >&2
+    echo "         requires to travel with the copy being redistributed." >&2
+    exit 1
+fi
+if [ "$unlicensed" -gt "$UNLICENSED_MAX" ]; then
+    echo "  ERROR: $unlicensed of $roots package roots ship no licence file, at most $UNLICENSED_MAX expected" >&2
+    echo "         Every one of them is redistributed inside the APK. Check the" >&2
+    echo "         *.md sweep above for a clause that went missing, or, if npm" >&2
+    echo "         itself changed, confirm the new residue and move the ceiling." >&2
+    exit 1
+fi
+echo "  Licences: $roots package roots, $unlicensed without one (upstream's own residue)"
 
 # --- Step 4: Verify entry points ---
 echo ""
