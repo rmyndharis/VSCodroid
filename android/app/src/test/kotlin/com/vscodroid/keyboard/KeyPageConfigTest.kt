@@ -136,9 +136,9 @@ class KeyPageConfigTest {
             // A key the table does not name is not a dead key. KeyInjector
             // resolves through KeyMapping.getKeyDefOrLetter, which derives the
             // event fields from the first character, so an unmapped "F2" is sent
-            // as KeyF with keyCode 70 and types an F into the file. The three
-            // modifiers never reach the injector; ExtraKeyRow.handleKeyAction
-            // consumes them itself.
+            // as KeyF with keyCode 70 and VS Code resolves it as the letter F.
+            // The three modifiers never reach the injector;
+            // ExtraKeyRow.handleKeyAction consumes them itself.
             val modifiers = setOf("Ctrl", "Alt", "Shift")
             val sent = KeyPages.defaults.flatMap { it.items }
                 .filterIsInstance<KeyItem.Button>()

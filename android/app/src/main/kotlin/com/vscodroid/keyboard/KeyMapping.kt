@@ -18,8 +18,8 @@ object KeyMapping {
         "ArrowDown" to KeyDef("ArrowDown", "ArrowDown", 40),
         // Navigation and function keys. Each needs a row of its own here rather
         // than the [getKeyDefOrLetter] fallback, which derives the fields from
-        // the first character: "F2" would be sent as KeyF with keyCode 70 and
-        // type an F, and "Home" as KeyH.
+        // the first character: "F2" would be sent as KeyF with keyCode 70, which
+        // VS Code resolves as the letter F, and "Home" as KeyH.
         "Home" to KeyDef("Home", "Home", 36),
         "End" to KeyDef("End", "End", 35),
         "PageUp" to KeyDef("PageUp", "PageUp", 33),

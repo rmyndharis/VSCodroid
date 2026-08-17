@@ -176,15 +176,21 @@ class KeyMappingTest {
         /**
          * An absent entry is not a dead key. [KeyMapping.getKeyDefOrLetter]
          * derives the fields from the first character, so a missing "F2" is sent
-         * as `KeyF` with keyCode 70 and types an F into the file, and "Home" is
-         * sent as `KeyH`. Only the real code and keyCode reach a binding.
+         * as `KeyF` with keyCode 70, which VS Code resolves as the letter F, and
+         * "Home" is sent as `KeyH`.
+         *
+         * All three fields are pinned. `keyCode` is what a keybinding resolves
+         * through, `code` names the physical key, and `key` is what anything
+         * reading `event.key` sees, so a typo in one of them is wrong in a way
+         * the other two cannot report.
          */
-        @ParameterizedTest(name = "F{0} carries its own code and keyCode")
+        @ParameterizedTest(name = "F{0} carries its own key, code and keyCode")
         @ValueSource(ints = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
         fun `function keys carry the function key code and keyCode`(n: Int) {
             val def = KeyMapping.getKeyDef("F$n")
             assertNotNull(def, "'F$n' has no definition, so it falls back to the letter heuristic")
-            assertEquals("F$n", def!!.code, "'F$n' must carry its own physical code")
+            assertEquals("F$n", def!!.key, "'F$n' must report itself as F$n to event.key")
+            assertEquals("F$n", def.code, "'F$n' must carry its own physical code")
             assertEquals(111 + n, def.keyCode, "F1 to F12 are keyCodes 112 to 123")
             assertFalse(def.requiresShift, "'F$n' is typed without Shift")
         }
@@ -195,7 +201,8 @@ class KeyMappingTest {
             for ((key, keyCode) in expected) {
                 val def = KeyMapping.getKeyDef(key)
                 assertNotNull(def, "'$key' has no definition, so it falls back to the letter heuristic")
-                assertEquals(key, def!!.code, "'$key' must carry its own physical code")
+                assertEquals(key, def!!.key, "'$key' must report itself as $key to event.key")
+                assertEquals(key, def.code, "'$key' must carry its own physical code")
                 assertEquals(keyCode, def.keyCode, "'$key' has one keyCode and it is not negotiable")
                 assertFalse(def.requiresShift, "'$key' is typed without Shift")
             }
