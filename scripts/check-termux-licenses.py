@@ -137,6 +137,17 @@ RENAMED = {
     "python": ("libpython.so", "libpython3.*.so"),
 }
 
+# The download scripts that have to carry a `get_sonames()`. Named here rather
+# than discovered by grepping for the function, because a search cannot report
+# what it no longer finds: the rename or the move that empties the answer also
+# takes the script out of the set the loss would be measured against, so every
+# package it named leaves the comparison while the report still reads as a
+# complete one. A script listed here that stops carrying the function fails the
+# run instead, which is the point. Moving that map is a decision, and this line
+# is where it gets made.
+SONAME_SCRIPTS = ("download-java.sh", "download-python.sh", "download-ruby.sh",
+                  "download-termux-tools.sh")
+
 # The body of a `get_sonames()` shell function, and one arm of the case inside
 # it. Read out of the download scripts rather than copied here, so the two
 # cannot drift: a soname added there is compared here on the next run.
@@ -189,15 +200,19 @@ def subjects():
     The second half is what keeps a narrowed report from reading like a clean
     one. A parse that stops matching does not empty this answer, because RENAMED
     below fills it either way, so the population is counted twice by two
-    different means: which scripts contain the function at all, by name, and
-    which of them this regex got case arms out of. A script in the first set and
-    not the second is reported rather than dropped.
+    independent means: SONAME_SCRIPTS, which says which scripts must carry the
+    function, and this glob, which says which of them a case arm was read out
+    of. A script in the first set and not the second is reported rather than
+    dropped, whether it kept the function and changed shape or lost the name
+    altogether. A script this glob finds and that list does not is a new carrier,
+    which widens the comparison and is taken as it comes.
     """
-    rows, unparsed = {}, []
+    rows, unparsed, carriers = {}, [], set()
     for script in sorted(SCRIPTS.glob("download-*.sh")):
         text = script.read_text(encoding="utf-8")
         if "get_sonames()" not in text:
             continue
+        carriers.add(script.name)
         body = SONAME_FN.search(text)
         arms = CASE_ARM.findall(body.group(1)) if body else []
         if not arms:
@@ -206,9 +221,10 @@ def subjects():
         for pkg, sonames in arms:
             for soname in sonames.split():
                 rows.setdefault(pkg, set()).add(widen(soname))
+    unparsed.extend(set(SONAME_SCRIPTS) - carriers)
     for pkg, patterns in RENAMED.items():
         rows.setdefault(pkg, set()).update(patterns)
-    return rows, unparsed
+    return rows, sorted(unparsed)
 
 
 def fold(licence):
@@ -308,8 +324,10 @@ def main():
     if unparsed:
         print(f"FAIL get_sonames() could not be read in {len(unparsed)} script(s): "
               f"{', '.join(unparsed)}", file=sys.stderr)
-        print("  -> the function's shape changed; every package it names would "
-              "silently drop out of this comparison", file=sys.stderr)
+        print("  -> the function was renamed, moved or reshaped; every package "
+              "it names would otherwise drop out of this comparison in silence. "
+              "Put it back, or take the script out of SONAME_SCRIPTS here and "
+              "say where its packages are read instead", file=sys.stderr)
         return 1
 
     def copyleft(licence):

@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attribution is now checked against every binary in the asset tree, not just the top two directories: 195 more files, including the WebAssembly, Windows and macOS objects an ELF-only scan walks past.
 - A binary that moves can no longer be recorded under the wrong licence in silence. An attribution entry that stops matching is reported even when the move took its own directory with it.
 - Termux's licence field is now read back per package. When upstream answers, a release stops on a component recorded permissive but declared copyleft, which ships with no source offer.
+- A release also stops when that comparison cannot be trusted: too few packages read upstream, or a download script no longer naming the ones it installs.
 - The check that the licences screen's documents are packaged now runs when the build script changes, which is the edit that can drop them.
 - The About dialog's Source Code link moved onto the new licenses screen, beside the offer of source it answers.
 
