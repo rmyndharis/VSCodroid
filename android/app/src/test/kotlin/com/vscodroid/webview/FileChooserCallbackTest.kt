@@ -181,7 +181,7 @@ class FileChooserCallbackTest {
         launcherStarts = false
         val element = Element()
 
-        assertTrue(show(element), "the request was still handled here, not declined")
+        assertTrue(show(element), "a path that answers the callback must claim the request too")
 
         assertEquals(listOf(emptyList<Uri>()), element.answers,
             "a chooser that never opened has to release the element straight away")

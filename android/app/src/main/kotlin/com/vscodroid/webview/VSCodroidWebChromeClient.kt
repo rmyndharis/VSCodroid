@@ -72,12 +72,17 @@ class VSCodroidWebChromeClient(
      * Without this override the default client declines, no chooser opens, and
      * the command waits forever with nothing said.
      *
-     * Returning true takes ownership of [filePathCallback], and the platform
-     * requires it to be invoked exactly once. Any path that returns without
-     * invoking it wedges the element for good: the page keeps one request
-     * outstanding, so every later Upload on that document does nothing at all,
-     * and only a reload clears it. That is why the failure paths here answer
-     * with an empty array rather than returning false and walking away.
+     * Returning true takes ownership of [filePathCallback], which must then be
+     * invoked exactly once. Returning true and never invoking it wedges the
+     * element for good: the page keeps one request outstanding, so every later
+     * Upload on that document does nothing at all, and only a reload clears it.
+     * Every path below therefore answers, the failing ones included.
+     *
+     * The pairing to avoid is answering *and* declining: a callback invoked here
+     * on a path that also returns false hands a request back to the framework
+     * that has already been answered. What the framework does with a request
+     * declined without an answer was not measured here, so nothing below leans
+     * on it either way.
      */
     override fun onShowFileChooser(
         webView: WebView,
