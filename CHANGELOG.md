@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The milestone log and implementation plan no longer record a process-liveness check as the fix for the white screen on reopen. A contributor could reintroduce it as precedent.
 - The milestone checklist no longer plans on-device CI as a hosted device lab. Nothing in the workflows starts the app, and arm64 runners cannot boot an emulator.
 - The bug report's documented contents match what it emits, and the logging table no longer names a server or extension-host log file that nothing in the app writes.
+- The logging table names the Logcat tags in use. It named a tag nothing logs under, and called WebView output debug-only when errors and warnings ship in release.
 - The requirements table's heap limit is no longer a flat 512 MB; the ceiling has been derived from device RAM since a fixed limit left 3-4 GB phones nothing to work with.
 - `CONTRIBUTING.md` no longer describes a URL allow-list the app does not have. VSCodroid is a development environment and reaches LAN hosts on purpose; the session token is what is checked.
 - `CONTRIBUTING.md` describes both toolchain delivery paths. It named only Play Asset Delivery, while every non-Play install takes the HTTP path that developers themselves run on.
