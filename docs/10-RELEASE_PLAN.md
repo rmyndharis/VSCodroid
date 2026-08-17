@@ -234,12 +234,14 @@ VSCodroid is a full desktop-class code editor that runs entirely on your Android
 
 Features:
 • A real editor — syntax highlighting, IntelliSense, multi-cursor
-• Extension support — install themes, linters and language packs from Open VSX
+• Extension support: install themes, linters and language support from Open VSX
 • Integrated terminal with Node.js, Python and Git pre-installed
 • Extra Key Row for Ctrl, Alt, Tab, Esc and arrow keys
 • Offline-first — code without internet
 • Open folders from your device storage, including SD cards and cloud providers
 • Portrait, landscape and split-screen support
+
+The editor's interface is in English.
 
 Built for developers who code on-the-go. Whether you're on a train, in a coffee shop, or just prefer your tablet — VSCodroid gives you a real development environment.
 
@@ -249,11 +251,15 @@ Not affiliated with or endorsed by Microsoft Corporation.
 Uses Open VSX extension registry, not Microsoft Marketplace.
 ```
 
-Two feature lines are worded the way they are on purpose. "Open folders from your
+Three feature lines are worded the way they are on purpose. "Open folders from your
 device storage" is SAF, and the app deliberately offers no "Open with" entry for
 individual files — advertising file opening would describe a capability that was
 removed. And the editor is never named as the trademarked product; it is built from
-Code - OSS, which is what the disclaimer says.
+Code - OSS, which is what the disclaimer says. The extension line offers "language
+support" and not "language packs": a display-language pack from Open VSX installs,
+enables, and changes not one word on screen, so the old wording sold a capability
+the app does not have to exactly the readers who would miss it. The line under the
+list says so outright, because a listing is read before the guide is.
 
 ### 5.3 Policy Compliance
 

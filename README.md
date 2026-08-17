@@ -119,7 +119,7 @@ If you are **ready to learn**, you should be able to **start today**.
 ## ✨ Features
 
 - **Real VS Code** — Monaco Editor, Workbench UI, Command Palette, and all the features you know.
-- **Extension Support** — Install themes, linters, language packs, and more from [Open VSX](https://open-vsx.org).
+- **Extension Support**: Install themes, linters, language support, and more from [Open VSX](https://open-vsx.org). The editor's own interface is English only.
 - **Integrated Terminal** — Full bash terminal with real PTY support (vim, tmux, readline all work).
 - **Batteries Included** — Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
 - **Offline-First** — Code without an internet connection. Everything runs locally on your device.
