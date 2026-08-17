@@ -81,7 +81,11 @@ To edit settings as JSON, use the Command Palette: `Preferences: Open User Setti
 
 ### Extra Key Row
 
-When the soft keyboard is visible, a row of extra keys appears above it:
+When the soft keyboard is visible, a row of extra keys appears above it. The row
+holds four pages. Swipe it left or right to change page; the dots underneath show
+which page you are on.
+
+**Page 1, essential coding keys:**
 
 | Key | Purpose |
 |-----|---------|
@@ -90,11 +94,61 @@ When the soft keyboard is visible, a row of extra keys appears above it:
 | **Ctrl** | Modifier for shortcuts (Ctrl+S, Ctrl+Z, etc.) |
 | **Alt** | Modifier for shortcuts (Alt+Up/Down to move lines) |
 | **Shift** | Modifier for selections and uppercase |
-| **+** | Plus sign |
-| **{ }** | Curly braces |
-| **( )** | Parentheses |
+| **trackpad** | The wide pad. Drag to move the cursor; see below |
+| **{}** | Opening curly brace |
+| **()** | Opening parenthesis |
+
+`{}` and `()` insert only the opening character. The editor closes the pair for
+you and leaves the cursor between the two.
+
+**Page 2, common symbols:** `;` `:` `"` `/` `|` `` ` `` `&` `_`
+
+**Page 3, brackets and operators:** `[` `]` `<` `>` `=` `!` `#` `@`
+
+**Page 4, function and navigation keys:** `F1` through `F12`, `Home`, `End`,
+`PgUp`, `PgDn`. This is the only place a touch user can reach them: no other page
+carries a function key, and the trackpad sends arrows only. Any shortcut the
+editor or an extension binds to one is now a tap away.
+
+#### The trackpad
+
+The wide pad on page 1 stands in for the four arrow keys. Drag it and the cursor
+moves. It sends real arrow keys, so it works anywhere an arrow key does, the
+terminal included, and a diagonal drag moves on both axes at once.
+
+It has three gears, and which one you are in depends on how far your finger has
+travelled since the drag began, not on how fast you are moving it. A short drag
+steps character by character. Keep going in the same stroke and the same amount
+of finger travel starts buying more movement, twice over, so one long drag
+crosses lines and then whole screens. Lift your finger and the next drag starts
+in the first gear again.
+
+#### Long press
+
+Touch and hold a key that has alternates and a small popup offers them:
+
+| Key | Alternates |
+|-----|------------|
+| `{}` | `[` and `<` |
+| `()` | `]` and `>` |
+| `"` | `'` and `` ` `` |
+| `/` | `\` |
+| `` ` `` | `~` |
+
+Every other key, Tab, Esc and the three modifiers included, sends one press on a
+long hold, the same press a tap sends. Nothing on this row repeats.
+
+#### Modifiers
 
 **Ctrl, Alt, and Shift are sticky** -- tap once to activate for the next keypress. Tap again to deactivate. They highlight when active.
+
+Two things behave differently from "the next keypress". Shift stays held for a
+whole trackpad drag, so dragging with Shift on selects text rather than moving
+the cursor once. And all three clear by themselves when the soft keyboard hides.
+
+The keys on each page are defined in
+`android/app/src/main/kotlin/com/vscodroid/keyboard/KeyPageConfig.kt`, and the
+trackpad's gears in `TrackpadGesture.kt` beside it.
 
 ### Common Keyboard Shortcuts
 

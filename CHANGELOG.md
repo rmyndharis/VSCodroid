@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The privacy policy describes that opening a device folder makes a copy in app storage, which the old text omitted entirely.
 - The privacy policy no longer claims Microsoft's telemetry code was removed. It is disabled and given nowhere to report to, which is the accurate and stronger statement.
 - The published privacy page carries the project's trademark notice, and the store listing no longer opens with a Microsoft trademark and carries the disclaimer in full.
+- The key row guide now matches the app. It listed a plus key that has never existed and covered none of the trackpad, the extra pages or the long-press alternates.
 
 ### Added
 
