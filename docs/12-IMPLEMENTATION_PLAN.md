@@ -2195,7 +2195,7 @@ flowchart TD
 
 1. **Extension OAuth callback relay**: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
 2. **Persist extension secrets across app restarts**: patch `isEncryptionAvailable()` → `true` in workbench.js so `SecretStorageService` uses IndexedDB instead of in-memory Map
-3. **White screen on app reopen**: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on main thread when reconnecting to already-running server; replaced with `isServerRunning()` (process liveness check, no I/O)
+3. **White screen on app reopen**: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on the main thread when reconnecting to an already-running server. What shipped is `NodeService.isServerReady()`, which reports what the health probe already found and costs no I/O. Not a process-liveness check: `Process.isAlive` is true from the moment the process is spawned and for the whole of a post-crash restart, so navigating on it points the WebView at a port with nothing listening. The liveness wrapper has been removed from `NodeService` and `ServerReadinessCallSiteTest` fails the build if it comes back
 4. **Mobile menu CSS**: touch-friendly hamburger dropdown (44px touch targets, 14px font, 280px min-width) appended to workbench.css
 5. **Keyboard/ExtraKeyRow positioning**: fix double-compensation (adjustResize + bottomMargin). Switch to edge-to-edge (`setDecorFitsSystemWindows=false`) with manual insets padding for consistent behavior on Android 13-16
 

@@ -14,9 +14,13 @@ M6 (Release)   → Play Store release
 
 > A ticked box records what was true when it was ticked, not what is true now. Several
 > carry figures the build has since moved past: the V8 heap is no longer the flat 512 MB
-> under M4, and the size measurements under M5 predate later asset growth. Six boxes are
-> still open, so this is a live checklist rather than a historical document; treat the
+> under M4, and the size measurements under M5 predate later asset growth. Boxes are still
+> open under M6, so this is a live checklist rather than a historical document; treat the
 > ticked ones as dated entries and verify any number against the code before quoting it.
+> Most of what is open is operational (Play Console monitoring, store reviews, adoption
+> numbers) and no state of this repository can ever close it, so do not read an open box
+> here as work waiting in the tree. The count is deliberately not written down: a number
+> in this note is wrong the moment a box moves, and nothing makes it fail loudly.
 
 ---
 
@@ -441,7 +445,7 @@ _Ordered by dependency: fix bugs → verify features → harden → brand → sh
 1. **Stability & auth fixes** _(discovered during device testing)_
    - [x] Extension OAuth callback relay: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
    - [x] Persist extension secrets across app restarts: patch `isEncryptionAvailable()` → `true` in workbench.js so `SecretStorageService` uses IndexedDB instead of in-memory Map
-   - [x] White screen on app reopen: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on main thread when reconnecting to already-running server; replaced with `isServerRunning()` (process liveness check, no I/O)
+   - [x] White screen on app reopen: `isServerHealthy()` (synchronous HTTP) threw `NetworkOnMainThreadException` on the main thread when reconnecting to an already-running server. The activity now asks `NodeService.isServerReady()`, which reports what the health probe already found and costs no I/O. Do not read this as an endorsement of a process-liveness check: the wrapper that first replaced it forwarded `Process.isAlive`, which is true from the moment the process is spawned and for the whole of a post-crash restart, so navigating on it points the WebView at a port with nothing listening. That wrapper is gone, and `ServerReadinessCallSiteTest` fails the build if it comes back
    - [x] Mobile menu CSS: touch-friendly hamburger dropdown (44px touch targets, 14px font, 280px min-width) appended to workbench.css
    - [x] Keyboard/ExtraKeyRow positioning: fix double-compensation (adjustResize + bottomMargin). Switch to edge-to-edge (`setDecorFitsSystemWindows=false`) with manual insets padding for consistent behavior on Android 13-16
 
@@ -535,7 +539,7 @@ _Order: audit code → configure release build → test on devices → validate 
 11. **CI/CD pipeline**
     - [x] GitHub Actions: build debug APK on PR (`build.yml`), lint on PR (`lint.yml`)
     - [x] Release workflow: tag → build → sign → GitHub Release (`release.yml`)
-    - [ ] Automated testing on Firebase Test Lab (physical ARM64 devices)
+    - [ ] Automated on-device testing in CI. Not started, and the hosted-lab plan it was written as is not the shape it would take: nothing under `.github/workflows/` starts the app, and the harness that does, `scripts/device-test.sh`, needs an attached device or a booted arm64 emulator, which GitHub's arm64 runners cannot provide (no `/dev/kvm`). On-device runs are on a person today, before a tag and after a change to what gets bundled
     - [x] Build toolchain zips and upload as GitHub Release assets — `scripts/package-toolchains.sh` + `release.yml`
     - [x] Fallback download URL served from GitHub Releases — README links to releases page
     - [x] CI fix: node-pty subshell path resolved with ROOT_DIR — Build + Unit Tests green
