@@ -23,10 +23,25 @@ permissions:
 # Two things this does NOT do, both worth stating because the setting's name
 # invites the opposite reading.
 #
-# It does not make the half-written state invisible. No `draft:` input is passed
-# to the publish step below, and the action defaults it to false, so a release
-# interrupted partway through uploading is public and downloadable. The one in
-# the incident above was a draft for an unrelated reason.
+# It does not keep a half-written release out of sight; the publish step below
+# does, and only on the run that creates the release. With no `prerelease:`
+# input the pinned action ignores its own `draft:` default and creates the
+# release as a draft: `createRelease` in src/github.ts reads
+# `const draft = prerelease === true ? config.input_draft === true : true`.
+# `finalizeRelease` is what clears the flag, and `run` in src/run.ts awaits
+# every upload before calling it, so a first publish killed mid-upload leaves a
+# draft rather than a public release missing half its assets.
+#
+# The window that is left is on a second run, the one the paragraph above
+# measures: a moved tag takes the update path, which passes
+# `draft: existingRelease.draft`, so an already-published release stays public
+# while each same-named asset is deleted and re-uploaded one at a time. Closing
+# that means unpublishing or deleting the release before the run, which takes it
+# out of `releases/latest` for the duration, and that is where every non-Play
+# install resolves its toolchain ZIPs. So it stays open deliberately: it needs a
+# tag to move, while the pointer is read on every sideloaded install.
+# `draft: true` is no shortcut to it either, because `finalizeRelease` returns
+# early when that input is set and the release would never be published at all.
 #
 # It does not mean nothing in this group is ever cancelled. Per GitHub's
 # documented behaviour, a group holds at most one pending run: a third push
