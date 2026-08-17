@@ -547,6 +547,40 @@ class ProcessManagerTest {
         )
     }
 
+    @Test
+    fun `the watchdog tells an OOM kill from an ordinary signal`() {
+        // 137 is 128 + SIGKILL, and on this platform that is nearly always the
+        // low-memory killer or the phantom-process limit: the two causes a
+        // reader has to act on, and the two that no other exit code announces.
+        //
+        // The assertion is on the words, and it has to be. 137 is a member of
+        // the 129..192 range the branch below it covers, so deleting the 137
+        // line does not remove a log line: it falls through and warns
+        // "Server killed by SIGKILL" instead. A test asserting that a warning
+        // was logged, or that the exit code reached onServerCrashed, stays green
+        // through exactly that deletion and proves nothing.
+        manager.serverProcessField = mockk<Process>(relaxed = true) {
+            every { waitFor() } returns 137
+            every { isAlive } returns false
+        }
+
+        val diagnosed = CountDownLatch(1)
+        every {
+            Logger.w(any(), match<String> { it.contains("OOM or phantom limit") }, any())
+        } answers {
+            diagnosed.countDown()
+        }
+
+        ProcessManager::class.java.getDeclaredMethod("startWatchdog")
+            .apply { isAccessible = true }
+            .invoke(manager)
+
+        assertTrue(
+            diagnosed.await(5, TimeUnit.SECONDS),
+            "137 must be reported as memory or the process limit, not as a bare signal"
+        )
+    }
+
     // -- Connection token --
 
     @Test
