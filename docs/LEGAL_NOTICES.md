@@ -135,6 +135,58 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **License**: BSD-3-Clause (fork of node-sqlite3, Copyright (c) MapBox); SQLite itself is public domain
 - **Full license**: https://github.com/microsoft/vscode-node-sqlite3/blob/main/LICENSE
 
+### @vscode/native-watchdog
+
+- **Project**: https://github.com/microsoft/node-native-watchdog
+- **Version**: whatever the server tree ships (`node_modules/@vscode/native-watchdog/package.json`)
+- **License**: MIT License
+- **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
+- **Ships**: `build/Release/watchdog.node`
+
+### @vscode/deviceid
+
+- **Project**: https://github.com/microsoft/vscode-deviceid
+- **Version**: whatever the server tree ships (`node_modules/@vscode/deviceid/package.json`)
+- **License**: MIT License
+- **Copyright**: Copyright (c) Microsoft Corporation.
+- **Ships**: `build/Release/windows.node`. The name is the package's own and is not a description of the platform; the file in this tree is an ARM64 ELF addon.
+
+### @vscode/sandbox-runtime
+
+- **Project**: https://github.com/anthropic-experimental/sandbox-runtime, as declared by the package's own `repository` field
+- **Version**: whatever the server tree ships (`node_modules/@vscode/sandbox-runtime/package.json`)
+- **License**: Apache License 2.0. The full text ships at `node_modules/@vscode/sandbox-runtime/LICENSE` and carries no filled-in copyright line.
+- **Ships**: `vendor/seccomp/x64/apply-seccomp`, an x86-64 helper that cannot run on an ARM64 device. It is listed because it is redistributed, not because it is used.
+
+### kerberos (Node addon)
+
+The npm package, not the MIT Kerberos 5 C libraries listed further down. Different
+project, different licence, nearly the same name.
+
+- **Project**: https://github.com/mongodb-js/kerberos
+- **Version**: whatever the server tree ships (`node_modules/kerberos/package.json`)
+- **License**: Apache License 2.0. The full text ships at `node_modules/kerberos/LICENSE`.
+- **Ships**: `build/Release/kerberos.node`, and a second copy under `build/Release/obj.target/`
+
+### @microsoft/mxc-sdk
+
+- **Project**: https://www.npmjs.com/package/@microsoft/mxc-sdk. The package declares no repository.
+- **Version**: whatever the server tree ships (`node_modules/@microsoft/mxc-sdk/package.json`)
+- **License**: MIT License
+- **Copyright**: Copyright (c) Microsoft Corporation.
+- **Ships**: `bin/arm64/linux-test-proxy` and `bin/arm64/lxc-exec`
+
+### js-debug
+
+The built-in JavaScript and Node.js debugger extension, produced by the Code - OSS
+build rather than downloaded from a gallery.
+
+- **Project**: https://github.com/microsoft/vscode-js-debug
+- **Version**: whatever the Code - OSS tag in `VSCODE_VERSION` pins
+- **License**: MIT License. The full text and the extension's own `ThirdPartyNotices.txt` ship inside `extensions/ms-vscode.js-debug/`.
+- **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
+- **Ships**: two `win32-app-container-tokens.win32-*-msvc-*.node` addons. These are Windows PE binaries with no use on Android; they are listed because they are redistributed.
+
 ### npm
 
 - **Project**: https://www.npmjs.com
@@ -177,15 +229,25 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 
 ## Complete Bundled Native Library Inventory
 
-Every shared library and executable redistributed inside the APK, with the licence
-each is distributed under. The licence column is taken from Termux's own
-`TERMUX_PKG_LICENSE`, which is what these packages are built from, rather than from
-upstream project pages that may describe a different version.
+The shared libraries and executables that sit at the top level of
+`assets/usr/lib` and `jniLibs/arm64-v8a`, with the licence each is distributed
+under. The licence column is taken from Termux's own `TERMUX_PKG_LICENSE`, which
+is what these packages are built from, rather than from upstream project pages
+that may describe a different version.
+
+This is not every binary in the APK, and the heading here claimed it was. The
+rest live deeper in the asset tree and are attributed by the sections above:
+Git's helper executables under `usr/lib/git-core/`, CPython's extension modules
+under `usr/lib/python*/lib-dynload/`, and the server tree's native addons and
+bundled tools under `assets/vscode-reh/`. 111 files against the 64 listed below,
+redistributed on identical terms.
 
 `scripts/check-library-attribution.py` regenerates the basis for this table from the
 files actually present in the build tree and fails when a shipped binary is absent
-from it, or when a copyleft component is missing from the source offer below. It runs
-on every pull request. Before it existed, Berkeley DB shipped under **AGPL-3.0-only**
+from it, or when a copyleft component is missing from the source offer below. It
+walks the whole asset tree, recognising a binary by ELF magic or a `.node`
+extension, and holds every component it finds to both this file and `NOTICE.md`.
+It runs on every pull request. Before it existed, Berkeley DB shipped under **AGPL-3.0-only**
 in every release with no attribution and no source offer, having arrived as a
 transitive dependency of Kerberos that nobody classified; it is no longer bundled,
 because measurement showed nothing linked it.

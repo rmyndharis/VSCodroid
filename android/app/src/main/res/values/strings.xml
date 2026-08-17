@@ -48,6 +48,8 @@
     <!-- About dialog -->
     <string name="about_title">About VSCodroid</string>
     <string name="about_version_format">Version %s</string>
+    <string name="about_licenses">Licenses</string>
+    <string name="licenses_title">Open Source Licenses</string>
 
     <!-- Toolchain picker (first-run) -->
     <string name="picker_title">What do you code in?</string>

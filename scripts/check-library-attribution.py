@@ -10,6 +10,22 @@ their notice to travel with the binary; GPL and LGPL additionally require an
 offer of the corresponding source. Neither obligation is discharged by code, so
 nothing in the build could previously notice when one went unmet.
 
+Those two directories are not the whole of what ships. They are the top level of
+two directories, and the scan read only that: `assets/usr/lib/git-core/` holds
+twelve GPL-2.0 Git executables, `assets/usr/lib/python*/lib-dynload/` holds
+seventy-five CPython extension modules, and `assets/vscode-reh/` carries the
+server's native addons and the binaries the built-in extensions bundle. 111
+redistributed binaries against the 64 the flat scan saw, and every one of them is
+in the APK on exactly the same terms as the 64. So the tree is walked to its
+leaves, and the allowlist below maps each subtree to the component that already
+carries its attribution.
+
+Two ways of recognising a binary, not one, because either alone has a hole. ELF
+magic finds the Git helpers, `rg`, `tgrep`, `apply-seccomp` and `python.o`, none
+of which have a telling name. The `.node` extension finds what ELF magic cannot:
+`ms-vscode.js-debug` ships two `win32-*-msvc-*.node` addons that are PE, not ELF,
+and a scan keyed on ELF alone walks straight past them.
+
 One did. `libdb-18.1.so` -- Berkeley DB, **AGPL-3.0-only**, the strongest
 copyleft in common use -- shipped in every release with no attribution anywhere
 and no source offer, because it arrived as a transitive dependency of krb5 and
@@ -42,12 +58,14 @@ read is printed, because "0 toolchain libraries" from a tree that has no packs
 and from a tree whose packs were never recorded print the same otherwise.
 """
 
+import fnmatch
 import json
 import pathlib
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+ASSETS = ROOT / "android/app/src/main/assets"
 USR_LIB = ROOT / "android/app/src/main/assets/usr/lib"
 JNILIBS = ROOT / "android/app/src/main/jniLibs/arm64-v8a"
 LEGAL_NOTICES = ROOT / "docs/LEGAL_NOTICES.md"
@@ -169,6 +187,69 @@ TOOLCHAIN_LIBRARIES = {
     "libffi.so": ("libffi", "MIT"),
 }
 
+# Binaries that ship deeper in the asset tree than the two directories above,
+# keyed by a glob over the path relative to `assets/`.
+#
+# By subtree rather than by file name, for two reasons the tree makes plain. The
+# names repeat -- four different `rg` binaries and four `tgrep`, in four
+# directories -- so a name says nothing about which component redistributes it.
+# And the names churn: `lib-dynload` alone is 75 modules that come and go with
+# the Python build, and js-debug's addons carry a content hash in the file name.
+# What is stable is the package the file sits inside, which is also the thing an
+# attribution names.
+#
+# `fnmatch`'s `*` spans `/`, so `<prefix>/*` covers a whole subtree at any depth.
+# The longest matching pattern wins, which is what lets a vendored copy be
+# attributed to its own upstream rather than to the package around it: Copilot
+# ships ripgrep inside its own tree, and ripgrep's licence is not Copilot's.
+# Verified rather than assumed -- the SDK copy's `rg` is byte-identical to
+# `@vscode/ripgrep-universal`'s (sha256 e152ea68...), the `copilot-linux-arm64`
+# copy is a different ripgrep build, and both are ripgrep.
+#
+# Every component here is one the documents already carry, or now carry: the
+# point of the widening is to check what ships against the record, not to invent
+# a second record.
+NESTED_LIBRARIES = {
+    # --- Termux packages, below the top level of usr/lib ---
+    # git's helper executables: `git-http-fetch`, `git-daemon` and the rest.
+    "usr/lib/git-core/*": ("Git", "GPL-2.0"),
+    # CPython's extension modules and the `python.o` beside its build config.
+    # Globbed on the version, never spelled: download-python.sh resolves it from
+    # the Termux index at build time, so a literal here goes stale on a rebuild
+    # nobody connects to this file.
+    "usr/lib/python*/*": ("Python", "PSF-2.0"),
+    # --- the server tree's native addons ---
+    "vscode-reh/node_modules/node-pty/*": ("node-pty", "MIT"),
+    "vscode-reh/node_modules/@parcel/watcher/*": ("@parcel/watcher", "MIT"),
+    "vscode-reh/node_modules/@vscode/sqlite3/*": ("@vscode/sqlite3", "BSD-3-Clause"),
+    "vscode-reh/node_modules/@vscode/deviceid/*": ("@vscode/deviceid", "MIT"),
+    "vscode-reh/node_modules/@vscode/native-watchdog/*": ("@vscode/native-watchdog", "MIT"),
+    "vscode-reh/node_modules/@vscode/sandbox-runtime/*": ("@vscode/sandbox-runtime", "Apache-2.0"),
+    "vscode-reh/node_modules/@microsoft/mxc-sdk/*": ("@microsoft/mxc-sdk", "MIT"),
+    # The npm addon, not the Termux C libraries. Different project, different
+    # licence, confusingly similar name -- hence the qualifier, which has to
+    # read the same way in both documents for the attribution check to find it.
+    "vscode-reh/node_modules/kerberos/*": ("kerberos (Node addon)", "Apache-2.0"),
+    # --- the search binary, wherever it is bundled from ---
+    "vscode-reh/node_modules/@vscode/ripgrep-universal/*": ("ripgrep", "MIT"),
+    "vscode-reh/node_modules/@github/copilot-linux-arm64/ripgrep/*": ("ripgrep", "MIT"),
+    "vscode-reh/extensions/copilot/node_modules/@github/copilot/sdk/ripgrep/*":
+        ("ripgrep", "MIT"),
+    # --- built-in extensions that carry binaries of their own ---
+    "vscode-reh/extensions/ms-vscode.js-debug/*": ("js-debug", "MIT"),
+    # --- redistributed under GitHub's own terms, not an open source licence ---
+    # Its full reasoning is the "Proprietary Redistributed Components" section of
+    # LEGAL_NOTICES.md; what this line adds is that the binaries are counted.
+    "vscode-reh/node_modules/@github/copilot-linux-arm64/*":
+        ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),
+    "vscode-reh/extensions/copilot/node_modules/@github/copilot/*":
+        ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),
+}
+
+# Longest pattern first, so a subtree entry beats the package entry containing
+# it. Sorted once rather than per file.
+NESTED_ORDER = sorted(NESTED_LIBRARIES, key=len, reverse=True)
+
 
 def toolchain_libs():
     """Libraries the toolchain manifests declare, which manifests were read, and
@@ -211,7 +292,16 @@ def toolchain_libs():
 
 
 def shipped():
-    """Every redistributed binary, by file name."""
+    """The redistributed binaries at the top level of the two flat directories,
+    by file name.
+
+    Everything deeper is `nested()`'s, and the two must not overlap or a file
+    would be reported twice with two different identifiers. The split is drawn
+    at exactly what this function accepts -- top level of `usr/lib` AND `.so` in
+    the name -- so an ELF at the top of `usr/lib` whose name says nothing (there
+    are none today, measured) still reaches `nested()` rather than falling
+    between them.
+    """
     out = []
     for root in (USR_LIB, JNILIBS):
         if not root.is_dir():
@@ -223,6 +313,87 @@ def shipped():
                 continue
             out.append(p.name)
     return out
+
+
+def nested():
+    """Every other redistributed binary in the asset tree, by path relative to
+    `assets/`.
+
+    The path, not the name, because the name is not an identifier here: `rg`,
+    `tgrep` and `kerberos.node` each ship more than once from more than one
+    package, and a failure has to say which copy it means.
+
+    A file counts as a binary if it starts with ELF magic or ends in `.node`.
+    Neither test subsumes the other -- see the module docstring -- and the union
+    is deliberately generous, since the cost of a false positive is one line in
+    NESTED_LIBRARIES and the cost of a false negative is an unattributed binary
+    in a shipped APK.
+    """
+    out = []
+    if not ASSETS.is_dir():
+        return out
+    for p in sorted(ASSETS.rglob("*")):
+        if p.is_symlink() or not p.is_file():
+            continue
+        if p.parent == USR_LIB and ".so" in p.name:
+            continue  # counted by shipped()
+        try:
+            with p.open("rb") as f:
+                elf = f.read(4) == b"\x7fELF"
+        except OSError:
+            continue
+        if elf or p.suffix == ".node":
+            out.append(p.relative_to(ASSETS).as_posix())
+    return out
+
+
+def nested_pattern(rel):
+    """The allowlist entry that claims a nested path, or None."""
+    for pattern in NESTED_ORDER:
+        if fnmatch.fnmatchcase(rel, pattern):
+            return pattern
+    return None
+
+
+def subtree_present(pattern):
+    """Whether the directory a pattern covers is on disk.
+
+    The pattern minus its trailing `/*`, resolved with `Path.glob` rather than
+    tested as a literal, because `usr/lib/python*` has to find whichever version
+    the Termux index resolved to at build time.
+
+    Resolving it matters, and the literal-prefix version of this got it wrong:
+    truncating `usr/lib/python*/*` at its first glob leaves `usr/lib`, which
+    exists in any tree that ran download-termux-tools.sh. A checkout that had
+    not also run download-python.sh was then told its Python entry was stale,
+    when Python was simply not there. Measured on exactly that tree.
+    """
+    return any(p.is_dir() for p in ASSETS.glob(pattern.rsplit("/*", 1)[0]))
+
+
+def stale_patterns(nest):
+    """Allowlist entries whose subtree is on disk but which claim nothing.
+
+    An entry that matches no file is not harmless. It is the state a rename
+    leaves behind, and the rename is what makes the binaries invisible: the
+    package moves, its files stop matching, they arrive at the classifier as
+    unknown paths -- or, worse, are swallowed by a broader entry that still
+    matches and attributed to the wrong component. Either way the entry that
+    should have caught the move sits there matching nothing and saying nothing.
+
+    So an entry has to earn its place by WINNING for at least one file, not
+    merely by being satisfiable. The difference is the whole point of the
+    overrides: `@github/copilot .../ripgrep/*` is contained by the Copilot entry
+    around it, and if the longest-first ordering were lost it would still
+    "match" every one of those files while never being consulted.
+
+    Anchored on the subtree's presence, because a tree can hold `usr/` without
+    `vscode-reh/` or the reverse: two scripts fetch them and a checkout may have
+    run only one. A pattern whose anchor is absent is not stale, it is just not
+    this tree's business.
+    """
+    won = {nested_pattern(rel) for rel in nest}
+    return [p for p in sorted(NESTED_LIBRARIES) if p not in won and subtree_present(p)]
 
 
 def attributed_in(text):
@@ -254,9 +425,13 @@ def attributed_in(text):
 
 def main():
     names = shipped()
-    if not names:
+    nest = nested()
+    if not names and not nest:
         # Neither tree is committed, so an empty run means the assets were never
         # downloaded. Saying so beats reporting that nothing is unattributed.
+        # Both halves, because a tree can hold one without the other: the server
+        # tree is fetched by a different script than the Termux libraries, and a
+        # checkout that has only run one of the two still ships binaries.
         print("skip -- no built assets present (run the download scripts first)")
         return 0
 
@@ -291,6 +466,22 @@ def main():
     for_check = [(n, LIBRARIES.get(n)) for n in names]
     tc, manifests, unrecorded = toolchain_libs()
     for_check += [(n, TOOLCHAIN_LIBRARIES.get(n)) for n in tc]
+    # Everything below the top level of those two directories, held to exactly
+    # the same three checks. Identified by path, so the three lists cannot
+    # collide on a shared file name.
+    for_check += [(r, NESTED_LIBRARIES.get(nested_pattern(r))) for r in nest]
+
+    stale = stale_patterns(nest)
+    if stale:
+        print(f"FAIL {len(stale)} allowlist entr(ies) match nothing in a tree that "
+              "has the subtree:", file=sys.stderr)
+        for pattern in stale:
+            print(f"  {pattern}", file=sys.stderr)
+        print("  -> the package moved, was renamed, or stopped shipping binaries."
+              " Point the entry at where its files are now, or delete it -- but"
+              " check first that the binaries did not simply move under an entry"
+              " that attributes them to something else", file=sys.stderr)
+        return 1
 
     if unrecorded:
         # The pack was downloaded on this machine and is about to be zipped, so
@@ -326,7 +517,9 @@ def main():
          "fill in the licence Termux's build.sh declares; an empty field silently "
          "answers the copyleft question with 'no'"),
         ("not classified", unknown,
-         "add it to LIBRARIES with the licence Termux's build.sh declares"),
+         "a bare file name belongs in LIBRARIES with the licence Termux's build.sh "
+         "declares; a path belongs in NESTED_LIBRARIES, keyed on the subtree of the "
+         "package that redistributes it"),
         ("not attributed", unattributed,
          "add a section naming the project and its licence to each file listed"),
         ("copyleft, absent from the source offer", unoffered,
@@ -347,9 +540,9 @@ def main():
     # also what a run before the download step prints, and those are opposite
     # facts. Naming the documents for the same reason, the count of components
     # says nothing about which files were held to it.
-    print(f"ok: {len(names)} shipped binaries + {len(tc)} toolchain libraries "
-          f"from {len(manifests)} manifest(s), {len(covered)} components, "
-          f"all attributed in {' and '.join(docs)}")
+    print(f"ok: {len(names)} shipped binaries + {len(nest)} nested + "
+          f"{len(tc)} toolchain libraries from {len(manifests)} manifest(s), "
+          f"{len(covered)} components, all attributed in {' and '.join(docs)}")
     # The names, not just the count. A count alone cannot answer the question that
     # actually matters when two trees disagree -- *which* file is missing -- and
     # some of these are found by `dlopen` at run time rather than through
@@ -357,6 +550,16 @@ def main():
     # of the bug that left five Python modules dead on shipped builds. Printing the
     # list costs a line of log and makes any two builds directly comparable.
     print("   " + " ".join(sorted(names)))
+    # The nested set by component and count rather than by path: 111 paths is
+    # eight kilobytes of log, and the question the flat list answers -- do two
+    # builds ship the same thing -- is answered here by any count that moves. A
+    # Python module dropping out of lib-dynload takes `Python` from 76 to 75.
+    if nest:
+        tally = {}
+        for rel in nest:
+            component = NESTED_LIBRARIES[nested_pattern(rel)][0]
+            tally[component] = tally.get(component, 0) + 1
+        print("   nested: " + ", ".join(f"{c} {n}" for c, n in sorted(tally.items())))
     return 0
 
 

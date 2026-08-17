@@ -12,14 +12,18 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.net.Uri
 import android.os.IBinder
 import android.os.SystemClock
+import android.text.util.Linkify
 import android.view.View
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import androidx.activity.OnBackPressedCallback
@@ -47,6 +51,7 @@ import com.vscodroid.service.NodeService
 import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
+import com.vscodroid.util.Notices
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
@@ -1322,15 +1327,54 @@ class MainActivity : AppCompatActivity() {
         val version = getString(R.string.about_version_format, versionName)
         val disclaimer = getString(R.string.legal_disclaimer)
 
+        // An AlertDialog has three button slots and this dialog needs four
+        // destinations, so "Source Code" moved one level in, onto the licences
+        // dialog. That is where it belongs rather than a place it was pushed to:
+        // what the licences dialog carries is the GPL's written offer of source,
+        // and the repository link is the answer to the question that offer
+        // raises.
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.about_title))
             .setMessage("$version\n\n$disclaimer")
             .setPositiveButton("OK", null)
-            .setNeutralButton("Source Code") { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
-            }
+            .setNeutralButton(getString(R.string.about_licenses)) { _, _ -> showLicensesDialog() }
             .setNegativeButton("Privacy Policy") { _, _ ->
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")))
+            }
+            .show()
+    }
+
+    /**
+     * Shows the bundled third-party notices, read from the APK.
+     *
+     * Offline on purpose. The app redistributes GPL and LGPL binaries, and the
+     * written offer of source that has to travel with them reaches the device
+     * only through this screen; a link to a web page would discharge nothing on
+     * a device with no network, which is the state this app is built to be
+     * usable in.
+     *
+     * [Notices.read] never throws and never returns empty: a document it could
+     * not open is replaced in place by a line naming it.
+     */
+    private fun showLicensesDialog() {
+        val body = TextView(this).apply {
+            // Before setText: autoLinkMask is applied when the text is set, and
+            // linkifying is the point. The offer names repositories to fetch
+            // source from, and a URL nobody can tap is a URL nobody follows.
+            autoLinkMask = Linkify.WEB_URLS
+            typeface = Typeface.MONOSPACE
+            textSize = 11f
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, pad)
+            text = Notices.read { assets.open(it) }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.licenses_title))
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Source Code") { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
             }
             .show()
     }

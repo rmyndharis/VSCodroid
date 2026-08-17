@@ -46,10 +46,16 @@ android {
         // "Setup failed" rather than "not enough room". Measuring it here instead
         // removes the way that goes wrong rather than restating the number.
         //
-        // Every file under assets/ is extracted: extractAssetDir copies whole
-        // trees for vscode-reh and usr, extractBundledExtensions unpacks all of
-        // extensions/, and the bootstrap scripts are copied individually. So the
-        // whole tree is the right thing to measure, not a subset.
+        // Every file under src/main/assets is extracted: extractAssetDir copies
+        // whole trees for vscode-reh and usr, extractBundledExtensions unpacks
+        // all of extensions/, and the bootstrap scripts are copied individually.
+        // So the whole tree is the right thing to measure, not a subset.
+        //
+        // The APK's assets are that tree plus the notices bundled by
+        // `bundleNotices` below, and those are deliberately outside this sum:
+        // they are read straight out of the APK by the licences dialog and never
+        // written to disk, so charging a device for room to unpack them would
+        // ask for space nothing is going to use.
         //
         // Jobs that build without a real asset tree (lint, unit tests, R8) get a
         // small number here, which is correct rather than a gap: their APK has no
@@ -152,6 +158,11 @@ android {
 
     // On-demand toolchain asset packs (Play Asset Delivery)
     assetPacks += listOf(":toolchain_go", ":toolchain_ruby", ":toolchain_java")
+
+    // The attribution documents, packaged so they reach the device. See
+    // `bundleNotices` at the foot of this file for why they are copied rather
+    // than committed here.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/notices"))
 
     lint {
         // The baseline is what makes this affordable: the 59 issues recorded in
@@ -484,10 +495,44 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     }
 }
 
+// The attribution documents, copied into the APK so a person holding the
+// binaries can read the notices that have to travel with them.
+//
+// This matters most for the copyleft ones. Bash, Git, Make, readline, libiconv,
+// gdbm, liblzma and zstd are all GPL or LGPL, and the GPL's written offer of
+// source has to accompany the binary rather than sit in a repository the holder
+// of an APK has no reason to know exists. NOTICE.md and docs/LEGAL_NOTICES.md
+// carried that offer and shipped nowhere; every device ran the binaries with no
+// notice of any kind on it.
+//
+// Copied from the repository root rather than committed under src/main/assets,
+// because a second copy is a copy that goes stale, and a stale licence notice is
+// worse than an absent one: it is a claim about terms that is no longer true.
+// The two files are ~37 KiB of markdown, which deflates to roughly 12 KiB in the
+// APK, about 0.01% of the base module.
+//
+// They are read out of the APK by MainActivity's licences dialog and never
+// extracted, which is why they are a separate assets source directory: it keeps
+// them out of the src/main/assets sum that sizes first-run extraction.
+val bundleNotices = tasks.register<Copy>("bundleNotices") {
+    group = "build"
+    description = "Copies the attribution documents into the APK's assets."
+
+    val repoRoot = rootProject.projectDir.parentFile
+    from(File(repoRoot, "NOTICE.md"))
+    from(File(repoRoot, "docs/LEGAL_NOTICES.md"))
+    into(layout.buildDirectory.dir("generated/notices"))
+
+    // The names the app opens. Kept beside the copy so a rename here fails the
+    // build rather than emptying the dialog on a device: com.vscodroid.util
+    // .Notices.BUNDLED lists the same two, and NoticesTest compares the lists.
+}
+
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
         dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries)
+        dependsOn(bundleNotices)
     }

@@ -21,6 +21,14 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | OpenSSH | BSD | Termux build, https://www.openssh.com |
 | node-pty | MIT | https://github.com/microsoft/node-pty — native addon rebuilt for Android/Bionic |
 | @parcel/watcher | MIT | https://github.com/parcel-bundler/watcher — native addon rebuilt for Android/Bionic |
+| @vscode/sqlite3 | BSD-3-Clause (SQLite itself is public domain) | https://github.com/microsoft/vscode-node-sqlite3, native addon rebuilt for Android/Bionic |
+| @vscode/native-watchdog | MIT | https://github.com/microsoft/node-native-watchdog, bundled by the Code - OSS build |
+| @vscode/deviceid | MIT | https://github.com/microsoft/vscode-deviceid, bundled by the Code - OSS build |
+| @vscode/sandbox-runtime | Apache-2.0 | https://github.com/anthropic-experimental/sandbox-runtime, bundled by the Code - OSS build |
+| kerberos (Node addon) | Apache-2.0 | https://github.com/mongodb-js/kerberos. The npm addon, not the MIT Kerberos 5 C libraries listed below |
+| @microsoft/mxc-sdk | MIT | https://www.npmjs.com/package/@microsoft/mxc-sdk, bundled by the Code - OSS build |
+| js-debug | MIT | https://github.com/microsoft/vscode-js-debug, the built-in JavaScript debugger produced by the Code - OSS build |
+| @github/copilot (GitHub Copilot CLI) | GitHub Copilot CLI License, proprietary | Redistributed under GitHub, Inc.'s own terms as a dependency of the Copilot extension. The full text ships in the server tree; the reasoning is in `docs/LEGAL_NOTICES.md` |
 | musl (dynamic loader) | MIT | Alpine Linux package, https://musl.libc.org — bundled so the Claude Code CLI can run; the CLI itself is installed by the user and is not redistributed here |
 
 ## Bundled Native Components
@@ -28,11 +36,17 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 Licences here are Termux's own `TERMUX_PKG_LICENSE` for the package each binary
 comes from, and the "Linked by" column is read out of the shipped ELF headers
 rather than written by hand. `scripts/check-library-attribution.py` fails the build
-when a shipped binary is missing from this table, when it is missing from the
-matching table in `docs/LEGAL_NOTICES.md`, or when a copyleft component is missing
-from the source offer that file carries. Both documents are read: this one said
-the build was gated on it while only the other was, so the two agreed by habit
-rather than by anything enforcing it.
+when a shipped binary is attributed nowhere in this file, when it is missing from
+`docs/LEGAL_NOTICES.md`, or when a copyleft component is missing from the source
+offer that file carries. Both documents are read: this one said the build was
+gated on it while only the other was, so the two agreed by habit rather than by
+anything enforcing it.
+
+This table covers the Termux libraries and executables at the top level of
+`assets/usr/lib` and `jniLibs/arm64-v8a`. The binaries that sit deeper in the
+asset tree are attributed under **Core Components** above, and the gate holds
+them to the same rules: it walks the tree to its leaves, recognising a binary by
+ELF magic or a `.node` extension.
 
 Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
 glibc's soname but are built from this repository's own source.
