@@ -212,6 +212,21 @@ def main(tree):
         gallery = product.get("extensionsGallery", {}).get("serviceUrl", "")
         check("marketplace.visualstudio.com" not in gallery,
               "no Microsoft marketplace URL", f"serviceUrl = {gallery!r}")
+        # An absence again, and the only place it can be read. server-main.js
+        # builds the translated string bundle's URL from nlsCoreBaseUrl and hands
+        # the page an empty one when the key is missing, which is the whole of
+        # why the interface is English only and why docs/USER_GUIDE.md says so.
+        # Neither the branding overlay nor assets/server.js names the key, but
+        # the overlay is merged ONTO Code - OSS's own product.json rather than
+        # replacing it, so a VSCODE_VERSION bump that lands the key upstream
+        # carries it into the built file with nothing in this repository having
+        # changed. That path only exists in the built tree, which is why it is
+        # checked here rather than beside the other two.
+        nls = sorted(k for k in product if "nls" in k.lower())
+        check(not nls, "no translated string bundle URL",
+              f"product.json now carries {', '.join(nls)}. The interface is no longer "
+              "English only; rewrite the 'The Interface Is English Only' entry in "
+              "docs/USER_GUIDE.md and retire DisplayLanguageTest with it.")
 
     # LICENSE.txt was required to exist and then never opened, which made it the
     # one gate that could not see the thing it was added for. The pivot away from

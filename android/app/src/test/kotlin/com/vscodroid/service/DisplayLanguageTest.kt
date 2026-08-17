@@ -1,5 +1,6 @@
 package com.vscodroid.service
 
+import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -25,12 +26,12 @@ import java.io.File
  * this file is pointed: change either mechanism and it fails, naming the
  * section to rewrite.
  *
- * This reads source text, which is the weaker kind of test. What it buys is the
- * one property at issue: that the two files still say what the guide says they
- * say. What it cannot buy is the runtime behaviour, which lives in the built
- * server bundle, and that bundle is a gitignored artifact absent from a fresh
- * clone. The reverse direction is covered too, by the last case: deleting the
- * guide entry while the mechanism stands fails just as loudly.
+ * This reads source, which is the weaker kind of test. What it buys is the one
+ * property at issue: that the files a fresh clone contains still say what the
+ * guide says they say. What it cannot buy is the runtime behaviour, which lives
+ * in the built server bundle, and that bundle is a gitignored artifact absent
+ * from a fresh clone. The reverse direction is covered too, by the last case:
+ * deleting the guide entry while the mechanism stands fails just as loudly.
  */
 class DisplayLanguageTest {
 
@@ -81,24 +82,58 @@ class DisplayLanguageTest {
     /**
      * The key whose absence decides it. `server-main.js` builds the translated
      * bundle's URL only when `nlsCoreBaseUrl` is set, and hands the page an
-     * empty URL otherwise, so adding it anywhere that reaches `product.json`
-     * turns the interface translatable and retires the guide entry.
+     * empty URL otherwise, so the key arriving anywhere that reaches
+     * `product.json` turns the interface translatable and retires the guide
+     * entry.
      *
-     * Both writers are checked because `product.json` has two: the branding
-     * overlay applied before the build, and `server.js`, which rewrites the
-     * file on every start. Checking one leaves the other free to add the key.
+     * Three writers reach that file, and this covers the two a fresh clone
+     * contains.
+     *
+     * `branding/product.json` is an overlay with two opposite halves and only
+     * `set` adds keys: `scripts/build-vscode-oss.sh` pops everything named in
+     * `remove` out of the built file, so the same string landing there would
+     * make the limit permanent rather than lift it. Reading the file as text
+     * cannot tell those apart, and would fail loudest on the one edit that
+     * agrees with the guide, which is why this parses instead.
+     *
+     * `server.js` is JavaScript rather than JSON, so it stays a text check.
+     *
+     * The third writer is Code - OSS's own `product.json`. The overlay is
+     * merged onto it rather than replacing it, so a `VSCODE_VERSION` bump that
+     * lands the key upstream carries it into the built file without either of
+     * the two files here changing. That one is out of reach from a unit test,
+     * because the built tree is a gitignored artifact; `verify-server-tree.py`
+     * reads it on every build, where it exists.
      */
     @Test
     fun `no product configuration supplies a translated string bundle`() {
-        for (file in listOf(branding, serverJs)) {
-            assertFalse(
-                read(file).contains("nlsCoreBaseUrl"),
-                "${file.name} now names nlsCoreBaseUrl, which is the address the editor " +
-                    "downloads translated interface strings from. If that is deliberate, the " +
-                    "interface is no longer English only and the Known Limitations entry " +
-                    "'The Interface Is English Only' in docs/USER_GUIDE.md has to go.",
-            )
-        }
+        val overlay = JSONObject(read(branding))
+        val set = if (overlay.has("set")) overlay.getJSONObject("set") else JSONObject()
+
+        // Positive control. The assertion below passes on an overlay whose
+        // adding half is named something else, or gone, which is a scan of
+        // nothing wearing the same green.
+        assertTrue(
+            set.length() > 0,
+            "branding/product.json has no non-empty 'set' object, so nothing was checked here. " +
+                "The overlay's shape changed; find the half that adds keys now and point this " +
+                "at it.",
+        )
+        assertFalse(
+            set.has("nlsCoreBaseUrl"),
+            "branding/product.json sets nlsCoreBaseUrl, which is the address the editor " +
+                "downloads translated interface strings from. If that is deliberate, the " +
+                "interface is no longer English only and the Known Limitations entry " +
+                "'The Interface Is English Only' in docs/USER_GUIDE.md has to go. Naming it " +
+                "in the overlay's 'remove' half is the opposite change and is not this.",
+        )
+        assertFalse(
+            read(serverJs).contains("nlsCoreBaseUrl"),
+            "server.js names nlsCoreBaseUrl, which it writes into product.json on every " +
+                "start, so the editor now has an address to download translated interface " +
+                "strings from. If that is deliberate, the Known Limitations entry 'The " +
+                "Interface Is English Only' in docs/USER_GUIDE.md has to go.",
+        )
     }
 
     @Test

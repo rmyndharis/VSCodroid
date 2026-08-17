@@ -20,12 +20,25 @@ import java.io.File
  *
  * The reason this is worth a test rather than care: editing one of our own
  * extensions and forgetting the version has already cost this project a
- * release. A correction made inside a directory whose name did not change
- * reached clean installs and no one upgrading, because the editor caches its
- * scan of the extensions directory against that directory's own timestamp, and
- * rewriting a file two levels down does not move it. Adding and removing a
- * directory does. So the version bump is not bookkeeping; it is the delivery
- * mechanism, and half a bump delivers nothing while looking done.
+ * release. The process-monitor extension's code was rewritten while its
+ * manifest stayed at 1.0.0, extraction skipped the directory because a
+ * directory of that name was already on disk, and the fix reached clean
+ * installs and nobody who upgraded.
+ *
+ * That half is fixed, and reading this as "our edits never reach upgraders"
+ * would be reading it backwards. [bundledDirsToExtract] re-unpacks every
+ * `vscodroid.` directory unconditionally, so an upgrader does receive the
+ * edited bytes, and restoring a blanket re-copy of the fetched ones to be safe
+ * would undo the split that keeps 57 MB off every update and preserves state a
+ * fetched extension regenerates inside its own directory.
+ *
+ * What a same-named edit still does not deliver is the editor's re-read of
+ * `package.json`. Its scan of the extensions directory is keyed on that
+ * directory's own timestamp, and writing a file two levels down does not move
+ * it while adding and removing a directory does. So the bump is the delivery
+ * mechanism for a change to a manifest, which is the only kind that needs one,
+ * and half a bump, the name moved or the manifest moved but not both, is what
+ * this file refuses.
  *
  * Deliberately not a check that the version was bumped *this* change: there is
  * no baseline in the tree to compare against, and a rule demanding a bump on
@@ -66,6 +79,60 @@ class BundledExtensionVersionTest {
                 "and the manifest is what the version in extensions.json comes from, so a " +
                 "mismatch ships a manifest pointing at the wrong copy. Rename the directory " +
                 "and edit the manifest together. Checked ${dirs.size} directories.",
+        )
+    }
+
+    /**
+     * `MILESTONES.md` holds the one prose inventory of these directories, and a
+     * rename moves the directory without touching it. It was left naming a
+     * welcome directory that no longer existed, which sends a reader, or an
+     * agent told to check a claim against the tree, to a path nothing on disk
+     * matches. Both directions, because an inventory that omits a directory is
+     * as wrong as one that invents it.
+     *
+     * Scoped to that one file on purpose. `docs/12-IMPLEMENTATION_PLAN.md`
+     * draws the same names at 1.0.0 inside a planned layout, which records what
+     * was intended rather than claiming what ships; a rule sweeping every
+     * document would fail on it, and a gate that fails on correct text is one
+     * people edit rather than obey.
+     */
+    @Test
+    fun `the milestones inventory names the directories that ship`() {
+        val milestones = File("../../MILESTONES.md")
+        assertTrue(
+            milestones.isFile,
+            "${milestones.absolutePath} not found. Paths here resolve from the Gradle test " +
+                "working directory, which is the module directory (android/app).",
+        )
+
+        val named = Regex("""${Regex.escape(OWN_EXTENSION_PREFIX)}[a-z0-9-]+-\d+(?:\.\d+)*""")
+            .findAll(milestones.readText()).map { it.value }.toSet()
+        // The positive control, for the same reason as above: the inventory
+        // moving to another heading, or the naming scheme changing, would leave
+        // two empty sets agreeing with each other.
+        assertTrue(
+            named.isNotEmpty(),
+            "MILESTONES.md names no $OWN_EXTENSION_PREFIX directory at all, so this test " +
+                "compared nothing. The inventory moved or was dropped; point this at where it " +
+                "lives now.",
+        )
+
+        val onDisk = extensionsDir.listFiles { f -> f.isDirectory }
+            ?.map { it.name }.orEmpty()
+            .filter { it.startsWith(OWN_EXTENSION_PREFIX) }
+            .toSet()
+
+        assertEquals(
+            emptyList<String>(), (named - onDisk).sorted(),
+            "MILESTONES.md names a bundled extension directory that is not in " +
+                "${extensionsDir.absolutePath}. A rename left the inventory behind; update it " +
+                "in the same change. Found ${named.size} named, ${onDisk.size} on disk.",
+        )
+        assertEquals(
+            emptyList<String>(), (onDisk - named).sorted(),
+            "a bundled extension directory is missing from the MILESTONES.md inventory, which " +
+                "is the only prose list of them. Add it there, and check the count on the line " +
+                "above the list. Found ${named.size} named, ${onDisk.size} on disk.",
         )
     }
 }
