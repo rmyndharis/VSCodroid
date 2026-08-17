@@ -349,6 +349,20 @@ Notes:
 - **Play Console**: Android Vitals for crash clusters and ANR analysis
 - **User-initiated reports**: "Report a Bug" option in app settings → generates log bundle
 
+**A stack trace from v1.0.0 cannot be read back.** That build ran R8, and its
+`mapping.txt` was never published or archived; the only copy would have been in a
+local build directory, which holds one build at a time and has since been
+overwritten. Measured: the published v1.0.0 APK carries `pg-map-id 7e59ec8`,
+while the map still on disk is `bd8a693`, so they do not correspond. A trace from
+that build can be triaged by its message and its unobfuscated frames and no
+further.
+
+Later releases do not have this problem. `release.yml` attaches `mapping.txt` to
+the release it builds, and `r8.yml` keeps it as a workflow artifact, so the map
+travels with the build that produced it. When triaging, take the map from the
+release the reporter installed rather than from a local build directory, which
+holds whatever was compiled last.
+
 ### 7.3 Feedback Channels
 
 | Channel | Purpose |
