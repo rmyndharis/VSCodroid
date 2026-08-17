@@ -605,7 +605,16 @@ def main():
     # Everything below the top level of those two directories, held to exactly
     # the same three checks. Identified by path, so the three lists cannot
     # collide on a shared file name.
-    for_check += [(r, NESTED_LIBRARIES.get(nested_pattern(r))) for r in nest]
+    #
+    # Classified once and kept, because the tally at the end of this function
+    # needs the same answer. Looking it up a second time there had to index
+    # NESTED_LIBRARIES with whatever nested_pattern returned, and that is None
+    # for an unclassified path: a KeyError and a traceback in place of the
+    # report. It could not fire only because the `not classified` check returns
+    # first, which is a fact about the order of two blocks eighty lines apart
+    # rather than about this line.
+    nested_entries = [(r, NESTED_LIBRARIES.get(nested_pattern(r))) for r in nest]
+    for_check += nested_entries
 
     stale = stale_patterns(nest)
     if stale:
@@ -686,14 +695,19 @@ def main():
     # of the bug that left five Python modules dead on shipped builds. Printing the
     # list costs a line of log and makes any two builds directly comparable.
     print("   " + " ".join(sorted(names)))
-    # The nested set by component and count rather than by path: 111 paths is
-    # eight kilobytes of log, and the question the flat list answers -- do two
-    # builds ship the same thing -- is answered here by any count that moves. A
-    # Python module dropping out of lib-dynload takes `Python` from 76 to 75.
-    if nest:
+    # The nested set by component and count rather than by path: two hundred
+    # paths is eight kilobytes of log, and the question the flat list answers --
+    # do two builds ship the same thing -- is answered here by any count that
+    # moves. A Python module dropping out of lib-dynload takes `Python` from 76
+    # to 75.
+    if nested_entries:
         tally = {}
-        for rel in nest:
-            component = NESTED_LIBRARIES[nested_pattern(rel)][0]
+        for _, entry in nested_entries:
+            # Reusing the classification made above rather than repeating it.
+            # Nothing unclassified can reach here today, and the fallback is not
+            # a guess about that: it keeps a reordering of the checks above
+            # printing a report instead of raising.
+            component = entry[0] if entry else "unclassified"
             tally[component] = tally.get(component, 0) + 1
         print("   nested: " + ", ".join(f"{c} {n}" for c, n in sorted(tally.items())))
     return 0
