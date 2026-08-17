@@ -193,6 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Toolchains**
 
+- A sideloaded toolchain install resolves `latest` once and takes both the digest and the payload from that release, so a release published mid-download no longer refuses the install.
 - Installed toolchains can be run. Android refuses to execute any file in an app's data directory, so terminal commands are handed to the system loader. **The redirect is shell functions, so its reach is the shell's reach**: `make`, `bash -c`, scripts and extension-spawned processes still hit the binary directly and are refused. **Go cannot compile** even in the terminal, because `go build` starts its own compiler directly.
 - You can add and remove languages after first run. Touch and hold the app icon and choose **Manage toolchains**. The picker is shown once and previously had no other way in.
 - **`go build` would have failed with a permission error in the next release.** The Go manifest named only `go` and `gofmt`, leaving the compiler, linker and assembler unrunnable. The manifest is now built from the toolchain itself.

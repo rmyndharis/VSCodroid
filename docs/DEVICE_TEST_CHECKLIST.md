@@ -147,6 +147,7 @@ the device.
 | TC-4 | Ruby and Java run | `ruby -e 'puts 1+1'`; write and run a `Hello.java` with `java Hello.java` | Both print their output | | |
 | TC-5 | Go runs but does not compile | `go version`, then `go build` on any package | `go version` prints; `go build` **is expected to fail** with a permission error. Anything else is the surprise worth reporting | | |
 | TC-6 | Toolchain uninstall | Manage toolchains > uninstall one | Files removed, command no longer found in a new terminal | | |
+| TC-7 | A sideloaded install pins one release | Install any toolchain on a build that is NOT from Play, with `adb logcat -s ToolchainManager` running | One line reading `Pinned this install to .../releases/download/<tag>`, naming a concrete tag rather than `latest`, and the install completes. A `Falling back to the unpinned release URL` line instead is not a failure, but record it: it means the resolve did not work on this network | | |
 
 TC-5 is written as an expected failure on purpose. `go` starts its compiler and
 linker as separate programs from the app's own storage, and Android refuses to

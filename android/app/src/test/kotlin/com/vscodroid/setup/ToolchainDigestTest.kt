@@ -216,3 +216,118 @@ class ToolchainDigestTest {
         assertEquals(1, manifests.size, "registered toolchains disagree about the manifest: $manifests")
     }
 }
+
+/**
+ * Resolving `latest` to one concrete release, so the manifest and the payload
+ * cannot come from two.
+ *
+ * The risk here runs one way, and it is the opposite of the digest reader's. A
+ * resolver that answers null too often costs the old behaviour, which is a rare
+ * race that fails closed and succeeds on retry. One that answers a plausible but
+ * wrong URL 404s every toolchain for everyone, so each function below refuses
+ * anything it does not fully recognise rather than pasting it into a URL.
+ *
+ * The redirect shape these are written against was measured on 2026-08-16:
+ * `releases/latest` answers `302` to `releases/tag/<tag>` in one hop, while
+ * `releases/latest/download/<asset>` takes two and ends at a signed CDN address
+ * that carries no tag at all.
+ */
+class LatestReleasePinningTest {
+
+    private val zip = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_go.zip"
+
+    @Test
+    fun `the release URL is derived from an asset URL`() {
+        assertEquals(
+            "https://github.com/rmyndharis/VSCodroid/releases/latest",
+            latestReleaseUrlFor(zip),
+        )
+    }
+
+    @Test
+    fun `a URL that does not go through latest resolves to nothing`() {
+        // Already pinned, so there is nothing to resolve and the caller keeps
+        // what it has.
+        assertNull(
+            latestReleaseUrlFor(
+                "https://github.com/rmyndharis/VSCodroid/releases/download/v1.0.0/toolchain_go.zip"
+            )
+        )
+    }
+
+    @Test
+    fun `the tag is read out of the redirect GitHub actually sends`() {
+        assertEquals(
+            "v1.0.0",
+            releaseTagFromLocation("https://github.com/rmyndharis/VSCodroid/releases/tag/v1.0.0"),
+        )
+        // The server release tag is not v-prefixed, and is the one this has to
+        // keep out of the app channel rather than mis-parse.
+        assertEquals(
+            "server-1.133.0",
+            releaseTagFromLocation("https://github.com/rmyndharis/VSCodroid/releases/tag/server-1.133.0"),
+        )
+    }
+
+    @Test
+    fun `a redirect that names no usable tag is refused`() {
+        // Kills a parser that takes whatever follows the marker. Each of these
+        // would build a URL that 404s, and the fallback is strictly better.
+        assertNull(releaseTagFromLocation("https://github.com/o/r/releases"))
+        assertNull(releaseTagFromLocation("https://github.com/o/r/releases/tag/"))
+        assertNull(releaseTagFromLocation("https://github.com/o/r/releases/tag/a b"))
+        assertNull(releaseTagFromLocation("https://github.com/o/r/releases/tag/../../evil"))
+    }
+
+    @Test
+    fun `pinning replaces latest with the tag and keeps the asset`() {
+        assertEquals(
+            "https://github.com/rmyndharis/VSCodroid/releases/download/v1.0.0/toolchain_go.zip",
+            pinnedAssetUrl(zip, "v1.0.0"),
+        )
+    }
+
+    @Test
+    fun `pinning refuses what it does not recognise`() {
+        assertNull(pinnedAssetUrl("https://example.test/some/other/path.zip", "v1.0.0"))
+        assertNull(pinnedAssetUrl(zip, "not a tag"))
+        // An asset that is itself a path was never the shape this is for, and
+        // pasting it would name something else entirely.
+        assertNull(
+            pinnedAssetUrl(
+                "https://github.com/o/r/releases/latest/download/nested/x.zip",
+                "v1.0.0",
+            )
+        )
+    }
+
+    @Test
+    fun `pinning the ZIP pins the manifest beside it`() {
+        // The invariant the whole change rests on. Only the ZIP URL is resolved;
+        // the manifest is derived from it afterwards, so if this ever stopped
+        // holding the two requests would silently address different releases
+        // again and nothing else would notice.
+        val pinned = pinnedAssetUrl(zip, "v1.1.0")!!
+
+        assertEquals(
+            "https://github.com/rmyndharis/VSCodroid/releases/download/v1.1.0/toolchains.sha256",
+            manifestUrlFor(pinned),
+        )
+    }
+
+    @Test
+    fun `every registered toolchain can be pinned to one release`() {
+        // The registry-wide version of the test above: one resolution has to
+        // serve all three, or a single install could pin while another does not.
+        val pinned = ToolchainRegistry.available
+            .mapNotNull { it.downloadUrl }
+            .map { pinnedAssetUrl(it, "v1.1.0") }
+
+        assertEquals(emptyList<String?>(), pinned.filter { it == null }, "a registered toolchain could not be pinned")
+        assertEquals(
+            1,
+            pinned.filterNotNull().map { manifestUrlFor(it) }.toSet().size,
+            "pinned toolchains disagree about the manifest",
+        )
+    }
+}

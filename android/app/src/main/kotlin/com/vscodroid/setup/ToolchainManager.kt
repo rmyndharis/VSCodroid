@@ -693,14 +693,19 @@ class ToolchainManager(private val context: Context) {
                     return@execute
                 }
 
+                // Once, before either request, so the manifest and the payload
+                // name the same release however long the transfer takes. Falls
+                // back to the unpinned URL, which is what shipped before this.
+                val pinnedUrl = pinLatest(url)
+
                 // Resolved before the payload, not after. A release that cannot
                 // vouch for this ZIP should cost a few hundred bytes and a clear
                 // refusal, rather than 179 MB and then a refusal.
-                val expectedDigest = publishedDigestFor(url, download)
+                val expectedDigest = publishedDigestFor(pinnedUrl, download)
 
                 // Download
                 retrying(packName, download) {
-                    downloadFile(packName, url, zipFile, estimatedSize, download)
+                    downloadFile(packName, pinnedUrl, zipFile, estimatedSize, download)
                 }
 
                 if (download.cancelled) {
@@ -893,6 +898,59 @@ class ToolchainManager(private val context: Context) {
                 String(buffer, 0, total)
             }
         }
+
+    /**
+     * [zipUrl] with `latest` resolved to the release it names right now, or
+     * [zipUrl] unchanged when it cannot be resolved.
+     *
+     * The manifest and the payload are two requests minutes apart, and both used
+     * to go through `latest` independently, so a release published between them
+     * handed back bytes to check against a digest read from the release before
+     * it. Resolving once and building both URLs from the answer is what closes
+     * that; [manifestUrlFor] derives the manifest beside the ZIP, so pinning the
+     * ZIP pins the manifest for free.
+     *
+     * One HEAD, one hop, no body. `releases/latest` answers `releases/tag/<tag>`
+     * and involves no asset, which is why it is asked rather than the asset URL:
+     * that one redirects twice and ends at a signed CDN address carrying no tag.
+     *
+     * **Falls back to the unpinned URL on any failure, deliberately.** A wrong
+     * pin would 404 every toolchain for everyone, while the unpinned URL is what
+     * shipped before this existed. So the floor here is the old behaviour and
+     * the ceiling is a closed window, and nothing in between can be worse than
+     * where it started.
+     */
+    private fun pinLatest(zipUrl: String): String {
+        val latestUrl = latestReleaseUrlFor(zipUrl) ?: return zipUrl
+        val pinned = try {
+            val conn = URL(latestUrl).openConnection() as HttpURLConnection
+            try {
+                conn.connectTimeout = HTTP_TIMEOUT_MS
+                conn.readTimeout = HTTP_TIMEOUT_MS
+                conn.instanceFollowRedirects = false
+                conn.requestMethod = "HEAD"
+                conn.setRequestProperty("User-Agent", "VSCodroid")
+                val code = conn.responseCode
+                val location = if (code in 300..399) conn.getHeaderField("Location") else null
+                location?.let { releaseTagFromLocation(it) }?.let { pinnedAssetUrl(zipUrl, it) }
+            } finally {
+                conn.disconnect()
+            }
+        } catch (e: IOException) {
+            Logger.w(tag, "Could not resolve the latest release: ${e.message}")
+            null
+        }
+        if (pinned == null) {
+            Logger.w(
+                tag,
+                "Falling back to the unpinned release URL; the digest and the payload " +
+                    "may come from different releases if one is published mid-download",
+            )
+            return zipUrl
+        }
+        Logger.i(tag, "Pinned this install to ${pinned.substringBeforeLast('/')}")
+        return pinned
+    }
 
     /**
      * The digest the release publishes for [zipName], or a refusal.
@@ -1567,15 +1625,77 @@ private const val MANIFEST_NAME = "toolchains.sha256"
  * beyond that is diagnostic: in the log it is indistinguishable from the
  * tampering this check exists to catch.
  *
- * Closing it properly means resolving `latest` to a concrete release once and
- * building both URLs from that, so the pair cannot straddle a publish. That is
- * deliberately not done here: it depends on the shape of GitHub's redirect
- * chain for release assets, which nothing in this repository has measured, and
- * a wrong guess about it breaks every install rather than a rare one. Measure
- * it against a real release first.
+ * That window is closed before this is called, by [pinnedAssetUrl] and the
+ * resolution in front of it: the ZIP URL handed here already names a concrete
+ * release, so deriving the manifest beside it inherits the same one. The
+ * paragraphs above describe what happens when that resolution fails and the
+ * unpinned URL is used as a fallback, which is the old behaviour and the floor
+ * this can never drop below.
  */
 internal fun manifestUrlFor(zipUrl: String): String =
     zipUrl.substringBeforeLast('/') + "/" + MANIFEST_NAME
+
+/**
+ * The release-level `latest` URL an asset URL resolves through, or null when
+ * the URL is not of that shape.
+ *
+ * `https://host/o/r/releases/latest/download/x.zip` gives
+ * `https://host/o/r/releases/latest`.
+ *
+ * Deliberately the RELEASE redirect and not the asset one. Measured 2026-08-16:
+ * `releases/latest/download/<asset>` redirects to
+ * `releases/download/<tag>/<asset>` and then again to a signed CDN URL that
+ * carries no tag, so reading the end of that chain answers nothing and reading
+ * its middle means depending on how many hops there are. `releases/latest`
+ * redirects once, to `releases/tag/<tag>`, and involves no asset at all.
+ */
+internal fun latestReleaseUrlFor(assetUrl: String): String? {
+    val i = assetUrl.indexOf(LATEST_DOWNLOAD)
+    return if (i < 0) null else assetUrl.substring(0, i) + "/releases/latest"
+}
+
+/**
+ * The tag named by a `releases/latest` redirect, or null.
+ *
+ * `https://host/o/r/releases/tag/v1.2.3` gives `v1.2.3`.
+ *
+ * A tag that is not plainly a tag is refused rather than pasted into a URL.
+ * Everything downstream falls back to the unpinned URL on null, so refusing
+ * costs the old behaviour; accepting something with a slash or a space in it
+ * would build a URL that 404s for every toolchain.
+ */
+internal fun releaseTagFromLocation(location: String): String? {
+    val i = location.indexOf(RELEASES_TAG)
+    if (i < 0) return null
+    val tag = location.substring(i + RELEASES_TAG.length)
+        .substringBefore('?')
+        .substringBefore('#')
+        .trim('/')
+    return if (tag.isNotEmpty() && TAG_CHARS.matches(tag)) tag else null
+}
+
+/**
+ * [assetUrl] with `latest` replaced by a concrete [tag], or null.
+ *
+ * `.../releases/latest/download/x.zip` and `v1.2.3` give
+ * `.../releases/download/v1.2.3/x.zip`.
+ *
+ * Refuses an asset name containing a slash, because that would mean the URL was
+ * not the flat `releases/latest/download/<name>` this is written for and the
+ * result would name something else entirely.
+ */
+internal fun pinnedAssetUrl(assetUrl: String, tag: String): String? {
+    val i = assetUrl.indexOf(LATEST_DOWNLOAD)
+    if (i < 0) return null
+    val asset = assetUrl.substring(i + LATEST_DOWNLOAD.length)
+    if (asset.isEmpty() || asset.contains('/')) return null
+    if (!TAG_CHARS.matches(tag)) return null
+    return assetUrl.substring(0, i) + "/releases/download/" + tag + "/" + asset
+}
+
+private const val LATEST_DOWNLOAD = "/releases/latest/download/"
+private const val RELEASES_TAG = "/releases/tag/"
+private val TAG_CHARS = Regex("""[A-Za-z0-9._-]+""")
 
 /**
  * The digest a `sha256sum` manifest publishes for [fileName], or null when it
