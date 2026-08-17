@@ -59,6 +59,8 @@ like one that compared all forty-four, and the failing branch above cannot fire
 for a package nobody read. So a floor under that count fails. It answers a
 different question from the paragraph above: upstream answering for hardly any
 of the map means these package names have moved, not that the network is down.
+A run that trips the floor caches nothing, so the reading that tripped it cannot
+outlive it and answer for a week of runs that never asked upstream anything.
 
 Two things this must not do, both of which would damage the gate it checks.
 
@@ -338,13 +340,6 @@ def main():
         print("skip -- could not read TERMUX_PKG_LICENSE from "
               f"raw.githubusercontent.com ({exc}); no licence was compared")
         return 0
-    if fetched:
-        # Only when something was actually fetched. Rewriting the file on a run
-        # that answered entirely from it would touch its mtime, and the mtime is
-        # what expires it, so a cache refreshed by its own reader would never be
-        # refetched and the report would freeze at whatever it first saw.
-        write_cache(cache, cached_age)
-
     agree, differ, understated, unstated, unread = [], [], [], [], []
     for pkg, hits in mapped:
         theirs, why = cache[pkg]
@@ -401,7 +396,8 @@ def main():
     # termux-packages layout having moved. The comparison is then meaningless
     # while the report above still reads as an orderly one, and the copyleft
     # branch cannot fire for a package nobody read.
-    if mapped and compared < len(mapped) * MIN_COMPARED_SHARE:
+    under_floor = bool(mapped) and compared < len(mapped) * MIN_COMPARED_SHARE
+    if under_floor:
         print(f"FAIL only {compared} of {len(mapped)} packages could be read "
               f"upstream, under the {MIN_COMPARED_SHARE:.0%} this comparison "
               "needs to mean anything", file=sys.stderr)
@@ -410,6 +406,17 @@ def main():
               "the termux-packages layout, have moved. Every unread package is "
               "a licence nobody checked", file=sys.stderr)
         failed = True
+
+    # After the verdict, and never on a run the floor rejected. A cached answer
+    # carries a week of life, so a reading too thin to compare would answer for
+    # every run in that week: the same failure, with no request made, on a healthy
+    # network, and nothing the message names left to fix. Only when something was
+    # actually fetched, too: rewriting the file on a run that answered entirely
+    # from it would touch its mtime, and the mtime is what expires it, so a cache
+    # refreshed by its own reader would never be refetched and the report would
+    # freeze at whatever it first saw.
+    if fetched and not under_floor:
+        write_cache(cache, cached_age)
     return 1 if failed else 0
 
 
