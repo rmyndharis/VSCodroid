@@ -33,14 +33,24 @@ import javax.xml.parsers.DocumentBuilderFactory
  */
 class HardwareKeyboardTest {
 
-    private val kotlinSources = File("src/main/kotlin")
+    /**
+     * Both source roots the build compiles Kotlin from, not just the populated
+     * one. Every file lives under src/main/kotlin today, but src/main/java is
+     * the other default root and is the location an IDE offers first when a new
+     * class is added to an Android module. A `.kt` file landing there is
+     * compiled into the app identically, so a scan of one root reports a clean
+     * tree while the override is in the APK. The control below cannot reveal
+     * that, because it looks for a file in the root that is read either way.
+     */
+    private val kotlinSources = listOf(File("src/main/kotlin"), File("src/main/java"))
 
     private val manifest = File("src/main/AndroidManifest.xml")
 
-    /** Every override of [names] under src/main/kotlin, as `path:line: text`. */
+    /** Every override of [names] under [kotlinSources], as `path:line: text`. */
     private fun overridesOf(vararg names: String): List<String> {
         val declaration = Regex("""\boverride\s+fun\s+(${names.joinToString("|")})\s*\(""")
-        return kotlinSources.walkTopDown()
+        return kotlinSources.asSequence()
+            .flatMap { it.walkTopDown() }
             .filter { it.isFile && it.extension == "kt" }
             .flatMap { file ->
                 file.readLines().withIndex()
@@ -59,9 +69,9 @@ class HardwareKeyboardTest {
 
     @Test
     fun `no key event is intercepted before the WebView sees it`() {
-        check(kotlinSources.isDirectory) {
-            "no Kotlin sources at ${kotlinSources.absolutePath}: this test would " +
-                "otherwise pass by looking at nothing"
+        check(kotlinSources.any { it.isDirectory }) {
+            "no Kotlin sources at ${kotlinSources.map { it.absolutePath }}: this test " +
+                "would otherwise pass by looking at nothing"
         }
 
         // The control, and it has to come first, because this guard is the kind
@@ -86,6 +96,11 @@ class HardwareKeyboardTest {
             "onKeyMultiple",
             "onKeyPreIme",
             "onKeyShortcut",
+            // Not a View callback like the rest, and the one that would be easy
+            // to miss for that reason. WebViewClient.shouldOverrideKeyEvent is
+            // asked before the page is given the key, and returning true keeps
+            // it, so it swallows a keystroke exactly as the others do.
+            "shouldOverrideKeyEvent",
         )
 
         assertEquals(
