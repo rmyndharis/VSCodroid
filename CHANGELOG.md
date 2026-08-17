@@ -77,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Serve on Network**: lists the ports your dev servers are listening on, shows the address other devices can reach them at, and copies it. Loopback-only servers are called out.
 - You can preview your own dev server at the device's network address from inside the editor, not only at `localhost`.
 - `Simple Browser: Show` opens any loopback address in a tab beside your code. It shipped all along and was documented nowhere.
-- The guide documents two silent limits: the interface is English only, and an extension bundling a compiled Linux program installs and never runs. The Get Started screen warns of the second.
+- The guide documents two silent limits: the interface is English only, and an extension bundling a compiled Linux program can install and never run. The Get Started screen warns of the second.
 - **GitHub Copilot Chat works on device**: platform packages aliased under the name Android resolves, the SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic.
 - **Claude Code extension support**: the marketplace serves its musl build, the CLI starts through the bundled musl loader, and a loopback DNS proxy gives musl binaries name resolution.
 - A glibc compatibility shim so prebuilt glibc-only addons load against Bionic, supplying the `__isoc99_` scanf family, the ctype tables and `copy_file_range`, and translating differently-numbered constants.

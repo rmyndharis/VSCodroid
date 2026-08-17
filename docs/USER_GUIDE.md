@@ -570,22 +570,32 @@ Extensions exclusive to the Microsoft Marketplace (such as Microsoft C/C++ and s
 ### Extensions That Bundle a Compiled Program
 
 Extensions written in JavaScript, TypeScript or WebAssembly work. An extension
-that carries a program compiled for desktop Linux does not, and the way it fails
-is the real problem: it installs, it shows as enabled in the Extensions panel,
-and then its features are simply absent. No error, no notification, nothing on
-screen. That silence is the editor's own behaviour, not a fault in VSCodroid: a
-release build writes an extension's startup failure to a log and deliberately
-raises no notification for it.
+that carries a program compiled for desktop Linux may not, and when it does not,
+the way it fails is the real problem: it installs, it shows as enabled in the
+Extensions panel, and then its features are simply absent. No error, no
+notification, nothing on screen. That silence is the editor's own behaviour, not
+a fault in VSCodroid: a release build writes an extension's startup failure to a
+log and deliberately raises no notification for it.
 
-Two walls stand behind this. Android's C library is not the one desktop Linux
-distributions use, so a program built for them cannot start here, and a compiled
-Node add-on built for them cannot be loaded into the editor. Separately, Android
-refuses to execute any file inside an app's own storage, which is exactly where
-an installed extension lives, so even a correctly built program has to be handed
-to a loader by something else. VSCodroid asks the marketplace for the musl build
-wherever an extension publishes one, which is what makes that route possible at
-all, but the extension itself then has to offer a setting that lets its command
-be prefixed. Almost none do.
+Two walls stand behind this, and they are not the same wall. The first is that
+Android's C library is not the one desktop Linux distributions build against, so
+a whole program compiled for them cannot start here at all. An add-on loaded
+into the editor is the softer case: VSCodroid ships a compatibility layer that
+lets add-ons built for desktop Linux load anyway, and the ones inside the app
+depend on it. That layer is generated from the add-ons the app itself carries,
+supplying the library names and the exact functions those ask for, so an add-on
+you install later loads only if what it asks for happens to fall inside that
+same set. An add-on built against GNU's C++ standard library is outside it
+altogether, and even a load that succeeds is not a promise: the two C libraries
+lay some structures out differently, so an add-on can start and then misbehave.
+
+The second wall is that Android refuses to execute any file inside an app's own
+storage, which is exactly where an installed extension lives, so even a
+correctly built program has to be handed to a loader by something else.
+VSCodroid asks the marketplace for the musl build wherever an extension
+publishes one, which is what makes that route possible at all, but the extension
+itself then has to offer a setting that lets its command be prefixed. Almost
+none do.
 
 **How to recognise it.** The extension is installed and enabled, its commands are
 missing from the Command Palette or do nothing when run, and the Problems panel
@@ -604,7 +614,7 @@ TypeScript, or compiled to WebAssembly. On an extension's Open VSX page, a
 download list naming several operating systems and processors is certain to be
 shipping a compiled program. A single download covering all platforms is not
 proof of the opposite: some extensions carry a compiled helper inside that one
-package, and the helper is the part that fails.
+package, and the helper is the part that can fail.
 
 ### The Interface Is English Only
 

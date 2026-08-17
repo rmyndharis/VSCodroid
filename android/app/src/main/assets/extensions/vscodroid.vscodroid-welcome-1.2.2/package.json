@@ -67,7 +67,7 @@
           {
             "id": "extensions",
             "title": "Extend with more features",
-            "description": "Install extensions from the Open VSX marketplace for language support, themes, and tools.\n\nExtensions written in JavaScript work. The few that bundle a program compiled for desktop Linux install without complaint and then do nothing, with no error on screen.\n\n[Browse Extensions](command:workbench.view.extensions)",
+            "description": "Install extensions from the Open VSX marketplace for language support, themes, and tools.\n\nExtensions written in JavaScript work. The few that bundle a program compiled for desktop Linux can install without complaint and then do nothing, with no error on screen.\n\n[Browse Extensions](command:workbench.view.extensions)",
             "media": {
               "svg": "media/extensions.svg"
             },
