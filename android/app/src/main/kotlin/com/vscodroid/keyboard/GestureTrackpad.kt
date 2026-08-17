@@ -11,16 +11,14 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import com.vscodroid.R
-import kotlin.math.abs
-import kotlin.math.sign
 
 /**
  * Drag-to-navigate trackpad that replaces 4 arrow key buttons with a single gesture area.
  *
- * Three speed gears activate based on cumulative drag distance:
- * - Precise (0dp): 24dp per arrow — character-by-character
- * - Moderate (100dp): 14dp per arrow — word navigation
- * - Fast (250dp): 6dp per arrow — line/file traversal
+ * Three speed gears activate based on cumulative drag distance; the distances
+ * and the arrows a drag earns live in [TrackpadGesture], which has no Android
+ * types in it and is tested on the JVM. What is left here is touch plumbing and
+ * drawing.
  */
 @SuppressLint("ClickableViewAccessibility")
 class GestureTrackpad @JvmOverloads constructor(
@@ -43,18 +41,11 @@ class GestureTrackpad @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
 
-    private enum class Gear(val activationDp: Float, val thresholdDp: Float) {
-        PRECISE(0f, 24f),
-        MODERATE(100f, 14f),
-        FAST(250f, 6f)
-    }
+    private val gesture = TrackpadGesture()
 
     private var tracking = false
     private var lastX = 0f
     private var lastY = 0f
-    private var accumulatedDx = 0f
-    private var accumulatedDy = 0f
-    private var totalDistance = 0f
     private var touchOffsetX = 0f
     private var touchOffsetY = 0f
 
@@ -103,9 +94,7 @@ class GestureTrackpad @JvmOverloads constructor(
                 tracking = true
                 lastX = event.x
                 lastY = event.y
-                accumulatedDx = 0f
-                accumulatedDy = 0f
-                totalDistance = 0f
+                gesture.reset()
                 touchOffsetX = 0f
                 touchOffsetY = 0f
                 parent.requestDisallowInterceptTouchEvent(true)
@@ -120,27 +109,13 @@ class GestureTrackpad @JvmOverloads constructor(
                 lastX = event.x
                 lastY = event.y
 
-                totalDistance += abs(dx) + abs(dy)
-                val threshold = dpToPx(getCurrentGear().thresholdDp)
-
-                accumulatedDx += dx
-                accumulatedDy += dy
-
                 touchOffsetX = event.x - width / 2f
                 touchOffsetY = event.y - height / 2f
 
-                // Emit horizontal arrows
-                while (abs(accumulatedDx) >= threshold) {
-                    val direction = if (accumulatedDx > 0) "ArrowRight" else "ArrowLeft"
+                val directions =
+                    gesture.accumulate(dx, dy, resources.displayMetrics.density)
+                for (direction in directions) {
                     onArrowKey?.invoke(direction)
-                    accumulatedDx -= sign(accumulatedDx) * threshold
-                }
-
-                // Emit vertical arrows
-                while (abs(accumulatedDy) >= threshold) {
-                    val direction = if (accumulatedDy > 0) "ArrowDown" else "ArrowUp"
-                    onArrowKey?.invoke(direction)
-                    accumulatedDy -= sign(accumulatedDy) * threshold
                 }
 
                 invalidate()
@@ -157,15 +132,6 @@ class GestureTrackpad @JvmOverloads constructor(
             }
         }
         return super.onTouchEvent(event)
-    }
-
-    private fun getCurrentGear(): Gear {
-        val totalDp = totalDistance / resources.displayMetrics.density
-        return when {
-            totalDp >= Gear.FAST.activationDp -> Gear.FAST
-            totalDp >= Gear.MODERATE.activationDp -> Gear.MODERATE
-            else -> Gear.PRECISE
-        }
     }
 
     private fun dpToPx(dp: Float): Float =
