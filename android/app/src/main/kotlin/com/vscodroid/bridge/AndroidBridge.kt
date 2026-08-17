@@ -83,10 +83,13 @@ private const val MAX_TRACKED_SIGN_INS = 32
  * number of rounds untouched, since every character in it is unreserved; only the
  * `=` moves, to `%3D`, then `%253D`.
  *
- * The cost of being wrong is asymmetric and worth stating. An id this misses is a
- * sign-in that gets refused, and the caller now says so rather than hanging. An
- * id it invents is not reachable: the value has to come out of a URL the
- * workbench asked this app to open, which already requires the session token.
+ * The cost of being wrong is asymmetric and worth stating. An id this misses
+ * arms nothing, so the callback that comes back for it is refused in the log and
+ * nowhere else: the message for a late arrival sits on the other side of that
+ * branch, and `openExternalUrl` still reports the launch as made, so the sign-in
+ * fails quietly. An id it invents is not reachable: the value has to come out of
+ * a URL the workbench asked this app to open, which already requires the session
+ * token.
  */
 private val AUTH_REQUEST_ID = Regex("""vscode-reqid(?:=|%(?:25)*3[Dd])(\d+)""")
 
@@ -121,6 +124,13 @@ internal fun authRequestIdsIn(url: String): List<String> =
  * still in flight, so consuming the entry on arrival would let that reload fire
  * into the moment the workbench is collecting the value.
  *
+ * They are removed once that explanation has been given, which is the bound on
+ * it. An entry kept for the life of the process is one an outside caller can
+ * name at will through the exported filter, and the id it has to guess is a
+ * small integer; taking the entry back as the message goes up means each launch
+ * can produce that message at most once, and every repeat lands in the branch
+ * that says nothing.
+ *
  * Time is supplied by callers from the monotonic clock, never from wall time, so
  * that changing the device clock mid-sign-in neither breaks a real return nor
  * reopens the window. No arithmetic happens here; the window is applied by
@@ -136,21 +146,40 @@ object AuthTabWindow {
     /**
      * Records a browser launch against the request ids it carries.
      *
-     * @return the ids this call newly recorded, which is what [disarm] takes back
-     *   if the launch then throws. An id already recorded keeps its original
-     *   reading rather than being pushed forward: the earlier reading is the
-     *   conservative one, it closes the window sooner, and a launch that fails
-     *   must not be able to extend a request already in flight.
+     * An id already recorded is moved forward to this launch's reading rather
+     * than keeping its earlier one, because ids repeat. The workbench mints them
+     * from a class static that is re-initialised with the page --
+     * `static{this.REQUEST_ID=0}`, then `++REQUEST_ID` per request -- so every
+     * reload, folder switch and renderer recreation starts counting at one again.
+     * "Already recorded" therefore does not mean the same request seen twice; it
+     * routinely means a launch from a page that no longer exists. Keeping that
+     * older reading let it decide the window for the sign-in actually in flight,
+     * and refused a callback that came back in seconds with a message saying it
+     * had taken too long.
+     *
+     * @return the ids this call recorded, which is what [disarm] takes back if
+     *   the launch then throws. Rolling a repeated id back removes it rather than
+     *   restoring the older reading: the request that reading belonged to was
+     *   minted by a page since replaced, and the workbench holds the ids it is
+     *   waiting on in memory, so nothing is left that could still satisfy it.
      */
     @Synchronized
     fun arm(requestIds: Collection<String>, nowMillis: Long): List<String> {
-        val added = requestIds.filterNot { launches.containsKey(it) }
-        added.forEach { launches[it] = nowMillis }
-        return added
+        val armed = requestIds.distinct()
+        armed.forEach {
+            // Taken out before being put back, so a repeated id counts as the
+            // newest entry instead of keeping the position of the launch it
+            // replaces. The cap below is documented to hold the most recent
+            // launches, and a plain overwrite leaves insertion order untouched.
+            launches.remove(it)
+            launches[it] = nowMillis
+        }
+        return armed
     }
 
     /**
-     * Takes back the ids a launch armed, for a launch that then threw.
+     * Takes back launch records: the ids a launch armed when that launch then
+     * threw, and an id whose late arrival has already been explained.
      *
      * Arming has to happen before the launch (see the caller), so a launch that
      * never happened had already opened the relay to the ids it named, and until

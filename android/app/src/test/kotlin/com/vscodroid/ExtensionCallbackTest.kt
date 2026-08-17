@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import android.net.Uri
+import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.webview.redactToken
@@ -118,17 +119,49 @@ class AuthTabWindowTest {
     }
 
     @Test
-    fun `an id already in flight keeps its first reading and is not reported as newly armed`() {
-        // Both halves matter and they are the same fact seen twice. The earlier
-        // reading is the conservative one, it closes the window sooner; and
-        // reporting the id as newly armed would let a launch that then threw take
-        // back a request that was already in flight, refusing a real return.
+    fun `a repeated id is moved forward to the launch that is actually in flight`() {
+        // Ids repeat, which is what makes keeping the first reading the wrong
+        // answer rather than the cautious one. The workbench counts them from one
+        // out of a class static that is re-initialised with the page, so a
+        // reload, a folder switch or a renderer recreation hands the same id to
+        // the next sign-in. Holding the older reading meant a launch from a page
+        // that no longer exists decided the window for the sign-in in flight: the
+        // callback came back in seconds and was refused, with a message telling
+        // the user their sign-in had taken too long.
         AuthTabWindow.arm(listOf("900001"), 1_000L)
 
-        val added = AuthTabWindow.arm(listOf("900001"), 9_000L)
+        val armed = AuthTabWindow.arm(listOf("900001"), 9_000L)
 
-        assertEquals(emptyList<String>(), added)
-        assertEquals(1_000L, AuthTabWindow.armedAt("900001"))
+        assertEquals(
+            9_000L, AuthTabWindow.armedAt("900001"),
+            "the window is still being judged from a launch the user has already left behind",
+        )
+        assertEquals(
+            listOf("900001"), armed,
+            "the ids a launch records are the ids its rollback has to take back",
+        )
+    }
+
+    @Test
+    fun `a sign-in started after a page reload is judged from its own launch`() {
+        // The same fact as the case above, carried through to the answer the
+        // relay actually gives, because that is where it was costing something.
+        // A sign-in in the morning arms 900001. Hours later the page reloads --
+        // after a folder switch, a renderer recreation or the resume path -- the
+        // workbench counter starts again, and the next sign-in is handed 900001
+        // too. Its callback comes back thirty seconds later.
+        AuthTabWindow.arm(listOf("900001"), 1_000L)
+
+        AuthTabWindow.arm(listOf("900001"), 1_201_000L)
+
+        val armedAt = AuthTabWindow.armedAt("900001")
+        assertNotNull(armedAt, "the launch just made was not recorded at all")
+        assertTrue(
+            authCallbackIsExpected(armedAt!!, 1_231_000L, AUTH_TAB_WINDOW_MILLIS),
+            "a callback thirty seconds after its own launch was refused, because the id was " +
+                "still carrying the reading of a sign-in from two hours before. The user is " +
+                "told the sign-in took too long, and every retry in that page repeats it.",
+        )
     }
 
     @Test
@@ -340,6 +373,86 @@ class AuthCallbackCallSiteTest {
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
 
+    private companion object {
+        /** What [skeleton] leaves behind where a string literal stood. */
+        const val LITERAL = "STR"
+
+        const val TOAST = "Toast.makeText("
+    }
+
+    /**
+     * [source] with every string literal collapsed to [LITERAL].
+     *
+     * What is left is the shape of the expression, which is the property worth
+     * measuring: a message built from literals alone reads as `STR + STR`, and
+     * anything else reaching it -- a variable, a call, a template hole -- leaves
+     * a name or a marker behind. Searching the text for one composition operator
+     * measures the operator rather than the property, and misses the other.
+     *
+     * A literal that interpolates is collapsed to `STR$`, because a hole inside a
+     * literal takes its value from outside it exactly as `+` does. An escaped
+     * character is skipped whole: `\$` is a dollar sign, not a hole, and `\"`
+     * does not end the literal.
+     */
+    private fun skeleton(source: String): String {
+        val out = StringBuilder()
+        val literal = StringBuilder()
+        var inLiteral = false
+        var i = 0
+        while (i < source.length) {
+            val c = source[i]
+            when {
+                inLiteral && c == '\\' -> i++
+                c == '"' -> {
+                    if (inLiteral) {
+                        out.append(if (literal.contains('$')) "$LITERAL\$" else LITERAL)
+                        literal.clear()
+                    }
+                    inLiteral = !inLiteral
+                }
+                inLiteral -> literal.append(c)
+                else -> out.append(c)
+            }
+            i++
+        }
+        return out.toString()
+    }
+
+    /**
+     * The message argument of every [TOAST] call in a [skeleton]ised source.
+     *
+     * Balanced rather than line-based: the calls here are written over four lines
+     * and the message is the one argument that is allowed to vary.
+     */
+    private fun toastMessages(skeletonised: String): List<String> {
+        val messages = mutableListOf<String>()
+        var from = 0
+        while (true) {
+            val start = skeletonised.indexOf(TOAST, from)
+            if (start < 0) return messages
+            val args = mutableListOf<String>()
+            var i = start + TOAST.length
+            var argStart = i
+            var depth = 1
+            while (i < skeletonised.length && depth > 0) {
+                when (skeletonised[i]) {
+                    '(' -> depth++
+                    ')' -> {
+                        depth--
+                        if (depth == 0) args += skeletonised.substring(argStart, i)
+                    }
+                    ',' -> if (depth == 1) {
+                        args += skeletonised.substring(argStart, i)
+                        argStart = i + 1
+                    }
+                }
+                i++
+            }
+            messages += args.getOrElse(1) { "" }
+            from = i
+        }
+    }
+
     @Test
     fun `the relay asks whether a sign-in was in flight`() {
         check(mainActivity.isFile) {
@@ -456,10 +569,18 @@ class AuthCallbackCallSiteTest {
     @Test
     fun `the message for a callback that arrived too late carries nothing from it`() {
         // The message exists because a sign-in that took longer than the window
-        // used to die in silence. It is reached only after the id has been matched
-        // to a launch this app made, so it cannot be raised by an outside caller;
-        // what it must never do is put any part of the payload on the screen,
-        // since that payload is attacker-shaped by construction.
+        // used to die in silence. Reaching it needs an id this app really did
+        // launch a browser for, which is a bound rather than a gate: the id is an
+        // integer the workbench counts from one and the filter is exported, so an
+        // outside caller can reach this once per launch the user made. What it
+        // must never do is put any part of the payload on the screen, since that
+        // payload is attacker-shaped by construction.
+        //
+        // Measured on the expression, not on the line. The predecessor of this
+        // assertion looked for a `$` beside a quote, which is one of the two ways
+        // to build a message out of a value: `"too long: " + payload` carries no
+        // `$` at all, and the mutation that inlines the intent's own `data`
+        // parameter that way left every case here green.
         check(mainActivity.isFile) { "MainActivity.kt not found" }
 
         val body = code(mainActivity)
@@ -474,21 +595,75 @@ class AuthCallbackCallSiteTest {
             "expected the restart message and the expiry message, found ${toasts.size}: $toasts",
         )
 
-        val interpolated = body.filter { it.contains("\"") && it.contains("$") }
+        val messages = toastMessages(skeleton(body.joinToString("\n")))
         assertEquals(
-            emptyList<String>(), interpolated,
-            "a message shown here must be fixed text. Anything interpolated into it can " +
-                "be chosen by whoever fired the intent, and this app is the one the user " +
-                "trusts to be telling them about their sign-in.",
+            2, messages.size,
+            "expected to read two message arguments, found ${messages.size}: $messages",
+        )
+        messages.forEach { message ->
+            val beyondLiterals = message
+                .replace(LITERAL, "")
+                .filterNot { it.isWhitespace() || it == '+' }
+            assertEquals(
+                "", beyondLiterals,
+                "a message shown here must be fixed text, and this one is assembled from " +
+                    "something else: `$message` ($LITERAL stands for a string literal, and a " +
+                    "trailing \$ for a template hole inside one). Whatever reaches it can be " +
+                    "chosen by whoever fired the intent, and this app is the one the user " +
+                    "trusts to be telling them about their sign-in.",
+            )
+        }
+    }
+
+    @Test
+    fun `the late message is given once per launch, not on every arrival`() {
+        // What keeps that message from being something an outside caller can
+        // operate. Records are kept past their own window on purpose, so once the
+        // user has signed in, an id this app launched stays known for the life of
+        // the process, and the id is a small integer through an exported
+        // BROWSABLE filter. Without the record being taken back as the message
+        // goes up, anything on the device can raise "Sign-in took too long" in a
+        // loop, branded as this app and nagging the user to re-authenticate on
+        // someone else's cue.
+        //
+        // Asserted on the source because the branch lives in an Activity method,
+        // which cannot be built in a plain JVM test. Position is the property:
+        // taking the record back before the timing gate would refuse the sign-in
+        // the user is actually completing, and taking it back after the gate has
+        // passed would consume a callback that is about to be relayed.
+        check(mainActivity.isFile) { "MainActivity.kt not found" }
+
+        val body = code(mainActivity)
+            .dropWhile { !it.contains("private fun receiveCallbackIntent(") }
+            .drop(1)
+            .takeWhile { it != "    }" }
+        check(body.isNotEmpty()) { "receiveCallbackIntent not found; this test is measuring nothing" }
+
+        val gate = body.indexOfFirst { it.contains("authCallbackIsExpected(") }
+        val relay = body.indexOfFirst { it.contains("handleExtensionCallback(") }
+        val taken = body.indexOfFirst { it.contains("AuthTabWindow.disarm(") }
+
+        assertTrue(gate >= 0, "the timing gate is gone")
+        assertTrue(relay >= 0, "the relay itself is gone")
+        assertTrue(
+            taken > gate,
+            "the launch record must be taken back inside the branch that shows the expiry " +
+                "message; found the timing gate at line $gate and the take-back at $taken",
+        )
+        assertTrue(
+            taken < relay,
+            "the take-back must sit in the refusing branch, not on the accepting one: a " +
+                "callback that is being relayed is still being collected by the workbench, " +
+                "and the forced reload asks this same record whether to stay out of the way",
         )
     }
 
     @Test
     fun `the forced reload asks whether a sign-in is still able to come back`() {
-        // The race the hold exists for: returning after five minutes is the
-        // ordinary shape of a sign-in that needed a second factor, and the reload
-        // discards the page the callback has to land in. Dropping the argument
-        // leaves resumeAction correct and never reaching its holding branch.
+        // The race the sign-in branch exists for: returning after five minutes is
+        // the ordinary shape of a sign-in that needed a second factor, and the
+        // reload discards the page the callback has to land in. Dropping the
+        // argument leaves resumeAction correct and its first branch unreachable.
         check(mainActivity.isFile) { "MainActivity.kt not found" }
 
         val decisions = code(mainActivity).filter { it.contains("resumeAction(") }
@@ -1284,15 +1459,22 @@ class ResumeActionTest {
     private val middling = HEALTH_CHECK_THRESHOLD_MS + 1
 
     @Test
-    fun `a long absence with a sign-in in flight holds the reload`() {
-        assertEquals(ResumeAction.HOLD_FOR_SIGN_IN, resumeAction(long, signInPending = true))
+    fun `a long absence with a sign-in in flight probes instead of reloading`() {
+        // Not NOTHING, and that is the half worth stating. The absence really was
+        // long enough for the connection to have died, and no later resume comes
+        // back to it: each one is judged on its own absence, so an action skipped
+        // here is an action never taken. The probe is what can be answered safely
+        // -- it reloads only when IndexedDB is already unusable, and such a page
+        // has nothing left to collect a callback with.
+        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(long, signInPending = true))
     }
 
     @Test
     fun `a long absence with nothing in flight still reloads`() {
-        // The control, and the half that matters more often: holding
-        // unconditionally would leave a page stale for the rest of the session,
-        // which is the failure the reload was added for in the first place.
+        // The control, and the half that matters more often: downgrading every
+        // long absence to the probe would leave a page stale for the rest of the
+        // session, which is the failure the reload was added for in the first
+        // place.
         assertEquals(ResumeAction.RELOAD, resumeAction(long, signInPending = false))
     }
 
@@ -1313,15 +1495,16 @@ class ResumeActionTest {
     }
 
     @Test
-    fun `the hold is tested before the reload, not after`() {
+    fun `the sign-in case is tested before the reload, not after`() {
         // The mutation is reordering the two branches, which compiles, reads
-        // fine, and makes the holding branch unreachable. At exactly the
-        // threshold neither fires, which is the boundary worth stating too.
-        assertEquals(ResumeAction.HOLD_FOR_SIGN_IN, resumeAction(long, signInPending = true))
+        // fine, and makes the sign-in branch unreachable -- so a return from a
+        // second factor reloads the page the callback has to land in. At exactly
+        // the threshold neither fires, which is the boundary worth stating too.
+        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(long, signInPending = true))
         assertEquals(
             ResumeAction.PROBE_CONNECTION,
             resumeAction(FORCE_RELOAD_THRESHOLD_MS, signInPending = true),
-            "the reload threshold is exclusive; at the boundary there is nothing to hold",
+            "the reload threshold is exclusive; at the boundary there is no reload to spare",
         )
     }
 }

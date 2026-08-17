@@ -336,13 +336,27 @@ intent:
 | `isExtensionCallback(scheme, host)` | `MainActivity.kt` | Anything that is not exactly scheme `vscodroid` **and** host `callback` |
 | `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast rather than injecting — deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
 | `AuthTabWindow.armedAt(callbackRequestId(data))` | `MainActivity.kt` | A callback whose payload cannot be parsed, or whose `vscode-reqid` this app never launched a browser for. Logged only; a message here would be one an outside caller could raise at will |
-| `authCallbackIsExpected(armedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback for a request this app did launch, arriving more than `AUTH_TAB_WINDOW_MILLIS` (10 minutes, `AndroidBridge.kt`) after that launch. Shows a fixed "sign-in took too long" toast, since a slow consent screen or second factor otherwise fails in silence |
+| `authCallbackIsExpected(armedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback for a request this app did launch, arriving more than `AUTH_TAB_WINDOW_MILLIS` (10 minutes, `AndroidBridge.kt`) after that launch. Shows a fixed "sign-in took too long" toast, since a slow consent screen or second factor otherwise fails in silence, and takes the launch record back as it does so |
 
 The last two gates together test whether *this app* went looking for **this**
 sign-in, which is the only thing separating a genuine return from an invented one.
 The legitimate sender is a browser, so there is no caller identity to check, and
 the callback id is a counter the workbench hands out from one rather than a
 secret.
+
+That makes the last gate a bound on the message rather than a wall in front of
+it. Records are deliberately kept past their own window, and the id is a small
+integer, so an outside caller naming a request the user really did start reaches
+that toast once. Taking the record back as the message goes up means every
+further arrival for that id falls through to the gate above it, which says
+nothing. An accepted callback does **not** consume its record: the workbench
+collects the relayed value asynchronously, and the resume path asks this same
+record whether to leave the page alone.
+
+A launch carrying no readable request id arms nothing, so its callback is refused
+by the gate above and nothing is shown. `openExternalUrl` still reports the launch
+as made, so a provider that echoes the callback address back in a form
+`authRequestIdsIn` cannot read fails quietly rather than loudly.
 
 What a launch arms is the set of request ids the outgoing address carries, not
 the fact that a browser opened. `callback.html` refuses to run without a
@@ -359,10 +373,21 @@ user who trusts this app.
 Relaying is also the end of the recovery, not a repair. The workbench keeps the ids
 it is waiting for in an in-memory `Set` that is never persisted, so a relayed value
 is consumable only by the page instance that began the sign-in. That is also why
-the forced reload after five minutes in the background is held while any launch is
-still inside its window: reloading discards the very requests the callback is
-coming back to, and five minutes away is the ordinary shape of a sign-in that
-needed a second factor.
+the forced reload after five minutes in the background is downgraded to the
+IndexedDB health check while any launch is still inside its window: reloading
+discards the very requests the callback is coming back to, and five minutes away
+is the ordinary shape of a sign-in that needed a second factor. Downgraded rather
+than skipped, because the decision is taken on each return from the background
+and judged on that return's own absence, so nothing comes back later to answer
+one that was skipped. The health check only reloads when IndexedDB is already
+unusable, and such a page has nothing left to collect a callback with.
+
+Request ids do not survive the page. The workbench counts them from a class
+static that is re-initialised on every load, so the same id is handed out again
+after a reload, a folder switch or a renderer recreation. A launch therefore
+moves an id already recorded forward to its own reading rather than keeping the
+earlier one, which would otherwise judge the sign-in in flight by the window of
+one the user had already left behind.
 
 #### Logging
 

@@ -257,11 +257,19 @@ class MainActivity : AppCompatActivity() {
      *
      * The two refusals below are deliberately not alike. A request this app never
      * launched is refused in the log and nowhere else: the filter is exported, so
-     * a message there would be one an outside caller could raise at will. A
+     * a message there would be one an outside caller could raise at any moment. A
      * request it did launch, arriving past its window, is worth a message for the
-     * same reason the restart case is, and can only be reached by a sign-in this
-     * app really started. Both messages are fixed text; nothing from the callback
-     * reaches the screen.
+     * same reason the restart case is.
+     *
+     * That second message is bounded rather than gated, and the difference
+     * matters. It is not out of reach of an outside caller: the id is a small
+     * integer the workbench counts from one, and a record is kept past its own
+     * window on purpose, so anything on the device can name a request the user
+     * really did start. What it cannot do is repeat, because the record is taken
+     * back as the message goes up -- one explanation per launch, and every
+     * further arrival for that id lands in the silent branch above.
+     *
+     * Both messages are fixed text; nothing from the callback reaches the screen.
      */
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -287,9 +295,9 @@ class MainActivity : AppCompatActivity() {
         // produced it. Null covers both a payload this cannot read and a request
         // this app never launched, and the two deserve the same answer: there is
         // no sign-in here to report on.
-        val armedAt = callbackRequestId(uri.getQueryParameter("data"))
-            ?.let { AuthTabWindow.armedAt(it) }
-        if (armedAt == null) {
+        val requestId = callbackRequestId(uri.getQueryParameter("data"))
+        val armedAt = requestId?.let { AuthTabWindow.armedAt(it) }
+        if (requestId == null || armedAt == null) {
             // Logged without the URI. It is the payload of a sign-in this app
             // did not start, and the log is readable by anything holding
             // READ_LOGS on a developer device. No toast either: a message here
@@ -298,13 +306,24 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (!authCallbackIsExpected(armedAt, SystemClock.elapsedRealtime(), AUTH_TAB_WINDOW_MILLIS)) {
-            // Said out loud, unlike the branch above, and only because of what
-            // was just established: this app launched this exact request itself,
-            // so the message cannot be raised by an outside caller. The user has
-            // been reading a consent screen or waiting on a second factor for
+            // Said out loud, unlike the branch above, because of what was just
+            // established: this app launched this exact request itself. The user
+            // has been reading a consent screen or waiting on a second factor for
             // longer than the window, and the alternative is an editor that
             // simply never signs in and never says why.
             //
+            // Taken back as the message goes up, and that is what keeps the
+            // message from becoming something an outside caller can operate. The
+            // filter is exported and BROWSABLE and the id is an integer counted
+            // from one, so anything on the device can name a launch the user
+            // really made; with the record consumed here, each launch can produce
+            // this message once, and every repeat falls into the silent branch
+            // above. Only the arrival past the window consumes it -- an accepted
+            // callback leaves the record alone, because the forced reload asks
+            // whether a sign-in is still in flight and the workbench collects the
+            // relayed value asynchronously.
+            AuthTabWindow.disarm(listOf(requestId))
+
             // Fixed text, carrying nothing from the URI. What rides in the
             // callback is attacker-shaped by construction, and a message that
             // quoted any of it would be a way to put chosen words on the screen
@@ -563,7 +582,8 @@ class MainActivity : AppCompatActivity() {
      * "Canceled" errors on gallery requests and IndexedDB connections closing.
      *
      * Strategy:
-     * - >5 min background with a sign-in in flight: hold the reload
+     * - >5 min background with a sign-in in flight: health check instead of the
+     *   forced reload
      * - >5 min background: force reload (stale state almost certain)
      * - >1 min background: run JS health check, reload only if broken
      * - <1 min: no action needed (WebSocket survives short pauses)
@@ -594,19 +614,6 @@ class MainActivity : AppCompatActivity() {
 
         val bgMs = SystemClock.elapsedRealtime() - ts
         when (resumeAction(bgMs, signInIsPending())) {
-            ResumeAction.HOLD_FOR_SIGN_IN -> {
-                // Put the reading back, because nothing else will. This branch
-                // fires on the way back from a browser, which is exactly the
-                // moment the callback intent is being delivered, and the reload
-                // it is holding would throw that page away: the ids the workbench
-                // is waiting on live in an in-memory Set that does not survive a
-                // navigation, so a reload here loses a sign-in that had already
-                // succeeded. Restoring the reading leaves the decision to be made
-                // again on the next return from the background, by which time the
-                // window will have closed on its own.
-                backgroundedAt = ts
-                Logger.i(tag, "Holding the reload after ${bgMs / 1000}s: a sign-in is in flight")
-            }
             ResumeAction.RELOAD -> {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
                 // reload(), not a rebuilt URL. The WebView URL is the only
@@ -1851,9 +1858,6 @@ internal enum class ResumeAction {
 
     /** Long enough that stale state is near certain. Reload unconditionally. */
     RELOAD,
-
-    /** Long enough to reload, but a sign-in is still able to come back. */
-    HOLD_FOR_SIGN_IN,
 }
 
 /**
@@ -1868,15 +1872,23 @@ internal enum class ResumeAction {
  * requests it is waiting on in memory, so the reload discards them and the
  * sign-in that had just succeeded is lost with no error anywhere.
  *
- * Held rather than skipped: the caller puts its reading back, so the decision is
- * made again on the next return from the background, and the hold cannot outlast
- * the callback window it is waiting on.
+ * Downgraded to the probe rather than dropped, and that is the whole of what a
+ * pending sign-in buys. The absence really was long enough for the connection to
+ * have died, so answering it with nothing leaves the page in the state the
+ * five-minute rule exists to repair -- and nothing would come back to it, because
+ * this decision is only ever made on the way in from the background and each
+ * arrival is judged on its own absence. The probe is the strongest answer that is
+ * safe here: it only reloads when IndexedDB is already unusable, and a page in
+ * that state has nothing left to collect a callback with.
  *
- * The probe below is not held. It only reloads when IndexedDB is already
- * unusable, and a page in that state has nothing left to collect a callback with.
+ * An earlier shape of this held the reload for later by putting the caller's
+ * backgrounded reading back. That reading is written afresh by `onStop`, which
+ * Android always delivers before the next `onStart`, so the restored value was
+ * overwritten before its only consumer could read it and the reload was dropped
+ * rather than deferred.
  */
 internal fun resumeAction(bgMs: Long, signInPending: Boolean): ResumeAction = when {
-    bgMs > FORCE_RELOAD_THRESHOLD_MS && signInPending -> ResumeAction.HOLD_FOR_SIGN_IN
+    bgMs > FORCE_RELOAD_THRESHOLD_MS && signInPending -> ResumeAction.PROBE_CONNECTION
     bgMs > FORCE_RELOAD_THRESHOLD_MS -> ResumeAction.RELOAD
     bgMs > HEALTH_CHECK_THRESHOLD_MS -> ResumeAction.PROBE_CONNECTION
     else -> ResumeAction.NOTHING
