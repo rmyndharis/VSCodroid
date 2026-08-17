@@ -567,6 +567,66 @@ VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you ma
 
 Extensions exclusive to the Microsoft Marketplace (such as Microsoft C/C++ and some other Microsoft-published extensions) are not available on Open VSX. Check Open VSX for community-maintained alternatives. GitHub Copilot Chat is not affected: it ships built in and works on device.
 
+### Extensions That Bundle a Compiled Program
+
+Extensions written in JavaScript, TypeScript or WebAssembly work. An extension
+that carries a program compiled for desktop Linux does not, and the way it fails
+is the real problem: it installs, it shows as enabled in the Extensions panel,
+and then its features are simply absent. No error, no notification, nothing on
+screen. That silence is the editor's own behaviour, not a fault in VSCodroid: a
+release build writes an extension's startup failure to a log and deliberately
+raises no notification for it.
+
+Two walls stand behind this. Android's C library is not the one desktop Linux
+distributions use, so a program built for them cannot start here, and a compiled
+Node add-on built for them cannot be loaded into the editor. Separately, Android
+refuses to execute any file inside an app's own storage, which is exactly where
+an installed extension lives, so even a correctly built program has to be handed
+to a loader by something else. VSCodroid asks the marketplace for the musl build
+wherever an extension publishes one, which is what makes that route possible at
+all, but the extension itself then has to offer a setting that lets its command
+be prefixed. Almost none do.
+
+**How to recognise it.** The extension is installed and enabled, its commands are
+missing from the Command Palette or do nothing when run, and the Problems panel
+and status bar stay empty. Run **Developer: Show Logs...** from the Command
+Palette and read the extension host log; the reason is there and nowhere else.
+
+**One variant is loud rather than silent.** An extension that publishes a
+separate build per platform, with no musl build and no platform-independent one,
+refuses to install at all, with a dialog reading `The 'publisher.name' extension
+is not available in VSCodroid for the Alpine ARM 64 platform.` Alpine is not what
+your phone is running; it is the build VSCodroid asks for, for the reason above.
+Read that message as "this extension publishes nothing that can run here".
+
+**What to install instead.** Prefer language support written in JavaScript or
+TypeScript, or compiled to WebAssembly. On an extension's Open VSX page, a
+download list naming several operating systems and processors is certain to be
+shipping a compiled program. A single download covering all platforms is not
+proof of the opposite: some extensions carry a compiled helper inside that one
+package, and the helper is the part that fails.
+
+### The Interface Is English Only
+
+Menus, commands, settings descriptions and dialogs are in English, and no setting
+changes that. A language pack from Open VSX installs and enables normally,
+**Configure Display Language** lists it, and choosing it offers to reload. The
+editor comes back in English.
+
+The translated text is not on the device, and there is nowhere to fetch it from.
+The editor loads its interface strings from two places at startup: an English
+bundle that ships inside the app, and a translated bundle downloaded from an
+address held in the editor's product configuration. The open-source editor source
+carries no such address and VSCodroid adds none, so the download URL is empty and
+only the English bundle ever loads. The editor's server side is started with
+English fixed as well, so an extension's own commands and settings stay English
+too.
+
+Nothing reports any of this. The language pack shows as installed and enabled;
+the only sign is that the words do not change. If you have already picked a
+language, **Clear Display Language Preference** from the Command Palette puts the
+setting back.
+
 ### No Multi-window
 
 VS Code's web client runs as a single window. You cannot open multiple VS Code windows side by side. However, you can use Android's split-screen mode to pair VSCodroid with another app (like a browser for previewing).
