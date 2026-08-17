@@ -100,7 +100,48 @@ class KeyPageConfigTest {
     }
 
     @Nested
+    inner class Page4Test {
+
+        private val page = KeyPages.defaults[3]
+
+        @Test
+        fun `carries every function key and the four navigation keys`() {
+            val buttons = page.items.filterIsInstance<KeyItem.Button>()
+            // Pinned as a whole list rather than searched for a few members.
+            // This page is the only route to any of these keys, so one dropped
+            // entry is a shortcut that cannot be typed at all on a touchscreen.
+            assertEquals(
+                (1..12).map { "F$it" } + listOf("Home", "End", "PageUp", "PageDown"),
+                buttons.map { it.value },
+                "Page 4 carries F1 to F12 then Home, End and the two page keys"
+            )
+        }
+    }
+
+    @Nested
     inner class ButtonIntegrityTest {
+
+        @Test
+        fun `every key the row sends has a definition of its own`() {
+            // A key the table does not name is not a dead key. KeyInjector
+            // resolves through KeyMapping.getKeyDefOrLetter, which derives the
+            // event fields from the first character, so an unmapped "F2" is sent
+            // as KeyF with keyCode 70 and types an F into the file. The three
+            // modifiers never reach the injector; ExtraKeyRow.handleKeyAction
+            // consumes them itself.
+            val modifiers = setOf("Ctrl", "Alt", "Shift")
+            val sent = KeyPages.defaults.flatMap { it.items }
+                .filterIsInstance<KeyItem.Button>()
+                .flatMap { button -> listOf(button.value) + button.alternates.map { it.value } }
+                .filterNot { it in modifiers }
+            for (value in sent) {
+                assertNotNull(
+                    KeyMapping.getKeyDef(value),
+                    "'$value' is on the key row with no KeyMapping entry, so it is sent " +
+                        "as whatever letter its first character names"
+                )
+            }
+        }
 
         @Test
         fun `every button has non-empty label and value`() {
@@ -125,7 +166,7 @@ class KeyPageConfigTest {
             //
             // What can fail is taking that default. A screen reader then reads the
             // symbol -- "{}" instead of "Curly braces" -- which is exactly the case
-            // these strings exist for. All 23 buttons name themselves today, so a
+            // these strings exist for. All 39 buttons name themselves today, so a
             // description equal to its label means one was dropped.
             for ((pageIndex, page) in KeyPages.defaults.withIndex()) {
                 for (item in page.items) {

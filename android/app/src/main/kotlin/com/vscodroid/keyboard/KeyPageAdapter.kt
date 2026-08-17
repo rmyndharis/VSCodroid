@@ -26,9 +26,9 @@ class KeyPageAdapter(
      * They used to be two values, and the copy here was only ever written in one
      * direction: releasing a modifier reached it, switching one on did not, so it
      * said "off" for the whole time a modifier was held. Nothing rebinds a page
-     * as the row stands, three pages with `offscreenPageLimit = 1` leaves at
-     * most one detached at a time, and RecyclerView returns a single detached
-     * page from its two-entry view cache already bound, so the gap never
+     * as the row stands, four pages with `offscreenPageLimit = 1` leaves at
+     * most two detached at a time, and RecyclerView returns a detached page
+     * from its two-entry view cache already bound, so the gap never
      * surfaced. Enough pages to overflow that cache, or a different limit, turns
      * it into a Ctrl repainted idle while the next key still arrives as Ctrl+key.
      */

@@ -93,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every release carries a manifest of what it was built from: editor version and commit, plus the version and checksum of each bundled tool.
 - The privacy policy describes Android backup, which copies `~/.vscodroid/data/Machine` to your Google account. SSH keys, tokens, projects and toolchains are excluded by an allowlist.
 - Two checks hold the bridge API documentation to the code: one reads the compiled class for method existence, the other reads source for parameter names, order, nullability and return types.
+- A fourth key row page carrying F1 to F12, Home, End, PgUp and PgDn. None were reachable by touch before, so any shortcut bound to one needed a hardware keyboard.
 
 ### Security
 

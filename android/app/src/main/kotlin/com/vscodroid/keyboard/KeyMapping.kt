@@ -16,6 +16,26 @@ object KeyMapping {
         "ArrowUp" to KeyDef("ArrowUp", "ArrowUp", 38),
         "ArrowRight" to KeyDef("ArrowRight", "ArrowRight", 39),
         "ArrowDown" to KeyDef("ArrowDown", "ArrowDown", 40),
+        // Navigation and function keys. Each needs a row of its own here rather
+        // than the [getKeyDefOrLetter] fallback, which derives the fields from
+        // the first character: "F2" would be sent as KeyF with keyCode 70 and
+        // type an F, and "Home" as KeyH.
+        "Home" to KeyDef("Home", "Home", 36),
+        "End" to KeyDef("End", "End", 35),
+        "PageUp" to KeyDef("PageUp", "PageUp", 33),
+        "PageDown" to KeyDef("PageDown", "PageDown", 34),
+        "F1" to KeyDef("F1", "F1", 112),
+        "F2" to KeyDef("F2", "F2", 113),
+        "F3" to KeyDef("F3", "F3", 114),
+        "F4" to KeyDef("F4", "F4", 115),
+        "F5" to KeyDef("F5", "F5", 116),
+        "F6" to KeyDef("F6", "F6", 117),
+        "F7" to KeyDef("F7", "F7", 118),
+        "F8" to KeyDef("F8", "F8", 119),
+        "F9" to KeyDef("F9", "F9", 120),
+        "F10" to KeyDef("F10", "F10", 121),
+        "F11" to KeyDef("F11", "F11", 122),
+        "F12" to KeyDef("F12", "F12", 123),
         "{" to KeyDef("{", "BracketLeft", 219, requiresShift = true),
         "}" to KeyDef("}", "BracketRight", 221, requiresShift = true),
         "(" to KeyDef("(", "Digit9", 57, requiresShift = true),

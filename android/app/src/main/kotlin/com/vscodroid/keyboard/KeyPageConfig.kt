@@ -58,5 +58,27 @@ object KeyPages {
             KeyItem.Button("#", "#", contentDescription = "Hash"),
             KeyItem.Button("@", "@", contentDescription = "At sign"),
         )),
+        // Page 4: Function and navigation keys. Nothing else on the row reaches
+        // them. No other page carries one, and the trackpad emits arrows only
+        // (TrackpadGesture.accumulate), so any binding on a function key or on
+        // Home, End, PageUp and PageDown wanted a hardware keyboard.
+        KeyPage(listOf(
+            KeyItem.Button("F1", "F1", contentDescription = "Function key F1"),
+            KeyItem.Button("F2", "F2", contentDescription = "Function key F2"),
+            KeyItem.Button("F3", "F3", contentDescription = "Function key F3"),
+            KeyItem.Button("F4", "F4", contentDescription = "Function key F4"),
+            KeyItem.Button("F5", "F5", contentDescription = "Function key F5"),
+            KeyItem.Button("F6", "F6", contentDescription = "Function key F6"),
+            KeyItem.Button("F7", "F7", contentDescription = "Function key F7"),
+            KeyItem.Button("F8", "F8", contentDescription = "Function key F8"),
+            KeyItem.Button("F9", "F9", contentDescription = "Function key F9"),
+            KeyItem.Button("F10", "F10", contentDescription = "Function key F10"),
+            KeyItem.Button("F11", "F11", contentDescription = "Function key F11"),
+            KeyItem.Button("F12", "F12", contentDescription = "Function key F12"),
+            KeyItem.Button("Home", "Home", contentDescription = "Home key"),
+            KeyItem.Button("End", "End", contentDescription = "End key"),
+            KeyItem.Button("PgUp", "PageUp", contentDescription = "Page up"),
+            KeyItem.Button("PgDn", "PageDown", contentDescription = "Page down"),
+        )),
     )
 }
