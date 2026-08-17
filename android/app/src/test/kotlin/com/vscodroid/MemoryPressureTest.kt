@@ -144,3 +144,67 @@ class MemoryPressureWireTest {
         )
     }
 }
+
+/**
+ * Which component reports pressure once there is no Activity left to report it.
+ *
+ * The server the process monitor watches outlives the Activity: NodeService
+ * returns START_STICKY and the manifest declares no `android:stopWithTask`. So
+ * with the Activity as the only writer, swiping the task away leaves Node
+ * running while nothing fills the file `readMemoryPressure` opens, and the idle
+ * language-server kill that reading gates can never fire again. That is the
+ * state the system reclaims memory from, and the failure is silent: it looks
+ * exactly like no language server having been idle.
+ *
+ * `Application` is a ComponentCallbacks2 for the whole process lifetime, so an
+ * override there fires whether or not an Activity exists.
+ *
+ * These read the class and its source instead of driving the callback, which is
+ * weaker than [MemoryPressureWireTest] above and worth being exact about.
+ * `onTrimMemory` cannot be invoked from a JVM test at all: its first statement
+ * is `super.onTrimMemory(level)`, the unit-test android.jar answers that with
+ * `RuntimeException: Method onTrimMemory in android.app.Application not mocked`,
+ * and no stub on the instance intercepts it, because a super call is not
+ * dispatched virtually. What the override is allowed to contain is therefore
+ * that super call and one call out, and one call out is what this pins.
+ * Everything decided or written behind it is covered above.
+ */
+class ProcessWideMemoryPressureTest {
+
+    private val source = File("src/main/kotlin/com/vscodroid/VSCodroidApp.kt")
+
+    @Test
+    fun `the process, not only the Activity, hears a trim callback`() {
+        assertTrue(
+            VSCodroidApp::class.java.declaredMethods.any { it.name == "onTrimMemory" },
+            "the manifest names VSCodroidApp as the application class, and once the " +
+                "Activity is gone it is the only component left to hear the callback"
+        )
+    }
+
+    @Test
+    fun `it records the severity where the monitor looks for it`() {
+        check(source.isFile) {
+            "VSCodroidApp.kt not found at ${source.absolutePath}, so this test would " +
+                "otherwise pass by looking at nothing"
+        }
+
+        val body = source.readLines()
+            .dropWhile { !it.contains("override fun onTrimMemory(") }
+            .drop(1)
+            .takeWhile { !it.startsWith("    }") }
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString(" ")
+            .replace(Regex("\\s+"), " ")
+
+        // The whole call, not just the name: the directory has to be the one
+        // process-monitor.js resolves TMPDIR to, and the level has to arrive
+        // unexamined, because applyMemoryPressure maps it and comparing it
+        // instead is what killed every idle language server on every app switch.
+        assertTrue(
+            body.contains("""applyMemoryPressure(File(cacheDir, "tmp"), level)"""),
+            "the application override must record pressure the same way the Activity " +
+                "does; found instead: $body"
+        )
+    }
+}

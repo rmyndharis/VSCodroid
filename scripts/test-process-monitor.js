@@ -56,6 +56,12 @@ const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
 const MAIN_ACTIVITY = path.join(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
 );
+// The second writer. The Activity reports pressure while it exists; the
+// application class reports it for the whole process, which is the only one
+// left once the task is swiped away and the server keeps running.
+const VSCODROID_APP = path.join(
+    __dirname, '../android/app/src/main/kotlin/com/vscodroid/VSCodroidApp.kt',
+);
 const ENVIRONMENT = path.join(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/util/Environment.kt',
 );
@@ -145,22 +151,27 @@ function checkPressureContract(tmp) {
         }
     };
     walk(path.join(__dirname, '../android/app/src/main/kotlin'));
+    // Sorted on both sides, because the order is whatever readdir returned.
     assert.deepStrictEqual(
-        callers, [MAIN_ACTIVITY],
+        callers.slice().sort(), [MAIN_ACTIVITY, VSCODROID_APP].sort(),
         'the set of sources that write the pressure file is not what this check reads. ' +
-        `Found [${callers.join(', ')}], expected only MainActivity.kt. Another writer's ` +
-        'severity words would be outside the comparison; none at all means the function ' +
-        'was renamed and this check is comparing the monitor against nothing.',
+        `Found [${callers.join(', ')}], expected MainActivity.kt and VSCodroidApp.kt. ` +
+        "Another writer's severity words would be outside the comparison; none at all " +
+        'means the function was renamed and this check is comparing the monitor against ' +
+        'nothing.',
     );
-    // All of them, not the first: a second writer aiming somewhere else is exactly
-    // the drift this compares for, and match() without /g would never look at it.
-    const writerDirs = [...kotlin.matchAll(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/g)]
-        .map((m) => m[1]);
+    // All of them, not the first, and from every caller above rather than from
+    // MainActivity alone: a second writer aiming somewhere else is exactly the
+    // drift this compares for, and neither match() without /g nor a scan of one
+    // file would ever look at it.
+    const writerDirs = callers.flatMap((f) => [...fs.readFileSync(f, 'utf8')
+        .matchAll(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/g)]
+        .map((m) => m[1]));
     const writerDir = writerDirs.length ? [writerDirs[0]] : null;
     const envDir = environment.match(/val tmpDir = "\$cacheDir\/([^"]+)"/);
     assert.ok(
         writerDir,
-        'could not find the directory MainActivity writes the pressure file into, so the ' +
+        'could not find the directory the pressure file is written into, so the ' +
         'comparison below would be against nothing',
     );
     assert.ok(
@@ -170,12 +181,12 @@ function checkPressureContract(tmp) {
     );
     assert.deepStrictEqual(
         [...new Set(writerDirs)], writerDirs.slice(0, 1),
-        'MainActivity writes the pressure file into more than one directory (' +
+        'the pressure file is written into more than one directory (' +
         writerDirs.join(', ') + '), so at most one of them can be the one the monitor opens',
     );
     assert.strictEqual(
         writerDir[0], envDir[1],
-        `MainActivity writes the pressure file into cacheDir/${writerDir[0]} while TMPDIR -- ` +
+        `the pressure file is written into cacheDir/${writerDir[0]} while TMPDIR -- ` +
         `which is the directory the monitor opens -- is cacheDir/${envDir[1]}. The severity is ` +
         'written where nothing looks for it, and the filenames agreeing hides it.',
     );
