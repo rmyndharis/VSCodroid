@@ -37,10 +37,15 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
+      # No api-level here, and that is deliberate rather than an omission.
+      # android-actions/setup-android has never declared one: its inputs are
+      # cmdline-tools-version, accept-android-sdk-licenses,
+      # log-accepted-android-sdk-licenses and packages. Passing api-level: 36
+      # produced "Unexpected input(s) 'api-level'" on every run and set nothing,
+      # for as long as it was there. The platform this build needs is fetched by
+      # Gradle from compileSdk, which is why removing it changes no behaviour.
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
-        with:
-          api-level: 36
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
