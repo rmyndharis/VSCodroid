@@ -135,7 +135,7 @@ Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
 with a token that does not match is refused before the method acts. Thirty of
-the thirty-one then return an empty value — `false`, `null`, `""`, `"{}"`, `"[]"`,
+the thirty-one then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
 `0`, or nothing. **`generateSshKey` is the exception**: it returns
 `{"success":false,"error":"unauthorized"}`, a truthy string, so a caller testing
 `if (!result)` reads a refusal as success. Test its `success` field. Read the token from

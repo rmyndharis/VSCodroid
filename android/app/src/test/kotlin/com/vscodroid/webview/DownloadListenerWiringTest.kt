@@ -92,4 +92,19 @@ class DownloadListenerWiringTest {
                 "user's folder, empty, under the name of the file they asked for."
         }
     }
+
+    @Test
+    fun `the page that answers the listener is given the script that answers it`() {
+        val inject = withoutComments(body("injectBridgeToken"))
+
+        assertTrue(inject.contains("injectDownloadCapture(")) {
+            "injectBridgeToken no longer injects the capture script, so no page has the " +
+                "shadowed createObjectURL or the sender the listener hands off to. The " +
+                "listener still installs, the picker still opens, and every download then " +
+                "fails with nothing to read the bytes. Nothing else notices: the script's " +
+                "own check reads the function's text out of this file rather than asking " +
+                "whether anyone calls it, and the two cases above only prove the listener " +
+                "is installed. Inject it wherever the page is prepared now."
+        }
+    }
 }

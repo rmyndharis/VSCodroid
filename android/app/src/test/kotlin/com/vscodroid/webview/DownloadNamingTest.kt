@@ -203,4 +203,23 @@ class DownloadNamingTest {
     fun `a fragment is not read as part of the name`() {
         assertEquals("page.html", downloadFileName("https://host/page.html#section", null, null))
     }
+
+    /**
+     * `+` means a space in a query parameter and means itself everywhere else,
+     * and one decoder serves both. Reading a path segment under the query rule
+     * turns a C++ file into one with two spaces in the middle of its name.
+     */
+    @Test
+    fun `a plus in a path segment is a plus, not a space`() {
+        assertEquals("c++notes.txt", downloadFileName("https://host/a/c++notes.txt", null, null))
+        assertEquals(
+            "a+b.txt",
+            downloadFileName("https://host/x", "attachment; filename*=UTF-8''a%2Bb.txt", null),
+        )
+        // And the one place the query rule is right still gets it.
+        assertEquals(
+            "my file.txt",
+            downloadFileName("https://host/r?path=/w/my+file.txt", null, null),
+        )
+    }
 }

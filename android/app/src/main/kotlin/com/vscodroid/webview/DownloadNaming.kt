@@ -138,7 +138,13 @@ private fun lastPathSegment(url: String): String? =
  */
 private fun percentDecode(value: String): String =
     try {
-        URLDecoder.decode(value, "UTF-8")
+        // Percent-escapes only. `URLDecoder` also turns `+` into a space, which
+        // is the rule for a query parameter and wrong everywhere else: a path
+        // segment and a Content-Disposition filename both carry `+` as itself,
+        // so `c++notes.txt` would arrive as `c  notes.txt`. Escaping it first
+        // makes the decoder hand it back unchanged, and the one caller that
+        // does want the query rule applies it before calling here.
+        URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
     } catch (e: IllegalArgumentException) {
         value
     }

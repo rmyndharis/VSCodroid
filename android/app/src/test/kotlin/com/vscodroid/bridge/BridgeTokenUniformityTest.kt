@@ -52,6 +52,16 @@ class BridgeTokenUniformityTest {
         val onOpenRecentFolder: (Uri) -> Unit = mockk(relaxed = true)
         val onShowAbout: () -> Unit = mockk(relaxed = true)
         val safManager: SafStorageManager = mockk(relaxed = true)
+        // Passed rather than left to default, and that is the whole point of
+        // this fixture. Every one of these has a no-op default, so a collaborator
+        // omitted here is not merely untested: it is absent from [collaborators],
+        // and the half of the guard that checks a method OBEYS the token rather
+        // than merely consulting it has nothing to watch. A new bridge method
+        // reaching an omitted callback would pass this suite while ignoring the
+        // token entirely.
+        val onDownloadNamed: (String, String) -> Unit = mockk(relaxed = true)
+        val onDownloadChunk: (String, String) -> Boolean = mockk(relaxed = true)
+        val onDownloadComplete: (String, String?) -> Unit = mockk(relaxed = true)
 
         val bridge = AndroidBridge(
             context = context,
@@ -63,12 +73,16 @@ class BridgeTokenUniformityTest {
             onOpenRecentFolder = onOpenRecentFolder,
             onShowAbout = onShowAbout,
             safManager = safManager,
+            onDownloadNamed = onDownloadNamed,
+            onDownloadChunk = onDownloadChunk,
+            onDownloadComplete = onDownloadComplete,
         )
 
         /** Everything the bridge can reach except the validator it is allowed to consult. */
         val collaborators = listOf(
             context, clipboard, onBackPressed, onMinimize,
             onOpenFolderPicker, onOpenRecentFolder, onShowAbout, safManager,
+            onDownloadNamed, onDownloadChunk, onDownloadComplete,
         )
 
         init {
