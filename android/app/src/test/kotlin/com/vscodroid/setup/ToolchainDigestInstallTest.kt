@@ -63,6 +63,18 @@ private class LoopbackServer {
     val requested: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
     /**
+     * Paths that answer 302 with a `Location`, so a test can be a release ALIAS
+     * rather than an asset. Checked before [routes], and answered with no body,
+     * which is what a `HEAD` gets anyway.
+     *
+     * Exists for the `latest` resolution: nothing else in this class needed a
+     * redirect, and without one the only thing a test could check about pinning
+     * was its string arithmetic.
+     */
+    @Volatile
+    var redirects: Map<String, String> = emptyMap()
+
+    /**
      * Paths that answer 503 for their first N requests and normally after that,
      * so a test can be a flaky connection rather than a broken one.
      */
@@ -114,8 +126,20 @@ private class LoopbackServer {
             return
         }
 
-        val body = routes[path]
         val out = conn.getOutputStream()
+
+        val redirectTo = redirects[path]
+        if (redirectTo != null) {
+            out.write(
+                ("HTTP/1.1 302 Found\r\nLocation: $redirectTo\r\n" +
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray()
+            )
+            out.flush()
+            conn.shutdownOutput()
+            return
+        }
+
+        val body = routes[path]
         if (body == null) {
             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
         } else {
@@ -512,5 +536,71 @@ class ToolchainDigestInstallTest {
 
         assertEquals(1, timesRequested(manifestPath))
         assertEquals(1, timesRequested(zipPath), "the payload was not downloaded on a release that vouches for it")
+    }
+
+    /**
+     * The pin, proved by behaviour rather than by string arithmetic.
+     *
+     * `LatestReleasePinningTest` checks the URL functions against inputs it
+     * chooses, which cannot tell a pin that engages from one that is never
+     * called. Here the release is served ONLY under its concrete tag: the
+     * `latest/download/` paths answer 404. So the install can succeed only if
+     * `pinLatest` resolved the alias and built both URLs from the answer, and
+     * deleting the call turns this red rather than leaving it green.
+     */
+    @Test
+    fun `an install resolves latest once and fetches both files from that release`() {
+        publishFrom("/o/r/releases/latest/download")
+        val tagged = "/o/r/releases/download/v9.9.9"
+
+        server.redirects = mapOf(
+            "/o/r/releases/latest" to "http://127.0.0.1:${server.port}/o/r/releases/tag/v9.9.9"
+        )
+        // Deliberately NOT serving anything under latest/download/. If the pin
+        // does not engage, both requests 404 and the install reports FAILED.
+        server.routes = mapOf(
+            "$tagged/toolchain_test.zip" to zipBytes,
+            "$tagged/toolchains.sha256" to "$zipDigest  toolchain_test.zip\n".toByteArray(),
+        )
+
+        installAndWait()
+
+        assertTrue(
+            statuses().contains(AssetPackStatus.COMPLETED),
+            "the install did not complete, so the alias was never resolved: ${statuses()}",
+        )
+        assertEquals(1, timesRequested("/o/r/releases/latest"), "the alias was not resolved exactly once")
+        assertEquals(1, timesRequested("$tagged/toolchains.sha256"), "the manifest did not come from the pinned release")
+        assertEquals(1, timesRequested("$tagged/toolchain_test.zip"), "the payload did not come from the pinned release")
+        assertEquals(
+            0,
+            timesRequested("/o/r/releases/latest/download/toolchain_test.zip"),
+            "the unpinned URL was used even though the alias resolved",
+        )
+    }
+
+    /**
+     * And the floor underneath it.
+     *
+     * The alias answers 404 here, so nothing can be pinned. The install must
+     * still work, through the unpinned URL, because that is what shipped before
+     * pinning existed and a resolution failure must never cost more than the
+     * behaviour it replaced.
+     */
+    @Test
+    fun `an install still works when the alias cannot be resolved`() {
+        publishFrom("/o/r/releases/latest/download")
+
+        // No redirects map at all: /o/r/releases/latest answers 404.
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+
+        installAndWait()
+
+        assertTrue(
+            statuses().contains(AssetPackStatus.COMPLETED),
+            "a failed resolution cost the install: ${statuses()}",
+        )
+        assertEquals(1, timesRequested(manifestPath), "the manifest was not fetched from the unpinned URL")
+        assertEquals(1, timesRequested(zipPath), "the payload was not fetched from the unpinned URL")
     }
 }
