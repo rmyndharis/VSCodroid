@@ -207,7 +207,15 @@ class MainActivity : AppCompatActivity() {
      * it went with the old process.
      */
     private fun deliverFileChooserResult(uris: List<Uri>) {
-        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.onFileChooserResult(uris)
+        val client = webView?.webChromeClient as? VSCodroidWebChromeClient
+        if (client == null) {
+            // Logged because a selection that goes nowhere looks from the outside
+            // exactly like a picker that never opened, and the two need different
+            // answers from whoever reads the report.
+            Logger.w(tag, "No client left to answer; dropping ${uris.size} selection(s)")
+            return
+        }
+        client.onFileChooserResult(uris)
     }
 
     private val serviceConnection = object : ServiceConnection {
