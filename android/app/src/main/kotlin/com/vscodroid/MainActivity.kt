@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -174,6 +175,39 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri?.let { handleSafFolderSelected(it) }
+    }
+
+    /**
+     * The device file picker behind `<input type=file>`, which is what the
+     * Explorer's `Upload...` command opens.
+     *
+     * Two contracts and not one, because the contract is what decides the
+     * picker's selection mode: offering multi-select to an input that asked for
+     * a single file lets the user choose five and lose four without being told.
+     *
+     * Registered as fields, like every launcher above: `registerForActivityResult`
+     * throws once the Activity is past its own `onCreate`.
+     */
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> deliverFileChooserResult(listOfNotNull(uri)) }
+
+    private val multiFileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> deliverFileChooserResult(uris) }
+
+    /**
+     * Routes the picker's answer to the client that asked for it.
+     *
+     * Read back off the WebView rather than held in a field of its own: the
+     * chrome client is replaced together with the view on a renderer crash, and
+     * a result belonging to the page that died must not be handed to the one
+     * that replaced it. A result arriving after the process was recreated finds
+     * no client and is dropped, which is right, because the element waiting for
+     * it went with the old process.
+     */
+    private fun deliverFileChooserResult(uris: List<Uri>) {
+        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.onFileChooserResult(uris)
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -1103,7 +1137,22 @@ class MainActivity : AppCompatActivity() {
                 injectBridgeToken()
             },
         )
-        wv.webChromeClient = VSCodroidWebChromeClient()
+        wv.webChromeClient = VSCodroidWebChromeClient { allowMultiple ->
+            // "*/*" rather than the input's accept types: the Upload command's
+            // input declares none, and a filter derived from one could only ever
+            // narrow what the user is allowed to import.
+            try {
+                if (allowMultiple) {
+                    multiFileChooserLauncher.launch(arrayOf("*/*"))
+                } else {
+                    fileChooserLauncher.launch(arrayOf("*/*"))
+                }
+                true
+            } catch (e: ActivityNotFoundException) {
+                Logger.w(tag, "No document picker on this device", e)
+                false
+            }
+        }
 
         val keyInjector = KeyInjector(wv)
         extraKeyRow?.keyInjector = keyInjector
