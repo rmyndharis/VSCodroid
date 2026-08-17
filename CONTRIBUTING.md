@@ -13,6 +13,7 @@ Thank you for your interest in contributing to VSCodroid. This guide covers ever
 - [Testing on Device](#testing-on-device)
 - [How to Add a New Bundled Tool](#how-to-add-a-new-bundled-tool)
 - [How to Add a New Patch](#how-to-add-a-new-patch)
+- [Things that break quietly](#things-that-break-quietly)
 - [Code Style](#code-style)
 - [Pull Request Process](#pull-request-process)
 - [Reporting Bugs](#reporting-bugs)
@@ -696,6 +697,34 @@ generated identifiers, broke on every version bump, and printed `SKIP` on a miss
 5. **Explain why in the patch's own commit message.** A diff shows what changed; the reason it is
    needed on Android is what the next person will not be able to reconstruct.
 
+
+## Things that break quietly
+
+Four rules that are not obvious from reading any single file, and that no test
+enforces. Breaking one costs nothing at build time and shows up on a device.
+
+**`initBridge()` runs once per WebView, not once per folder.** It returns early
+on `bridgeInitialized` (`MainActivity.kt`). Re-registering the JavaScript
+interface issues a new session token, and the page is still holding the old one,
+so every bridge call from that page starts failing. The one intended
+re-registration is after a renderer crash, where `recreateWebView()` clears the
+flag for a view that no longer has the interface.
+
+**First-run setup keys on `versionName`; migrations threshold on
+`versionCode`.** Both are written together when setup completes
+(`FirstRunSetup.kt`). Bump one without the other and either setup re-runs on
+every launch or a migration never runs at all.
+
+**Tool symlinks are rebuilt on every launch, not only on first run**
+(`SplashActivity.kt` calls `setupToolSymlinks()` unconditionally). Android
+assigns a new `nativeLibraryDir` on every reinstall, which dangles every
+absolute symlink pointing into it. `File.exists()` follows links and answers
+false for a dangling one, so staleness is detected with `Os.lstat()`.
+
+**`server.js` rewrites `product.json` on every start with a shallow
+`Object.assign`.** Nested objects are replaced whole, not merged, so
+`extensionsGallery` has to carry every field it needs. Dropping one from the
+override silently removes it from the running product.
 
 ## Code Style
 
