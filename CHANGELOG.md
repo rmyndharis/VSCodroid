@@ -112,7 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bundled binaries are traced to a signature from the project that built them, not a checksum served by the same host. A signed index older than a month is refused to stop replay.
 - A server tarball downloaded from a release is checked against the digest that release records. Only a cached copy was, so freshly fetched bytes reached the APK unexamined.
 - The bundled npm tarball and the Node headers are checked against digests recorded here, not a checksum the same host serves. That catches later substitution, not a first one.
-- Each bundled extension is checked against a digest recorded here rather than one the registry serves beside the VSIX. A published digest that moves under a fixed version fails the build.
+- Each bundled extension is checked against a digest recorded here, not one the registry serves beside the VSIX. A digest that moves under a fixed version fails the build.
 
 ### Fixed
 
