@@ -59,6 +59,11 @@ Run the download scripts in this order:
 This is the order CI uses, and the order matters — each step below notes why.
 
 ```bash
+# 0. Prerequisites. Checks node, git and python3, and exits on a missing
+#    ANDROID_NDK_HOME rather than letting steps 9 and 10 discover it after
+#    twenty minutes of downloading. REQUIRE_NDK=0 skips that one check.
+./scripts/setup.sh
+
 # 1. Fetch the Code - OSS server tree built by the build-vscode-oss workflow.
 #    This leaves it in server/, not in assets/.
 ./scripts/fetch-vscode-oss.sh
@@ -104,7 +109,7 @@ This is the order CI uses, and the order matters — each step below notes why.
 ./scripts/download-java.sh
 ```
 
-Alternatively, run steps 1–10 and the APK build in one go:
+Alternatively, run steps 0 to 10 and the APK build in one go:
 
 ```bash
 ./scripts/build-all.sh
