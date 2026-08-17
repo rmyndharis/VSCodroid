@@ -172,6 +172,27 @@ class MemoryPressureWireTest {
 class ProcessWideMemoryPressureTest {
 
     private val source = File("src/main/kotlin/com/vscodroid/VSCodroidApp.kt")
+    private val manifest = File("src/main/AndroidManifest.xml")
+
+    @Test
+    fun `the manifest points the process at this class`() {
+        check(manifest.isFile) {
+            "AndroidManifest.xml not found at ${manifest.absolutePath}, so this test would " +
+                "otherwise pass by looking at nothing"
+        }
+
+        // The override below only runs while <application> names this class.
+        // Pointing that attribute at another Application subclass (a startup
+        // initializer, a multidex or injection base class) while leaving this
+        // one in the tree restores the defect exactly: the process again has no
+        // writer once the Activity is gone, and the two tests below stay green
+        // because the class still declares the override and still calls out.
+        assertTrue(
+            manifest.readText().contains("android:name=\".VSCodroidApp\""),
+            "the process reports pressure through whichever class <application> names; " +
+                "VSCodroidApp is not that class, so its override is never called"
+        )
+    }
 
     @Test
     fun `the process, not only the Activity, hears a trim callback`() {
