@@ -160,13 +160,31 @@ function checkPressureContract(tmp) {
         'means the function was renamed and this check is comparing the monitor against ' +
         'nothing.',
     );
-    // All of them, not the first, and from every caller above rather than from
-    // MainActivity alone: a second writer aiming somewhere else is exactly the
-    // drift this compares for, and neither match() without /g nor a scan of one
-    // file would ever look at it.
-    const writerDirs = callers.flatMap((f) => [...fs.readFileSync(f, 'utf8')
-        .matchAll(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/g)]
-        .map((m) => m[1]));
+    // All of them, not the first, and asserted per caller rather than over the
+    // pooled result: a writer aiming somewhere else is exactly the drift this
+    // compares for, and neither match() without /g nor a scan of one file would
+    // ever look at it.
+    //
+    // Per caller is what keeps the check counting its own subjects. Once there
+    // are two writers, a pooled "we found a directory" test is satisfied by
+    // either one of them, so a caller whose base expression moves off cacheDir
+    // (to filesDir, say, which is the durable directory) contributes nothing,
+    // the pool stays non-empty on the other writer's behalf, and every
+    // comparison below agrees about a literal that writer no longer uses. The
+    // component that drifted is then the one writing where nothing reads, and
+    // this file says ok.
+    const writerDirs = callers.flatMap((f) => {
+        const dirs = [...fs.readFileSync(f, 'utf8')
+            .matchAll(/applyMemoryPressure\(File\(cacheDir,\s*"([^"]+)"\)/g)]
+            .map((m) => m[1]);
+        assert.ok(
+            dirs.length,
+            `${path.basename(f)} calls applyMemoryPressure but not as ` +
+            'applyMemoryPressure(File(cacheDir, "...")), so the directory that caller ' +
+            'writes the pressure file into is outside every comparison below',
+        );
+        return dirs;
+    });
     const writerDir = writerDirs.length ? [writerDirs[0]] : null;
     const envDir = environment.match(/val tmpDir = "\$cacheDir\/([^"]+)"/);
     assert.ok(
