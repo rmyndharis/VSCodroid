@@ -66,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The milestone checklist says a ticked box records what was true when it was ticked. It is the only planning document still tracking open work, so it carries a note rather than a historical marker.
 - The milestone log and implementation plan no longer record a process-liveness check as the fix for the white screen on reopen. A contributor could reintroduce it as precedent.
 - The milestone checklist no longer plans on-device CI as a hosted device lab. Nothing in the workflows starts the app, and arm64 runners cannot boot an emulator.
+- The bug report's documented contents match what it emits, and the logging table no longer names a server or extension-host log file that nothing in the app writes.
 - The requirements table's heap limit is no longer a flat 512 MB; the ceiling has been derived from device RAM since a fixed limit left 3-4 GB phones nothing to work with.
 - `CONTRIBUTING.md` no longer describes a URL allow-list the app does not have. VSCodroid is a development environment and reaches LAN hosts on purpose; the session token is what is checked.
 - `CONTRIBUTING.md` describes both toolchain delivery paths. It named only Play Asset Delivery, while every non-Play install takes the HTTP path that developers themselves run on.
@@ -103,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The on-device editor server requires a connection token, generated on first start and kept in private storage. Binding to `127.0.0.1` is not access control on Android.
 - The connection token no longer reaches the Android system log, which other software on the device can read.
-- Crash logs leaving the app now have the connection token taken out. The bug report copied to the clipboard and the crash dialog both carried it verbatim.
+- Crash text reaching the clipboard, the crash dialog and the page now has the connection token stripped from the `tkn=` parameter it travels in.
 - The address the editor is opened at is redacted by the shared routine before logging, replacing a hand-maintained token-free copy that could drift from the real one.
 - Deciding whether the server on the port is ours no longer sends it the connection token. Ownership is settled from a record this app writes; a holder we have no record for is treated as a stranger.
 - Startup readiness is judged by the one endpoint answered before the token check. The previous check treated any non-error reply as healthy, including "forbidden".
