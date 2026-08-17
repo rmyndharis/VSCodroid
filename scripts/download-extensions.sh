@@ -14,7 +14,7 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets/extensions"
 WORK_DIR="$ROOT_DIR/toolchains/extensions"
 
-# Extensions to bundle: publisher.name or publisher.name@version
+# Extensions to bundle: publisher.name@version#sha256
 #
 # Every one is pinned to the newest STABLE version whose engines.vscode is
 # satisfied by the VSCODE_VERSION file. Stable matters as much as compatible:
@@ -33,12 +33,26 @@ WORK_DIR="$ROOT_DIR/toolchains/extensions"
 # GitLens is deliberately absent. VS Code's own SCM view, inline blame and diff
 # editor cover what this app needs, and GitLens is 22 MB plus a walkthrough and
 # a welcome view on first run. Anyone who wants it can install it from Open VSX.
+#
+# The digest after the "#" is the sha256 of the VSIX that pin resolves to,
+# recorded here rather than taken from the registry. Open VSX serves the bytes
+# and the files.sha256 beside them from one host under one path prefix, so on
+# its own that pair says the download arrived intact and nothing about what was
+# published: whoever can replace one can replace the other, and this script
+# would compare the replacement against itself and report "sha256: verified".
+# Pinning makes this repository the party that says what each VSIX is, the same
+# arrangement download-java.sh uses for SPAWN_SHA_*.
+#
+# What it does not buy: nothing here establishes that a digest was right the
+# first time. Each was read from Open VSX once and its value is that it stops
+# moving afterwards. Bump the version and the digest together; the published
+# value is still fetched below and a disagreement fails the build.
 EXTENSIONS=(
-    "PKief.material-icon-theme@5.37.0"
-    "esbenp.prettier-vscode@12.4.0"
-    "ms-python.python@2026.4.0"
-    "dbaeumer.vscode-eslint@3.0.34"
-    "bradlc.vscode-tailwindcss@0.16.0"
+    "PKief.material-icon-theme@5.37.0#ade9adefe3909cea92aed52850ddd00975d1dc1b62fe558831f6fb8b88f7c3ce"
+    "esbenp.prettier-vscode@12.4.0#fb730ea4306d09cdc0a3aaa9e9baae28058cc97a4fbfce8b056b377a0639a9fe"
+    "ms-python.python@2026.4.0#232aeafb01f069824fdd92d3e628c1c442bbcfa1d3cc945ff97076340bb2b4a6"
+    "dbaeumer.vscode-eslint@3.0.34#ca5334d46f6a39079e751ef4601bfc9f86bc3a46483e87291ec609239d161308"
+    "bradlc.vscode-tailwindcss@0.16.0#3fd7ceb8b20a88d1df01c3c95f240e7b3db14fd66b8f003c1d686790608d1942"
 )
 
 OPENVSX_API="https://open-vsx.org/api"
@@ -53,11 +67,11 @@ OPENVSX_API="https://open-vsx.org/api"
 # unreachable" from a note into a failed build.
 #
 # The shape half is checked here, before anything reads or deletes a directory.
-# Both computations split on "@", so an entry with none, with an empty version, or
-# with more than one "@" makes them disagree:
-#     foo.bar        -> sweep "foo.bar-foo.bar"    (neither strip does anything)
-#     foo.bar@       -> sweep "foo.bar-"           (trailing hyphen, matches nothing)
-#     foo.bar@1.0@2  -> sweep "foo.bar@1.0-2"      (the strips cut in different places)
+# Both computations split on "@" and then on "#", so an entry missing either
+# separator, carrying two of one, or leaving a field empty makes them disagree:
+#     foo.bar          -> sweep "foo.bar-foo.bar"  (neither strip does anything)
+#     foo.bar@#abc     -> sweep "foo.bar-"         (trailing hyphen, matches nothing)
+#     foo.bar@1.0@2#ab -> sweep "foo.bar@1.0-2"    (the strips cut in different places)
 # none of which any extraction ever produces.
 #
 # Refused rather than skipped, because the header above already requires pins for
@@ -66,28 +80,29 @@ OPENVSX_API="https://open-vsx.org/api"
 # never activates, and logs nothing. An entry naming no usable version has no
 # correct handling to fall back on, so there is nothing for a skip to do but hide it.
 #
+# One expression rather than a case per malformation, because the digest field
+# added three more of them and the interesting property is positive: the entry
+# has to be an id, a version and 64 lowercase hex digits, in that order, with one
+# separator between each. A missing digest must not fall through to "verify
+# against whatever the registry says" -- that is the arrangement the pin exists
+# to end.
+#
 # The shape check cannot cover the other half -- an alias like "@latest" is a
 # well-formed pin that Open VSX resolves to a different string -- so that is
 # asserted on the resolved value further down, where it can be measured instead
 # of guessed at.
+EXT_SPEC_SHAPE='^[^@#]+\.[^@#]+@[^@#]+#[0-9a-f]{64}$'
 for entry in "${EXTENSIONS[@]}"; do
-    case "$entry" in
-        *@*@*)
-            echo "  FAIL   $entry has more than one '@'." >&2
-            echo "         Pin it as publisher.name@version, exactly one '@'." >&2
-            exit 1 ;;
-        *@)
-            echo "  FAIL   $entry names an empty version." >&2
-            echo "         Pin it as publisher.name@version." >&2
-            exit 1 ;;
-        *@*) ;;
-        *)
-            echo "  FAIL   $entry names no version." >&2
-            echo "         Pin it as publisher.name@version. Unpinned entries resolve to" >&2
-            echo "         whatever is newest that day, and the cleanup sweep cannot compute" >&2
-            echo "         their directory name, so it deletes the extracted tree every run." >&2
-            exit 1 ;;
-    esac
+    if ! [[ "$entry" =~ $EXT_SPEC_SHAPE ]]; then
+        echo "  FAIL   $entry is not a usable pin." >&2
+        echo "         Write it as publisher.name@version#sha256, with exactly one '@'," >&2
+        echo "         exactly one '#', no empty field, and 64 lowercase hex digits." >&2
+        echo "         The cleanup sweep computes this extension's directory name from" >&2
+        echo "         the id and the version, so an entry it cannot split is a tree it" >&2
+        echo "         deletes on every run; and without the digest there is nothing to" >&2
+        echo "         hold the download to but the registry serving it." >&2
+        exit 1
+    fi
 done
 
 echo "=== Downloading bundled extensions from Open VSX ==="
@@ -108,12 +123,18 @@ mkdir -p "$ASSETS_DIR"
 if git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     managed=""
     for entry in "${EXTENSIONS[@]}"; do
-        # The same two expansions the download loop uses for EXT_ID and
-        # PINNED_VERSION, deliberately -- %%@* and #*@, not %@* and ##*@. The
-        # guard above rules out the inputs where the two pairs differ, so either
-        # spelling would compute the same string today; using the loop's makes
-        # the agreement structural rather than something a reader has to re-derive.
-        managed="$managed ${entry%%@*}-${entry#*@}"
+        # The same expansions the download loop uses for EXT_ID and
+        # PINNED_VERSION, deliberately -- %%@* and #*@ and %%#*, not %@* and
+        # ##*@ and %#*. The guard above rules out the inputs where the two sets
+        # differ, so either spelling would compute the same string today; using
+        # the loop's makes the agreement structural rather than something a
+        # reader has to re-derive.
+        #
+        # The digest field must be stripped here as well, or every managed name
+        # becomes "<id>-<version>#<hex>", matches no extracted directory, and the
+        # sweep below deletes and re-downloads all five trees on every run.
+        entry_tail="${entry#*@}"
+        managed="$managed ${entry%%@*}-${entry_tail%%#*}"
     done
     for dir in "$ASSETS_DIR"/*/; do
         [ -d "$dir" ] || continue
@@ -132,11 +153,13 @@ fi
 mkdir -p "$WORK_DIR"
 
 for EXT_SPEC in "${EXTENSIONS[@]}"; do
-    # publisher.name@version. The guard above refuses no "@", an empty version and
-    # more than one "@", so both halves are non-empty here and the branches that
-    # handled their absence are gone.
+    # publisher.name@version#sha256. The guard above refuses every shape where
+    # these three splits disagree with the sweep's, so all three fields are
+    # non-empty here and the branches that handled their absence are gone.
     EXT_ID="${EXT_SPEC%%@*}"
-    PINNED_VERSION="${EXT_SPEC#*@}"
+    EXT_TAIL="${EXT_SPEC#*@}"
+    PINNED_VERSION="${EXT_TAIL%%#*}"
+    PINNED_SHA256="${EXT_TAIL#*#}"
 
     PUBLISHER="${EXT_ID%%.*}"
     NAME="${EXT_ID#*.}"
@@ -201,40 +224,47 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     echo "  Version: $VERSION"
     echo "  Download URL: $DOWNLOAD_URL"
 
-    # files.sha256 sits right next to files.download in the metadata this loop
-    # already parses, and it is read here -- above the fast path -- rather than
-    # after it. The skip below used to jump over the comparison, the download
-    # and the engines check together, so an extracted tree was a tree nothing
-    # had ever verified, while the comment on the comparison claimed it failed
-    # closed "cached files included". CI's locked cache key narrowed that but
-    # did not close it: restore-keys falls back to any earlier tree.
+    # The expected digest is the pinned one, so it is on hand here whatever the
+    # network is doing. That retires the whole offline question this block used
+    # to carry: there is no "Open VSX unreachable, trust the stamp" case left,
+    # because the answer never came from Open VSX in the first place.
+    EXPECTED="$PINNED_SHA256"
+    STAMP="$WORK_DIR/${DIR_NAME}.verified"
+
+    # files.sha256 is still read, demoted from the answer to a cross-check.
+    # A version is immutable on Open VSX, so a published digest that moves under
+    # a fixed one is the precise event a pin exists to catch, and it fails the
+    # build rather than deciding it. Unreachable is not the same as moved: an
+    # empty result skips the comparison and the pin still governs, which is the
+    # offline behaviour download-npm.sh has.
+    #
+    # `|| true` binds to the assignment, not to the pipeline inside it, so a
+    # failed fetch lands as an empty PUBLISHED rather than aborting under set -e
+    # with only curl's message. --show-error keeps that message: it says whether
+    # this was no network or a 404.
     SHA256_URL=$(python3 -c "import json; print(json.load(open('$METADATA_FILE'))['files'].get('sha256', ''))")
     if [ -z "$SHA256_URL" ]; then
-        echo "  FAIL   $EXT_ID: metadata carries no files.sha256" >&2
-        exit 1
+        echo "  NOTE: metadata carries no files.sha256; the pin has nothing to cross-check against"
+    else
+        PUBLISHED=$(curl -sL --fail --show-error "$SHA256_URL" | awk '{print $1}' || true)
+        if [ -n "$PUBLISHED" ] && [ "$PUBLISHED" != "$EXPECTED" ]; then
+            echo "  FAIL   $EXT_ID $PINNED_VERSION: Open VSX publishes a different digest" >&2
+            echo "         pinned    : $EXPECTED" >&2
+            echo "         published : $PUBLISHED" >&2
+            echo "         A version does not change its bytes. Either this pin was never" >&2
+            echo "         right or the release was replaced; find out which before this" >&2
+            echo "         build is trusted, and do not simply copy the published value." >&2
+            exit 1
+        fi
     fi
-    # Unreachable is not the same as absent, and download-npm.sh already draws
-    # that line: a rebuild with no network still verifies what it has instead of
-    # dying in the fetch. The stamp below records the digest this tree was
-    # extracted against, so offline the claim narrows honestly from "still
-    # matches what Open VSX publishes" to "matched it when it was extracted".
-    STAMP="$WORK_DIR/${DIR_NAME}.verified"
-    # `|| true` binds to the assignment, not to the pipeline inside it, so a
-    # failed fetch lands as an empty EXPECTED and is decided below rather than
-    # aborting under set -e with only curl's message. --show-error keeps that
-    # message: it says whether this was no network or a 404, and those want
-    # different responses from whoever is reading.
-    EXPECTED=$(curl -sL --fail --show-error "$SHA256_URL" | awk '{print $1}' || true)
 
     # Skip the download and the extraction, never the verification.
     if [ -d "$DEST_DIR" ] && [ -f "$DEST_DIR/package.json" ] && [ -f "$STAMP" ]; then
         RECORDED=$(cat "$STAMP")
-        if [ -z "$EXPECTED" ]; then
-            echo "  Already extracted: $DIR_NAME (Open VSX unreachable; verified at extraction)"
-        elif [ "$RECORDED" = "$EXPECTED" ]; then
-            echo "  Already extracted: $DIR_NAME (sha256 still matches what is published)"
+        if [ "$RECORDED" = "$EXPECTED" ]; then
+            echo "  Already extracted: $DIR_NAME (matches the pinned sha256)"
         else
-            echo "  Re-extracting $DIR_NAME: published sha256 has moved since it was extracted"
+            echo "  Re-extracting $DIR_NAME: not the tree the pinned sha256 names"
             rm -rf "$DEST_DIR" "$STAMP"
         fi
         if [ -d "$DEST_DIR" ]; then
@@ -251,11 +281,6 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
         rm -rf "$DEST_DIR"
     fi
 
-    if [ -z "$EXPECTED" ]; then
-        echo "  FAIL   $EXT_ID: no published digest at $SHA256_URL, and no verified tree to fall back on" >&2
-        exit 1
-    fi
-
     # Download VSIX
     VSIX_FILE="$WORK_DIR/${DIR_NAME}.vsix"
     if [ ! -f "$VSIX_FILE" ]; then
@@ -265,19 +290,18 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     fi
 
     # These are executable payloads bundled into the APK, so they get the same
-    # bar as every other download script: fail closed. (An earlier revision
-    # claimed Open VSX publishes no digests; a live fetch of files.sha256
-    # disproved it.) EXPECTED was read above, before the fast path, so that a
-    # tree this run does not download is held to the same comparison.
+    # bar as every other download script: fail closed. EXPECTED is the pin, set
+    # above the fast path, so a tree this run does not download is held to the
+    # same comparison as one it does.
     ACTUAL=$( (sha256sum "$VSIX_FILE" 2>/dev/null || shasum -a 256 "$VSIX_FILE") | cut -d' ' -f1)
     if [ "$ACTUAL" != "$EXPECTED" ]; then
-        echo "  FAIL   $EXT_ID: VSIX does not match files.sha256" >&2
-        echo "         published : ${EXPECTED:-(empty)}" >&2
-        echo "         file      : $ACTUAL" >&2
+        echo "  FAIL   $EXT_ID: VSIX does not match the pinned sha256" >&2
+        echo "         pinned : $EXPECTED" >&2
+        echo "         file   : $ACTUAL" >&2
         rm -f "$VSIX_FILE"
         exit 1
     fi
-    echo "  sha256: verified"
+    echo "  sha256: matches the pinned digest"
 
     # Extract extension/ contents from VSIX (it's a ZIP)
     echo "  Extracting..."
