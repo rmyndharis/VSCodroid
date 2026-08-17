@@ -227,6 +227,23 @@ function main() {
             'unknown'],
         [1012, [NODE, '/data/user/0/com.vscodroid/files/home/projects/build-tailwind.js'],
             'unknown'],
+        // The same specificity question for the patterns that are single words.
+        // These four are one rule read in both directions, and either half alone
+        // passes on the wrong one: a rule that only has to classify gopls is
+        // satisfied by matching every basename containing it, and a rule that
+        // only has to spare run-eslint.js is satisfied by matching nothing.
+        [1013, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/run-eslint.js'],
+            'unknown'],
+        // The pattern reaches this one through a flag's value, not through the
+        // script being run: every argument is tested, and the basename of
+        // --out=/tmp/tsserver-log.js is tsserver-log.js.
+        [1014, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/build.js',
+            '--out=/tmp/tsserver-log.js'], 'unknown'],
+        // A server whose program name is the pattern with nothing around it, and
+        // one that is the pattern plus the extension its entry point carries.
+        [1015, ['/data/user/0/com.vscodroid/files/usr/bin/gopls', '-mode=stdio'], 'langserver'],
+        [1016, [NODE, `${REH}/extensions/node_modules/typescript/lib/tsserver.js`,
+            '--useInferredProjectPerProjectRoot'], 'langserver'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);

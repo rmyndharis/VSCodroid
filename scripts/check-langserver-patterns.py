@@ -3,12 +3,12 @@
 
     check-langserver-patterns.py <extensions-dir>
 
-process-monitor.js labels a process as a language server by substring-matching
-its command line against a list of patterns, and that list is what decides which
-processes the idle-kill can reclaim. A pattern that matches nothing is invisible
-twice over: the server keeps running, it keeps counting against Android's
-phantom-process budget, and the feature built to manage exactly that never sees
-it.
+process-monitor.js labels a process as a language server by matching the
+basename of each command-line argument against a list of patterns, and that list
+is what decides which processes the idle-kill can reclaim. A pattern that
+matches nothing is invisible twice over: the server keeps running, it keeps
+counting against Android's phantom-process budget, and the feature built to
+manage exactly that never sees it.
 
 That already happened. The list carried 'css-languageserver',
 'html-languageserver' and 'json-languageserver' while the processes VS Code
@@ -29,7 +29,10 @@ lower-cased the command line first and matched against that, so a pattern with a
 capital in it could not match there while matching perfectly here. Every run of
 this script said the three bundled servers were covered, and none of them was.
 Both sides now fold case and both look at the basename, which is the part that
-names the program rather than the directory somebody put it in.
+names the program rather than the directory somebody put it in. Both also split
+the list the same way: a pattern that is a single word has to be the whole
+basename, give or take the extension a Node entry point carries, while a pattern
+carrying a separator is still found anywhere inside it.
 """
 
 import pathlib
@@ -61,6 +64,19 @@ def patterns():
     return re.findall(r"'([^']+)'", src[start:end])
 
 
+def matches(name, pattern):
+    """classify()'s comparison, against one already-lower-cased basename.
+
+    The character class is spelled out rather than written \\w: Python's is
+    unicode-aware and JavaScript's is not, and a helper that accepts a pattern
+    the monitor would reject is this script's whole failure mode.
+    """
+    needle = pattern.lower()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", needle):
+        return needle in name
+    return any(name == needle + ext for ext in ("", ".js", ".mjs", ".cjs"))
+
+
 def main(extensions):
     pats = patterns()
     # An empty list would make every assertion below vacuously true, and this
@@ -82,7 +98,7 @@ def main(extensions):
         # each argument, case-folded. The argument that carries a server is its
         # path, so its basename is what has to match here.
         name = server.name.lower()
-        hit = next((p for p in pats if p.lower() in name), None)
+        hit = next((p for p in pats if matches(name, p)), None)
         if hit:
             print(f"  ok      {server.name} matched by {hit!r}")
         else:

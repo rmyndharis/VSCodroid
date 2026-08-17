@@ -32,6 +32,11 @@ const KILL_ON_PRESSURE = new Set(['critical']);
 // literals and refuses a disagreement in either direction.
 const PRESSURE_FILENAME = 'vscodroid-memory-pressure';
 
+// How an entry matches depends on its shape, which namesProgram() below reads:
+// a bare word has to name the program exactly (optionally with a .js, .mjs or
+// .cjs extension), while an entry carrying a separator is distinctive enough to
+// be found anywhere in the name. So 'gopls' matches gopls and gopls.js and
+// nothing else, while 'rust-analyzer' still matches rust-analyzer-wrapper.
 const LANG_SERVER_PATTERNS = [
     'tsserver', 'typescript-language-server',
     'pylsp', 'pyright', 'python-language-server', 'jedi',
@@ -59,14 +64,14 @@ const LANG_SERVER_PATTERNS = [
     // un-classified the server it names.
     //
     // Both program names in full, rather than the 'tailwind' they share. A bare
-    // 'tailwind' also matches a user's own tailwind.config.js, build-tailwind.js,
-    // or an npx tailwindcss run, and being classified 'langserver' is not cosmetic:
-    // it puts a process into lsCpuTracker and makes it eligible for the idle kill
-    // under memory pressure. Killing a build someone is waiting on is a worse
-    // outcome than failing to reclaim a language server.
+    // 'tailwind' also names a user's own tailwind.js build script, and being
+    // classified 'langserver' is not cosmetic: it puts a process into
+    // lsCpuTracker and makes it eligible for the idle kill under memory
+    // pressure. Killing a build someone is waiting on is a worse outcome than
+    // failing to reclaim a language server.
     //
-    // Two entries because neither contains the other: 'tailwindmodeserver.js' does
-    // not contain 'tailwindserver'.
+    // Two entries because neither names the other: tailwindModeServer.js is not
+    // 'tailwindServer' with an extension on the end.
     //
     // check-langserver-patterns.py cannot see this one: it globs *ServerMain.js
     // under vscode-reh/extensions, and Tailwind is a marketplace extension living
@@ -171,6 +176,27 @@ function readCpuTime(pid) {
 }
 
 /**
+ * Does this argument's basename name the program a pattern describes?
+ *
+ * A bare word does not name a program wherever it appears: 'eslint' is inside
+ * run-eslint.js and eslint.config.js, and 'tsserver' is inside tsserver-log.js,
+ * which reaches this via `--out=/tmp/tsserver-log.js` because every argument is
+ * tested and not only the one the launcher runs. Being classified 'langserver'
+ * is not cosmetic: it puts the process into lsCpuTracker, and five minutes with
+ * no CPU movement then make it a SIGTERM the next time Android reports critical
+ * memory pressure. So a bare word has to be the whole name, give or take the
+ * extension a Node entry point carries.
+ *
+ * Patterns carrying a separator, 'rust-analyzer' and 'cssServerMain.js', are
+ * specific enough that finding one inside a name means what it says, and they
+ * keep the substring test they need.
+ */
+function namesProgram(name, needle) {
+    if (!/^\w+$/.test(needle)) return name.includes(needle);
+    return ['', '.js', '.mjs', '.cjs'].some((ext) => name === needle + ext);
+}
+
+/**
  * Classify a process by its cmdline.
  */
 function classify(cmdline) {
@@ -208,7 +234,7 @@ function classify(cmdline) {
 
     for (const pattern of LANG_SERVER_PATTERNS) {
         const needle = pattern.toLowerCase();
-        if (names.some((name) => name.includes(needle))) return 'langserver';
+        if (names.some((name) => namesProgram(name, needle))) return 'langserver';
     }
 
     // Generic node bootstrap-fork (extension host, search, etc.)

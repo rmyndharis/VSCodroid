@@ -157,6 +157,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When the system kills the editor server for memory or the background-process limit, the log says so instead of reporting a clean exit.
 - The editor's memory ceiling is sized from the device. A fixed limit left 3-4 GB phones being killed repeatedly while larger devices never used what they had.
 - Switching to another app no longer kills your language servers. Android's window-hidden signal numerically outranks its real out-of-memory warning.
+- A script of yours whose name merely contains a language server's, such as `run-eslint.js`, is no longer classed as one and killed under memory pressure.
 - Stopping the app from its notification no longer freezes the screen for several seconds or shows the "isn't responding" dialog.
 
 **Device folders (SAF)**
