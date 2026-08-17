@@ -23,10 +23,12 @@ Three rules:
     licence and the tree carries the licence text itself.
 
 The third rule is the one that reads a build product, so it runs where build
-products exist: `download-extensions.sh` calls this after extracting, which
-covers `build.yml` and `release.yml` both. On a pull request the trees are
-gitignored and absent, so lint gets the first two rules and this prints how many
-trees it read rather than leaving the count to be assumed.
+products exist. `download-extensions.sh` calls this after extracting, and
+`build.yml` calls it again once the asset cache has been restored, because that
+download step is skipped on a cache hit and the restored trees are still on
+disk to be read. A checkout with no trees, which is what `lint.yml` has, gets
+the first two rules and a count naming how many of the five were read, so a run
+that examined nothing cannot be read as one that examined all of them.
 
 Matched on the id, not on the display name. The names in the table are the ones
 a reader recognises and are not what the extensions call themselves: the table
@@ -178,13 +180,14 @@ def main() -> int:
     print(f"  ok     all {len(pinned)} bundled extensions have a notices row, "
           f"and every row has an extension")
     print(f"  ok     every recorded licence is redistributable")
-    if trees_read:
-        print(f"  ok     {trees_read} extracted tree(s) declare that licence "
+    if trees_read == len(pinned):
+        print(f"  ok     all {trees_read} extracted trees declare that licence "
               f"and carry its text")
     else:
-        print(f"  note   0 extracted trees on disk, so the licence each one "
-              f"declares was not read; that runs from "
-              f"download-extensions.sh")
+        print(f"  note   {trees_read} of {len(pinned)} extracted trees on "
+              f"disk; the licence the other {len(pinned) - trees_read} declare "
+              f"was not read here. That half runs wherever the trees exist, "
+              f"which is build.yml and release.yml")
     return 0
 
 

@@ -208,6 +208,16 @@ jobs:
       - name: Check every shipped library is attributed
         run: python3 scripts/check-library-attribution.py
 
+      # Deliberately not `if: cache-hit != 'true'`, and that is the whole point
+      # of the step. download-extensions.sh runs this after extracting, but that
+      # step is skipped on a cache hit, which is most pull requests -- and the
+      # rule that compares each tree's declared licence against the notices is
+      # the one an edit to NOTICE.md is most likely to break. The trees come
+      # back from the cache either way, so running it here reads them on every
+      # build. lint.yml keeps the committed half for checkouts with no trees.
+      - name: Check the bundled extensions match the notices
+        run: python3 scripts/check-bundled-extensions.py
+
       - name: Verify assets
         run: |
           echo "=== Assets ==="
