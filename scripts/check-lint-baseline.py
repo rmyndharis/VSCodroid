@@ -4,9 +4,9 @@
     check-lint-baseline.py
 
 `android/app/lint-baseline.xml` holds the warnings lint is told to hide, so
-every entry in it is a warning no report will ever show again. It is currently
-17 entries and `android/app/build.gradle.kts` says so in the comment above
-`baseline =`. Nothing held either to the other.
+every entry in it is a warning no report will ever show again. How many entries
+it is allowed to hold is stated in one place, the comment above `baseline =` in
+`android/app/build.gradle.kts`. Nothing held the file to it.
 
 `./gradlew updateLintBaseline` is the documented way to edit the file and it
 does not edit it, it rewrites it. Measured in a clean checkout on 2026-08-18,
@@ -41,8 +41,15 @@ Three assertions, all against the committed file, none needing a lint run:
 Both of the first two are needed, and each covers what the other misses. Only
 the count sees a regeneration performed outside the home directory, where lint
 writes `../gradle/libs.versions.toml` instead, a relative path every location
-rule would accept. Only the location rule sees a hand edit that swaps entries
-without changing how many there are.
+rule would accept. Only the location rule sees an edit that holds the count
+steady while putting a machine-rooted path back.
+
+Neither of them reads what is being hidden, and that is the limit worth stating
+rather than leaving to be discovered. An edit that keeps the count and keeps
+every path relative to the module passes both: repoint an entry at another file
+here, or swap its issue id, and the run is green. Only the diff catches that.
+What the count rule buys is that such a diff cannot be a quiet one, since hiding
+one more warning also means editing the number in build.gradle.kts.
 
 The committed XML, deliberately, and not the count lint prints in its report
 (`N warnings were filtered out because they are listed in the baseline file`).
