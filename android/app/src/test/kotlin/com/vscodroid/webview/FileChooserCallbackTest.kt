@@ -13,6 +13,7 @@ import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -141,6 +142,28 @@ class FileChooserCallbackTest {
         client.onFileChooserResult(listOf(mockk<Uri>(relaxed = true)))
 
         assertEquals(1, element.answers.size, "the second result has nobody left to answer")
+    }
+
+    /**
+     * What the Activity reads to keep the resume reload off a page that is about
+     * to be handed a file.
+     *
+     * The picker is another app, so the browse backgrounds this one, and coming
+     * back from a long browse is the shape the forced reload was written for.
+     * Reporting nothing outstanding there loses the selection with no message
+     * anywhere, so the flag has to be true for exactly as long as the answer is
+     * still owed.
+     */
+    @Test
+    fun `an outstanding request is visible until it is answered`() {
+        val element = Element()
+        assertFalse(client.hasPendingFileChooser, "nothing is waiting before a request")
+
+        show(element)
+        assertTrue(client.hasPendingFileChooser, "the request is out while the picker is up")
+
+        client.onFileChooserResult(emptyList())
+        assertFalse(client.hasPendingFileChooser, "answering releases the element")
     }
 
     /** Nothing outstanding, nothing to answer, and nothing to crash on. */

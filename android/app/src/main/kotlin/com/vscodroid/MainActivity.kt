@@ -621,17 +621,21 @@ class MainActivity : AppCompatActivity() {
      * "Canceled" errors on gallery requests and IndexedDB connections closing.
      *
      * Strategy:
+     * - a device file picker still waiting to be answered: nothing at all,
+     *   whatever the absence
      * - >5 min background with a sign-in in flight: health check instead of the
      *   forced reload
      * - >5 min background: force reload (stale state almost certain)
      * - >1 min background: run JS health check, reload only if broken
      * - <1 min: no action needed (WebSocket survives short pauses)
      *
-     * The first line is the one that is not about staleness at all. Five minutes
-     * in the background is the ordinary shape of a sign-in that needed a second
-     * factor or an organisation's consent screen, so the reload written for a
-     * stale WebSocket was firing precisely when the user came back from one, and
-     * it discards the page the callback has to land in.
+     * Neither of the first two lines is about staleness. Five minutes in the
+     * background is the ordinary shape of a sign-in that needed a second factor
+     * or an organisation's consent screen, so the reload written for a stale
+     * WebSocket was firing precisely when the user came back from one, and it
+     * discards the page the callback has to land in. Browsing device storage for
+     * a file is the same trip through another app, and it ends the same way, with
+     * a result being handed to this page.
      */
     private fun handleResumeFromBackground() {
         val ts = backgroundedAt
@@ -652,7 +656,7 @@ class MainActivity : AppCompatActivity() {
         if (!shouldActOnResume(nodeService?.isServerReady(), ts, serverPort)) return
 
         val bgMs = SystemClock.elapsedRealtime() - ts
-        when (resumeAction(bgMs, signInIsPending())) {
+        when (resumeAction(bgMs, signInIsPending(), fileChooserIsPending())) {
             ResumeAction.RELOAD -> {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
                 // reload(), not a rebuilt URL. The WebView URL is the only
@@ -699,6 +703,18 @@ class MainActivity : AppCompatActivity() {
             authCallbackIsExpected(it, now, AUTH_TAB_WINDOW_MILLIS)
         }
     }
+
+    /**
+     * Whether an `<input type=file>` is still waiting for the device picker.
+     *
+     * Asked of the chrome client on the current WebView, which is where
+     * [deliverFileChooserResult] takes the answer, so the two cannot disagree
+     * about which document is owed one. A client that was replaced with its page
+     * reports nothing pending, which is right: there is no selection left to
+     * protect.
+     */
+    private fun fileChooserIsPending(): Boolean =
+        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.hasPendingFileChooser == true
 
     /**
      * Probes the WebView for an IndexedDB connection that did not survive being
@@ -1974,13 +1990,31 @@ internal enum class ResumeAction {
  * safe here: it only reloads when IndexedDB is already unusable, and a page in
  * that state has nothing left to collect a callback with.
  *
+ * [fileChooserPending] outranks both, and gets the stronger answer rather than
+ * the probe. The difference from a sign-in is that the answer is already
+ * arriving: the picker is another app, so the browse *is* the absence, and the
+ * chosen file is handed to this same document moments after this decision. The
+ * probe would not be enough, on two counts. It reloads the page from JS when
+ * IndexedDB is unusable, which discards the selection just as the forced reload
+ * does; and it starts at one minute, where browsing storage for longer than that
+ * is the ordinary case rather than the exotic one.
+ *
+ * The cost is a page left possibly stale, and it is bounded: the answer is being
+ * delivered now, and the next trip through the background judges the page afresh
+ * on its own absence.
+ *
  * An earlier shape of this held the reload for later by putting the caller's
  * backgrounded reading back. That reading is written afresh by `onStop`, which
  * Android always delivers before the next `onStart`, so the restored value was
  * overwritten before its only consumer could read it and the reload was dropped
  * rather than deferred.
  */
-internal fun resumeAction(bgMs: Long, signInPending: Boolean): ResumeAction = when {
+internal fun resumeAction(
+    bgMs: Long,
+    signInPending: Boolean,
+    fileChooserPending: Boolean,
+): ResumeAction = when {
+    fileChooserPending -> ResumeAction.NOTHING
     bgMs > FORCE_RELOAD_THRESHOLD_MS && signInPending -> ResumeAction.PROBE_CONNECTION
     bgMs > FORCE_RELOAD_THRESHOLD_MS -> ResumeAction.RELOAD
     bgMs > HEALTH_CHECK_THRESHOLD_MS -> ResumeAction.PROBE_CONNECTION

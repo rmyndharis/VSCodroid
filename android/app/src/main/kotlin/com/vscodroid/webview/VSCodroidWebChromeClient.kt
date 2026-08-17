@@ -27,6 +27,18 @@ class VSCodroidWebChromeClient(
      */
     private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
 
+    /**
+     * Whether an `<input type=file>` is still waiting for the picker.
+     *
+     * Read by the Activity on the way back from the background. The picker runs
+     * in another app, so browsing storage backgrounds this one exactly as a
+     * sign-in does, and the resume rule reloads the page after five minutes: a
+     * file chosen at the end of a long browse would arrive at a document that is
+     * being torn down, and be lost with nothing said.
+     */
+    val hasPendingFileChooser: Boolean
+        get() = pendingFileChooser != null
+
     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
         // Redacted as one string, which covers both halves that can carry the
         // connection token: `sourceId` is a script URL and `message` is arbitrary

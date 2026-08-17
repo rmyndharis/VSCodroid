@@ -1452,6 +1452,10 @@ class ConnectionHealthProbeTest {
  * and the callback is delivered on the way back, into the same moment this
  * decision is made. The workbench keeps the requests it is waiting on in memory,
  * so a reload here throws away a sign-in that had already succeeded, silently.
+ *
+ * Picking a file from device storage is the second such trip, and the one a user
+ * makes far more often. The picker is another app, browsing it takes as long as
+ * finding the file takes, and the selection comes back through this same moment.
  */
 class ResumeActionTest {
 
@@ -1466,7 +1470,10 @@ class ResumeActionTest {
         // here is an action never taken. The probe is what can be answered safely
         // -- it reloads only when IndexedDB is already unusable, and such a page
         // has nothing left to collect a callback with.
-        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(long, signInPending = true))
+        assertEquals(
+            ResumeAction.PROBE_CONNECTION,
+            resumeAction(long, signInPending = true, fileChooserPending = false),
+        )
     }
 
     @Test
@@ -1475,7 +1482,10 @@ class ResumeActionTest {
         // long absence to the probe would leave a page stale for the rest of the
         // session, which is the failure the reload was added for in the first
         // place.
-        assertEquals(ResumeAction.RELOAD, resumeAction(long, signInPending = false))
+        assertEquals(
+            ResumeAction.RELOAD,
+            resumeAction(long, signInPending = false, fileChooserPending = false),
+        )
     }
 
     @Test
@@ -1484,14 +1494,54 @@ class ResumeActionTest {
         // only reloads when IndexedDB is already unusable, and a page in that
         // state has nothing left to collect a callback with, so suppressing it
         // would trade a real recovery for a callback that cannot be delivered.
-        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(middling, signInPending = true))
-        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(middling, signInPending = false))
+        assertEquals(
+            ResumeAction.PROBE_CONNECTION,
+            resumeAction(middling, signInPending = true, fileChooserPending = false),
+        )
+        assertEquals(
+            ResumeAction.PROBE_CONNECTION,
+            resumeAction(middling, signInPending = false, fileChooserPending = false),
+        )
+    }
+
+    @Test
+    fun `a file picker still waiting for an answer stops the reload`() {
+        // Browsing device storage is a trip through another app, so the browse is
+        // the absence: a file chosen after ten minutes in Downloads comes back
+        // through this decision, and the reload discards the document the URI is
+        // about to be handed to. The selection is lost with no message and no
+        // log line, which is the failure this outranks.
+        assertEquals(
+            ResumeAction.NOTHING,
+            resumeAction(long, signInPending = false, fileChooserPending = true),
+        )
+    }
+
+    @Test
+    fun `a file picker stops the probe as well as the reload`() {
+        // Not the downgrade a sign-in gets. The probe reloads the page from JS
+        // when IndexedDB is unusable, which loses the selection the same way, and
+        // it starts at one minute, where a browse of that length is ordinary.
+        assertEquals(
+            ResumeAction.NOTHING,
+            resumeAction(middling, signInPending = false, fileChooserPending = true),
+        )
+        assertEquals(
+            ResumeAction.NOTHING,
+            resumeAction(long, signInPending = true, fileChooserPending = true),
+        )
     }
 
     @Test
     fun `a short absence does nothing, with or without a sign-in`() {
-        assertEquals(ResumeAction.NOTHING, resumeAction(1_000L, signInPending = true))
-        assertEquals(ResumeAction.NOTHING, resumeAction(1_000L, signInPending = false))
+        assertEquals(
+            ResumeAction.NOTHING,
+            resumeAction(1_000L, signInPending = true, fileChooserPending = false),
+        )
+        assertEquals(
+            ResumeAction.NOTHING,
+            resumeAction(1_000L, signInPending = false, fileChooserPending = false),
+        )
     }
 
     @Test
@@ -1500,11 +1550,37 @@ class ResumeActionTest {
         // fine, and makes the sign-in branch unreachable -- so a return from a
         // second factor reloads the page the callback has to land in. At exactly
         // the threshold neither fires, which is the boundary worth stating too.
-        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(long, signInPending = true))
         assertEquals(
             ResumeAction.PROBE_CONNECTION,
-            resumeAction(FORCE_RELOAD_THRESHOLD_MS, signInPending = true),
+            resumeAction(long, signInPending = true, fileChooserPending = false),
+        )
+        assertEquals(
+            ResumeAction.PROBE_CONNECTION,
+            resumeAction(FORCE_RELOAD_THRESHOLD_MS, signInPending = true, fileChooserPending = false),
             "the reload threshold is exclusive; at the boundary there is no reload to spare",
+        )
+    }
+
+    @Test
+    fun `the resume decision is told about the picker, not only the sign-in`() {
+        // Source reading, for the reason AuthCallbackCallSiteTest gives for the
+        // sign-in half: resumeAction can be exactly right and never told. Passing
+        // a literal false here, or dropping the argument on a later edit, leaves
+        // every case above green while the reload goes back to discarding the
+        // file the user just picked.
+        val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        check(mainActivity.isFile) { "MainActivity.kt not found at ${mainActivity.absolutePath}" }
+
+        val decisions = mainActivity.readLines()
+            .filterNot { val t = it.trimStart(); t.startsWith("//") || t.startsWith("*") }
+            .filter { it.contains("resumeAction(") }
+            .filterNot { it.contains("fun resumeAction") }
+
+        assertEquals(1, decisions.size, "expected one resume decision, found: $decisions")
+        assertTrue(
+            decisions.single().contains("fileChooserIsPending()"),
+            "the resume decision must be told whether a file picker is still out; found: " +
+                decisions.single(),
         )
     }
 }
