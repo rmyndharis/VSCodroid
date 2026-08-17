@@ -372,6 +372,18 @@ jobs:
       - name: Check every shipped toolchain library is attributed
         run: python3 scripts/check-library-attribution.py
 
+      # The step above answers "is every binary attributed" out of a table
+      # written by hand, and until now nothing asked whether the table was
+      # right. This reads Termux's own TERMUX_PKG_LICENSE back for each package
+      # and prints the differences. It fails on one of them only: a component
+      # recorded permissive where Termux declares copyleft ships with no offer
+      # of source, and the step above cannot see it, because it reads the same
+      # table. Everything else is reported, including a package it could not
+      # reach at all, because Termux repackaging is ordinary upstream activity
+      # and a gate that failed on it would be switched off.
+      - name: Compare recorded licences against Termux
+        run: python3 scripts/check-termux-licenses.py
+
       # The one place both trees exist at once. The base runtime and the packs
       # are filled by different download scripts and nothing compares them
       # until the whole bundle is assembled, where bundletool answers a shared

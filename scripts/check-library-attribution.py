@@ -61,6 +61,10 @@ Three checks, in the order a new library trips them:
 
 The map below is the licence record. Its source is Termux's own
 `TERMUX_PKG_LICENSE`, which is what these packages are actually built from.
+Nothing here reads that field, so nothing here can tell a correct entry from a
+mistyped one: check-termux-licenses.py reads it back per package and reports the
+differences, and fails on the one that matters, a component recorded permissive
+where Termux declares copyleft.
 
 Toolchain packs are covered too, but only where they exist. Their payloads are
 downloaded, not committed, so this has to run AFTER the download step to see

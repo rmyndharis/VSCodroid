@@ -319,7 +319,9 @@ The shared libraries and executables that sit at the top level of
 `assets/usr/lib` and `jniLibs/arm64-v8a`, with the licence each is distributed
 under. The licence column is taken from Termux's own `TERMUX_PKG_LICENSE`, which
 is what these packages are built from, rather than from upstream project pages
-that may describe a different version.
+that may describe a different version. `scripts/check-termux-licenses.py` reads
+that field back on every release and reports where this column and Termux
+disagree, so the sentence before this one is measured rather than promised.
 
 This is not every binary in the APK, and the heading here claimed it was. Most of
 them are not below: they live deeper in the asset tree and are attributed by the

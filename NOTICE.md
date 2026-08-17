@@ -49,6 +49,12 @@ offer that file carries. Both documents are read: this one said the build was
 gated on it while only the other was, so the two agreed by habit rather than by
 anything enforcing it.
 
+That the licences here are Termux's own is now checked rather than asserted.
+`scripts/check-termux-licenses.py` reads `TERMUX_PKG_LICENSE` back from Termux
+for each package and reports where the two disagree. It fails on one difference
+only: a component recorded permissive where Termux declares copyleft, which is
+what would leave a binary shipping with no offer of source.
+
 This table covers the Termux libraries and executables at the top level of
 `assets/usr/lib` and `jniLibs/arm64-v8a`. The binaries that sit deeper in the
 asset tree are attributed under **Core Components** above, and the gate holds
