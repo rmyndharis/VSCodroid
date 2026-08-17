@@ -559,11 +559,24 @@ it as `--logsPath` (`Environment.getLogsDir`):
 adb shell run-as com.vscodroid.debug ls files/home/.vscodroid/data/logs
 ```
 
+Those `[node]` lines come from a reader `ProcessManager` attaches to the process it spawned.
+A server it adopted instead, which is what happens when the app process is killed and the
+editor server it forked survives holding the port, has no such process behind it and
+produces none. That is the state a post-crash session starts in, so read silence under this
+tag with the `Port ... already served by a server of ours; adopting it` line above it as an
+adopted server rather than a dead one.
+
 To probe the server yourself, take the port from logcat (`Server is ready on port NNNN`,
 logged by `NodeService` at info level, so it is there in both build types) and reach it
-through a forward:
+through a forward. On a session that has been up for hours the line has usually rolled out
+of the ring buffer; `assets/server.js` writes the same port down beside the pid of the
+server it forked, and removes it when that server exits, so the file answers whenever there
+is a server to probe:
 
 ```bash
+# The port again, when the log line is gone
+adb shell run-as com.vscodroid.debug cat files/server/editor-server.pid
+
 adb forward tcp:$PORT tcp:$PORT
 curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$PORT/version"
 adb forward --remove tcp:$PORT

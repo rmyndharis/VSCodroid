@@ -11,10 +11,11 @@ have: a code-server fork checked out as a git submodule, `yarn gulp vscode-web-m
 against it, patches applied as inline Python replacements inside
 `scripts/download-vscode-server.sh`, feature branches merged into a `develop` branch. None
 of that is how this repository works. There is no submodule and no `.gitmodules`, no
-`develop` branch, no `scripts/download-vscode-server.sh`, no `server/lib/`, and nothing here
-uses yarn. The server is built from MIT Code - OSS source by
-`.github/workflows/build-vscode-oss.yml` with unified diffs from `patches/`, and app builds
-fetch the result with `scripts/fetch-vscode-oss.sh`.
+`develop` branch, no `scripts/download-vscode-server.sh`, no `server/lib/`, and no script
+under `scripts/` or workflow under `.github/` invokes yarn. Older planning documents still
+name it, and they are stale in the same way this one was. The server is built from MIT
+Code - OSS source by `.github/workflows/build-vscode-oss.yml` with unified diffs from
+`patches/`, and app builds fetch the result with `scripts/fetch-vscode-oss.sh`.
 
 The instructions have been removed rather than rewritten. The rest of the planning suite is
 kept as written, because a plan, an ADR or a risk score records what was thought at the time

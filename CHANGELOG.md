@@ -64,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README, the user guide and the requirements specification now carry storage figures that match the gate: 810 MB of assets, 875 MB required before extraction, about 1.15 GB with all toolchains. The README promised 500 MB while setup refuses under 875 MB.
 - The milestone checklist says a ticked box records what was true when it was ticked. It is the only planning document still tracking open work, so it carries a note rather than a historical marker.
-- The milestone log and the implementation plan no longer record a process-liveness check as the fix for the white screen on reopen. A contributor reading them as precedent would reintroduce it.
+- The milestone log and implementation plan no longer record a process-liveness check as the fix for the white screen on reopen. A contributor could reintroduce it as precedent.
+- The milestone checklist no longer plans on-device CI as a hosted device lab. Nothing in the workflows starts the app, and arm64 runners cannot boot an emulator.
 - The requirements table's heap limit is no longer a flat 512 MB; the ceiling has been derived from device RAM since a fixed limit left 3-4 GB phones nothing to work with.
 - `CONTRIBUTING.md` no longer describes a URL allow-list the app does not have. VSCodroid is a development environment and reaches LAN hosts on purpose; the session token is what is checked.
 - `CONTRIBUTING.md` describes both toolchain delivery paths. It named only Play Asset Delivery, while every non-Play install takes the HTTP path that developers themselves run on.
