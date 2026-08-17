@@ -524,8 +524,10 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
 // Copied from the repository root rather than committed under src/main/assets,
 // because a second copy is a copy that goes stale, and a stale licence notice is
 // worse than an absent one: it is a claim about terms that is no longer true.
-// The two files are ~37 KiB of markdown, which deflates to roughly 12 KiB in the
-// APK, about 0.01% of the base module.
+// The two files are ~44 KiB of markdown, which deflates to roughly 15 KiB in the
+// APK, about 0.01% of the base module. They grow as the tree does, since every
+// binary in it has to be named in both, so treat those as the order of magnitude
+// rather than as figures to check against.
 //
 // They are read out of the APK by MainActivity's licences dialog and never
 // extracted, which is why they are a separate assets source directory: it keeps
