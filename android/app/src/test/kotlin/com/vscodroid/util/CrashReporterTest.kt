@@ -12,12 +12,14 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Tests for [CrashReporter] — crash log management and lifecycle.
@@ -323,6 +325,64 @@ class CrashReporterTest {
         }
     }
 
+    /**
+     * The handler `init` installs, and the log it writes. Everything else in
+     * this file fabricates crash files by hand, so the producer itself has never
+     * run: it swallows every throwable, which means a writer that wrote nothing
+     * would look exactly like one that worked.
+     */
+    @Nested
+    inner class UncaughtExceptionHandlerTest {
+
+        private var previousDefault: Thread.UncaughtExceptionHandler? = null
+
+        @BeforeEach
+        fun rememberDefaultHandler() {
+            previousDefault = Thread.getDefaultUncaughtExceptionHandler()
+        }
+
+        /**
+         * The default handler is JVM-wide and this suite runs in a single JVM
+         * with no forking, so one left installed here would still be there for
+         * every class that runs afterwards.
+         */
+        @AfterEach
+        fun restoreDefaultHandler() {
+            Thread.setDefaultUncaughtExceptionHandler(previousDefault)
+        }
+
+        @Test
+        fun `an uncaught exception is written down and still reaches the handler it replaced`() {
+            val chained = AtomicReference<Throwable>()
+            Thread.setDefaultUncaughtExceptionHandler { _, thrown -> chained.set(thrown) }
+            val context = mockk<Context>(relaxed = true)
+            every { context.cacheDir } returns tempDir
+
+            CrashReporter.init(context)
+
+            val installed = Thread.getDefaultUncaughtExceptionHandler()
+            assertNotNull(installed, "init has to install a handler")
+            val boom = IllegalStateException("boom")
+            installed!!.uncaughtException(Thread("worker-7"), boom)
+
+            val written = File(tempDir, "crash-logs").listFiles()?.toList().orEmpty()
+            assertEquals(1, written.size, "one crash, one log: $written")
+            val text = written.single().readText()
+            assertTrue(text.contains("Thread: worker-7"), "the crashing thread is named: $text")
+            assertTrue(
+                text.contains("java.lang.IllegalStateException: boom"),
+                "the exception has to be in there: $text",
+            )
+            assertTrue(
+                text.contains("at com.vscodroid.util.CrashReporterTest"),
+                "the stack trace is what makes the log worth keeping: $text",
+            )
+            assertSame(
+                boom, chained.get(),
+                "the handler that was there before still has to run, or the process never dies",
+            )
+        }
+    }
 }
 
 /**
