@@ -485,22 +485,23 @@ flowchart TD
 
 ### 8.2 Logging
 
-Everything ends up in Logcat, and every tag is `VSCodroid.<class>`: `Logger` prepends that
-prefix to the per-class tag it is handed, so nothing is ever logged under the bare
-`VSCodroid`. Filter on a full tag, for example `adb logcat -s VSCodroid.ProcessManager`.
+Everything the Kotlin side logs ends up in Logcat, and every tag is `VSCodroid.<class>`:
+`Logger` prepends that prefix to the per-class tag it is handed, so nothing is ever logged
+under the bare `VSCodroid`. Filter on a full tag, for example
+`adb logcat -s VSCodroid.ProcessManager`.
 
 | Component | Log Destination | Level |
 |-----------|----------------|-------|
 | Kotlin | Logcat, tag `VSCodroid.<class>` (`VSCodroid.MainActivity`, `VSCodroid.ProcessManager`, and so on) | INFO (release), DEBUG (debug) |
 | Node.js server | stdout with stderr merged into it, read by `ProcessManager.startOutputReader` and re-logged line by line as `[node] ...` under `VSCodroid.ProcessManager` | DEBUG, so debug builds only |
-| Extension Host | worker_thread inside the server process (patch `0004`), not a file this app writes; `ExtensionHostConnection` pipes the worker's stdout and stderr into the server's log service, which prints them on the server console | as above, arriving as `[node]` lines |
+| Extension Host | worker_thread inside the server process (patch `0004`); `ExtensionHostConnection` pipes the worker's stdout and stderr into the server's log service, which writes them to `remoteagent.log` and prints them on the server console, from where the row above carries them into Logcat | INFO into `remoteagent.log` in every build; the Logcat copy is DEBUG, arriving as `[node]` lines |
 | WebView | `VSCodroidWebChromeClient.onConsoleMessage` mirrors every console message into Logcat under `VSCodroid.WebChromeClient`; Chrome DevTools additionally attaches on debug builds | ERROR and WARNING in every build, everything else DEBUG |
 
 Nothing writes `server.log` or `exthost.log`. `CrashReporter.generateBugReport` looks for
 the first under `Environment.getLogsDir` (`filesDir/home/.vscodroid/data/logs`) and never
 finds it, so a bug report carries no server-log section. That directory is not empty,
 though: `ProcessManager.startServer` points the server's `--logsPath` at it, and the
-server's own log service writes `remoteagent.log` there.
+server's own log service writes `remoteagent.log` there, Extension Host output included.
 
 ### 8.3 Configuration
 
