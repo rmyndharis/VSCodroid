@@ -408,11 +408,15 @@ fun getLastCrash(authToken: String): String?
 
 @JavascriptInterface
 fun generateBugReport(authToken: String): String
-// Generates a comprehensive bug report containing:
+// Generates a bug report containing:
 // - Device info (model, Android version, app version)
 // - Memory usage
-// - Recent crash logs (up to 3)
-// - Last 200 lines of Node.js server output
+// - How many crash logs exist, plus the text of the three most recent
+// Node.js server output is not in it, despite the section the code still
+// builds for it: ProcessManager reads the server's stdout and logs it in
+// debug builds, and no file is written for this to read.
+// Everything read off disk has the connection token replaced wherever it
+// appears as a `tkn=` parameter.
 
 @JavascriptInterface
 fun clearCrashLogs(authToken: String)

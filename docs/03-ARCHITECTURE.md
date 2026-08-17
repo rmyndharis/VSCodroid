@@ -488,9 +488,13 @@ flowchart TD
 | Component | Log Destination | Level |
 |-----------|----------------|-------|
 | Kotlin | Android Logcat (tag: VSCodroid) | INFO (release), DEBUG (debug) |
-| Node.js server | File: ~/.vscodroid/logs/server.log | INFO |
-| Extension Host | File: ~/.vscodroid/logs/exthost.log | WARN |
+| Node.js server | stdout/stderr, read by `ProcessManager.startOutputReader` and written to Logcat | DEBUG (debug builds only) |
+| Extension Host | worker_thread inside the server process (patch `0004`), not a file this app writes | as above |
 | WebView | Chrome DevTools (debug builds only) | ALL |
+
+Nothing writes `server.log` or `exthost.log`. `CrashReporter.generateBugReport` looks for
+the first under `Environment.getLogsDir` (`filesDir/home/.vscodroid/data/logs`) and never
+finds it, so a bug report carries no server-log section.
 
 ### 8.3 Configuration
 

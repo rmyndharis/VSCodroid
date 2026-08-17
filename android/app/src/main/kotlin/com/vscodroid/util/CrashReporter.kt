@@ -67,8 +67,12 @@ object CrashReporter {
     /**
      * Generates a bug report bundle containing:
      * - Device info (model, Android version, app version)
-     * - Recent crash logs
-     * - Last 200 lines of Node.js server output
+     * - Memory usage
+     * - How many crash logs exist, plus the text of the three most recent
+     *
+     * Not the server's output: the block below reads a `server.log` that
+     * nothing writes, so that section never appears. `docs/05-API_SPEC.md`
+     * and the logging table in `docs/03-ARCHITECTURE.md` say the same.
      *
      * The report is copied to the clipboard and handed back across the JS
      * bridge, so everything read off disk goes through [redactToken] first: the
