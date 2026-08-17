@@ -14,17 +14,28 @@ Those two directories are not the whole of what ships. They are the top level of
 two directories, and the scan read only that: `assets/usr/lib/git-core/` holds
 twelve GPL-2.0 Git executables, `assets/usr/lib/python*/lib-dynload/` holds
 seventy-five CPython extension modules, and `assets/vscode-reh/` carries the
-server's native addons and the binaries the built-in extensions bundle. 111
-redistributed binaries against the 64 the flat scan saw, and every one of them is
-in the APK on exactly the same terms as the 64. So the tree is walked to its
-leaves, and the allowlist below maps each subtree to the component that already
-carries its attribution.
+server's native addons, the WebAssembly its editor services load, and the
+binaries the built-in extensions bundle. So the tree is walked to its leaves, and
+the allowlist below maps each subtree to the component that already carries its
+attribution.
 
-Two ways of recognising a binary, not one, because either alone has a hole. ELF
-magic finds the Git helpers, `rg`, `tgrep`, `apply-seccomp` and `python.o`, none
-of which have a telling name. The `.node` extension finds what ELF magic cannot:
-`ms-vscode.js-debug` ships two `win32-*-msvc-*.node` addons that are PE, not ELF,
-and a scan keyed on ELF alone walks straight past them.
+A file is recognised as a binary by its magic number, plus one extension.
+
+ELF alone is not enough, and reading it as though it were is how a scan can walk
+a tree to its leaves and still miss more than it finds. Most of what ships here
+below the two flat directories is not ELF at all: tree-sitter's grammars and
+oniguruma are WebAssembly, PSReadLine is .NET assemblies, pip vendors distlib's
+Windows launchers, and several npm packages carry the Windows and macOS builds of
+a helper beside the Linux one. None of those can execute on this device. That
+changes nothing about the obligation: they are inside the APK, redistributed on
+their own terms, and a notice has to travel with them. So WebAssembly, PE and
+Mach-O are tested for alongside ELF.
+
+The `.node` extension is kept beside the magic numbers even though every `.node`
+in the tree today is ELF or PE and would be caught anyway. A file with that
+suffix is a loadable native addon whatever container it turns out to be in, and
+the union is deliberately generous: a false positive costs one line in
+NESTED_LIBRARIES, a false negative costs an unattributed binary in a shipped APK.
 
 One did. `libdb-18.1.so` -- Berkeley DB, **AGPL-3.0-only**, the strongest
 copyleft in common use -- shipped in every release with no attribution anywhere
@@ -87,6 +98,25 @@ COPYLEFT = (
     "GPL", "AGPL", "LGPL", "MPL", "EPL", "CDDL",
     "MOZILLA PUBLIC", "ECLIPSE PUBLIC", "COMMON DEVELOPMENT",
     "GENERAL PUBLIC LICENSE",
+)
+
+# The object formats redistributed in this tree, by the first bytes of the file.
+#
+# All four appear under assets/ today. Mach-O and PE are here because npm
+# packages ship every platform's build of a helper and the whole package lands in
+# the APK; WebAssembly because tree-sitter, oniguruma and two of js-debug's
+# panels are compiled to it rather than to native code.
+#
+# `MZ` is two bytes rather than four, which is as specific as a DOS header gets.
+# It is the weakest test here, and it is still the right trade: over-matching
+# costs one allowlist line, under-matching ships an unattributed binary.
+BINARY_MAGIC = (
+    b"\x7fELF",                                  # ELF
+    b"\x00asm",                                  # WebAssembly
+    b"MZ",                                       # PE/COFF, .NET assemblies included
+    b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",    # Mach-O 32-bit, either endianness
+    b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",    # Mach-O 64-bit, either endianness
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",    # Mach-O universal
 )
 
 # soname (or executable) -> (component name as written in LEGAL_NOTICES, licence)
@@ -218,6 +248,12 @@ NESTED_LIBRARIES = {
     # the Termux index at build time, so a literal here goes stale on a rebuild
     # nobody connects to this file.
     "usr/lib/python*/*": ("Python", "PSF-2.0"),
+    # pip vendors distlib, which ships six prebuilt Windows launchers. The
+    # licence is the same PSF-2.0 as CPython's, so the entry above discharges the
+    # terms either way; the copyright holder is Vinay Sajip rather than the
+    # PSF, and PSF-2.0 is precisely the licence that asks for the notice to
+    # travel, so the file is named for what it is.
+    "usr/lib/python*/site-packages/pip/_vendor/distlib/*": ("distlib", "PSF-2.0"),
     # --- the server tree's native addons ---
     "vscode-reh/node_modules/node-pty/*": ("node-pty", "MIT"),
     "vscode-reh/node_modules/@parcel/watcher/*": ("@parcel/watcher", "MIT"),
@@ -235,8 +271,29 @@ NESTED_LIBRARIES = {
     "vscode-reh/node_modules/@github/copilot-linux-arm64/ripgrep/*": ("ripgrep", "MIT"),
     "vscode-reh/extensions/copilot/node_modules/@github/copilot/sdk/ripgrep/*":
         ("ripgrep", "MIT"),
+    # --- WebAssembly the editor loads at run time ---
+    # Grammars, not native code, and shipped in three copies: the server's own,
+    # the Copilot extension's node_modules, and the grammars bundled into that
+    # extension's `dist`. Each is attributed to the package that redistributes
+    # it, which is the same rule the native entries above follow.
+    "vscode-reh/node_modules/@vscode/tree-sitter-wasm/*": ("@vscode/tree-sitter-wasm", "MIT"),
+    "vscode-reh/extensions/copilot/node_modules/@vscode/tree-sitter-wasm/*":
+        ("@vscode/tree-sitter-wasm", "MIT"),
+    "vscode-reh/extensions/copilot/node_modules/web-tree-sitter/*": ("web-tree-sitter", "MIT"),
+    # `onig.wasm` is Oniguruma compiled to WebAssembly. The npm wrapper is MIT
+    # and the regex engine inside it is BSD-2-Clause; both are recorded, because
+    # the wrapper's licence does not cover the code it carries.
+    "vscode-reh/node_modules/vscode-oniguruma/*": ("vscode-oniguruma", "MIT, BSD-2-Clause"),
     # --- built-in extensions that carry binaries of their own ---
     "vscode-reh/extensions/ms-vscode.js-debug/*": ("js-debug", "MIT"),
+    "vscode-reh/extensions/ms-vscode.vscode-js-profile-table/*":
+        ("vscode-js-profile-visualizer", "MIT"),
+    # --- .NET assemblies, carried by the terminal's shell integration ---
+    # PSReadLine and its pager ship prebuilt for the PowerShell integration.
+    # They cannot run here, and they are in the APK, which is the only fact the
+    # licence cares about.
+    "vscode-reh/out/vs/workbench/contrib/terminal/common/scripts/psreadline/*":
+        ("PSReadLine", "BSD-2-Clause"),
     # --- redistributed under GitHub's own terms, not an open source licence ---
     # Its full reasoning is the "Proprietary Redistributed Components" section of
     # LEGAL_NOTICES.md; what this line adds is that the binaries are counted.
@@ -244,11 +301,31 @@ NESTED_LIBRARIES = {
         ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),
     "vscode-reh/extensions/copilot/node_modules/@github/copilot/*":
         ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),
+    # --- the Copilot Chat extension's own bundle ---
+    # MIT, and a different component from the proprietary CLI two lines up
+    # despite sharing a directory tree. `dist/` holds the tree-sitter grammars
+    # and the blackbird WebAssembly that the extension's build inlines, so this
+    # entry stands for the extension as redistributor rather than for one
+    # upstream project.
+    "vscode-reh/extensions/copilot/dist/*": ("GitHub Copilot Chat extension", "MIT"),
+    "vscode-reh/extensions/copilot/node_modules/@github/blackbird-external-ingest-utils/*":
+        ("@github/blackbird-external-ingest-utils", "MIT"),
 }
 
 # Longest pattern first, so a subtree entry beats the package entry containing
 # it. Sorted once rather than per file.
 NESTED_ORDER = sorted(NESTED_LIBRARIES, key=len, reverse=True)
+
+# Every entry is a whole subtree, `<prefix>/*`. Three things depend on that shape
+# and none of them can tell when it is broken: longest-match ordering is only a
+# correct proxy for containment when overlap is prefix-based, containment is
+# tested as a string prefix, and the staleness anchor is the pattern minus its
+# `/*`. An entry ending anywhere else would quietly get all three wrong, so it is
+# refused here instead, where the answer is one line long.
+_odd = [p for p in NESTED_LIBRARIES if not p.endswith("/*")]
+if _odd:
+    raise SystemExit("NESTED_LIBRARIES entries must cover a whole subtree "
+                     f"and end in '/*': {', '.join(sorted(_odd))}")
 
 
 def toolchain_libs():
@@ -323,11 +400,10 @@ def nested():
     `tgrep` and `kerberos.node` each ship more than once from more than one
     package, and a failure has to say which copy it means.
 
-    A file counts as a binary if it starts with ELF magic or ends in `.node`.
-    Neither test subsumes the other -- see the module docstring -- and the union
-    is deliberately generous, since the cost of a false positive is one line in
-    NESTED_LIBRARIES and the cost of a false negative is an unattributed binary
-    in a shipped APK.
+    A file counts as a binary if it opens with one of BINARY_MAGIC or ends in
+    `.node`. Testing ELF alone would walk past most of what ships here: see the
+    module docstring for the formats and why an object this device cannot execute
+    still has to be attributed.
     """
     out = []
     if not ASSETS.is_dir():
@@ -339,10 +415,10 @@ def nested():
             continue  # counted by shipped()
         try:
             with p.open("rb") as f:
-                elf = f.read(4) == b"\x7fELF"
+                head = f.read(4)
         except OSError:
             continue
-        if elf or p.suffix == ".node":
+        if head.startswith(BINARY_MAGIC) or p.suffix == ".node":
             out.append(p.relative_to(ASSETS).as_posix())
     return out
 

@@ -187,6 +187,92 @@ build rather than downloaded from a gallery.
 - **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
 - **Ships**: two `win32-app-container-tokens.win32-*-msvc-*.node` addons. These are Windows PE binaries with no use on Android; they are listed because they are redistributed.
 
+### vscode-js-profile-visualizer
+
+The built-in viewer for CPU and heap profiles, produced by the Code - OSS build.
+
+- **Project**: https://github.com/microsoft/vscode-js-profile-visualizer
+- **Version**: whatever the Code - OSS tag in `VSCODE_VERSION` pins
+- **License**: MIT License. The full text and the extension's own `ThirdPartyNotices.txt` ship inside `extensions/ms-vscode.vscode-js-profile-table/`.
+- **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
+- **Ships**: two `*.module.wasm` table renderers under `out/`.
+
+### @vscode/tree-sitter-wasm
+
+The incremental parser behind syntax-aware editing, compiled to WebAssembly
+rather than to a native addon. Two copies ship: the server's own, and the one the
+Copilot Chat extension resolves.
+
+- **Project**: https://github.com/microsoft/vscode-tree-sitter-wasm
+- **Upstream**: https://github.com/tree-sitter/tree-sitter, MIT, recorded with its commit in the package's `cgmanifest.json`
+- **License**: MIT License. The full text ships as `LICENSE` inside the package.
+- **Ships**: `tree-sitter.wasm` and the grammar modules beside it (bash, css, ini, powershell, regex, typescript in the server copy).
+
+### web-tree-sitter
+
+tree-sitter's own WebAssembly binding, bundled by the Copilot Chat extension.
+
+- **Project**: https://github.com/tree-sitter/tree-sitter
+- **License**: MIT License. The full text ships as `LICENSE` inside the package.
+- **Copyright**: Copyright (c) 2018-2024 Max Brunsfeld
+- **Ships**: `tree-sitter.wasm`.
+
+### vscode-oniguruma
+
+The regex engine TextMate grammars are matched with, compiled to WebAssembly.
+
+- **Project**: https://github.com/microsoft/vscode-oniguruma
+- **Upstream**: Oniguruma, https://github.com/kkos/oniguruma, **BSD-2-Clause**. The wrapper's licence does not cover the engine inside it, so both are recorded; Oniguruma's own notice ships as `NOTICES.txt` in the package.
+- **License**: MIT License for the wrapper. The full text ships as `LICENSE.txt` inside the package.
+- **Copyright**: Copyright (c) Microsoft Corporation (wrapper); Copyright (c) 2002-2020 K. Kosako (Oniguruma)
+- **Ships**: `release/onig.wasm`.
+
+### @github/blackbird-external-ingest-utils
+
+A WebAssembly helper the Copilot Chat extension uses for code indexing.
+
+- **Project**: https://www.npmjs.com/package/@github/blackbird-external-ingest-utils. The package declares no repository.
+- **Version**: whatever the Copilot Chat extension pins at the Code - OSS tag in `VSCODE_VERSION`
+- **License**: MIT License, declared by the package
+- **Ships**: `external_ingest_utils_bg.wasm`, both inside the package and inlined into the extension's `dist/`.
+
+### GitHub Copilot Chat extension
+
+The extension itself, which is open source and MIT, and a different component
+from the proprietary `@github/copilot` CLI it depends on. Its `dist/` bundle
+carries the tree-sitter grammars and the blackbird WebAssembly listed above,
+inlined by its build.
+
+- **Project**: https://github.com/microsoft/vscode-copilot-chat
+- **Version**: whatever the Code - OSS tag in `VSCODE_VERSION` pins
+- **License**: MIT License. The full text ships as `LICENSE.txt` inside `extensions/copilot/`.
+- **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
+- **Ships**: `dist/tree-sitter*.wasm` and `dist/external_ingest_utils_bg.wasm`.
+
+### PSReadLine
+
+Prebuilt .NET assemblies carried by the terminal's PowerShell shell integration.
+Nothing on Android can load them; they are inside the APK, which is the only fact
+the licence turns on.
+
+- **Project**: https://github.com/PowerShell/PSReadLine
+- **Version**: whatever the Code - OSS tag in `VSCODE_VERSION` pins. The server tree's own `ThirdPartyNotices.txt` records it and reproduces the licence text.
+- **License**: BSD-2-Clause License
+- **Copyright**: Copyright (c) 2013, Jason Shirk
+- **Ships**: `Microsoft.PowerShell.PSReadLine.dll`, `Microsoft.PowerShell.Pager.dll` and the two `Microsoft.PowerShell.PSReadLine.Polyfiller.dll` builds, under `out/vs/workbench/contrib/terminal/common/scripts/psreadline/`.
+
+### distlib
+
+Vendored inside the bundled pip. Listed separately from Python because the
+licence is the same but the copyright is not, and PSF-2.0 is precisely the
+licence that asks for the notice to travel with the copy.
+
+- **Project**: https://github.com/pypa/distlib
+- **Version**: recorded in `usr/lib/python*/site-packages/pip/_vendor/vendor.txt`
+- **License**: Python Software Foundation License, Version 2. The full text ships as `LICENSE.txt` inside the package.
+- **Copyright**: Copyright (c) 2012-2024 Vinay Sajip
+- **Ships**: six prebuilt Windows launchers (`t32.exe`, `t64.exe`, `t64-arm.exe`, `w32.exe`, `w64.exe`, `w64-arm.exe`), redistributed unused.
+
 ### npm
 
 - **Project**: https://www.npmjs.com
@@ -235,18 +321,29 @@ under. The licence column is taken from Termux's own `TERMUX_PKG_LICENSE`, which
 is what these packages are built from, rather than from upstream project pages
 that may describe a different version.
 
-This is not every binary in the APK, and the heading here claimed it was. The
-rest live deeper in the asset tree and are attributed by the sections above:
-Git's helper executables under `usr/lib/git-core/`, CPython's extension modules
-under `usr/lib/python*/lib-dynload/`, and the server tree's native addons and
-bundled tools under `assets/vscode-reh/`. 111 files against the 64 listed below,
-redistributed on identical terms.
+This is not every binary in the APK, and the heading here claimed it was. Most of
+them are not below: they live deeper in the asset tree and are attributed by the
+sections above. Git's helper executables under `usr/lib/git-core/`, CPython's
+extension modules under `usr/lib/python*/lib-dynload/`, pip's vendored launchers,
+the server tree's native addons and bundled tools under `assets/vscode-reh/`, the
+WebAssembly its editor services load, and the .NET assemblies its terminal
+integration carries. 195 files against the 64 listed below, measured on the tree
+that built this release, redistributed on identical terms.
+
+That figure is a measurement rather than a fixed property, and the gate prints it
+on every run: a Python module leaving `lib-dynload` or a package adding a grammar
+moves it. What has to stay true is that every one of those files is attributed
+somewhere, which is what the gate enforces rather than what this sentence claims.
 
 `scripts/check-library-attribution.py` regenerates the basis for this table from the
 files actually present in the build tree and fails when a shipped binary is absent
 from it, or when a copyleft component is missing from the source offer below. It
-walks the whole asset tree, recognising a binary by ELF magic or a `.node`
-extension, and holds every component it finds to both this file and `NOTICE.md`.
+walks the whole asset tree, recognising a binary by its magic number (ELF,
+WebAssembly, PE or Mach-O) or a `.node` extension, and holds every component it
+finds to both this file and `NOTICE.md`. Formats this device cannot execute are
+counted too: a Windows launcher and a .NET assembly are redistributed on their
+own terms whether or not anything here can load them, and reading only ELF magic
+walked past 84 of the files now counted.
 It runs on every pull request. Before it existed, Berkeley DB shipped under **AGPL-3.0-only**
 in every release with no attribution and no source offer, having arrived as a
 transitive dependency of Kerberos that nobody classified; it is no longer bundled,

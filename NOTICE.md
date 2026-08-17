@@ -28,6 +28,13 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | kerberos (Node addon) | Apache-2.0 | https://github.com/mongodb-js/kerberos. The npm addon, not the MIT Kerberos 5 C libraries listed below |
 | @microsoft/mxc-sdk | MIT | https://www.npmjs.com/package/@microsoft/mxc-sdk, bundled by the Code - OSS build |
 | js-debug | MIT | https://github.com/microsoft/vscode-js-debug, the built-in JavaScript debugger produced by the Code - OSS build |
+| vscode-js-profile-visualizer | MIT | https://github.com/microsoft/vscode-js-profile-visualizer, the built-in profile viewer produced by the Code - OSS build. Its tables are WebAssembly |
+| @vscode/tree-sitter-wasm | MIT | https://github.com/microsoft/vscode-tree-sitter-wasm, bundled by the Code - OSS build. WebAssembly builds of tree-sitter (https://github.com/tree-sitter/tree-sitter) and its grammars |
+| web-tree-sitter | MIT | https://github.com/tree-sitter/tree-sitter, the WebAssembly binding, bundled by the Copilot Chat extension |
+| vscode-oniguruma | MIT | https://github.com/microsoft/vscode-oniguruma, bundled by the Code - OSS build. The regex engine it compiles to WebAssembly is Oniguruma (BSD-2-Clause, https://github.com/kkos/oniguruma) and its notice ships in the package |
+| @github/blackbird-external-ingest-utils | MIT | https://www.npmjs.com/package/@github/blackbird-external-ingest-utils, a WebAssembly dependency of the Copilot Chat extension |
+| PSReadLine | BSD-2-Clause | https://github.com/PowerShell/PSReadLine. Prebuilt .NET assemblies carried by the terminal's PowerShell shell integration; they have no use on Android and are listed because they are redistributed |
+| distlib | PSF-2.0 | https://github.com/pypa/distlib, vendored inside the bundled pip. Ships six prebuilt Windows launchers, redistributed unused |
 | @github/copilot (GitHub Copilot CLI) | GitHub Copilot CLI License, proprietary | Redistributed under GitHub, Inc.'s own terms as a dependency of the Copilot extension. The full text ships in the server tree; the reasoning is in `docs/LEGAL_NOTICES.md` |
 | musl (dynamic loader) | MIT | Alpine Linux package, https://musl.libc.org — bundled so the Claude Code CLI can run; the CLI itself is installed by the user and is not redistributed here |
 
@@ -46,7 +53,10 @@ This table covers the Termux libraries and executables at the top level of
 `assets/usr/lib` and `jniLibs/arm64-v8a`. The binaries that sit deeper in the
 asset tree are attributed under **Core Components** above, and the gate holds
 them to the same rules: it walks the tree to its leaves, recognising a binary by
-ELF magic or a `.node` extension.
+its magic number (ELF, WebAssembly, PE or Mach-O) or a `.node` extension. The
+formats this device cannot execute are counted too. A Windows launcher or a .NET
+assembly is redistributed inside the APK on its own terms whether or not
+anything here can run it.
 
 Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
 glibc's soname but are built from this repository's own source.

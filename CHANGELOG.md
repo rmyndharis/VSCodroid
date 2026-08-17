@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed an origin check on the Android bridge that nothing called and nothing could satisfy. The session token gates that surface, and every bridge method now validates it.
 - Asking the terminal host or extension host to stop immediately no longer gets the graceful path instead. Nothing escalates today, which is why this was invisible.
 - Berkeley DB (AGPL-3.0-only) is no longer bundled. Nothing linked it. Four libraries that are used were added to the source offer, and `NOTICE.md` now lists all 39 components.
-- Every binary in the asset tree is now checked against the attribution record, not just the top two directories: 111 more files, and six components neither notice named.
+- Attribution is now checked against every binary in the asset tree, not just the top two directories: 195 more files, including the WebAssembly, Windows and macOS objects an ELF-only scan walks past.
 - The About dialog's Source Code link moved onto the new licenses screen, beside the offer of source it answers.
 
 - Builds now verify the packaged server tree carries every patch this repository applies, not just the downloaded copy. The two trees had already diverged on a working checkout.
