@@ -184,6 +184,10 @@ class ToolchainDigestInstallTest {
         Collections.synchronizedList(mutableListOf())
     private val settled = CountDownLatch(1)
 
+    /** Every failure reason reported, so a test can assert on WHY and not only that. */
+    private val reasons: MutableList<ToolchainFailure> =
+        Collections.synchronizedList(mutableListOf())
+
     /** Both derived from one directory, so a test can move the release. */
     private var releaseDir = "/download"
     private val zipPath get() = "$releaseDir/toolchain_test.zip"
@@ -308,7 +312,8 @@ class ToolchainDigestInstallTest {
             .get(m) as Map<String, Any>
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { pack, status, pct ->
+        onStateChange = { pack, status, pct, why ->
+            if (why != null) reasons.add(why)
             events.add(Triple(pack, status, pct))
             if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
                 settled.countDown()
@@ -602,5 +607,38 @@ class ToolchainDigestInstallTest {
         )
         assertEquals(1, timesRequested(manifestPath), "the manifest was not fetched from the unpinned URL")
         assertEquals(1, timesRequested(zipPath), "the payload was not fetched from the unpinned URL")
+    }
+
+    @Test
+    fun `a release that does not publish the manifest says so, and does not blame the network`() {
+        // The manifest 404s, which arrives as MissingFromRelease. It extends
+        // IOException and used to be caught with it, so the user was told to
+        // check their connection for a file the release does not contain.
+        publishManifest(null)
+
+        installAndWait()
+
+        assertTrue(statuses().contains(AssetPackStatus.FAILED), "the install should have been refused")
+        assertEquals(
+            listOf(ToolchainFailure.NOT_PUBLISHED),
+            synchronized(reasons) { reasons.toList() },
+            "a file the release never published is not a network fault",
+        )
+    }
+
+    @Test
+    fun `a payload that does not match the published digest says that`() {
+        // A manifest that names the ZIP with someone else's digest. The bytes
+        // arrive complete and wrong, which is the one case Content-Length cannot
+        // see, and the reason has to distinguish it from a dropped connection.
+        publishManifest("${"0".repeat(64)}  toolchain_test.zip\n")
+
+        installAndWait()
+
+        assertEquals(
+            listOf(ToolchainFailure.DIGEST),
+            synchronized(reasons) { reasons.toList() },
+            "a complete body with the wrong digest is its own answer",
+        )
     }
 }

@@ -3,6 +3,8 @@ package com.vscodroid.setup
 import android.app.Activity
 import android.content.Context
 import android.os.StatFs
+import androidx.annotation.StringRes
+import com.vscodroid.R
 import android.system.Os
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackState
@@ -52,7 +54,36 @@ class ToolchainManager(private val context: Context) {
     }
 
     /** Callback for progress/state updates: (packName, status, percentDone) */
-    var onStateChange: ((String, Int, Int) -> Unit)? = null
+    /**
+     * Progress and outcome for one pack.
+     *
+     * The fourth argument is why it failed, and it is null for every status that
+     * is not a failure. It exists because "Failed" on its own is the same word
+     * for a full disk, a dropped connection and a release that never published
+     * the file, and the user is the one person who can act on the difference:
+     * free space, move to wifi, or wait for a release. The reason was in logcat
+     * and nowhere else.
+     *
+     * Reached through [fail] and [report] rather than invoked directly, so a new
+     * failure site cannot forget to say why: [fail] has no overload without one.
+     */
+    var onStateChange: ((String, Int, Int, ToolchainFailure?) -> Unit)? = null
+
+    /** Progress or success. Never a failure: those go through [fail]. */
+    private fun report(packName: String, status: Int, percent: Int) {
+        onStateChange?.invoke(packName, status, percent, null)
+    }
+
+    /**
+     * A failure, and why.
+     *
+     * There is no overload without a reason, which is the point: every one of
+     * the twelve failure sites had to name one, and a thirteenth cannot be added
+     * without doing the same.
+     */
+    private fun fail(packName: String, why: ToolchainFailure) {
+        onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why)
+    }
 
     // -- HTTP fallback state --
 
@@ -259,7 +290,7 @@ class ToolchainManager(private val context: Context) {
         val info = ToolchainRegistry.find(packName)
         if (info == null) {
             Logger.e(tag, "Unknown toolchain: $packName")
-            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+            fail(packName, ToolchainFailure.INTERNAL)
             return
         }
         Logger.i(tag, "Requesting install of ${info.displayName} (${info.packName})")
@@ -268,7 +299,7 @@ class ToolchainManager(private val context: Context) {
             val url = info.downloadUrl
             if (url == null) {
                 Logger.e(tag, "No downloadUrl for ${info.packName} — Play Store required")
-                onStateChange?.invoke(info.packName, AssetPackStatus.FAILED, 0)
+                fail(info.packName, ToolchainFailure.PLAY_REQUIRED)
                 return
             }
             downloadViaHttp(info.packName, url, info.estimatedSize)
@@ -444,7 +475,7 @@ class ToolchainManager(private val context: Context) {
         regenerateEnvFileLocked()
 
         Logger.i(tag, "Uninstalled toolchain: $name")
-        onStateChange?.invoke("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
+        report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
     }
 
     // -- Asset pack state handling --
@@ -462,7 +493,7 @@ class ToolchainManager(private val context: Context) {
         // after copyFromAssetPack() finishes extraction (line in copyFromAssetPack).
         // Firing it twice would cause downloadNext() to be called twice, skipping packs.
         if (status != AssetPackStatus.COMPLETED) {
-            onStateChange?.invoke(packName, status, percent)
+            report(packName, status, percent)
         }
 
         when (status) {
@@ -478,11 +509,11 @@ class ToolchainManager(private val context: Context) {
                             Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
                         } else {
                             Logger.e(tag, "No assetsPath for completed pack $packName")
-                            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                            fail(packName, ToolchainFailure.INTERNAL)
                         }
                     } catch (e: Exception) {
                         Logger.e(tag, "Failed to process completed pack $packName", e)
-                        onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                        fail(packName, ToolchainFailure.INTERNAL)
                     }
                 }
             }
@@ -512,7 +543,7 @@ class ToolchainManager(private val context: Context) {
         val manifestFile = File(assetsDir, "$packName.json")
         if (!manifestFile.exists()) {
             Logger.e(tag, "No $packName.json in asset pack $packName")
-            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+            fail(packName, ToolchainFailure.CORRUPT)
             return
         }
 
@@ -520,7 +551,7 @@ class ToolchainManager(private val context: Context) {
         val name = manifest.optString("name", "")
         if (name.isEmpty()) {
             Logger.e(tag, "Invalid manifest.json in $packName: missing 'name'")
-            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+            fail(packName, ToolchainFailure.CORRUPT)
             return
         }
         Logger.i(tag, "Installing toolchain: $name (from $packName)")
@@ -622,14 +653,14 @@ class ToolchainManager(private val context: Context) {
             // first-run queue moves on, and the card reads "Install" again after
             // the next launch with nothing said.
             if (!writeState(state)) {
-                onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                fail(packName, ToolchainFailure.STORAGE)
                 return
             }
             regenerateEnvFileLocked()
         }
 
         Logger.i(tag, "Toolchain $name installed successfully")
-        onStateChange?.invoke(packName, AssetPackStatus.COMPLETED, 100)
+        report(packName, AssetPackStatus.COMPLETED, 100)
     }
 
     // -- HTTP fallback (sideloaded installs) --
@@ -662,7 +693,7 @@ class ToolchainManager(private val context: Context) {
         // would discard it just as reliably as the shared flag did.
         val download = HttpDownload()
         httpDownloads[packName] = download
-        onStateChange?.invoke(packName, AssetPackStatus.PENDING, 0)
+        report(packName, AssetPackStatus.PENDING, 0)
 
         ioExecutor.execute {
             val tempDir = File(context.cacheDir, "toolchain-download")
@@ -677,7 +708,7 @@ class ToolchainManager(private val context: Context) {
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
-                    onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                    fail(packName, ToolchainFailure.STORAGE)
                     return@execute
                 }
 
@@ -725,13 +756,13 @@ class ToolchainManager(private val context: Context) {
                         "Digest mismatch for $packName: the release publishes $expectedDigest, " +
                             "the download hashes to $actualDigest. Not installing it.",
                     )
-                    onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                    fail(packName, ToolchainFailure.DIGEST)
                     return@execute
                 }
                 Logger.i(tag, "$packName matches the digest the release publishes")
 
                 // Extract — report as TRANSFERRING (file copy phase)
-                onStateChange?.invoke(packName, AssetPackStatus.TRANSFERRING, 90)
+                report(packName, AssetPackStatus.TRANSFERRING, 90)
                 extractDir.deleteRecursively()
                 extractDir.mkdirs()
                 extractZip(zipFile, extractDir)
@@ -739,19 +770,25 @@ class ToolchainManager(private val context: Context) {
                 // Install from extracted directory (same path as Play Asset Delivery)
                 installFromDirectory(packName, extractDir)
 
+            } catch (e: MissingFromRelease) {
+                // Ahead of the IOException it extends, because they are not the
+                // same event to a user: this one will not succeed on a better
+                // connection, and only a release changes it.
+                Logger.e(tag, "Not published in the release: $packName", e)
+                fail(packName, ToolchainFailure.NOT_PUBLISHED)
             } catch (e: IOException) {
                 if (download.cancelled) {
                     Logger.i(tag, "HTTP download cancelled for $packName")
                 } else {
                     Logger.e(tag, "HTTP download failed for $packName", e)
-                    onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                    fail(packName, ToolchainFailure.NETWORK)
                 }
             } catch (e: SecurityException) {
                 Logger.e(tag, "Zip security violation for $packName", e)
-                onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                fail(packName, ToolchainFailure.CORRUPT)
             } catch (e: Exception) {
                 Logger.e(tag, "Unexpected error downloading $packName", e)
-                onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0)
+                fail(packName, ToolchainFailure.INTERNAL)
             } finally {
                 // Two-argument remove: a later request for the same pack has
                 // already replaced this entry, and dropping its token would
@@ -1035,7 +1072,7 @@ class ToolchainManager(private val context: Context) {
         val declaredBytes = conn.contentLengthLong
         val totalBytes = if (declaredBytes > 0) declaredBytes else estimatedSize
 
-        onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, 0)
+        report(packName, AssetPackStatus.DOWNLOADING, 0)
 
         var bytesRead = 0L
         BufferedInputStream(conn.inputStream).use { input ->
@@ -1052,7 +1089,7 @@ class ToolchainManager(private val context: Context) {
                     val percent = if (totalBytes > 0) {
                         ((bytesRead * 85) / totalBytes).toInt().coerceAtMost(85)
                     } else 0
-                    onStateChange?.invoke(packName, AssetPackStatus.DOWNLOADING, percent)
+                    report(packName, AssetPackStatus.DOWNLOADING, percent)
                 }
             }
         }
@@ -1618,6 +1655,31 @@ internal fun isElfHeader(header: ByteArray): Boolean =
  */
 internal fun isCompleteTransfer(declaredBytes: Long, receivedBytes: Long): Boolean =
     declaredBytes <= 0L || receivedBytes == declaredBytes
+
+/**
+ * Why an install failed, in the terms the person looking at the screen can act in.
+ *
+ * The screen said "Failed" and nothing else, for every cause, while the reason
+ * sat in logcat where no user reads it. These are grouped by WHAT TO DO rather
+ * than by where the exception came from: a full disk and a failed state write
+ * are both [STORAGE] because both are answered by freeing space, and a truncated
+ * archive and a manifest missing its name are both [CORRUPT] because both are
+ * answered by retrying.
+ *
+ * [NOT_PUBLISHED] is deliberately not [NETWORK], although it arrives as an
+ * IOException on the same path: retrying on better signal cannot fix a file the
+ * release does not contain, and telling someone to check their connection when
+ * that is the problem sends them to look in the wrong place.
+ */
+enum class ToolchainFailure(@StringRes val message: Int) {
+    NETWORK(R.string.toolchain_failed_network),
+    STORAGE(R.string.toolchain_failed_storage),
+    NOT_PUBLISHED(R.string.toolchain_failed_not_published),
+    DIGEST(R.string.toolchain_failed_digest),
+    CORRUPT(R.string.toolchain_failed_corrupt),
+    PLAY_REQUIRED(R.string.toolchain_failed_play),
+    INTERNAL(R.string.toolchain_failed_internal),
+}
 
 /** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
 private const val MANIFEST_NAME = "toolchains.sha256"

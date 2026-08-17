@@ -62,6 +62,18 @@
     <string name="progress_installing">Installing\u2026</string>
     <string name="progress_done">Done</string>
     <string name="progress_failed">Failed</string>
+
+    <!-- Why an install failed. "Failed" alone was the same word for a full disk,
+         a dropped connection and a file the release never published, and the user
+         is the one person who can act on the difference. Each of these names the
+         thing they can do about it; ToolchainFailure decides which one is shown. -->
+    <string name="toolchain_failed_network">Download failed. Check your connection and try again.</string>
+    <string name="toolchain_failed_storage">Not enough storage. Free some space and try again.</string>
+    <string name="toolchain_failed_not_published">This toolchain is not in the current release. Try again after the next app update.</string>
+    <string name="toolchain_failed_digest">The download did not match what the release published. Try again.</string>
+    <string name="toolchain_failed_corrupt">The download was incomplete. Try again.</string>
+    <string name="toolchain_failed_play">This toolchain installs only on Play Store builds.</string>
+    <string name="toolchain_failed_internal">Install failed. The app log has the details.</string>
     <string name="progress_cancel">Cancel</string>
     <string name="progress_retry">Retry</string>
 

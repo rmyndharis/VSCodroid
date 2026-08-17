@@ -15,6 +15,7 @@ import com.vscodroid.util.padForSystemBars
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.util.Logger
+import android.widget.Toast
 
 /**
  * Settings screen for managing on-demand toolchains.
@@ -76,9 +77,15 @@ class ToolchainActivity : AppCompatActivity() {
         grid.adapter = adapter
 
         // Listen for download state changes
-        toolchainManager.onStateChange = { packName, status, percent ->
+        toolchainManager.onStateChange = { packName, status, percent, why ->
             runOnUiThread {
                 adapter.updateState(packName, status, percent)
+                // Same reasoning as the first-run screen: the card carries a
+                // status, not an explanation, and the explanation is the part
+                // that tells the user whether to free space or move to wifi.
+                if (why != null) {
+                    Toast.makeText(this, getString(why.message), Toast.LENGTH_LONG).show()
+                }
                 if (status == AssetPackStatus.REQUIRES_USER_CONFIRMATION) {
                     try {
                         toolchainManager.showConfirmationDialog(this)

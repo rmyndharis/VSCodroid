@@ -97,7 +97,7 @@ class ToolchainInstallTest {
     fun tearDown() = unmockkAll()
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { pack, status, pct ->
+        onStateChange = { pack, status, pct, _ ->
             events.add(Triple(pack, status, pct))
             if (status == AssetPackStatus.FAILED) failed.countDown()
         }

@@ -30,6 +30,7 @@ import com.vscodroid.util.padForSystemBars
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.widget.Toast
 
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : AppCompatActivity() {
@@ -319,8 +320,16 @@ class SplashActivity : AppCompatActivity() {
         // Set up toolchain manager
         val manager = ToolchainManager(this)
         toolchainManager = manager
-        manager.onStateChange = { packName, status, percent ->
-            runOnUiThread { handleDownloadState(packName, status, percent) }
+        manager.onStateChange = { packName, status, percent, why ->
+            runOnUiThread {
+                handleDownloadState(packName, status, percent)
+                // The row has space for one word and the reason is a sentence, so
+                // it is said here rather than squeezed in there. Without it the
+                // queue moves on and the only record of WHY is in logcat.
+                if (why != null) {
+                    Toast.makeText(this, getString(why.message), Toast.LENGTH_LONG).show()
+                }
+            }
         }
         manager.registerListener()
 

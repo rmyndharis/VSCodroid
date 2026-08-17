@@ -434,7 +434,7 @@ class AndroidBridge(
      */
     private val toolchainManager: ToolchainManager by lazy {
         ToolchainManager(context).apply {
-            onStateChange = { packName, status, _ -> onToolchainState(packName, status) }
+            onStateChange = { packName, status, _, _ -> onToolchainState(packName, status) }
         }
     }
 
