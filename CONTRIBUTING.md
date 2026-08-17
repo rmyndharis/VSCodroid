@@ -516,22 +516,41 @@ To bundle a new tool (e.g., a new CLI binary from Termux):
 
 ### 1. Create or modify a download script
 
-Add the download logic to `scripts/download-termux-tools.sh` or create a new script in `scripts/`. The general pattern:
+Add the package to `REQUIRED_PACKAGES` in `scripts/download-termux-tools.sh`, or create a new script in `scripts/` that sources `scripts/lib/termux-packages.sh`. Do not hand-roll the download: the library owns the index fetch, the signature check on that index, package resolution and the per-`.deb` digest check, so a `curl` straight at a `.deb` is the one payload in the tree whose bytes are never measured against anything signed. Nothing in CI will tell you, because `check-build-steps.py` checks that scripts are documented and invoked, not how they fetch.
 
 ```bash
-# Download .deb from Termux APT repo
-curl -o tool.deb "https://packages.termux.dev/apt/termux-main/pool/main/t/tool/tool_VERSION_aarch64.deb"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+WORK_DIR="$ROOT_DIR/toolchains/termux-packages"   # required; the library refuses to act without it
 
-# Extract (macOS uses bsdtar, Linux uses dpkg-deb)
-bsdtar -xf tool.deb data.tar.xz
-tar xf data.tar.xz
+# The index fetch, its signature check, resolution and the digest check on each
+# .deb. It also picks the mirror; TERMUX_MIRROR still overrides it.
+. "$SCRIPT_DIR/lib/termux-packages.sh"
 
-# Copy binary to jniLibs (rename to lib<name>.so for .so trick)
-cp data/data/com.termux/files/usr/bin/tool android/app/src/main/jniLibs/arm64-v8a/libtool.so
+REQUIRED_PACKAGES=(tool libdep)
 
-# Copy shared library dependencies to assets/usr/lib/ (if any)
-cp data/data/com.termux/files/usr/lib/libdep.so android/app/src/main/assets/usr/lib/
+termux_fetch_index
+termux_resolve_packages resolved-tool.tsv "${REQUIRED_PACKAGES[@]}"
+termux_download_packages "${REQUIRED_PACKAGES[@]}"
+termux_extract_packages "${REQUIRED_PACKAGES[@]}"
+
+# What the caller still owns: where the files go, and which are ELF objects.
+# Each package unpacks to $WORK_DIR/extracted/<package>/data/data/com.termux/files/usr
+JNI_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
+LIB_DIR="$ROOT_DIR/android/app/src/main/assets/usr/lib"
+TERMUX_USR="$WORK_DIR/extracted/tool/data/data/com.termux/files/usr"
+
+# Binary into jniLibs, renamed to lib<name>.so for the .so trick
+cp "$TERMUX_USR/bin/tool" "$JNI_DIR/libtool.so"
+
+# Shared library dependencies into assets/usr/lib/ (if any)
+cp "$WORK_DIR/extracted/libdep/data/data/com.termux/files/usr/lib/libdep.so" "$LIB_DIR/"
+
+# Every binary this places has to pass the load gate before it ships
+python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libtool.so"
 ```
+
+`termux_pkg_version <pkg>` gives the version the index resolved, for a path or a manifest. If a workflow is going to run the new script, `check-build-steps.py` requires a row for it in the script table above; if the PR build's asset-preparation job runs it, `build-all.sh` and `release.yml`'s build-release job have to run it as well.
 
 ### 2. Register the binary symlink in FirstRunSetup.kt
 
