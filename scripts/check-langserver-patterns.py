@@ -42,8 +42,11 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MONITOR = ROOT / "android/app/src/main/assets/process-monitor.js"
 
-# VS Code's built-in language servers are all named <lang>ServerMain.js.
-SERVER_ENTRY = "*ServerMain.js"
+# The editor's built-in language servers are named <lang>ServerMain.js, except
+# markdown's, which is serverWorkerMain.js. Globbing only the first shape meant
+# this script reported three servers on a tree that ships four, and said nothing
+# about the fourth in either direction.
+SERVER_ENTRIES = ("*ServerMain.js", "*WorkerMain.js")
 
 
 def patterns():
@@ -105,9 +108,9 @@ def main(extensions):
         print(f"  FAIL   no patterns parsed from {MONITOR.name}; the list moved or changed shape")
         return 1
 
-    servers = sorted(extensions.rglob(SERVER_ENTRY))
+    servers = sorted({p for glob in SERVER_ENTRIES for p in extensions.rglob(glob)})
     if not servers:
-        print(f"  FAIL   no {SERVER_ENTRY} under {extensions}; "
+        print(f"  FAIL   nothing matching {' or '.join(SERVER_ENTRIES)} under {extensions}; "
               "either nothing ships them or the naming convention changed")
         return 1
 
@@ -116,12 +119,24 @@ def main(extensions):
         # classify() splits the command line on spaces and tests the basename of
         # each argument, case-folded. The argument that carries a server is its
         # path, so its basename is what has to match here.
-        name = server.name.lower()
-        hit = next((p for p in pats if matches(name, p)), None)
+        #
+        # Both spellings, and requiring both is the point. Every one of these
+        # clients passes an extensionless module path to `fork`, so the basename
+        # that reaches argv has no `.js` on it, while the file on disk does. This
+        # script compared only the file name, so a pattern spelled with .js was
+        # reported as covering a server the monitor could not see, for three
+        # servers at once. A bare-word pattern satisfies both; one carrying a dot
+        # satisfies only the file name, and now fails here instead of passing.
+        spellings = (server.name.lower(), server.stem.lower())
+        hit = next((p for p in pats if all(matches(s, p) for s in spellings)), None)
         if hit:
-            print(f"  ok      {server.name} matched by {hit!r}")
+            print(f"  ok      {server.stem} matched by {hit!r}, with and without .js")
         else:
-            print(f"  FAIL    {server.name} is matched by no pattern")
+            partial = next((p for p in pats if any(matches(s, p) for s in spellings)), None)
+            print(f"  FAIL    {server.name} is matched by no pattern that covers both spellings")
+            if partial:
+                print(f"            {partial!r} matches the file name but not {server.stem},"
+                      " which is what `fork` puts in argv")
             print(f"            {server.relative_to(extensions)}")
             failed = True
 
