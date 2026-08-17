@@ -49,7 +49,8 @@ offer that file carries. Both documents are read: this one said the build was
 gated on it while only the other was, so the two agreed by habit rather than by
 anything enforcing it.
 
-That the licences here are Termux's own is now checked rather than asserted.
+That the licences here are Termux's own is now checked rather than asserted,
+wherever Termux states one and upstream can be read.
 `scripts/check-termux-licenses.py` reads `TERMUX_PKG_LICENSE` back from Termux
 for each package and reports where the two disagree. It fails on one difference
 only: a component recorded permissive where Termux declares copyleft, which is

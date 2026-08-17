@@ -321,7 +321,8 @@ under. The licence column is taken from Termux's own `TERMUX_PKG_LICENSE`, which
 is what these packages are built from, rather than from upstream project pages
 that may describe a different version. `scripts/check-termux-licenses.py` reads
 that field back on every release and reports where this column and Termux
-disagree, so the sentence before this one is measured rather than promised.
+disagree, so the sentence before this one is measured rather than promised for
+every package Termux states a licence for and that upstream answered for.
 
 This is not every binary in the APK, and the heading here claimed it was. Most of
 them are not below: they live deeper in the asset tree and are attributed by the
