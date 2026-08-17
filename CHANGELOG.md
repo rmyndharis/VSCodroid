@@ -231,6 +231,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A link opened from inside the editor no longer disappears when the bridge declines it; the click falls through to the WebView's own handling.
 - A browser launch that failed left the sign-in callback window open for ten minutes, during which any `vscodroid://callback` on the device was accepted.
 - A sign-in page on plain http now completes. Only the Custom Tabs hand-off was recording itself, so a self-hosted provider reached through the system browser had its return refused.
+- A sign-in opened by a link navigation rather than by the editor's own route now completes. That hand-off recorded nothing, so its return was refused with nothing said.
 - Signing in when Android has closed the app mid-browser now tells you what happened instead of silently doing nothing.
 - A sign-in that outlasts its window now says so instead of failing silently, and coming back after five minutes no longer discards a callback the editor was collecting.
 - The **Browse Extensions** step on Get Started could never complete, so the walkthrough stayed permanently unfinished. It waited on a view identifier the workbench does not register.

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.SystemClock
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
@@ -12,6 +13,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import java.io.ByteArrayInputStream
@@ -264,13 +267,37 @@ class VSCodroidWebViewClient(
         if (isLocalhost(url) || isCdnRedirect(url)) {
             return false
         }
+        // Empty until this launch arms something, and then the ids to take back
+        // if the launch throws. Same shape as `AndroidBridge.openExternalUrl`,
+        // and for the same reason: arming precedes the launch, so a launch
+        // nothing accepted would otherwise leave the relay open with no sign-in
+        // in flight.
+        var armed: List<String> = emptyList()
         // Fix #7: Open external URLs in system browser instead of blocking silently
         try {
             val intent = Intent(Intent.ACTION_VIEW, url)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // The app's second way out to a browser, and the one that recorded
+            // nothing. The bridge is the route the workbench normally takes, but
+            // `MainActivity.injectWindowOpenOverride` falls through to a plain
+            // navigation whenever the page holds no session token yet or the
+            // bridge reports no launch, and a subframe's `window.open` becomes
+            // one too because this WebView does not support multiple windows. A
+            // sign-in leaving this way returns by the same `vscodroid://callback`
+            // and was judged against a window nobody had opened, so it was
+            // refused in the log and the sign-in hung with nothing said.
+            //
+            // What is armed is the request ids the address carries, never the
+            // fact that a browser opened: a documentation link carries none and
+            // so opens nothing, which is what keeps this from widening the
+            // window every external link is followed.
+            armed = AuthTabWindow.arm(
+                authRequestIdsIn(url.toString()), SystemClock.elapsedRealtime()
+            )
             view.context.startActivity(intent)
             Logger.i(tag, "Opened external URL: ${redactToken(url.toString())}")
         } catch (e: Exception) {
+            AuthTabWindow.disarm(armed)
             Logger.e(tag, "Failed to open external URL: ${redactToken(url.toString())}", e)
         }
         return true  // Don't navigate WebView to external URL

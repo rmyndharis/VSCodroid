@@ -3,8 +3,12 @@ package com.vscodroid.webview
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
+import com.vscodroid.authCallbackIsExpected
+import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
+import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -12,7 +16,9 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -64,14 +70,68 @@ class ExternalUrlHandoffTest {
     private lateinit var view: WebView
     private lateinit var client: VSCodroidWebViewClient
 
-    private fun request(scheme: String, host: String, port: Int): WebResourceRequest {
+    private companion object {
+        /**
+         * An https sign-in address carrying the request id the workbench minted
+         * for the callback it is waiting on. The id travels inside `state`,
+         * percent-encoded twice, which is the ordinary shape: the callback
+         * address is a parameter of the authorisation address.
+         */
+        const val SIGN_IN =
+            "https://github.com/login/oauth/authorize?client_id=abc" +
+                "&state=http%253A%252F%252F127.0.0.1%253A13337%252Fcallback%253Fvscode-reqid%253D909"
+
+        /** The id [SIGN_IN] carries. */
+        const val SIGN_IN_REQUEST_ID = "909"
+
+        /** A neighbouring id nothing here launched, and the one that must stay refused. */
+        const val UNSOLICITED_REQUEST_ID = "910"
+
+        /** A link with no sign-in in it, which must open no window at all. */
+        const val DOCS = "https://code.visualstudio.com/docs"
+
+        /**
+         * The clock reading every launch below is armed with. Distinctive so that
+         * [AuthTabWindow.armedReadings] can be asked whether a launch recorded
+         * anything at all, whatever key it might have chosen.
+         */
+        const val LAUNCHED_AT = 1_700_111L
+    }
+
+    private fun request(
+        scheme: String, host: String, port: Int, address: String = ""
+    ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.scheme } returns scheme
         every { uri.host } returns host
         every { uri.port } returns port
+        // Read by `authRequestIdsIn`, and a relaxed mock's own `toString` names
+        // the mock rather than an address, so a case about request ids has to
+        // say what the address is. Empty elsewhere: no id, nothing armed.
+        every { uri.toString() } returns address
         val req = mockk<WebResourceRequest>(relaxed = true)
         every { req.url } returns uri
         return req
+    }
+
+    /**
+     * The decision `MainActivity.receiveCallbackIntent` makes about an arriving
+     * `vscodroid://callback`, in the two steps it makes it in: a request this app
+     * never launched has no reading, and a reading has to be inside the window.
+     */
+    private fun callbackWouldBeTaken(requestId: String): Boolean {
+        val armedAt = AuthTabWindow.armedAt(requestId) ?: return false
+        return authCallbackIsExpected(armedAt, LAUNCHED_AT, AUTH_TAB_WINDOW_MILLIS)
+    }
+
+    /**
+     * [AuthTabWindow] is an object and this suite runs in one JVM, so what these
+     * cases write through the real API outlives them. mockk's cleanup covers
+     * mocks, not that.
+     */
+    @AfterEach
+    fun handBackArmedRequests() {
+        AuthTabWindow.disarm(listOf(SIGN_IN_REQUEST_ID, UNSOLICITED_REQUEST_ID))
     }
 
     @BeforeEach
@@ -83,6 +143,12 @@ class ExternalUrlHandoffTest {
 
         mockkConstructor(Intent::class)
         every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
+
+        // The hand-off records the sign-in it is carrying, and reads the clock to
+        // do it. android.jar's stub throws, which the catch below would turn into
+        // a launch that never happened, so every case here needs it answered.
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns LAUNCHED_AT
 
         context = mockk(relaxed = true)
         view = mockk(relaxed = true)
@@ -137,5 +203,85 @@ class ExternalUrlHandoffTest {
         val handled = client.shouldOverrideUrlLoading(view, request("intent", "scan", -1))
         verify(exactly = 1) { context.startActivity(any()) }
         assertTrue(handled)
+    }
+
+    /**
+     * A sign-in that leaves through this route can come back.
+     *
+     * The bridge is the route the workbench normally takes, and it records the
+     * launch. This one is the fallback underneath it, reached when the page
+     * holds no session token yet, when the bridge reports no launch, and when a
+     * subframe calls `window.open`, which this WebView turns into a navigation
+     * because it does not support multiple windows. It recorded nothing, so the
+     * `vscodroid://callback` that came back was judged against a window nobody
+     * had opened and refused in the log, with no message anywhere: the sign-in
+     * simply never completed.
+     *
+     * Asserted on the acceptance decision itself rather than on the arming call,
+     * because the arming is only interesting for what it lets back in.
+     */
+    @Test
+    fun `a sign-in handed over here is a callback this app then accepts`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("https", "github.com", -1, SIGN_IN)
+        )
+
+        assertTrue(handled, "the address has to leave the WebView for a browser at all")
+        verify(exactly = 1) { context.startActivity(any()) }
+
+        assertTrue(
+            callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
+            "the callback for the sign-in this hand-off carried must be accepted when it " +
+                "returns; refusing it is a sign-in that hangs with nothing said",
+        )
+        assertFalse(
+            callbackWouldBeTaken(UNSOLICITED_REQUEST_ID),
+            "only the request the address carried may be accepted. The callback filter is " +
+                "exported and BROWSABLE and the id is a small integer, so a hand-off that " +
+                "opened the relay to anything else opens it to whatever is on the device.",
+        )
+    }
+
+    /**
+     * A hand-off that no activity took must not leave the relay open behind it.
+     *
+     * The record is written before the launch, because the launch hands off to
+     * another process. So a launch that then threw has already opened the window
+     * for the ids it named, and for the next ten minutes any app on the device
+     * can post a `vscodroid://callback` naming one of them, through an exported
+     * BROWSABLE filter, for a sign-in that never started.
+     */
+    @Test
+    fun `a hand-off that no activity took leaves nothing armed`() {
+        every { context.startActivity(any()) } throws IllegalStateException("no activity took it")
+
+        client.shouldOverrideUrlLoading(view, request("https", "github.com", -1, SIGN_IN))
+
+        assertFalse(
+            callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
+            "a launch that failed left the callback window armed for a sign-in that never " +
+                "started, and nothing on the way back can tell the difference",
+        )
+    }
+
+    /**
+     * The other half, and the one that keeps this from being a widening: every
+     * external link goes through here, and a link to documentation must not put
+     * the callback relay within reach of an id nobody asked for.
+     *
+     * Measured on the readings rather than on a key, so a hand-off that recorded
+     * the fact of a launch under any name at all is caught.
+     */
+    @Test
+    fun `a link carrying no sign-in opens no callback window`() {
+        client.shouldOverrideUrlLoading(view, request("https", "code.visualstudio.com", -1, DOCS))
+
+        verify(exactly = 1) { context.startActivity(any()) }
+        assertFalse(
+            AuthTabWindow.armedReadings().contains(LAUNCHED_AT),
+            "following a documentation link recorded a launch. Every external link in the " +
+                "editor arrives here, so recording them all reopens the window an unsolicited " +
+                "vscodroid://callback is taken in.",
+        )
     }
 }
