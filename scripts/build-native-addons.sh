@@ -91,6 +91,17 @@ echo "  output : $OUTPUT_ROOT"
 # --- Node headers ----------------------------------------------------------
 
 mkdir -p "$WORK_DIR"
+
+# A sidecar written by an earlier run outlives the code that wrote it and sits
+# here naming an expected value nothing reads. Swept before the block below
+# rather than inside it: the state that holds one is a work directory warm
+# enough to skip that block entirely, so a sweep in there would never meet a
+# sidecar. Unlike download-npm.sh's work directory this one is in no CI cache
+# path, so it is a local checkout that keeps one between runs. Globbed for the
+# same reason as there: the ones on disk carry version names this build no
+# longer uses.
+rm -f "$WORK_DIR"/node-*-headers.tar.gz.sha256
+
 NODE_INCLUDE="$WORK_DIR/node-v$NODE_VERSION/include/node"
 if [ ! -d "$NODE_INCLUDE" ]; then
     echo ""
@@ -109,12 +120,6 @@ if [ ! -d "$NODE_INCLUDE" ]; then
     HEADERS_PATH="$WORK_DIR/$HEADERS_TARBALL"
     [ -f "$HEADERS_PATH" ] || curl -fsSL --show-error \
         "https://nodejs.org/dist/v$NODE_VERSION/$HEADERS_TARBALL" -o "$HEADERS_PATH"
-
-    # A sidecar written by an earlier run survives in the cache long after the
-    # code that wrote it, naming an expected value nothing reads. Globbed for
-    # the same reason as in download-npm.sh: the ones already on disk carry
-    # version names this build no longer uses.
-    rm -f "$WORK_DIR"/node-*-headers.tar.gz.sha256
 
     published=$(curl -sL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" 2>/dev/null \
         | awk -v f="$HEADERS_TARBALL" '$2 == f { print $1; exit }' || true)
