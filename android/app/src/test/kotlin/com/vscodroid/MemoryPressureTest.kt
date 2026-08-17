@@ -12,6 +12,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -142,6 +143,14 @@ class MemoryPressureWireTest {
             PRESSURE_CRITICAL, applyMemoryPressure(tmpDir, TRIM_MEMORY_RUNNING_CRITICAL),
             "the severity is still the answer even when it could not be recorded"
         )
+
+        // Both the Activity and the application class reach this write, and the
+        // one that fails after a swipe has no Activity behind it. A tag naming
+        // one caller sends whoever reads the line looking for a lifecycle bug in
+        // a component that was already gone.
+        verify {
+            Logger.d("MemoryPressure", match { it.startsWith("Failed to write memory pressure") })
+        }
     }
 }
 

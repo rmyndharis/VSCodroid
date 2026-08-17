@@ -1794,7 +1794,11 @@ internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
     try {
         File(tmpDir, "vscodroid-memory-pressure").writeText(pressure)
     } catch (e: Exception) {
-        Logger.d("MainActivity", "Failed to write memory pressure: ${e.message}")
+        // Not the Activity's tag: the application class calls this too, and the
+        // write most likely to fail is the one that happens after the Activity
+        // is gone. Naming a destroyed component sends the reader to the wrong
+        // lifecycle.
+        Logger.d("MemoryPressure", "Failed to write memory pressure: ${e.message}")
     }
 }
 
