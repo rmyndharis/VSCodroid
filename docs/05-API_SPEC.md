@@ -314,12 +314,12 @@ sequenceDiagram
   participant C as Chrome Custom Tabs
   participant P as Identity provider
   W->>K: openExternalUrl(authUrl, authToken)
-  K->>K: AuthTabWindow.opened(elapsedRealtime)
+  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), elapsedRealtime)
   K->>C: CustomTabsIntent.launchUrl (https only)
   C->>P: user login + consent
   P-->>C: redirect to the workbench callback page
   C-->>K: VIEW intent, vscodroid://callback?data=ENCODED_JSON
-  K->>K: gate: workbenchLoaded, then authCallbackIsExpected(...)
+  K->>K: gate: workbenchLoaded, then armedAt(id), then authCallbackIsExpected(...)
   K-->>W: evaluateJavascript, writes vscode-web.url-callbacks[id]
 ```
 
@@ -327,29 +327,42 @@ The scheme is `vscodroid://callback`, not `vscodroid://oauth/<provider>`, and th
 payload is a single `data` parameter carrying the workbench's own JSON — no
 provider, code or state is parsed on the Kotlin side.
 
-**Two gates, and both refuse rather than relay.** The VIEW filter is exported and
-`BROWSABLE`, so any app or web page on the device can fire this intent:
+**Four gates, and all of them refuse rather than relay.** The VIEW filter is
+exported and `BROWSABLE`, so any app or web page on the device can fire this
+intent:
 
 | Gate | Where | What it rejects |
 |---|---|---|
 | `isExtensionCallback(scheme, host)` | `MainActivity.kt` | Anything that is not exactly scheme `vscodroid` **and** host `callback` |
 | `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast rather than injecting — deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
-| `authCallbackIsExpected(openedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback arriving outside the window since this app last handed an https URL to a browser. `AUTH_TAB_WINDOW_MILLIS` is 10 minutes (`AndroidBridge.kt`) |
+| `AuthTabWindow.armedAt(callbackRequestId(data))` | `MainActivity.kt` | A callback whose payload cannot be parsed, or whose `vscode-reqid` this app never launched a browser for. Logged only; a message here would be one an outside caller could raise at will |
+| `authCallbackIsExpected(armedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback for a request this app did launch, arriving more than `AUTH_TAB_WINDOW_MILLIS` (10 minutes, `AndroidBridge.kt`) after that launch. Shows a fixed "sign-in took too long" toast, since a slow consent screen or second factor otherwise fails in silence |
 
-The timing gate tests whether *this app* went looking for a sign-in, which is the
-only thing separating a genuine return from an invented one — the legitimate sender
-is a browser, so there is no caller identity to check, and the callback id is a
-counter the workbench hands out from one rather than a secret. `AuthTabWindow`
-records any https hand-off, not only a sign-in, because `openExternalUrl` cannot
-tell an authorisation page from a documentation link.
+The last two gates together test whether *this app* went looking for **this**
+sign-in, which is the only thing separating a genuine return from an invented one.
+The legitimate sender is a browser, so there is no caller identity to check, and
+the callback id is a counter the workbench hands out from one rather than a
+secret.
 
-A rejected callback is logged **without** the URI and raises no toast: it is the
-payload of a sign-in this app did not start, and a message there would be one an
-outside caller could raise at will.
+What a launch arms is the set of request ids the outgoing address carries, not
+the fact that a browser opened. `callback.html` refuses to run without a
+`vscode-reqid` and relays that same parameter on as the id, so a callback can only
+exist for a request whose id left this app inside the address it opened;
+`authRequestIdsIn` reads them out, under one or two rounds of percent-encoding,
+because the callback address usually travels as a parameter of the authorisation
+address. A documentation link carries none and arms nothing.
+
+Neither message carries any part of the callback. The payload arrives through an
+exported filter, so quoting it would be a way to put chosen words in front of a
+user who trusts this app.
 
 Relaying is also the end of the recovery, not a repair. The workbench keeps the ids
 it is waiting for in an in-memory `Set` that is never persisted, so a relayed value
-is consumable only by the page instance that began the sign-in.
+is consumable only by the page instance that began the sign-in. That is also why
+the forced reload after five minutes in the background is held while any launch is
+still inside its window: reloading discards the very requests the callback is
+coming back to, and five minutes away is the ordinary shape of a sign-in that
+needed a second factor.
 
 #### Logging
 

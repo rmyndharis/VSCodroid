@@ -192,13 +192,13 @@ class OpenExternalUrlRefusalTest {
     /**
      * A launch that threw must not leave the sign-in callback window armed.
      *
-     * `AuthTabWindow.opened()` is called before `launchUrl` on purpose -- a
+     * `AuthTabWindow.arm()` is called before `launchUrl` on purpose -- a
      * browser that answers instantly could otherwise return before the window
      * it needs is open -- so a launch that then fails had already widened it.
-     * For ten minutes after that, `vscodroid://callback` is accepted from
-     * anything on the device, through an exported BROWSABLE filter, for a
-     * sign-in nobody started. Nothing could tell before, because the method
-     * could not report that the launch had failed.
+     * For ten minutes after that, a `vscodroid://callback` naming that request
+     * is accepted from anything on the device, through an exported BROWSABLE
+     * filter, for a sign-in nobody started. Nothing could tell before, because
+     * the method could not report that the launch had failed.
      *
      * The launch itself is not stubbed: the https branch reaches
      * `CustomTabsIntent`, whose Intent work throws from android.jar's stub,
@@ -206,8 +206,8 @@ class OpenExternalUrlRefusalTest {
      *
      * `SystemClock.elapsedRealtime()` must be, though, and leaving it out is
      * how this test first passed against the bug. It is an android.jar stub
-     * that throws, and it is evaluated as the argument to `opened()` -- so the
-     * window was never armed, `openedAt()` was still the value this test had
+     * that throws, and it is evaluated as the argument to the arming call -- so
+     * the window was never armed, the record still held whatever this test had
      * just written, and removing the rollback changed nothing. A stubbed clock
      * is what makes the arming real and the assertion able to fail.
      */
