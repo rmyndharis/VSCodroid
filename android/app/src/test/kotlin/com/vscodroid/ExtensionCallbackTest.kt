@@ -2,6 +2,7 @@ package com.vscodroid
 
 import android.net.Uri
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.webview.redactToken
 import io.mockk.every
 import io.mockk.mockkStatic
@@ -9,6 +10,8 @@ import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -65,34 +68,246 @@ class ExtensionCallbackTest {
 }
 
 /**
- * That the window actually carries the value between the two halves.
+ * That the window actually carries the value between the two halves, and that it
+ * carries it per request rather than in bulk.
  *
  * `authCallbackIsExpected` is tested on numbers and the call sites are tested on
  * source text, so nothing in either touches the object that carries the reading
  * from the browser launch to the relay. An `AuthTabWindow` that returned a
- * constant, or whose accessor recursed into itself, would leave both sets green
- * and every sign-in broken on the device.
+ * constant, or that answered for an id it had never been given, would leave both
+ * sets green and either break every sign-in on the device or accept a callback
+ * nobody asked for.
  *
- * Plain JVM: the object holds a Long its callers supply and reads no Android API.
+ * Plain JVM: the object holds Longs its callers supply and reads no Android API.
+ *
+ * It is also a process-wide singleton shared with every other test in this JVM,
+ * so each case arms ids of its own and hands them back afterwards.
  */
 class AuthTabWindowTest {
 
+    /** Distinctive enough that no other test in this JVM could be arming them. */
+    private val ids = listOf("900001", "900002", "900003")
+
+    @AfterEach
+    fun handBack() = AuthTabWindow.disarm(ids)
+
     @Test
     fun `the reading handed in is the reading handed back`() {
-        AuthTabWindow.opened(123_456L)
-        assertEquals(123_456L, AuthTabWindow.openedAt())
+        AuthTabWindow.arm(listOf("900001"), 123_456L)
 
-        AuthTabWindow.opened(987_654L)
+        assertEquals(123_456L, AuthTabWindow.armedAt("900001"))
+    }
+
+    @Test
+    fun `an id nobody launched is not armed by a launch of another id`() {
+        // The narrowing itself. One timestamp for the whole process answered yes
+        // here, which is how opening a documentation link came to widen the
+        // window an unsolicited callback is accepted in.
+        AuthTabWindow.arm(listOf("900001"), 123_456L)
+
+        assertNull(AuthTabWindow.armedAt("900002"))
+    }
+
+    @Test
+    fun `a second launch arms its own id and leaves the first alone`() {
+        AuthTabWindow.arm(listOf("900001"), 100L)
+        AuthTabWindow.arm(listOf("900002"), 200L)
+
+        assertEquals(100L, AuthTabWindow.armedAt("900001"), "a later launch overwrote an earlier one")
+        assertEquals(200L, AuthTabWindow.armedAt("900002"))
+    }
+
+    @Test
+    fun `an id already in flight keeps its first reading and is not reported as newly armed`() {
+        // Both halves matter and they are the same fact seen twice. The earlier
+        // reading is the conservative one, it closes the window sooner; and
+        // reporting the id as newly armed would let a launch that then threw take
+        // back a request that was already in flight, refusing a real return.
+        AuthTabWindow.arm(listOf("900001"), 1_000L)
+
+        val added = AuthTabWindow.arm(listOf("900001"), 9_000L)
+
+        assertEquals(emptyList<String>(), added)
+        assertEquals(1_000L, AuthTabWindow.armedAt("900001"))
+    }
+
+    @Test
+    fun `a launch reports the ids it armed, and disarming takes back only those`() {
+        AuthTabWindow.arm(listOf("900001"), 100L)
+
+        val added = AuthTabWindow.arm(listOf("900002", "900003"), 200L)
+        assertEquals(listOf("900002", "900003"), added)
+
+        AuthTabWindow.disarm(added)
+        assertNull(AuthTabWindow.armedAt("900002"))
+        assertNull(AuthTabWindow.armedAt("900003"))
         assertEquals(
-            987_654L, AuthTabWindow.openedAt(),
-            "a second launch must move the window, not be ignored",
+            100L, AuthTabWindow.armedAt("900001"),
+            "a failed launch took back a request it had nothing to do with",
+        )
+    }
+
+    @Test
+    fun `every launch still held is reported, which is what the reload asks`() {
+        // The resume path asks whether ANY sign-in is still able to come back, and
+        // it can only ask that of the readings. An empty answer here would let the
+        // forced reload discard the page a callback was about to land in.
+        AuthTabWindow.arm(listOf("900001"), 100L)
+        AuthTabWindow.arm(listOf("900002"), 200L)
+
+        val readings = AuthTabWindow.armedReadings()
+
+        assertTrue(readings.contains(100L), "a launch is held but not reported: $readings")
+        assertTrue(readings.contains(200L), "a launch is held but not reported: $readings")
+    }
+
+    @Test
+    fun `the record does not grow for the life of the process`() {
+        // Entries outlive their own window on purpose, so that a late callback can
+        // be told apart from an invented one. Without a bound that is a leak in a
+        // process that stays alive for days.
+        val many = (1..200).map { "9100$it" }
+        try {
+            AuthTabWindow.arm(many, 500L)
+
+            assertNull(
+                AuthTabWindow.armedAt(many.first()),
+                "the oldest entry survived 200 launches; nothing is bounding this",
+            )
+            assertNotNull(
+                AuthTabWindow.armedAt(many.last()),
+                "the newest entry was evicted, which would refuse the sign-in just started",
+            )
+        } finally {
+            AuthTabWindow.disarm(many)
+        }
+    }
+}
+
+/**
+ * Which browser launches arm anything at all.
+ *
+ * This is the half that decides whether opening a link is treated as starting a
+ * sign-in. It used to be all of them: one timestamp, written by every
+ * `openExternalUrl` call, so following a documentation link opened a ten-minute
+ * window in which an unsolicited `vscodroid://callback` from anything on the
+ * device would be answered.
+ *
+ * What replaces it is not a guess about the URL. `callback.html` refuses to run
+ * without a `vscode-reqid` and relays that same parameter on as the id, so a
+ * callback can only exist for a request whose id left this app inside the address
+ * it opened. The addresses below are the real shapes that carries in.
+ */
+class AuthRequestIdTest {
+
+    @Test
+    fun `the callback address names its own request`() {
+        val ids = authRequestIdsIn(
+            "http://127.0.0.1:13337/callback?vscode-reqid=3&vscode-scheme=vscodroid" +
+                "&vscode-authority=vscode.github-authentication&vscode-path=/did-authenticate"
         )
 
-        // Back to the value a fresh process starts with. This object is a
-        // process-wide singleton and these are the only tests that touch it, but
-        // leaving it armed would hand the next test a state it did not set.
-        AuthTabWindow.opened(0L)
-        assertEquals(0L, AuthTabWindow.openedAt())
+        assertEquals(listOf("3"), ids)
+    }
+
+    @Test
+    fun `an authorisation address carrying the callback in state names it too`() {
+        // The shape the bundled GitHub provider actually sends: the callback
+        // address is encoded into `state`, and then the whole parameter list is
+        // encoded again on its way into the query. `=` becomes `%3D` and then
+        // `%253D`, which is why matching the plain spelling alone finds nothing
+        // and refuses every sign-in.
+        val ids = authRequestIdsIn(
+            "https://github.com/login/oauth/authorize?client_id=abc" +
+                "&redirect_uri=https%3A%2F%2Fvscode.dev%2Fredirect&scope=repo" +
+                "&state=http%253A%252F%252F127.0.0.1%253A13337%252Fcallback" +
+                "%253Fvscode-reqid%253D7%2526vscode-scheme%253Dvscodroid" +
+                "&code_challenge_method=S256"
+        )
+
+        assertEquals(listOf("7"), ids)
+    }
+
+    @Test
+    fun `a singly encoded callback address is read as well`() {
+        assertEquals(
+            listOf("11"),
+            authRequestIdsIn("https://login.example.com/authorize?redirect_uri=" +
+                "http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D11"),
+        )
+    }
+
+    @Test
+    fun `a link that is not a sign-in arms nothing`() {
+        // The whole point. Every one of these used to open the callback window as
+        // wide as a sign-in did.
+        for (link in listOf(
+            "https://code.visualstudio.com/docs/editor/extension-marketplace",
+            "http://192.168.1.50:5173/",
+            "https://example.com/?callback=1&reqid=4",
+            "https://example.com/vscode-reqid",
+            "https://example.com/?vscode-reqid=",
+        )) {
+            assertEquals(emptyList<String>(), authRequestIdsIn(link), "armed by: $link")
+        }
+    }
+
+    @Test
+    fun `an address naming the same request twice arms it once`() {
+        val ids = authRequestIdsIn(
+            "https://login.example.com/authorize?redirect_uri=" +
+                "http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D5" +
+                "&state=http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D5"
+        )
+
+        assertEquals(listOf("5"), ids)
+    }
+}
+
+/**
+ * Which request a callback payload claims to be for.
+ *
+ * The id is the whole of the match: it is compared against the launches this app
+ * made, and a value read out of the wrong place would either refuse every real
+ * sign-in or answer for one nobody started. The payload is built by
+ * `callback.html` as `JSON.stringify({ id, uri })`, and anything on the device
+ * can fire the intent that carries it, so the reader has to be total.
+ */
+class CallbackRequestIdTest {
+
+    @Test
+    fun `the id in a relay payload is read`() {
+        val payload = """{"id":"7","uri":{"scheme":"vscodroid","authority":"vscode.github-authentication"}}"""
+
+        assertEquals("7", callbackRequestId(payload))
+    }
+
+    @Test
+    fun `a number in the rest of the payload is not mistaken for the id`() {
+        // The reason this parses instead of searching the text. The `uri` half
+        // carries whatever the provider sent back, and a reader looking for the
+        // first number in the string would take a code or a state value and
+        // compare that against the launches instead.
+        val payload = """{"id":"7","uri":{"query":"code=12&state=99","path":"/did-authenticate"}}"""
+
+        assertEquals("7", callbackRequestId(payload))
+    }
+
+    @Test
+    fun `a payload with no id is refused rather than guessed at`() {
+        assertNull(callbackRequestId("""{"uri":{"scheme":"vscodroid"}}"""))
+        assertNull(callbackRequestId("""{"id":""}"""))
+    }
+
+    @Test
+    fun `text that is not a payload yields null rather than throwing`() {
+        // Reached from an exported, BROWSABLE filter, so this is ordinary input
+        // rather than a corner case. A throw here would take the whole intent
+        // handler with it.
+        for (text in listOf("", "not json", "[1,2,3]", "{", """{"id":}""")) {
+            assertNull(callbackRequestId(text), "accepted: $text")
+        }
+        assertNull(callbackRequestId(null))
     }
 }
 
@@ -196,12 +411,94 @@ class AuthCallbackCallSiteTest {
         check(method.any { it.contains("launchUrl(") }) { "no browser launch found in openExternalUrl" }
 
         val launches = method.count { it.contains("launchUrl(") || it.contains("startActivity(") }
-        val arms = method.count { it.contains("AuthTabWindow.opened(") }
+        val arms = method.count { it.contains("AuthTabWindow.arm(") }
 
         assertEquals(
             launches, arms,
             "each browser launch must record that it happened, or the callback it " +
                 "returns with is refused",
+        )
+    }
+
+    @Test
+    fun `the launch arms the ids the address carries, not the fact that it launched`() {
+        // The narrowing, at the one place it can be undone in a line. Passing
+        // anything other than the ids read out of the address puts the old
+        // behaviour back: every browser launch opening the callback window,
+        // whether or not a sign-in was involved.
+        check(bridge.isFile) { "AndroidBridge.kt not found" }
+
+        val arming = code(bridge).filter { it.contains("AuthTabWindow.arm(") }
+
+        assertEquals(1, arming.size, "expected exactly one arming site, found: $arming")
+        assertTrue(
+            arming.single().contains("authRequestIdsIn("),
+            "the arming must be keyed on the request ids in the address; found: ${arming.single()}",
+        )
+    }
+
+    @Test
+    fun `the relay matches a callback against the launch that could have produced it`() {
+        // Without this the timing gate is asked about a launch chosen by nothing:
+        // the most recent one, whatever it was for. Deleting the lookup and
+        // handing the gate any reading at all leaves every other test here green.
+        check(mainActivity.isFile) { "MainActivity.kt not found" }
+
+        val lookups = code(mainActivity).count { it.contains("AuthTabWindow.armedAt(") }
+
+        assertTrue(
+            lookups >= 1,
+            "the relay must look the callback's own request id up against the launches " +
+                "this app made; found $lookups",
+        )
+    }
+
+    @Test
+    fun `the message for a callback that arrived too late carries nothing from it`() {
+        // The message exists because a sign-in that took longer than the window
+        // used to die in silence. It is reached only after the id has been matched
+        // to a launch this app made, so it cannot be raised by an outside caller;
+        // what it must never do is put any part of the payload on the screen,
+        // since that payload is attacker-shaped by construction.
+        check(mainActivity.isFile) { "MainActivity.kt not found" }
+
+        val body = code(mainActivity)
+            .dropWhile { !it.contains("private fun receiveCallbackIntent(") }
+            .drop(1)
+            .takeWhile { it != "    }" }
+        check(body.isNotEmpty()) { "receiveCallbackIntent not found; this test is measuring nothing" }
+
+        val toasts = body.filter { it.contains("Toast.makeText(") }
+        assertEquals(
+            2, toasts.size,
+            "expected the restart message and the expiry message, found ${toasts.size}: $toasts",
+        )
+
+        val interpolated = body.filter { it.contains("\"") && it.contains("$") }
+        assertEquals(
+            emptyList<String>(), interpolated,
+            "a message shown here must be fixed text. Anything interpolated into it can " +
+                "be chosen by whoever fired the intent, and this app is the one the user " +
+                "trusts to be telling them about their sign-in.",
+        )
+    }
+
+    @Test
+    fun `the forced reload asks whether a sign-in is still able to come back`() {
+        // The race the hold exists for: returning after five minutes is the
+        // ordinary shape of a sign-in that needed a second factor, and the reload
+        // discards the page the callback has to land in. Dropping the argument
+        // leaves resumeAction correct and never reaching its holding branch.
+        check(mainActivity.isFile) { "MainActivity.kt not found" }
+
+        val decisions = code(mainActivity).filter { it.contains("resumeAction(") }
+            .filterNot { it.contains("fun resumeAction") }
+
+        assertEquals(1, decisions.size, "expected one resume decision, found: $decisions")
+        assertTrue(
+            decisions.single().contains("signInIsPending()"),
+            "the resume decision must be told whether a sign-in is in flight; found: " +
+                decisions.single(),
         )
     }
 }
@@ -966,6 +1263,65 @@ class ConnectionHealthProbeTest {
         assertTrue(
             connectionHealthProbe().contains("indexedDB.open"),
             "narrowing the probe must not empty it",
+        )
+    }
+}
+
+/**
+ * What returning from the background is allowed to do to the page.
+ *
+ * The reload above five minutes was written for a WebSocket that did not survive
+ * being frozen, and it collides with the one thing that routinely takes a user
+ * out of the app for more than five minutes: signing in. A second factor or an
+ * organisation's consent screen is minutes of reading and typing in another app,
+ * and the callback is delivered on the way back, into the same moment this
+ * decision is made. The workbench keeps the requests it is waiting on in memory,
+ * so a reload here throws away a sign-in that had already succeeded, silently.
+ */
+class ResumeActionTest {
+
+    private val long = FORCE_RELOAD_THRESHOLD_MS + 1
+    private val middling = HEALTH_CHECK_THRESHOLD_MS + 1
+
+    @Test
+    fun `a long absence with a sign-in in flight holds the reload`() {
+        assertEquals(ResumeAction.HOLD_FOR_SIGN_IN, resumeAction(long, signInPending = true))
+    }
+
+    @Test
+    fun `a long absence with nothing in flight still reloads`() {
+        // The control, and the half that matters more often: holding
+        // unconditionally would leave a page stale for the rest of the session,
+        // which is the failure the reload was added for in the first place.
+        assertEquals(ResumeAction.RELOAD, resumeAction(long, signInPending = false))
+    }
+
+    @Test
+    fun `a sign-in in flight does not stop the connection probe`() {
+        // Narrower than "do nothing while signing in", deliberately. The probe
+        // only reloads when IndexedDB is already unusable, and a page in that
+        // state has nothing left to collect a callback with, so suppressing it
+        // would trade a real recovery for a callback that cannot be delivered.
+        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(middling, signInPending = true))
+        assertEquals(ResumeAction.PROBE_CONNECTION, resumeAction(middling, signInPending = false))
+    }
+
+    @Test
+    fun `a short absence does nothing, with or without a sign-in`() {
+        assertEquals(ResumeAction.NOTHING, resumeAction(1_000L, signInPending = true))
+        assertEquals(ResumeAction.NOTHING, resumeAction(1_000L, signInPending = false))
+    }
+
+    @Test
+    fun `the hold is tested before the reload, not after`() {
+        // The mutation is reordering the two branches, which compiles, reads
+        // fine, and makes the holding branch unreachable. At exactly the
+        // threshold neither fires, which is the boundary worth stating too.
+        assertEquals(ResumeAction.HOLD_FOR_SIGN_IN, resumeAction(long, signInPending = true))
+        assertEquals(
+            ResumeAction.PROBE_CONNECTION,
+            resumeAction(FORCE_RELOAD_THRESHOLD_MS, signInPending = true),
+            "the reload threshold is exclusive; at the boundary there is nothing to hold",
         )
     }
 }

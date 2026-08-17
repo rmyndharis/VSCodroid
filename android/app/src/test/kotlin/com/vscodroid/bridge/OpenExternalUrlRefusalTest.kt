@@ -18,8 +18,9 @@ import io.mockk.mockkStatic
 import io.mockk.verify
 import io.mockk.verifyOrder
 import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -73,34 +74,47 @@ class OpenExternalUrlRefusalTest {
     private lateinit var context: Context
     private lateinit var bridge: AndroidBridge
 
-    /**
-     * What [AuthTabWindow] held before this class ran.
-     *
-     * It is an object, this suite runs in one JVM, and one test here writes to
-     * it. Restoring means whatever runs next reads what it would have read had
-     * this class not existed -- mockk's own cleanup covers mocks, not the state
-     * a test wrote through a real API.
-     */
-    private var authWindowBefore = 0L
-
     private companion object {
         /** Named so a failure says the launch was attempted, not that something broke. */
         const val UNREACHABLE = "a browser launch is not reachable from a JVM test"
 
         const val LOCAL = "http://localhost:3000"
 
-        /** An https URL, which is the branch that arms the auth callback window. */
-        const val REMOTE = "https://github.com/login/oauth/authorize"
+        /**
+         * An https sign-in address, which is the branch that goes through Custom
+         * Tabs. It carries a request id because that, and not the fact that a
+         * browser opened, is what arms the callback window: the workbench mints
+         * `vscode-reqid` for the callback it is waiting on, and the address the
+         * provider is given has to carry it back.
+         */
+        const val REMOTE =
+            "https://github.com/login/oauth/authorize?client_id=abc" +
+                "&state=http%253A%252F%252F127.0.0.1%253A13337%252Fcallback%253Fvscode-reqid%253D707"
+
+        /** The id [REMOTE] carries, matched against what the window recorded. */
+        const val REMOTE_REQUEST_ID = "707"
+
+        /** A plain-http sign-in, the LAN shape that leaves through ACTION_VIEW. */
+        const val REMOTE_HTTP =
+            "http://192.168.1.50/signin?redirect_uri=" +
+                "http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D808"
+
+        const val REMOTE_HTTP_REQUEST_ID = "808"
     }
 
+    /**
+     * [AuthTabWindow] is an object, this suite runs in one JVM, and the cases here
+     * write to it through the real bridge. Handing the ids back means whatever
+     * runs next reads what it would have read had this class not existed; mockk's
+     * own cleanup covers mocks, not state a test wrote through a real API.
+     */
     @AfterEach
-    fun restoreAuthWindow() {
-        AuthTabWindow.disarm(authWindowBefore)
+    fun handBackArmedRequests() {
+        AuthTabWindow.disarm(listOf(REMOTE_REQUEST_ID, REMOTE_HTTP_REQUEST_ID))
     }
 
     @BeforeEach
     fun setUp() {
-        authWindowBefore = AuthTabWindow.openedAt()
         mockkObject(Logger)
         every { Logger.w(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
@@ -199,9 +213,7 @@ class OpenExternalUrlRefusalTest {
      */
     @Test
     fun `a launch that fails puts the auth callback window back`() {
-        val before = 4_242L
         val armedAt = 999_999L
-        AuthTabWindow.opened(before)
 
         mockkStatic(SystemClock::class)
         every { SystemClock.elapsedRealtime() } returns armedAt
@@ -211,9 +223,9 @@ class OpenExternalUrlRefusalTest {
         every { remote.scheme } returns "https"
         every { Uri.parse(REMOTE) } returns remote
 
-        // Watched, not inferred. The final reading cannot tell "armed then rolled
-        // back" from "never armed": both leave the value this test just wrote.
-        // Two earlier attempts at a control here were satisfied without the
+        // Watched as well as read, because the two see different mutations. The
+        // final state cannot tell "armed then rolled back" from "never armed",
+        // and two earlier attempts at a control here were satisfied without the
         // production code doing anything -- the first because the real clock
         // throws before the arming it was meant to observe, the second because
         // `verify { SystemClock.elapsedRealtime() }` counted this test's OWN call
@@ -230,15 +242,35 @@ class OpenExternalUrlRefusalTest {
         )
 
         verifyOrder {
-            AuthTabWindow.opened(armedAt)
-            AuthTabWindow.disarm(before)
+            AuthTabWindow.arm(listOf(REMOTE_REQUEST_ID), armedAt)
+            AuthTabWindow.disarm(listOf(REMOTE_REQUEST_ID))
         }
-        assertEquals(
-            before, AuthTabWindow.openedAt(),
+        assertNull(
+            AuthTabWindow.armedAt(REMOTE_REQUEST_ID),
             "a launch that threw left the callback window armed. For the next ten minutes any " +
-                "app on the device can post a vscodroid://callback that this app will accept, " +
-                "with no sign-in in flight to justify it.",
+                "app on the device can post a vscodroid://callback naming that request and this " +
+                "app will accept it, with no sign-in in flight to justify it.",
         )
+    }
+
+    @Test
+    fun `an address with no request in it arms nothing`() {
+        // The narrowing, from the outside. Opening a documentation link used to
+        // widen the window an unsolicited callback is accepted in by ten minutes,
+        // exactly as starting a sign-in did, because the window recorded that a
+        // browser had opened rather than what it had been sent to do.
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.host } returns "code.visualstudio.com"
+        every { uri.scheme } returns "https"
+        every { Uri.parse(any()) } returns uri
+
+        mockkObject(AuthTabWindow)
+
+        bridge.openExternalUrl(
+            "https://code.visualstudio.com/docs", security.getSessionToken()
+        )
+
+        verify(exactly = 1) { AuthTabWindow.arm(emptyList(), any()) }
     }
 
     /*
@@ -289,14 +321,14 @@ class OpenExternalUrlRefusalTest {
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
 
-        val arm = lines.indexOfFirst { it.contains("AuthTabWindow.opened(") }
+        val arm = lines.indexOfFirst { it.contains("AuthTabWindow.arm(") }
         val launch = lines.indexOfFirst { it.contains("launchUrl(") }
         assertTrue(arm >= 0, "the auth window is no longer armed anywhere in AndroidBridge.kt")
         assertTrue(launch >= 0, "no browser launch found in AndroidBridge.kt")
 
         assertTrue(
             arm < launch,
-            "AuthTabWindow.opened() must precede launchUrl(): the launch hands off to another " +
+            "AuthTabWindow.arm() must precede launchUrl(): the launch hands off to another " +
                 "process, and a browser that returns instantly would otherwise arrive before " +
                 "the window it is judged against exists. A failed launch is handled by the " +
                 "rollback in the catch, not by arming later — arming later also makes that " +
@@ -321,14 +353,14 @@ class OpenExternalUrlRefusalTest {
         every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
 
         assertTrue(
-            bridge.openExternalUrl("http://192.168.1.50/signin", security.getSessionToken()),
+            bridge.openExternalUrl(REMOTE_HTTP, security.getSessionToken()),
             "the system browser branch must report the launch it made"
         )
         verify(exactly = 1) { context.startActivity(any()) }
-        assertTrue(
-            AuthTabWindow.openedAt() != 0L,
-            "every browser hand-off has to record itself, or the callback it " +
-                "returns with is refused"
+        assertNotNull(
+            AuthTabWindow.armedAt(REMOTE_HTTP_REQUEST_ID),
+            "every browser hand-off has to record the request it carries, or the callback " +
+                "it returns with is refused"
         )
     }
 

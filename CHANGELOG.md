@@ -95,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The session token is compared in constant time. Nothing was reachable through the old comparison; the point is that the property belongs in the comparison rather than in the token length.
 - Every one of the twenty-eight editor-to-Android calls now requires the session token. Six took none, and a test enumerates them so a new one cannot skip it.
 - Signing in to an extension only completes if this app started the sign-in, and only in the minutes after it sent you to a browser. An unsolicited callback could previously be answered on your behalf.
+- Callbacks are matched to the sign-in request they name, not to any recent browser launch, so opening a link no longer widens the window an unsolicited one is accepted in.
 - Content rendered inside the editor can only read files from directories the app publishes to it, rather than anywhere in app storage. Opening the home directory as a workspace now costs preview images rather than exposing the SSH key.
 - The loopback DNS proxy requires a per-boot token. Any installed app could previously use it as an open forwarder attributed to VSCodroid, and a rejected tunnel no longer leaves a connection pinned open.
 - The musl loader is anchored to Alpine's signing key and the signed chain followed to the payload. An Alpine index checksum covers only metadata, so the old check would have accepted a modified loader.
@@ -221,6 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A browser launch that failed left the sign-in callback window open for ten minutes, during which any `vscodroid://callback` on the device was accepted.
 - A sign-in page on plain http now completes. Only the Custom Tabs hand-off was recording itself, so a self-hosted provider reached through the system browser had its return refused.
 - Signing in when Android has closed the app mid-browser now tells you what happened instead of silently doing nothing.
+- A sign-in that outlasts its window now says so instead of failing silently, and coming back after five minutes no longer discards a callback the editor was collecting.
 - The **Browse Extensions** step on Get Started could never complete, so the walkthrough stayed permanently unfinished. It waited on a view identifier the workbench does not register.
 - **Serve on Network** appears for people upgrading, not only on a clean install. The app now records which extensions it bundled last time, so a never-bundled identifier cannot read as one you removed.
 - **Serve on Network** can find your dev server again. It read a system file Android does not let an app open, and the failure was indistinguishable from finding nothing.

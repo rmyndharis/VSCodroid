@@ -54,6 +54,8 @@ import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.sensitiveLocations
+import org.json.JSONException
+import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -252,6 +254,14 @@ class MainActivity : AppCompatActivity() {
      * to be signed in is owed the reason, and "sign in again" is an instruction
      * they can act on; silently relaying into a page that drops it is the
      * failure that was already there, wearing a fix.
+     *
+     * The two refusals below are deliberately not alike. A request this app never
+     * launched is refused in the log and nowhere else: the filter is exported, so
+     * a message there would be one an outside caller could raise at will. A
+     * request it did launch, arriving past its window, is worth a message for the
+     * same reason the restart case is, and can only be reached by a sign-in this
+     * app really started. Both messages are fixed text; nothing from the callback
+     * reaches the screen.
      */
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -273,17 +283,38 @@ class MainActivity : AppCompatActivity() {
             ).show()
             return
         }
-        if (!authCallbackIsExpected(
-                AuthTabWindow.openedAt(),
-                SystemClock.elapsedRealtime(),
-                AUTH_TAB_WINDOW_MILLIS
-            )
-        ) {
+        // The id the callback names, matched against the launch that could have
+        // produced it. Null covers both a payload this cannot read and a request
+        // this app never launched, and the two deserve the same answer: there is
+        // no sign-in here to report on.
+        val armedAt = callbackRequestId(uri.getQueryParameter("data"))
+            ?.let { AuthTabWindow.armedAt(it) }
+        if (armedAt == null) {
             // Logged without the URI. It is the payload of a sign-in this app
             // did not start, and the log is readable by anything holding
             // READ_LOGS on a developer device. No toast either: a message here
             // would be one an outside caller could raise at will.
             Logger.w(tag, "Ignoring a sign-in callback that no sign-in was waiting for")
+            return
+        }
+        if (!authCallbackIsExpected(armedAt, SystemClock.elapsedRealtime(), AUTH_TAB_WINDOW_MILLIS)) {
+            // Said out loud, unlike the branch above, and only because of what
+            // was just established: this app launched this exact request itself,
+            // so the message cannot be raised by an outside caller. The user has
+            // been reading a consent screen or waiting on a second factor for
+            // longer than the window, and the alternative is an editor that
+            // simply never signs in and never says why.
+            //
+            // Fixed text, carrying nothing from the URI. What rides in the
+            // callback is attacker-shaped by construction, and a message that
+            // quoted any of it would be a way to put chosen words on the screen
+            // of an app the user trusts.
+            Logger.w(tag, "A sign-in callback arrived after its window had closed")
+            Toast.makeText(
+                this,
+                "Sign-in took too long to complete. Please sign in again.",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
         handleExtensionCallback(uri)
@@ -532,9 +563,16 @@ class MainActivity : AppCompatActivity() {
      * "Canceled" errors on gallery requests and IndexedDB connections closing.
      *
      * Strategy:
+     * - >5 min background with a sign-in in flight: hold the reload
      * - >5 min background: force reload (stale state almost certain)
      * - >1 min background: run JS health check, reload only if broken
      * - <1 min: no action needed (WebSocket survives short pauses)
+     *
+     * The first line is the one that is not about staleness at all. Five minutes
+     * in the background is the ordinary shape of a sign-in that needed a second
+     * factor or an organisation's consent screen, so the reload written for a
+     * stale WebSocket was firing precisely when the user came back from one, and
+     * it discards the page the callback has to land in.
      */
     private fun handleResumeFromBackground() {
         val ts = backgroundedAt
@@ -555,8 +593,21 @@ class MainActivity : AppCompatActivity() {
         if (!shouldActOnResume(nodeService?.isServerReady(), ts, serverPort)) return
 
         val bgMs = SystemClock.elapsedRealtime() - ts
-        when {
-            bgMs > FORCE_RELOAD_THRESHOLD_MS -> {
+        when (resumeAction(bgMs, signInIsPending())) {
+            ResumeAction.HOLD_FOR_SIGN_IN -> {
+                // Put the reading back, because nothing else will. This branch
+                // fires on the way back from a browser, which is exactly the
+                // moment the callback intent is being delivered, and the reload
+                // it is holding would throw that page away: the ids the workbench
+                // is waiting on live in an in-memory Set that does not survive a
+                // navigation, so a reload here loses a sign-in that had already
+                // succeeded. Restoring the reading leaves the decision to be made
+                // again on the next return from the background, by which time the
+                // window will have closed on its own.
+                backgroundedAt = ts
+                Logger.i(tag, "Holding the reload after ${bgMs / 1000}s: a sign-in is in flight")
+            }
+            ResumeAction.RELOAD -> {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
                 // reload(), not a rebuilt URL. The WebView URL is the only
                 // truthful record of what is open, and rebuilding reads only
@@ -578,9 +629,28 @@ class MainActivity : AppCompatActivity() {
                 // the cookie, never the value inside it.
                 webView?.reload()
             }
-            bgMs > HEALTH_CHECK_THRESHOLD_MS -> {
-                checkConnectionHealth(bgMs)
-            }
+            ResumeAction.PROBE_CONNECTION -> checkConnectionHealth(bgMs)
+            ResumeAction.NOTHING -> Unit
+        }
+    }
+
+    /**
+     * Whether a sign-in this app started is still able to come back.
+     *
+     * Asked of the same record the callback relay is judged against, so the two
+     * cannot drift: whatever [receiveCallbackIntent] would still accept is
+     * whatever the reload has to keep out of the way of.
+     *
+     * The record outlives the callback's arrival on purpose, which is what closes
+     * the narrower race. A callback delivered a moment ago is injected into the
+     * page and collected asynchronously by the workbench; a record consumed on
+     * arrival would answer "nothing pending" during exactly that gap and let the
+     * reload discard the value it had just been handed.
+     */
+    private fun signInIsPending(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        return AuthTabWindow.armedReadings().any {
+            authCallbackIsExpected(it, now, AUTH_TAB_WINDOW_MILLIS)
         }
     }
 
@@ -1581,13 +1651,14 @@ class MainActivity : AppCompatActivity() {
          * URL, and the bootstrap client is the only place it is recognised.
          */
         private const val RETRY_URL = "vscodroid://retry-server"
-        /** Run health check if backgrounded longer than this. */
-        private const val HEALTH_CHECK_THRESHOLD_MS = 60_000L   // 1 minute
-
-        /** Force page reload if backgrounded longer than this. */
-        private const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
     }
 }
+
+/** Run health check if backgrounded longer than this. */
+internal const val HEALTH_CHECK_THRESHOLD_MS = 60_000L   // 1 minute
+
+/** Force page reload if backgrounded longer than this. */
+internal const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
 
 // Severities the process monitor understands. Words rather than numbers so that
 // nothing downstream is tempted to compare them with >=, which is the defect
@@ -1694,6 +1765,35 @@ internal fun isExtensionCallback(scheme: String?, host: String?): Boolean =
     scheme == "vscodroid" && host == "callback"
 
 /**
+ * The workbench request id a callback payload names, or null if it names none.
+ *
+ * The payload is what `callback.html` builds before it navigates to the intent:
+ * `encodeURIComponent(JSON.stringify({ id, uri }))`, where `id` is the
+ * `vscode-reqid` the page was loaded with. `Uri.getQueryParameter` undoes the
+ * encoding, so what arrives here is the JSON object itself.
+ *
+ * Parsed rather than pattern-matched, and the difference is not style. A reader
+ * that searched the text for a number would find one in the `uri` half as
+ * readily as in the `id` half, and the value decides whether an exported entry
+ * point is answered. Parsing is also what makes malformed input a null instead
+ * of a guess: anything on the device can fire this intent, so the payload is
+ * attacker-shaped by construction and the parse has to be total.
+ *
+ * Takes the already-extracted parameter rather than the `Uri`, for the reason
+ * [isExtensionCallback] takes two strings: `Uri` is abstract with a private
+ * constructor, so it can be neither built nor mocked in a plain JVM test, and
+ * the decision here is about one string.
+ */
+internal fun callbackRequestId(data: String?): String? {
+    if (data.isNullOrEmpty()) return null
+    return try {
+        JSONObject(data).optString("id").ifEmpty { null }
+    } catch (e: JSONException) {
+        null
+    }
+}
+
+/**
  * What binding to an already-running service should do about it.
  *
  * Extracted so the decision is a value rather than a shape in the source.
@@ -1741,8 +1841,49 @@ internal fun bindDecision(notice: String?, port: Int, ready: Boolean): BindDecis
 internal fun shouldActOnResume(ready: Boolean?, backgroundedAt: Long, serverPort: Int): Boolean =
     backgroundedAt != 0L && serverPort != 0 && ready == true
 
+/** What returning from the background should do to the page. */
+internal enum class ResumeAction {
+    /** Short absence. The WebSocket survives those. */
+    NOTHING,
+
+    /** Long enough that the connection may be dead. Ask, reload only if it is. */
+    PROBE_CONNECTION,
+
+    /** Long enough that stale state is near certain. Reload unconditionally. */
+    RELOAD,
+
+    /** Long enough to reload, but a sign-in is still able to come back. */
+    HOLD_FOR_SIGN_IN,
+}
+
 /**
- * Whether a sign-in callback arriving now is one this app went looking for.
+ * Whether the page may be reloaded on the way back from the background.
+ *
+ * [signInPending] outranks the reload, and that ordering is the point of this
+ * function existing. The two conditions are not independent: a sign-in that takes
+ * more than five minutes is a sign-in that went through a second factor or an
+ * organisation's consent screen, which is the ordinary case rather than the
+ * exotic one, so the threshold written for a stale WebSocket lines up almost
+ * exactly with the moment a callback is being delivered. The workbench holds the
+ * requests it is waiting on in memory, so the reload discards them and the
+ * sign-in that had just succeeded is lost with no error anywhere.
+ *
+ * Held rather than skipped: the caller puts its reading back, so the decision is
+ * made again on the next return from the background, and the hold cannot outlast
+ * the callback window it is waiting on.
+ *
+ * The probe below is not held. It only reloads when IndexedDB is already
+ * unusable, and a page in that state has nothing left to collect a callback with.
+ */
+internal fun resumeAction(bgMs: Long, signInPending: Boolean): ResumeAction = when {
+    bgMs > FORCE_RELOAD_THRESHOLD_MS && signInPending -> ResumeAction.HOLD_FOR_SIGN_IN
+    bgMs > FORCE_RELOAD_THRESHOLD_MS -> ResumeAction.RELOAD
+    bgMs > HEALTH_CHECK_THRESHOLD_MS -> ResumeAction.PROBE_CONNECTION
+    else -> ResumeAction.NOTHING
+}
+
+/**
+ * Whether the launch a callback belongs to is still inside its window.
  *
  * Shape is all `isExtensionCallback` can judge, and shape is what anything on
  * the device can produce: the VIEW filter is exported and BROWSABLE. The value
@@ -1752,14 +1893,18 @@ internal fun shouldActOnResume(ready: Boolean?, backgroundedAt: Long, serverPort
  * sign-in this app started, which is the only thing that separates a return from
  * an invention.
  *
- * Timing, not identity, and deliberately so: the legitimate sender is a browser,
- * so there is no caller identity here that could be checked. This narrows an
- * always-open door to the minutes after this app opened one itself.
+ * That match is made before this: the caller looks the callback's own request id
+ * up in [com.vscodroid.bridge.AuthTabWindow] and gets the reading of the launch
+ * that carried it, or nothing. This half answers only the remaining question,
+ * which is how long ago that was.
  *
- * `openedAt == 0` means no tab has been opened in this process. The lower bound
- * on the elapsed time is not redundant with it: the caller passes a monotonic
- * clock, and a negative reading would mean the two came from different boots,
- * which is not an elapsed time at all.
+ * Timing, not identity, for the rest of it: the legitimate sender is a browser,
+ * so there is no caller identity here that could be checked either.
+ *
+ * `openedAtMillis == 0` means no launch, which is what a caller with no reading
+ * to pass would produce. The lower bound on the elapsed time is not redundant
+ * with it: the caller passes a monotonic clock, and a negative reading would mean
+ * the two came from different boots, which is not an elapsed time at all.
  *
  * Takes its clock readings rather than reading them, for the reason
  * `isExtensionCallback` takes two strings -- `SystemClock` is not answerable in

@@ -43,68 +43,120 @@ private const val KEYGEN_TIMEOUT_SECONDS = 60L
 private const val DRAIN_JOIN_MILLIS = 1_000L
 
 /**
- * How long after this app opens an authentication tab a callback is still taken.
+ * How long after this app launches a sign-in its callback is still taken.
  *
  * Chosen against the sign-in it has to survive rather than against the attack.
  * A real one is a person reading a consent screen, fetching a password manager
- * and possibly a second factor, so a tight window would reject genuine returns —
+ * and possibly a second factor, so a tight window would reject genuine returns,
  * and a rejected sign-in is a bug report, while the window being ten minutes
  * instead of one still leaves the relay shut for the rest of the day.
  */
 internal const val AUTH_TAB_WINDOW_MILLIS = 10 * 60 * 1000L
 
 /**
- * When this app last handed a URL to a browser.
+ * How many sign-in requests are remembered at once.
  *
- * Any of them, not only a sign-in, and that is not a slip: nothing here can tell
- * an authorisation page from a documentation link, since both arrive through the
- * same bridge method on either of its two launch paths. Opening a link therefore
- * widens the window as much as starting a sign-in does. It still bounds an entry
- * point that had no bound at all, to the ten minutes after the user last left
- * for a browser rather than to every moment the app is running.
+ * A bound, not a policy. Entries are kept past their own window on purpose, so
+ * that a callback arriving late can be told apart from one nobody asked for and
+ * the user given a reason for the first; something therefore has to stop the
+ * record growing for the life of the process. Signing in is a deliberate act a
+ * person performs a handful of times in a session, so the entry older than this
+ * many is the one least likely to still be owed an explanation.
+ */
+private const val MAX_TRACKED_SIGN_INS = 32
+
+/**
+ * The workbench request ids carried by a URL this app is about to open.
  *
- * The `vscodroid://callback` relay had nothing to test but the shape of the URI,
- * and its VIEW filter is exported and BROWSABLE, so the value it writes into the
- * workbench's storage could be supplied at any moment by anything on the device.
- * The one fact that separates a real return from an invented one is whether this
- * app asked for it, and until now nobody was recording that.
+ * This is what separates a sign-in launch from a documentation link, and it is a
+ * fact about the URL rather than a guess about it. `callback.html` refuses to run
+ * without a `vscode-reqid` (`throw new Error('Missing id')`), and the id it
+ * relays on to `vscodroid://callback` is that same parameter read back out of its
+ * own address. So a callback can only exist for a request whose id was carried
+ * out of this app in the address it opened, as `redirect_uri`, inside `state`, or
+ * wherever else the provider echoes it back, and a URL carrying none can produce
+ * no callback at all.
+ *
+ * Matched under percent-encoding as well as plain, because the callback address
+ * usually travels as a parameter of the authorisation address and is therefore
+ * encoded at least once, sometimes twice. `vscode-reqid` itself survives any
+ * number of rounds untouched, since every character in it is unreserved; only the
+ * `=` moves, to `%3D`, then `%253D`.
+ *
+ * The cost of being wrong is asymmetric and worth stating. An id this misses is a
+ * sign-in that gets refused, and the caller now says so rather than hanging. An
+ * id it invents is not reachable: the value has to come out of a URL the
+ * workbench asked this app to open, which already requires the session token.
+ */
+private val AUTH_REQUEST_ID = Regex("""vscode-reqid(?:=|%(?:25)*3[Dd])(\d+)""")
+
+internal fun authRequestIdsIn(url: String): List<String> =
+    AUTH_REQUEST_ID.findAll(url).map { it.groupValues[1] }.distinct().toList()
+
+/**
+ * The sign-in requests this app launched a browser for, and when.
+ *
+ * Keyed by request id rather than being a single reading, and that is the whole
+ * of the narrowing. It used to be one timestamp written by *every*
+ * `openExternalUrl` call, so opening a documentation link widened the window in
+ * which an unsolicited `vscodroid://callback` would be answered exactly as much
+ * as starting a sign-in did. Now a launch arms only the ids it actually carries
+ * out of the app, and a callback is judged against its own launch: an id nobody
+ * launched is refused however recently a browser was opened.
+ *
+ * The `vscodroid://callback` relay has nothing else to test. Its VIEW filter is
+ * exported and BROWSABLE, so any installed app or any page the user taps can fire
+ * it, and the id it names is a counter from one rather than a secret. What an
+ * outside caller cannot supply is a sign-in this app started.
  *
  * Deliberately process-scoped and not persisted. The ids the workbench waits on
  * live in an in-memory Set that does not survive the page, so after a restart
- * there is no pending request a relayed value could satisfy — persisting this
+ * there is no pending request a relayed value could satisfy; persisting this
  * would only widen the window for callbacks that could not be delivered anyway.
  *
- * Time is read from the monotonic clock by callers, not from wall time, so that
- * changing the device clock mid-sign-in neither breaks a real return nor
- * reopens the window.
+ * Entries are not removed when a callback is accepted. Two reasons, and the
+ * second is not obvious: a late callback has to stay distinguishable from an
+ * invented one so the user can be told why the sign-in failed, and the forced
+ * reload on returning from the background asks this object whether a sign-in is
+ * still in flight, so consuming the entry on arrival would let that reload fire
+ * into the moment the workbench is collecting the value.
+ *
+ * Time is supplied by callers from the monotonic clock, never from wall time, so
+ * that changing the device clock mid-sign-in neither breaks a real return nor
+ * reopens the window. No arithmetic happens here; the window is applied by
+ * `authCallbackIsExpected`, which this object deliberately does not call.
  */
 object AuthTabWindow {
-    // Named apart from the accessor on purpose. `private var openedAt` beside
-    // `fun openedAt()` compiles and resolves to the field, but the reader has to
-    // work that out, and "does this recurse?" is not a question worth leaving in
-    // a security check.
-    @Volatile
-    private var lastOpenedAtMillis = 0L
 
-    fun opened(nowMillis: Long) {
-        lastOpenedAtMillis = nowMillis
+    private val launches = object : LinkedHashMap<String, Long>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>): Boolean =
+            size > MAX_TRACKED_SIGN_INS
     }
 
     /**
-     * Puts the window back where it was, for a launch that was armed and then
-     * threw.
+     * Records a browser launch against the request ids it carries.
      *
-     * Arming has to happen before the launch — see the caller — so a launch
-     * that never happened still widened the window, and until the launch could
-     * report failure nothing could tell. Ten minutes of an exported, BROWSABLE
-     * entry point accepting a `vscodroid://callback` from anything on the
-     * device, for a sign-in that was never started.
+     * @return the ids this call newly recorded, which is what [disarm] takes back
+     *   if the launch then throws. An id already recorded keeps its original
+     *   reading rather than being pushed forward: the earlier reading is the
+     *   conservative one, it closes the window sooner, and a launch that fails
+     *   must not be able to extend a request already in flight.
+     */
+    @Synchronized
+    fun arm(requestIds: Collection<String>, nowMillis: Long): List<String> {
+        val added = requestIds.filterNot { launches.containsKey(it) }
+        added.forEach { launches[it] = nowMillis }
+        return added
+    }
+
+    /**
+     * Takes back the ids a launch armed, for a launch that then threw.
      *
-     * Restores the previous reading rather than zeroing: an earlier launch may
-     * legitimately still be inside its own window, and this one failing is no
-     * reason to refuse that one's return.
+     * Arming has to happen before the launch (see the caller), so a launch that
+     * never happened had already opened the relay to the ids it named, and until
+     * the launch could report failure nothing could tell.
      *
-     * Named apart from [opened] so it does not read as a second launch site:
+     * Named apart from [arm] so it does not read as a second launch site:
      * `ExtensionCallbackTest` counts arming calls against browser launches to
      * catch a launch that forgets to arm, and a rollback spelled with the same
      * name would be counted as an arming. The two call names are deliberately
@@ -112,11 +164,18 @@ object AuthTabWindow {
      * counting, but a guard that only stays correct because a neighbour
      * filters prose is one bad refactor from a false count.
      */
-    fun disarm(previousMillis: Long) {
-        lastOpenedAtMillis = previousMillis
+    @Synchronized
+    fun disarm(requestIds: Collection<String>) {
+        requestIds.forEach { launches.remove(it) }
     }
 
-    fun openedAt(): Long = lastOpenedAtMillis
+    /** When this app launched a browser for [requestId], or null if it never did. */
+    @Synchronized
+    fun armedAt(requestId: String): Long? = launches[requestId]
+
+    /** Every launch reading held, for a caller asking whether any is still open. */
+    @Synchronized
+    fun armedReadings(): List<Long> = launches.values.toList()
 }
 
 class AndroidBridge(
@@ -182,11 +241,11 @@ class AndroidBridge(
     @JavascriptInterface
     fun openExternalUrl(url: String, authToken: String): Boolean {
         if (!security.validateToken(authToken)) return false
-        // Null until the auth window is armed, and the reading to put back if the
-        // launch that armed it then throws. Arming has to precede the launch, so
+        // Empty until the launch arms something, and then the ids to take back if
+        // the launch that armed them throws. Arming has to precede the launch, so
         // without this a launch nothing accepted still left the callback relay
-        // open for ten minutes with no sign-in in flight.
-        var armedFrom: Long? = null
+        // open to those ids for ten minutes with no sign-in in flight.
+        var armed: List<String> = emptyList()
         return try {
             val uri = Uri.parse(url)
             val isLocalhost = uri.host == "127.0.0.1" || uri.host == "localhost"
@@ -197,8 +256,12 @@ class AndroidBridge(
             // `vscodroid://callback`: a sign-in page on plain http, the shape this
             // method exists to serve on a LAN, that arms nothing hangs with the
             // callback refused and nothing said.
-            armedFrom = AuthTabWindow.openedAt()
-            AuthTabWindow.opened(SystemClock.elapsedRealtime())
+            //
+            // What is armed is the request ids this URL carries, not the fact that
+            // a browser opened. A documentation link carries none and so opens
+            // nothing: it used to widen the callback window by ten minutes exactly
+            // as a sign-in did.
+            armed = AuthTabWindow.arm(authRequestIdsIn(url), SystemClock.elapsedRealtime())
             // Use system browser for localhost URLs (dev server preview needs full browser),
             // Chrome Custom Tabs for https (keeps user in-app, handles OAuth redirects).
             if (uri.scheme == "https" && !isLocalhost) {
@@ -215,7 +278,7 @@ class AndroidBridge(
             }
             true
         } catch (e: Exception) {
-            armedFrom?.let { AuthTabWindow.disarm(it) }
+            AuthTabWindow.disarm(armed)
             Logger.e(tag, "Failed to open URL: $url", e)
             false
         }
