@@ -1159,6 +1159,12 @@ class FirstRunSetup(
      * generated state, so there is no user edit to preserve and no guard string
      * whose presence could certify a half-written file. `.bashrc` remains the
      * interactive shell's, and keeps its appenders.
+     *
+     * ⚠️ This file, and `toolchain-env.sh` which it sources, must print nothing.
+     * Every `$(...)` in the app now runs a shell that reads them first, so a line
+     * as harmless as `echo "toolchains ready"` would land inside the output of
+     * every command substitution rather than on anyone's screen. `.bashrc` is
+     * free to print, because only a terminal reads it.
      */
     fun createBashEnvFile() {
         val envFile = File(Environment.getBashEnvPath(context))
@@ -2286,6 +2292,10 @@ private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE b
 # task or an npm lifecycle script gets "command not found" for a command the
 # terminal runs fine. Interactive shells never read this file, so nothing here
 # is defined twice.
+#
+# Nothing in here, or in the toolchain-env.sh it sources, may print: this file
+# is read by the shell behind every $(...), so a stray echo ends up inside that
+# command's output instead of on a screen.
 """
 
 /**
