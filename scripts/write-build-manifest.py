@@ -128,9 +128,13 @@ def resolved_entries() -> list[tuple[str, str, str]]:
     exception until it was fixed; a manifest read from an older tree can still
     carry a line ahead of what that tree contains. One grep settles which state a
     checkout is in, and the anchor matters -- an earlier form of this note gave
-    `grep -n ': > "$PKG_MAP_FILE"'`, which misses the two scripts that truncate
-    through literal filenames and matches any comment quoting the pattern:
-        grep -nE '^[[:space:]]*: >' scripts/download-*.sh
+    `grep -n ': > "$PKG_MAP_FILE"'`, which missed the two scripts that truncate
+    through literal filenames, matched any comment quoting the pattern, and now
+    that the variable is gone matches nothing at all:
+        grep -nE '^[[:space:]]*: >' scripts/download-*.sh scripts/lib/*.sh
+    The second path carries the five Termux callers, which truncate their record
+    through the shared library rather than in the script itself; without it the
+    grep reports two writers out of seven and looks like an answer.
     """
     work = ROOT / "toolchains" / "termux-packages"
     # Cleared per call rather than appended to: collect() may be called more than

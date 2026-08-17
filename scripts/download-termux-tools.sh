@@ -13,8 +13,10 @@ ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
 JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
-TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
-PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
+# The index fetch, its signature check, package resolution and the digest check
+# on each .deb, shared with every other script that takes packages from Termux.
+# It also picks the mirror; TERMUX_MIRROR still overrides it.
+. "$SCRIPT_DIR/lib/termux-packages.sh"
 
 # Packages to download
 REQUIRED_PACKAGES=(
@@ -110,135 +112,16 @@ echo ""
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-# --- Step 1: Download and parse Packages index ---
-echo "Downloading Packages index..."
-if [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
-    curl -L --fail --show-error -o Packages "$PACKAGES_URL"
-    echo "  Downloaded: $(du -sh Packages | cut -f1)"
-else
-    echo "  Using cached Packages index (less than 1 hour old)"
-fi
+# --- Step 1: the package index, its signature, and what it resolves to ---
+termux_fetch_index
+termux_resolve_packages resolved-termux-tools.tsv "${REQUIRED_PACKAGES[@]}"
 
-# Checked on every run, not only after a download. A cached index is exactly as
-# unchecked as a fresh one, and every digest read below comes out of this file.
-bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" Packages
+# --- Step 2: Download .deb files, each checked against the signed index ---
+termux_download_packages "${REQUIRED_PACKAGES[@]}"
 
-# Parse index to find Filename for each required package.
-# Store results in a temp file (one line per pkg: "pkgname filename")
-echo ""
-echo "Resolving package URLs..."
-# Kept rather than discarded. These three fields are the exact record of what
-# the live index resolved to on this run; it was a mktemp deleted on exit, so
-# nothing afterwards could say which versions a release had actually shipped.
-# write-build-manifest.py reads it. Truncated per run, so a package that goes
-# away upstream leaves no stale line behind -- which reading the .deb directory
-# instead cannot promise, since that accumulates across builds.
-PKG_MAP_FILE="$WORK_DIR/resolved-termux-tools.tsv"
-: > "$PKG_MAP_FILE"
-
-for pkg in "${REQUIRED_PACKAGES[@]}"; do
-    # One pass, emitting when the stanza ends: the live index carries duplicate
-    # Package stanzas (gdk-pixbuf, neovim-nightly, ...), and two independent
-    # scans could pair stanza A's Filename with stanza B's SHA256.
-    pkg_line=$(awk -v pkg="$pkg" '
-        /^Package: / { if (fn != "" && current == pkg) exit; current = $2; fn = ""; sh = "" }
-        /^Filename: / && current == pkg { fn = $2 }
-        /^SHA256: / && current == pkg { sh = $2 }
-        END { if (fn != "") print fn, (sh == "" ? "-" : sh) }
-    ' Packages)
-    filename=${pkg_line% *}
-    sha256=${pkg_line##* }
-
-    if [ -z "$filename" ]; then
-        echo "  ERROR: Package '$pkg' not found in index"
-        exit 1
-    fi
-    echo "$pkg $filename ${sha256:--}" >> "$PKG_MAP_FILE"
-    echo "  $pkg -> $(basename "$filename")"
-done
-
-# Helper to look up filename for a package
-get_pkg_filename() {
-    awk -v pkg="$1" '$1 == pkg { print $2; exit }' "$PKG_MAP_FILE"
-}
-
-# Helper to look up the index's SHA256 for a package ("-" when absent)
-get_pkg_sha256() {
-    awk -v pkg="$1" '$1 == pkg { print $3; exit }' "$PKG_MAP_FILE"
-}
-
-# Everything fetched here executes on user devices (bash, git, ssh) or is
-# loaded into every process (the shared libraries), and it arrives over a
-# third-party mirror. A file that does not match the index's SHA256 -- cached
-# or fresh -- must not be used. The index this digest is read from is itself
-# checked against Termux's signature above, so the mirror does not get to pick
-# both.
-verify_pkg_sha256() {
-    local file="$1" expected="$2"
-    if [ "$expected" = "-" ] || [ -z "$expected" ]; then
-        # Fail closed: the index and the payload come from the same host, so a
-        # mirror that drops the SHA256 line could otherwise switch the check
-        # off silently. Every package in the real index carries one; its
-        # absence is an anomaly, not a pass.
-        echo "    ERROR: no SHA256 in index for $(basename "$file")" >&2
-        return 1
-    fi
-    local actual
-    actual=$( (sha256sum "$file" 2>/dev/null || shasum -a 256 "$file") | cut -d' ' -f1)
-    if [ "$actual" != "$expected" ]; then
-        echo "    ERROR: $(basename "$file") does not match the index" >&2
-        echo "      index : $expected" >&2
-        echo "      file  : $actual" >&2
-        rm -f "$file"
-        return 1
-    fi
-}
-
-# --- Step 2: Download .deb files ---
-echo ""
-echo "Downloading .deb packages..."
-mkdir -p debs
-for pkg in "${REQUIRED_PACKAGES[@]}"; do
-    filename="$(get_pkg_filename "$pkg")"
-    debname="$(basename "$filename")"
-    if [ -f "debs/$debname" ]; then
-        echo "  $debname (cached)"
-    else
-        curl -L --fail --show-error -o "debs/$debname" "$TERMUX_REPO/$filename"
-        echo "  $debname ($(du -sh "debs/$debname" | cut -f1))"
-    fi
-    verify_pkg_sha256 "debs/$debname" "$(get_pkg_sha256 "$pkg")"
-done
-
-# --- Step 3: Extract all .deb packages ---
-echo ""
-echo "Extracting packages..."
-rm -rf extracted
-mkdir -p extracted
-for pkg in "${REQUIRED_PACKAGES[@]}"; do
-    filename="$(get_pkg_filename "$pkg")"
-    debname="$(basename "$filename")"
-    pkg_extract="extracted/$pkg"
-    mkdir -p "$pkg_extract"
-    (
-        cd "$pkg_extract"
-        # .deb files are ar archives. Use bsdtar which handles them on macOS.
-        # Extract the data.tar.* member, then extract its contents.
-        bsdtar xf "../../debs/$debname" data.tar.xz data.tar.gz data.tar.zst 2>/dev/null || true
-        if [ -f data.tar.xz ]; then
-            tar xf data.tar.xz
-        elif [ -f data.tar.gz ]; then
-            tar xf data.tar.gz
-        elif [ -f data.tar.zst ]; then
-            zstd -d data.tar.zst -o data.tar && tar xf data.tar
-        else
-            echo "  ERROR: Could not extract data archive from $debname"
-            ls -la
-            exit 1
-        fi
-    )
-    echo "  $pkg extracted"
-done
+# --- Step 3: Extract ---
+rm -rf "$WORK_DIR/extracted"
+termux_extract_packages "${REQUIRED_PACKAGES[@]}"
 
 # --- Step 4: Place main executables in jniLibs ---
 echo ""
