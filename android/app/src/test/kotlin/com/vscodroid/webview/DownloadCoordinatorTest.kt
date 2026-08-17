@@ -389,6 +389,27 @@ class DownloadCoordinatorTest {
         assertEquals(listOf("chosen.txt"), asked)
     }
 
+    /**
+     * The page fills the name map and the platform empties it, so a page that
+     * names clicks the platform never turns into downloads fills it alone.
+     *
+     * Asserted from the outside, because what the bound protects is not a size
+     * but the absence of unbounded growth driven by page-controlled input. The
+     * newest name still works, which is what stops a bound from being satisfied
+     * by a map that forgets everything.
+     */
+    @Test
+    fun `names the page reports for downloads that never start do not accumulate`() {
+        repeat(64) { coordinator.onDownloadNamed("blob:$it", "file$it.txt") }
+
+        coordinator.onDownloadStart("blob:0", null)
+        coordinator.onDestinationChosen(null)
+        coordinator.onDownloadStart("blob:63", null)
+
+        assertEquals(listOf(FALLBACK_DOWNLOAD_NAME, "file63.txt"), asked,
+            "the oldest names are dropped while the newest one is still usable")
+    }
+
     /** Exactly once, in the other direction: a repeated completion has nobody left to answer. */
     @Test
     fun `a download that completes twice is reported once`() {
