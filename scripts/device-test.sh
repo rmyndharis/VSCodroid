@@ -1313,8 +1313,9 @@ bash_process_count() {
 # in Phase 2, so its Node process is there to be found -- if that is not visible
 # either, the reading is about `ps`, not about the terminal.
 APP_PROCS=$(app_process_lines)
-# Set only where a chord is actually injected, so that Test 34 below can tell
-# "the chord went nowhere" from "no chord was sent", which most runs are.
+# Set on every path Test 33 can leave by, so that Test 34 below reports the
+# reason itself rather than pointing at a line that may be a pass about process
+# counts. Empty is the one case Test 33 explains: it gave up before injecting.
 CHORD_VERDICT=""
 if [ -z "$APP_UID" ] || ! echo "$APP_PROCS" | grep -q "node"; then
     skip "terminal_opens" \
@@ -1323,6 +1324,7 @@ else
     BASH_BEFORE=$(bash_process_count)
     if [ "$BASH_BEFORE" -gt 0 ]; then
         pass "terminal_opens ($BASH_BEFORE bash process(es) running under $PKG)"
+        CHORD_VERDICT="not-needed"
     else
         FOCUS=$($ADB shell "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'" 2>/dev/null | tr -d '\r')
         if [ -z "$FOCUS" ]; then
@@ -1378,9 +1380,13 @@ case "$CHORD_VERDICT" in
         skip "hardware_key_chord_reaches_workbench" \
             "the chord was injected and nothing acted on it, which is what a lost keystroke and an unfocused workbench both look like. Type on a real keyboard instead (checklist KB-4)"
         ;;
+    not-needed)
+        skip "hardware_key_chord_reaches_workbench" \
+            "a terminal was already open, so Test 33 had nothing to inject and no chord was sent. Re-run with no terminal open, or type on a real keyboard (checklist KB-4)"
+        ;;
     *)
         skip "hardware_key_chord_reaches_workbench" \
-            "no chord was injected, so nothing was measured; the terminal_opens result above says why"
+            "the run stopped before a chord could be injected: this app's processes, the focused window or the input command itself could not be read. The terminal_opens skip above names which"
         ;;
 esac
 
