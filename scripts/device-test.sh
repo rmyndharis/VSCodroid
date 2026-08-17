@@ -57,12 +57,19 @@
 # Nothing here can drive the workbench: it lives in a WebView, and the editor,
 # the terminal's contents, the extension marketplace and the SAF picker are all
 # out of reach. Those are what docs/DEVICE_TEST_CHECKLIST.md is for. Where a
-# check cannot run, it reports SKIP and says why -- a phase that reports PASS
-# for something it did not run is worse than one that admits it.
+# check cannot run, it reports SKIP and says why. A phase that reports PASS for
+# something it did not run is worse than one that admits it, and a phase that
+# reports FAIL for something it could not read is worse still: it blames the
+# device for the workstation, and it teaches the reader to skim past red. So
+# where an instrument can simply be absent from this host, its silence is
+# reported as its own absence: curl, python3, `ps`, the dumpsys sections and
+# `input keycombination` each say whether they can see anything at all before
+# their answer is read as a verdict about the device.
 
-# The blank line above is what -h stops at: its `sed -n '2,/^$/'` had no empty
-# line to find and printed every commented line in the file, header and phase
-# notes alike.
+# The blank line above is where -h stops: it prints `sed -n '2,/^$/'`, so the
+# first empty line in the file bounds the help text. Keep the header one
+# unbroken comment block, or everything after the break silently stops being
+# printed by -h.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -111,6 +118,110 @@ derive_toolchain_release_urls() {
     # second one in this file would be free to drift from it.
     sed -n 's/.*downloadUrl = "\(https:[^"]*\)".*/\1/p' \
         "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt"
+}
+
+# ── Readers of files the app writes ────────────────────────────────
+# python3 is an instrument like adb or curl, and its absence is a fact about
+# this host, never evidence about the device. Both readers below consult this
+# flag instead of probing for themselves, so --self-check can drive the
+# python-less path on a machine that does have python3.
+if command -v python3 >/dev/null 2>&1; then
+    HAVE_PYTHON3=true
+else
+    HAVE_PYTHON3=false
+fi
+
+read_toolchain_names() {
+    # Reads toolchains.json on stdin and prints the installed names, space
+    # separated. Non-zero exit means "python3 read this file and could not parse
+    # it", which is the only condition that is evidence of damage. Without
+    # python3 the names come from grep and no parse verdict is offered at all:
+    # reporting the app's record as unreadable JSON because the host has no
+    # interpreter blames the device for the workstation. Same fallback shape as
+    # derive_npm_expected().
+    if $HAVE_PYTHON3; then
+        python3 -c "
+import json, sys
+try:
+    entries = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print(' '.join(e.get('name', '?') for e in entries))
+"
+    else
+        { grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' || true; } \
+            | sed 's/.*"\([^"]*\)"$/\1/' | tr '\n' ' ' | sed 's/ *$//'
+    fi
+}
+
+read_terminal_profile_path() {
+    # Reads settings.json on stdin and prints the bash profile's path. The file
+    # is JSONC once the workbench has rewritten it, so a plain parse is tried
+    # first and a regex is the fallback rather than the method. The regex has a
+    # shell twin here, outside the python program, because inside it it could
+    # not help with the one thing that silences both: no python3 on the host.
+    # Both take the first "bash" object in the file, so the two readings of the
+    # same bytes cannot disagree about which profile they are reporting.
+    if $HAVE_PYTHON3; then
+        python3 -c "
+import json, re, sys
+raw = sys.stdin.read()
+try:
+    profiles = json.loads(raw).get('terminal.integrated.profiles.linux', {})
+    print(profiles.get('bash', {}).get('path', ''))
+except Exception:
+    m = re.search(r'\"bash\"\s*:\s*\{[^}]*?\"path\"\s*:\s*\"([^\"]+)\"', raw, re.S)
+    print(m.group(1) if m else '')
+"
+    else
+        tr -d '\n' \
+            | { grep -o '"bash"[[:space:]]*:[[:space:]]*{[^}]*}' || true; } \
+            | head -1 \
+            | sed -n 's|.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*|\1|p'
+    fi
+}
+
+extract_wrapper_targets() {
+    # Reads toolchain-env.sh on stdin and prints the file each wrapper hands to
+    # the loader, one per line, deduplicated. PREFIX is filesDir/usr
+    # (Environment.kt), so $PREFIX/.. is filesDir.
+    #
+    # Anchored on the whole generated wrapper line rather than on the
+    # "$PREFIX/../" substring alone. ToolchainManager.regenerateEnvFileLocked()
+    # writes that substring into three shapes and only the first names a file:
+    # a wrapper function; an `export` whose value may hold several entries
+    # (RUBYLIB does); and the `export PATH=` list it appends whenever a manifest
+    # declares pathDirs. Matching the substring took all three, and the two that
+    # are lists come back carrying a `:` and a second unexpanded $PREFIX. That is
+    # not a path, so it can never be on disk, so the phase reported the payload
+    # missing on an install where every wrapper target was present.
+    sed -n 's|^[^ "]*() { [^"]* "\$PREFIX/\.\./\([^"]*\)" "\$@"; }$|\1|p' | sort -u
+}
+
+derive_wrapper_line_samples() {
+    # The wrapper lines ToolchainManager.regenerateEnvFileLocked() writes,
+    # rendered from the generator's own Kotlin string literals with sample
+    # values substituted for the interpolations. extract_wrapper_targets is
+    # asserted against these rather than against a copy of the format kept
+    # here, so a change to how the generator spells a wrapper turns up as a
+    # failed --self-check instead of as a phase that skips forever.
+    awk '
+/\$PREFIX\/\.\.\// && (/lines\.add\(/ || /sb\.appendLine\(/) {
+    line = $0
+    sub(/^[^(]*\("/, "", line)
+    sub(/"\)[ \t]*$/, "", line)
+    gsub(/\\"/, "\"", line)
+    gsub(/\\\$/, "@@DOLLAR@@", line)
+    n = 0
+    while (match(line, /\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*/)) {
+        n++
+        repl = (n == 1) ? "sample" : (n == 2) ? "/system/bin/loader" : "usr/lib/sample/bin/sample"
+        line = substr(line, 1, RSTART - 1) repl substr(line, RSTART + RLENGTH)
+    }
+    gsub(/@@DOLLAR@@/, "$", line)
+    print line
+}
+' "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManager.kt"
 }
 
 # Auto-detect adb if not in PATH
@@ -295,6 +406,70 @@ if $SELF_CHECK; then
     else
         fail "toolchain release URLs" \
             "no downloadUrl readable in ToolchainRegistry.kt; the toolchain phase would check nothing"
+    fi
+
+    # The three readings the device phases make of files the app writes. Each is
+    # asserted for the same reason as the URLs above: a reading that stops
+    # matching does not announce itself, it turns into a permanent SKIP or into
+    # a verdict about the wrong thing.
+    #
+    # The sample below is one wrapper line per shape the generator emits,
+    # rendered from ToolchainManager.kt itself, followed by the two shapes that
+    # carry the same "$PREFIX/../" substring and must be ignored: a multi-valued
+    # export (ToolchainManager.kt writes RUBYLIB this way) and the PATH list it
+    # appends whenever a manifest declares pathDirs. Only the first kind names a
+    # file, and a reader that returns any of the others reports a healthy
+    # install as a payload that is gone.
+    WRAP_SAMPLE=$(derive_wrapper_line_samples)
+    WRAP_RENDERED=$(printf '%s\n' "$WRAP_SAMPLE" | grep -c . || true)
+    WRAP_INPUT=$(printf '%s\nexport RUBYLIB="$PREFIX/../usr/lib/ruby/3.4.0:$PREFIX/../usr/lib/ruby/3.4.0/aarch64-linux-android"\nexport PATH="$PREFIX/../usr/bin:$PATH"\n' "$WRAP_SAMPLE")
+    WRAP_GOT=$(printf '%s\n' "$WRAP_INPUT" | extract_wrapper_targets | tr '\n' ' ' | sed 's/ *$//')
+    if [ "$WRAP_RENDERED" -eq 0 ]; then
+        fail "wrapper target reading" \
+            "no wrapper line readable in ToolchainManager.kt; the toolchain payload check would have nothing to compare against"
+    elif [ "$WRAP_GOT" = "usr/lib/sample/bin/sample" ]; then
+        pass "wrapper target reading ($WRAP_RENDERED generated shapes, exports and PATH ignored)"
+    else
+        fail "wrapper target reading" \
+            "reading ToolchainManager.kt's own wrapper lines yielded '$WRAP_GOT', not the single file they name"
+    fi
+
+    # Read twice on purpose: as this host will run it, and again on a host with
+    # no python3. The second run is not just a flag flip. It also shadows python3
+    # with a function that fails the way a missing command does, so a reader that
+    # reaches for the interpreter anyway comes back empty and this goes red.
+    # Without that, the flag alone would be satisfied by a reader that ignores it
+    # entirely, and the fallback would be asserted without ever being run.
+    TC_SAMPLE='[{"name":"go","displayName":"Go"},{"name":"ruby","displayName":"Ruby"}]'
+    TC_NAMES_PY=$(printf '%s' "$TC_SAMPLE" | read_toolchain_names)
+    TC_NAMES_NOPY=$(
+        HAVE_PYTHON3=false
+        python3() { return 127; }
+        printf '%s' "$TC_SAMPLE" | read_toolchain_names
+    )
+    if [ "$TC_NAMES_PY" = "go ruby" ] && [ "$TC_NAMES_NOPY" = "go ruby" ]; then
+        pass "toolchains.json reading (with python3, and with none)"
+    else
+        fail "toolchains.json reading" \
+            "expected 'go ruby' from both readings, got '$TC_NAMES_PY' with python3 and '$TC_NAMES_NOPY' without"
+    fi
+
+    ST_SAMPLE='{"terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.profiles.linux": {
+        "bash": { "path": "/data/user/0/p/files/usr/bin/bash", "args": [], "icon": "terminal-bash" }
+    }}'
+    ST_WANT="/data/user/0/p/files/usr/bin/bash"
+    ST_PATH_PY=$(printf '%s' "$ST_SAMPLE" | read_terminal_profile_path)
+    ST_PATH_NOPY=$(
+        HAVE_PYTHON3=false
+        python3() { return 127; }
+        printf '%s' "$ST_SAMPLE" | read_terminal_profile_path
+    )
+    if [ "$ST_PATH_PY" = "$ST_WANT" ] && [ "$ST_PATH_NOPY" = "$ST_WANT" ]; then
+        pass "settings.json profile reading (with python3, and with none)"
+    else
+        fail "settings.json profile reading" \
+            "expected '$ST_WANT' from both readings, got '$ST_PATH_PY' with python3 and '$ST_PATH_NOPY' without"
     fi
 
     printf "\n  ${GREEN}%d passed${RESET}, ${RED}%d failed${RESET}, ${YELLOW}%d skipped${RESET}\n\n" \
@@ -927,14 +1102,7 @@ TC_STATE=$($ADB shell run-as "$PKG" cat files/home/.vscodroid/toolchains.json 2>
 TC_NAMES=""
 TC_STATE_OK=false
 if [ -n "$TC_STATE" ]; then
-    TC_NAMES=$(printf '%s' "$TC_STATE" | python3 -c "
-import json, sys
-try:
-    entries = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-print(' '.join(e.get('name', '?') for e in entries))
-" 2>/dev/null)
+    TC_NAMES=$(printf '%s' "$TC_STATE" | read_toolchain_names 2>/dev/null)
     if [ $? -eq 0 ]; then
         TC_STATE_OK=true
     fi
@@ -953,6 +1121,10 @@ elif ! $TC_STATE_OK; then
     # it cannot parse makes it keep the last good toolchain-env.sh rather than
     # delete it, because the file on disk is the only working record of how to
     # run what is still installed.
+    #
+    # Only reachable when python3 was here and rejected the file. Without it
+    # read_toolchain_names offers no parse verdict, so a host with no
+    # interpreter cannot land here and blame the device for it.
     fail "toolchain_record" "toolchains.json is present but is not readable JSON"
     skip "toolchain_env_file" "the record is unreadable"
     skip "toolchain_env_sourced" "the record is unreadable"
@@ -988,9 +1160,11 @@ else
     # Every wrapper hands a file under filesDir to the system loader. A wrapper
     # whose file is gone is a command that reports a loader error instead of
     # running, which is what a half-removed or partly-copied install looks like.
-    # PREFIX is filesDir/usr (Environment.kt), so $PREFIX/.. is filesDir.
-    TC_TARGETS=$(printf '%s\n' "$TC_ENV" \
-        | sed -n 's|.*"\$PREFIX/\.\./\([^"]*\)".*|\1|p' | sort -u)
+    # extract_wrapper_targets reads only the wrapper lines, and --self-check
+    # asserts that reading against the generator's own spelling, so this can
+    # neither judge an `export` value as a missing file nor skip in silence when
+    # the generated format moves.
+    TC_TARGETS=$(printf '%s\n' "$TC_ENV" | extract_wrapper_targets)
     TC_TARGET_TOTAL=$(printf '%s\n' "$TC_TARGETS" | grep -c . || true)
     if [ "$TC_TARGET_TOTAL" -eq 0 ]; then
         skip "toolchain_payload" "toolchain-env.sh defines no wrappers to check"
@@ -1035,22 +1209,22 @@ printf "\n${BOLD}Phase 7: Terminal Through The App${RESET}\n"
 TERM_PROFILE_PATH=""
 SETTINGS_JSON=$($ADB shell run-as "$PKG" cat files/home/.vscodroid/data/Machine/settings.json 2>/dev/null | tr -d '\r')
 if [ -n "$SETTINGS_JSON" ]; then
-    # JSONC once the workbench has rewritten it, so a plain parse is tried first
-    # and a regex is the fallback rather than the method.
-    TERM_PROFILE_PATH=$(printf '%s' "$SETTINGS_JSON" | python3 -c "
-import json, re, sys
-raw = sys.stdin.read()
-try:
-    profiles = json.loads(raw).get('terminal.integrated.profiles.linux', {})
-    print(profiles.get('bash', {}).get('path', ''))
-except Exception:
-    m = re.search(r'\"bash\"\s*:\s*\{[^}]*?\"path\"\s*:\s*\"([^\"]+)\"', raw, re.S)
-    print(m.group(1) if m else '')
-" 2>/dev/null)
+    TERM_PROFILE_PATH=$(printf '%s' "$SETTINGS_JSON" | read_terminal_profile_path 2>/dev/null)
 fi
 
 # Test 30: the workbench is pointed at a shell that exists.
-if [ -z "$TERM_PROFILE_PATH" ]; then
+#
+# Three ways to have no path, and they are not the same fact. The file being
+# absent is about the device. The file being there with no bash profile is about
+# the app. An empty answer from the shell fallback on a host with no python3 is
+# about the host, and the one thing it must not do is name the app's settings.
+if [ -z "$SETTINGS_JSON" ]; then
+    fail "terminal_profile" \
+        "no Machine/settings.json on this device; the workbench has no terminal profile to open"
+elif [ -z "$TERM_PROFILE_PATH" ] && ! $HAVE_PYTHON3; then
+    skip "terminal_profile" \
+        "no python3 on this host and the fallback read of settings.json matched nothing; an empty answer here is about this machine"
+elif [ -z "$TERM_PROFILE_PATH" ]; then
     fail "terminal_profile" \
         "no terminal.integrated.profiles.linux.bash.path in settings.json; the terminal has no shell to start"
 else
