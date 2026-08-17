@@ -2,6 +2,7 @@ package com.vscodroid.util
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
@@ -18,6 +19,13 @@ import java.io.IOException
  * build stays green, the APK still installs, and the licences dialog quietly
  * comes up half empty on a device. There is no compiler relationship between the
  * three, which is what this test supplies.
+ *
+ * It supplies it only because the build script is declared an input to the test
+ * task. These tests read `build.gradle.kts` through the file system, which Gradle
+ * cannot see: before that declaration existed, editing the build script left the
+ * task UP-TO-DATE and every mutation to it passed. The `inputs.file` line in
+ * `tasks.withType<Test>` is what makes the assertions below reachable, and
+ * deleting it makes them silent rather than wrong.
  *
  * The stake is not cosmetic. The GPL requires its written offer of source to
  * accompany the binary, and this screen is the only place it does.
@@ -52,6 +60,35 @@ class NoticesTest {
             assertTrue(source.isFile, "bundleNotices copies $path, which does not exist")
             assertTrue(source.length() > 0, "$path is empty")
         }
+    }
+
+    @Test
+    fun `what the copy writes is packaged, and something makes the copy run`() {
+        val script = buildScript.readText()
+        val body = script.substringAfter("tasks.register<Copy>(\"bundleNotices\")", "")
+            .substringBefore("\n}")
+        val destination = Regex("""into\(layout\.buildDirectory\.dir\("([^"]+)"\)\)""")
+            .find(body)?.groupValues?.get(1)
+        assertNotNull(destination, "bundleNotices names no destination directory")
+
+        // Copying the documents is not packaging them. The destination has to be
+        // an assets source directory or they land in build/ and stop there,
+        // leaving the dialog with nothing but its two missing-document markers.
+        assertTrue(
+            Regex("assets\\.srcDir\\([^)]*" + Regex.escape(destination!!) + "[^)]*\\)")
+                .containsMatchIn(script),
+            "bundleNotices writes to $destination, which no assets.srcDir(...) " +
+                "registers. The documents would be copied and never packaged."
+        )
+
+        // And the copy has to be made to run. Nothing infers it from the source
+        // directory: on a clean build the directory is simply empty, and every
+        // gate stays green while the APK ships no notices at all.
+        assertTrue(
+            Regex("dependsOn\\([^)]*bundleNotices").containsMatchIn(script),
+            "Nothing depends on bundleNotices, so a clean build packages an empty " +
+                "notices directory."
+        )
     }
 
     @Test

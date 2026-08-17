@@ -251,6 +251,22 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+
+    // This build script is a genuine input to the unit tests, because one of
+    // them reads it: NoticesTest parses the `bundleNotices` task to check that
+    // what the build copies into the APK is what `Notices.BUNDLED` opens. Gradle
+    // cannot see a `File("build.gradle.kts").readText()` from inside a test, so
+    // without this declaration the task stays UP-TO-DATE whenever the build
+    // script is the only thing that changed.
+    //
+    // Which is exactly the edit the test exists to catch. Deleting a `from(...)`
+    // line and re-running left `> Task :app:testDebugUnitTest UP-TO-DATE`, exit
+    // 0, and the results XML untouched from the previous run; only
+    // `--rerun-tasks` turned it red. A guard that cannot run on the change it
+    // guards against is not a guard.
+    inputs.file(layout.projectDirectory.file("build.gradle.kts"))
+        .withPropertyName("appBuildScript")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // The server tree in assets/ has to carry this checkout's patches, and nothing
