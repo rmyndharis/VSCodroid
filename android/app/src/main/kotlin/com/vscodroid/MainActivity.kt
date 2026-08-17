@@ -1541,6 +1541,10 @@ class MainActivity : AppCompatActivity() {
      * to write the URL names nothing at all and the download would fail every
      * time. Revocation is therefore deferred, and only for URLs a download is
      * actually using, so nothing else in the workbench is kept alive by this.
+     * The Blob itself is kept alongside, because the bytes have to be read off
+     * the object: the page is served under `connect-src 'self' ws: wss: https:`,
+     * so a request for a `blob:` URL is refused before it starts, and that is
+     * every download of a file the editor could hold in memory.
      *
      * The second is the name. A blob has none, and the platform's download hook
      * is given the URL rather than the anchor, so `App.kt` would arrive as a
@@ -1559,9 +1563,30 @@ class MainActivity : AppCompatActivity() {
                 if (window.__vscodroidDownload) return;
 
                 var HOLD_MS = 120000;
-                var held = new Set();
+                var MAX_TRACKED = 8;
+
+                // url -> the object behind it. The page is asked for the bytes
+                // of a download by URL, and the bytes have to come off this
+                // object rather than off the URL: see readerFor below.
+                var made = new Map();
+                var held = new Map();
 
                 function token() { return (window.__vscodroid || {}).authToken; }
+
+                var create = URL.createObjectURL.bind(URL);
+                URL.createObjectURL = function(source) {
+                    var url = create(source);
+                    try {
+                        made.set(url, source);
+                        // Bounded, because the workbench mints object URLs for
+                        // all sorts of things and remembering every one of them
+                        // would pin its bytes for the life of the page. A
+                        // download claims its own entry on the click, which is
+                        // the task straight after this one.
+                        if (made.size > MAX_TRACKED) made.delete(made.keys().next().value);
+                    } catch (e) { /* the URL matters more than the record of it */ }
+                    return url;
+                };
 
                 var revoke = URL.revokeObjectURL.bind(URL);
                 URL.revokeObjectURL = function(url) {
@@ -1574,8 +1599,28 @@ class MainActivity : AppCompatActivity() {
                 // the page.
                 function hold(url) {
                     if (held.has(url)) return;
-                    held.add(url);
+                    held.set(url, made.get(url));
+                    made.delete(url);
                     setTimeout(function() { held.delete(url); revoke(url); }, HOLD_MS);
+                }
+
+                // The bytes of url, as a reader.
+                //
+                // A blob is read off the object and never off its URL. The
+                // workbench page is served under
+                // connect-src 'self' ws: wss: https:, which does not list
+                // blob:, so fetching a blob: URL is refused before it leaves
+                // the page: "Connecting to 'blob:...' violates the following
+                // Content Security Policy directive". Reading a Blob is not a
+                // request and no directive governs it. Anything else is a real
+                // URL the policy already allows.
+                function readerFor(url) {
+                    var blob = held.get(url);
+                    if (blob && blob.stream) return Promise.resolve(blob.stream().getReader());
+                    return fetch(url).then(function(response) {
+                        if (!response.ok) throw new Error('status ' + response.status);
+                        return response.body.getReader();
+                    });
                 }
 
                 var click = HTMLAnchorElement.prototype.click;
@@ -1610,9 +1655,13 @@ class MainActivity : AppCompatActivity() {
                         var t = token();
                         var bridge = window.AndroidBridge;
                         if (!t || !bridge) return false;
-                        fetch(url).then(function(response) {
-                            if (!response.ok) throw new Error('status ' + response.status);
-                            var reader = response.body.getReader();
+                        // Started on a promise so that a reader this page
+                        // cannot open at all is reported like any other failed
+                        // read, rather than thrown back at the caller that has
+                        // already been told the read began.
+                        Promise.resolve().then(function() {
+                            return readerFor(url);
+                        }).then(function(reader) {
                             return (function pump() {
                                 return reader.read().then(function(step) {
                                     if (step.done) {

@@ -24,6 +24,18 @@
  * notice losing: remove the deferral and this file goes red, while the Kotlin
  * suite, lint and the build all stay green and every download fails on device.
  *
+ * The second such behaviour is where the bytes are read from. A live `blob:`
+ * URL is still not fetchable here: the server sends the workbench page
+ *
+ *     connect-src 'self' ws: wss: https:;
+ *
+ * (`out/server-main.js`, the `Content-Security-Policy` response header), and
+ * `blob:` is not in that list, so Blink refuses the request with "Connecting to
+ * 'blob:...' violates the following Content Security Policy directive" before
+ * it leaves the page. Measured under that exact header. So the bytes come off
+ * the Blob object, which is not a request and which no directive governs, and
+ * the script keeps the object beside the URL to have one to read.
+ *
  * Extraction is deliberately strict. If the raw string moves or changes shape
  * this fails saying so, rather than quietly checking an empty string, which is
  * the failure mode that makes a scan of nothing look like a pass.
@@ -102,11 +114,17 @@ function newPage(options) {
         named: [],            // {token, url, fileName} reported to the bridge
         chunks: [],           // base64 pieces handed to the bridge
         finished: [],         // {id, error} reported to the bridge
+        fetched: [],          // urls a network request was attempted for
         cancelled: false,     // whether the reader was cancelled
+        minted: 0,            // how many object URLs the page asked for
         timers: [],
     };
 
     const URLStub = {
+        createObjectURL() {
+            state.minted += 1;
+            return `blob:http://127.0.0.1:5000/object-${state.minted}`;
+        },
         revokeObjectURL(url) { state.revoked.push(url); },
     };
 
@@ -131,31 +149,38 @@ function newPage(options) {
         },
     };
 
-    // A reader over fixed pieces, which is the shape fetch gives for both a
-    // blob and an http response.
+    // A reader over fixed pieces, which is the shape both a Blob's stream and
+    // an http response body give.
+    function readerOver(pieces) {
+        let next = 0;
+        return {
+            read() {
+                if (next >= pieces.length) return Promise.resolve({ done: true });
+                const value = pieces[next];
+                next += 1;
+                return Promise.resolve({ done: false, value });
+            },
+            cancel() { state.cancelled = true; },
+        };
+    }
+
     function responseFor(url) {
+        state.fetched.push(url);
+        // The page is served under connect-src 'self' ws: wss: https:, so Blink
+        // refuses a request for a blob: URL before it starts. Modelled here
+        // rather than left out: a harness that answers one is a harness that
+        // passes over the failure the whole feature ran into.
+        if (url.lastIndexOf('blob:', 0) === 0) {
+            return Promise.reject(new TypeError('Failed to fetch'));
+        }
         if (opts.fetchRejects) return Promise.reject(new Error('network is down'));
         if (opts.status && opts.status !== 200) {
             return Promise.resolve({ ok: false, status: opts.status });
         }
-        let next = 0;
-        const pieces = opts.pieces || [];
         return Promise.resolve({
             ok: true,
             status: 200,
-            body: {
-                getReader() {
-                    return {
-                        read() {
-                            if (next >= pieces.length) return Promise.resolve({ done: true });
-                            const value = pieces[next];
-                            next += 1;
-                            return Promise.resolve({ done: false, value });
-                        },
-                        cancel() { state.cancelled = true; },
-                    };
-                },
-            },
+            body: { getReader: () => readerOver(opts.pieces || []) },
         });
     }
 
@@ -208,6 +233,14 @@ function newPage(options) {
     state.revoke = (url) => sandbox.URL.revokeObjectURL(url);
     state.send = (url, id) => sandbox.window.__vscodroidDownload.send(url, id);
     state.runScriptAgain = () => vm.runInContext(SCRIPT, context);
+    // What the editor does: wrap the file's bytes in a Blob and mint a URL for
+    // it. Through the page's own URL.createObjectURL, so the script sees it.
+    state.objectUrl = (pieces) => sandbox.URL.createObjectURL({
+        stream: () => readerOverStream(pieces),
+    });
+    function readerOverStream(pieces) {
+        return { getReader: () => readerOver(pieces) };
+    }
     return state;
 }
 
@@ -217,6 +250,9 @@ function settle() {
 }
 
 const BLOB = 'blob:http://127.0.0.1:5000/6f1d2c30-9a4b-4c1e-8f77-2b0a5d3e91cc';
+
+/** A download of something the editor did not hold in memory, served over http. */
+const REMOTE = 'http://127.0.0.1:5000/vscode-remote-resource?path=/w/App.kt';
 
 // ---- the cases ------------------------------------------------------------
 
@@ -316,15 +352,28 @@ test('a bridge that throws does not swallow the click', () => {
         'the original click has to run whatever the recording did');
 });
 
-/** The whole transfer, asserted on the bytes rather than on the call count. */
-test('send streams the exact bytes and reports a clean finish', async () => {
-    const page = newPage({
-        pieces: [Uint8Array.from([0, 1, 2, 250]), Uint8Array.from([255, 65, 66])],
-    });
+/**
+ * The one this feature turns on, and the one the shipped policy decides.
+ *
+ * Every file the editor can hold in memory is downloaded through a `blob:`
+ * URL, and the page may not fetch one: `connect-src 'self' ws: wss: https:`
+ * does not list `blob:`, so Blink blocks the request and the user gets a
+ * destination picker followed by a failure. The bytes therefore have to come
+ * off the Blob, and this asserts both halves, because reading the right bytes
+ * over a request the policy refuses is exactly what looked correct.
+ */
+test('a blob download is read off the blob, never over a request', async () => {
+    const page = newPage();
+    const url = page.objectUrl([Uint8Array.from([0, 1, 2, 250]), Uint8Array.from([255, 65, 66])]);
 
-    assert.strictEqual(page.send(BLOB, 'dl-1'), true, 'a started read reports that it started');
+    page.anchor(url, { download: 'App.kt' }).click();
+    page.revoke(url);
+    assert.strictEqual(page.send(url, 'dl-1'), true, 'a started read reports that it started');
     await settle();
 
+    assert.deepStrictEqual(page.fetched, [],
+        'fetching a blob: URL is refused by the page policy, so a download that fetches one ' +
+        'fails for every file the editor holds in memory');
     const bytes = Buffer.concat(page.chunks.map((c) => Buffer.from(c.base64, 'base64')));
     assert.deepStrictEqual(
         Array.from(bytes), [0, 1, 2, 250, 255, 65, 66],
@@ -334,13 +383,35 @@ test('send streams the exact bytes and reports a clean finish', async () => {
         'an empty error is how success is spelled across the bridge');
 });
 
+/**
+ * The record of which Blob a URL names is bounded, like every other page-fed
+ * store here. It pins the bytes, so a page that mints object URLs nobody
+ * downloads must not be able to hold the file it did download hostage.
+ */
+test('object URLs nobody downloads do not pin their bytes', async () => {
+    const page = newPage();
+    const first = page.objectUrl([Uint8Array.from([7])]);
+    for (let i = 0; i < 8; i += 1) page.objectUrl([Uint8Array.from([i])]);
+
+    page.anchor(first, { download: 'App.kt' }).click();
+    page.send(first, 'dl-1');
+    await settle();
+
+    assert.deepStrictEqual(page.fetched, [first],
+        'a blob the page stopped tracking has to fall through to a request rather than ' +
+        'be answered with the bytes of another file');
+    assert.ok(page.finished[0].error, 'and the refusal that follows is reported');
+});
+
 /** Every piece is decodable on its own, because Android decodes them one at a time. */
 test('each piece decodes on its own', async () => {
-    const page = newPage({
-        pieces: [Uint8Array.from([1, 2]), Uint8Array.from([3]), Uint8Array.from([4, 5, 6])],
-    });
+    const page = newPage();
+    const url = page.objectUrl(
+        [Uint8Array.from([1, 2]), Uint8Array.from([3]), Uint8Array.from([4, 5, 6])],
+    );
+    page.anchor(url, { download: 'App.kt' }).click();
 
-    page.send(BLOB, 'dl-1');
+    page.send(url, 'dl-1');
     await settle();
 
     assert.strictEqual(page.chunks.length, 3, 'one bridge call per piece read');
@@ -349,11 +420,28 @@ test('each piece decodes on its own', async () => {
         'a piece that only decodes when joined to its neighbours would corrupt the file');
 });
 
+/**
+ * A download the editor did not hold in memory is an ordinary URL the policy
+ * allows, and it still has to work: it is the path everything above falls back
+ * to.
+ */
+test('a download the page has no blob for is fetched', async () => {
+    const page = newPage({ pieces: [Uint8Array.from([65, 66])] });
+
+    page.send(REMOTE, 'dl-1');
+    await settle();
+
+    assert.deepStrictEqual(page.fetched, [REMOTE]);
+    const bytes = Buffer.concat(page.chunks.map((c) => Buffer.from(c.base64, 'base64')));
+    assert.deepStrictEqual(Array.from(bytes), [65, 66]);
+    assert.deepStrictEqual(page.finished, [{ token: 'session-token', id: 'dl-1', error: '' }]);
+});
+
 /** A read that fails has to say so, or the download waits on a file forever. */
 test('a failed read is reported as an error', async () => {
     const page = newPage({ fetchRejects: true });
 
-    page.send(BLOB, 'dl-1');
+    page.send(REMOTE, 'dl-1');
     await settle();
 
     assert.strictEqual(page.finished.length, 1, 'a failure still ends the download');
@@ -365,7 +453,7 @@ test('a failed read is reported as an error', async () => {
 test('a non-ok response is reported as an error', async () => {
     const page = newPage({ status: 404 });
 
-    page.send(BLOB, 'dl-1');
+    page.send(REMOTE, 'dl-1');
     await settle();
 
     assert.strictEqual(page.finished.length, 1);
@@ -379,12 +467,13 @@ test('a non-ok response is reported as an error', async () => {
  * gone; finishing again would replace a real reason with a generic one.
  */
 test('a refused piece stops the read without reporting a second reason', async () => {
-    const page = newPage({
-        pieces: [Uint8Array.from([1]), Uint8Array.from([2]), Uint8Array.from([3])],
-        refuseChunkAt: 1,
-    });
+    const page = newPage({ refuseChunkAt: 1 });
+    const url = page.objectUrl(
+        [Uint8Array.from([1]), Uint8Array.from([2]), Uint8Array.from([3])],
+    );
+    page.anchor(url, { download: 'App.kt' }).click();
 
-    page.send(BLOB, 'dl-1');
+    page.send(url, 'dl-1');
     await settle();
 
     assert.strictEqual(page.chunks.length, 2, 'reading stops at the piece that was refused');
