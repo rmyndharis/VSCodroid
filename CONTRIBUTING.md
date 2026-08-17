@@ -350,6 +350,16 @@ shipped, `--instrumented` runs the app:
 The last one is new because it was missing: the instrumented suite had a command
 in the block below and no moment at which anyone owed it a run.
 
+`--instrumented` writes what it did to
+`android/app/build/reports/device-run.txt`: the time, the commit, the device
+fingerprint, Gradle's exit status and the counts read out of the XML that run
+wrote. **Before tagging a release, put that record in the release notes or the
+pull request that prepares the tag.** No check enforces it, and none can while
+no runner this project has measured is able to start the suite. What the record
+changes is that "was it run, on what, and when" has an answer that is a file
+rather than a recollection, and that a suite which never started says so instead
+of reporting zero failures.
+
 ```bash
 bash scripts/device-test.sh                 # build, install, and test
 bash scripts/device-test.sh --skip-build    # test an APK you already built

@@ -561,9 +561,65 @@ if $INSTRUMENTED; then
     printf "\n  ${GREEN}%d passed${RESET} — handing off to Gradle%s\n\n" \
         "$PASS" "${DEVICE:+ (ANDROID_SERIAL=$DEVICE)}"
     cd "$ROOT_DIR/android" || exit 1
-    # exec so the suite's own exit status is this script's, with no wrapper
-    # between a failing test and whoever is reading.
-    exec ./gradlew connectedDebugAndroidTest
+
+    # This used to `exec`, so that the suite's exit status was this script's with
+    # no wrapper between a failing test and whoever is reading. That property is
+    # kept below by exiting with the captured status; what `exec` also did was
+    # make it impossible to write anything afterwards, and a run that leaves no
+    # trace is a run nobody can be asked to have done.
+    #
+    # Nothing runs this suite automatically and no runner measured here can, so
+    # the only thing between a release and an unrun suite is a person
+    # remembering. A record does not make anyone run it. It makes the answer to
+    # "was it run, on what, and when" a file rather than a recollection.
+    ./gradlew connectedDebugAndroidTest
+    GRADLE_STATUS=$?
+
+    RECORD="$ROOT_DIR/android/app/build/reports/device-run.txt"
+    mkdir -p "$(dirname "$RECORD")"
+    # Counts come from the XML the run just wrote, not from Gradle's log. A
+    # stale report from an earlier run says "0 failures" and is
+    # indistinguishable from success, which is the trap the mutation harness
+    # documents for the same reason.
+    RESULT_DIR="$ROOT_DIR/android/app/build/outputs/androidTest-results/connected"
+    COUNTS=$(python3 - "$RESULT_DIR" <<'PY' 2>/dev/null || echo "counts unavailable"
+import glob, os, re, sys
+t = f = e = s = n = 0
+for p in glob.glob(os.path.join(sys.argv[1], "**", "*.xml"), recursive=True):
+    with open(p, encoding="utf-8", errors="replace") as fh:
+        head = fh.read(800)
+    m = re.search(r'tests="(\d+)".*?failures="(\d+)".*?errors="(\d+)"', head, re.S)
+    if m:
+        n += 1
+        t += int(m.group(1)); f += int(m.group(2)); e += int(m.group(3))
+    m = re.search(r'skipped="(\d+)"', head)
+    if m:
+        s += int(m.group(1))
+# Zeros are the answer both to "nothing failed" and to "nothing ran", and only
+# one of those is good news. Say which, rather than printing a clean-looking
+# line for a suite that never started.
+if n == 0:
+    print("no result files: the suite wrote nothing, so it did not run")
+elif t == 0:
+    print(f"{n} result file(s) but 0 tests: the suite ran nothing")
+else:
+    print(f"tests={t} failures={f} errors={e} skipped={s}")
+PY
+)
+    FINGERPRINT=$($ADB ${DEVICE:+-s "$DEVICE"} shell getprop ro.build.fingerprint 2>/dev/null | tr -d '\r')
+    {
+        printf 'instrumented suite\n'
+        printf '  when        %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf '  commit      %s\n' "$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null)"
+        printf '  device      %s\n' "${FINGERPRINT:-unknown}"
+        printf '  gradle exit %s\n' "$GRADLE_STATUS"
+        printf '  %s\n' "$COUNTS"
+    } > "$RECORD"
+
+    printf '\n'
+    cat "$RECORD"
+    printf '\n  recorded in %s\n\n' "${RECORD#"$ROOT_DIR"/}"
+    exit "$GRADLE_STATUS"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
