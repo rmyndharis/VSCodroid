@@ -193,6 +193,9 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      - name: Check the lint baseline has not grown
+        run: python3 scripts/check-lint-baseline.py
+
       - name: Check the welcome screen states nothing that goes stale
         run: python3 scripts/check-welcome-claims.py
 

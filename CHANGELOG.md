@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The build no longer treats a check it could not run as a check that passed. A `gh` that was absent or rate-limited previously skipped the tarball digest comparison silently.
 - Lint fails the build on new issues. A baseline was configured alongside a setting that discarded the result, so the two cancelled out and hid 22 errors.
 - The lint baseline keeps only the 17 issues it still suppresses. Of the 42 removed, 39 could match one developer's checkout alone; one could have re-hidden an unused resource.
+- The build now fails when that baseline grows or names one developer's checkout, so regenerating it cannot quietly silence warnings lint is still reporting.
 - The three release-only gates (code shrinker, resource shrinker, lintVital) now run weekly and when their inputs change, instead of first running on the day a release is tagged.
 - The release checks the bundle against store size limits before publishing, rather than failing at upload with the download release already public.
 - Every bundled executable and shared library is checked before packaging for architecture, resolvable dependencies and 16 KB page alignment. Previously only Node and the native addons were.

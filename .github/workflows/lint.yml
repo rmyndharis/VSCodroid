@@ -112,6 +112,14 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # Here rather than after `Run lint` below, because it reads the committed
+      # baseline and not the report. The count lint prints is a property of the
+      # machine: the same regenerated file filtered all 91 of its entries in the
+      # checkout that wrote it and 46 anywhere else, so a report-based check
+      # would read green exactly where the accident happens.
+      - name: Check the lint baseline has not grown
+        run: python3 scripts/check-lint-baseline.py
+
       # The committed half: the bundled extension list and the notices table are
       # two hand-kept copies of one fact, and each edit only ever touched one.
       # The other half of this script reads the extracted trees for the licence

@@ -192,6 +192,13 @@ android {
         // stopped matching, under LintBaselineFixed, and those are the ones to
         // delete by hand.
         //
+        // scripts/check-lint-baseline.py holds the committed file to both
+        // halves of that: the count stated above, and every location staying
+        // relative to this module. Nothing else can. Regenerating it here
+        // produced 91 entries, 45 of them rooted at `$HOME`, which match
+        // nothing when read from any other checkout; `./gradlew lint` still
+        // exited 0, because LintBaselineFixed is Information severity.
+        //
         // abortOnError was false alongside it, and the two cancel out. The
         // baseline narrows lint to new issues; the flag then discarded those
         // too, so `./gradlew lint` ran in CI, produced a report, uploaded it,
