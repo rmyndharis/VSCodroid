@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The build fails when a self-check sits in the repository unrun. All JavaScript self-checks must run on both the pull-request and tag paths, and every `check-*.py` must be invoked by something.
 - The build no longer treats a check it could not run as a check that passed. A `gh` that was absent or rate-limited previously skipped the tarball digest comparison silently.
 - Lint fails the build on new issues. A baseline was configured alongside a setting that discarded the result, so the two cancelled out and hid 22 errors.
-- The lint baseline keeps only the 17 issues it still suppresses. The 42 stale entries would have hidden those problems again on recurrence, one of them at error severity.
+- The lint baseline keeps only the 17 issues it still suppresses. Of the 42 removed, 39 could match one developer's checkout alone; one could have re-hidden an unused resource.
 - The three release-only gates (code shrinker, resource shrinker, lintVital) now run weekly and when their inputs change, instead of first running on the day a release is tagged.
 - The release checks the bundle against store size limits before publishing, rather than failing at upload with the download release already public.
 - Every bundled executable and shared library is checked before packaging for architecture, resolvable dependencies and 16 KB page alignment. Previously only Node and the native addons were.
