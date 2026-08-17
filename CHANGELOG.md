@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attribution is now checked against every binary in the asset tree, not just the top two directories: 195 more files, including the WebAssembly, Windows and macOS objects an ELF-only scan walks past.
 - A binary that moves can no longer be recorded under the wrong licence in silence. An attribution entry that stops matching is reported even when the move took its own directory with it.
 - The check that the licences screen's documents are packaged now runs when the build script changes, which is the edit that can drop them.
+- `NOTICE.md` names each bundled extension by id, and the build fails when that list and the shipped set disagree, or an extension's licence is not the one recorded.
 - The About dialog's Source Code link moved onto the new licenses screen, beside the offer of source it answers.
 
 - Builds now verify the packaged server tree carries every patch this repository applies, not just the downloaded copy. The two trees had already diverged on a working checkout.

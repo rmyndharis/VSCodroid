@@ -352,6 +352,13 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     echo "  Extracted: $(du -sh "$DEST_DIR" | cut -f1) -> $DIR_NAME"
 done
 
+# Every tree is on disk at this point, which is the only place the licence half
+# of this can run: the extracted directories are gitignored, so on a pull request
+# there is nothing to read. lint.yml runs the same script for the half that reads
+# committed sources.
+echo ""
+python3 "$SCRIPT_DIR/check-bundled-extensions.py"
+
 # Summary
 echo ""
 echo "=== Bundled extensions ready ==="

@@ -139,13 +139,17 @@ GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest.
 
 Downloaded from Open VSX at build time (`scripts/download-extensions.sh`):
 
-| Extension | License |
-|-----------|---------|
-| Material Icon Theme | MIT |
-| Prettier | MIT |
-| Python (ms-python) | MIT |
-| ESLint | MIT |
-| Tailwind CSS IntelliSense | MIT |
+| Extension | ID | License |
+|-----------|----|---------|
+| Material Icon Theme | PKief.material-icon-theme | MIT |
+| Prettier | esbenp.prettier-vscode | MIT |
+| Python | ms-python.python | MIT |
+| ESLint | dbaeumer.vscode-eslint | MIT |
+| Tailwind CSS IntelliSense | bradlc.vscode-tailwindcss | MIT |
+
+The ID column is what `scripts/check-bundled-extensions.py` matches this table
+against the download script's list on, so a bundled extension cannot lose its
+row here and a row cannot outlive the extension it describes.
 
 VSCodroid's own bundled extensions (`vscodroid.*`) are covered by this repository's MIT `LICENSE`.
 

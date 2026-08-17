@@ -112,6 +112,14 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # The committed half: the bundled extension list and the notices table are
+      # two hand-kept copies of one fact, and each edit only ever touched one.
+      # The other half of this script reads the extracted trees for the licence
+      # they declare, and runs from download-extensions.sh, because those trees
+      # are gitignored and no job here builds them.
+      - name: Check the bundled extensions match the notices
+        run: python3 scripts/check-bundled-extensions.py
+
       # `git apply --stat` parses a patch without needing the tree it applies to,
       # so the one thing that cannot be checked on a pull request -- whether the
       # patches still apply -- is separated here from the thing that can: whether
