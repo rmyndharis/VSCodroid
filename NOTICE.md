@@ -13,6 +13,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | Node.js | MIT | Termux build of `nodejs-lts`, https://github.com/nodejs/node |
 | npm | Artistic License 2.0 | https://github.com/npm/cli |
 | Python | PSF License | Termux build, https://www.python.org |
+| pip | MIT | Shipped in Python's `site-packages`; its own `LICENSE.txt` and `AUTHORS.txt` travel with it in `pip-*.dist-info/licenses/` |
 | Git | GPL v2 | Termux build, https://git-scm.com |
 | Bash | GPL v3 | Termux build, https://www.gnu.org/software/bash |
 | ripgrep | MIT / Unlicense (dual) | Bundled by the Code - OSS build (`@vscode/ripgrep-universal`), https://github.com/BurntSushi/ripgrep |

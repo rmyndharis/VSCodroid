@@ -311,6 +311,21 @@ licence that asks for the notice to travel with the copy.
 - **License**: Apache License 2.0 (OpenSSL 3.x)
 - **Used by**: Node.js, Python, Git, OpenSSH
 
+Git is GPL-2.0 and reaches OpenSSL through libcurl, and the two licenses are
+read as incompatible when a work combines them. The position taken here, stated
+so that it is a recorded decision rather than an oversight:
+
+- Nothing in this APK links Git against OpenSSL into one binary. They are
+  separate executables shipped side by side, each loading its own dependencies
+  at runtime, which is the same arrangement every Linux distribution ships and
+  the one Termux packages these builds as.
+- GPLv2's system-library exception is written for a system's own components and
+  is not squarely on point for a library an application bundles itself, so it is
+  not being relied on as the whole answer.
+- If a copyright holder disagreed, the remedy is to build Git against a
+  different TLS backend rather than to remove it. That is a build-time
+  substitution in `scripts/download-termux-tools.sh`, not a redesign.
+
 ---
 
 ## Complete Bundled Native Library Inventory
