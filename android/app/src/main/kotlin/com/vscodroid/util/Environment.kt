@@ -84,8 +84,10 @@ object Environment {
             // Measured against bash 3.2.57, and it is the shape of the rule
             // rather than the version that matters: `bash -c`, `bash script.sh`
             // and `bash -lc` all source this file; an interactive shell does
-            // not, so nothing is defined twice. What it does NOT reach is
-            // written out at [FirstRunSetup.createBashEnvFile].
+            // not. `bash -lc` also reads .bashrc, through .bash_profile, so the
+            // two files overlap there and everything in this one has to be safe
+            // to run twice. What it does NOT reach is written out at
+            // [FirstRunSetup.createBashEnvFile].
             "BASH_ENV" to getBashEnvPath(context),
             "TERM" to term,
             "TERMINFO" to "$filesDir/usr/share/terminfo",

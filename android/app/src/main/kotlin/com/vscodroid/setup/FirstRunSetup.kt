@@ -1139,8 +1139,19 @@ class FirstRunSetup(
      * that is being relied on. `bash -c 'type -t npm'`, `bash script.sh` and
      * `bash -lc` all report the function once BASH_ENV names this file; an
      * interactive shell reports nothing, because it reads `.bashrc` and never
-     * this. So the two files do not overlap in practice and nothing is defined
-     * twice.
+     * this.
+     *
+     * The two files DO overlap, and a login shell is where. `bash -lc` is
+     * non-interactive, so it reads this file, and it is also a login shell, so it
+     * reads `.bash_profile`, which [createBashProfile] writes as an unguarded
+     * `. "$HOME/.bashrc"`. Measured: `bash -lc` runs both, `bash -c` runs only
+     * this one. So under `-lc` the wrappers are defined twice,
+     * `toolchain-env.sh` is sourced twice and every installed toolchain lands on
+     * PATH twice, and `.bashrc`'s closing `cd` moves the shell out of the
+     * directory it was started in. Redefining a function and re-prepending a PATH
+     * entry are both harmless, which is why the overlap is left alone rather than
+     * guarded. Anything added to this file that is NOT safe to run twice has to
+     * bring its own guard.
      *
      * WHAT THIS DOES NOT FIX, because the gap is narrower than "commands work
      * now" and the rest needs a different mechanism:
@@ -1163,8 +1174,22 @@ class FirstRunSetup(
      * ⚠️ This file, and `toolchain-env.sh` which it sources, must print nothing.
      * Every `$(...)` in the app now runs a shell that reads them first, so a line
      * as harmless as `echo "toolchains ready"` would land inside the output of
-     * every command substitution rather than on anyone's screen. `.bashrc` is
-     * free to print, because only a terminal reads it.
+     * every command substitution rather than on anyone's screen. `.bashrc` is not
+     * the exception it looks like: `bash -lc` reaches it through `.bash_profile`,
+     * and bash's rshd/sshd branch reads it INSTEAD of this file when SSH_CLIENT
+     * or SSH2_CLIENT is set, or stdin is a socket, in a top-level shell. All
+     * three conditions measured on bash 3.2.57, the third included: the branch is
+     * skipped as soon as an inherited SHLVL says a shell is already nested. That
+     * third one is no help here, because [Environment.buildProcessEnvironment]
+     * exports no SHLVL and every shell the server starts is therefore top-level.
+     * What keeps the branch out of reach on device is the first two: nothing in
+     * this app sets either variable (there is no sshd here, only the ssh client),
+     * and the two ways a shell gets started both rule the socket out, node-pty
+     * giving the terminal a real pty and a task's shell a pipe. If a third way
+     * ever appears, this file is the one that stops being read. `.bashrc`'s
+     * prompt block is silent only because PS1 and PROMPT_COMMAND produce nothing
+     * when nobody is at a prompt; a bare `echo` beside them would carry into
+     * those same substitutions.
      */
     fun createBashEnvFile() {
         val envFile = File(Environment.getBashEnvPath(context))
@@ -2290,8 +2315,9 @@ private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE b
 # SELinux will not execute a file under this app's data directory. Functions
 # live in .bashrc, which only an INTERACTIVE bash reads, so without this file a
 # task or an npm lifecycle script gets "command not found" for a command the
-# terminal runs fine. Interactive shells never read this file, so nothing here
-# is defined twice.
+# terminal runs fine. An interactive shell never reads this file, but a login
+# shell such as `bash -lc` reads both, because .bash_profile sources .bashrc, so
+# everything here has to be safe to run twice.
 #
 # Nothing in here, or in the toolchain-env.sh it sources, may print: this file
 # is read by the shell behind every $(...), so a stray echo ends up inside that

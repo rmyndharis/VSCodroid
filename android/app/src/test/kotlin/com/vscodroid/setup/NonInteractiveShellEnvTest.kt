@@ -41,7 +41,9 @@ import java.util.concurrent.TimeUnit
  * The bash test at the end is the only one that asks bash rather than asking the
  * string we wrote. It runs against the host's bash, not the device's, so what it
  * establishes is the RULE -- non-interactive sources BASH_ENV, interactive does
- * not -- rather than anything about the bundled build.
+ * not -- rather than anything about the bundled build. That rule has one escape
+ * hatch, and [runBash] closes it: bash reads `~/.bashrc` INSTEAD of `$BASH_ENV`
+ * when it believes a remote shell daemon started it.
  */
 class NonInteractiveShellEnvTest {
 
@@ -198,7 +200,26 @@ class NonInteractiveShellEnvTest {
             .directory(cwd)
             .redirectErrorStream(true)
         builder.environment().apply {
+            // BASH_ENV is not a switch the child may inherit: each case below
+            // sets it or leaves it unset, and the control is worth nothing if
+            // the host already exported one.
             remove("BASH_ENV")
+            // SSH_CLIENT and SSH2_CLIENT are removed because either one turns
+            // BASH_ENV off entirely. A non-interactive bash that finds one
+            // concludes a remote shell daemon started it and sources ~/.bashrc
+            // INSTEAD of $BASH_ENV, and under this test's HOME there is no
+            // .bashrc, so every wrapper goes missing and the failure talks about
+            // wrappers and working directories with the cause nowhere in it.
+            //
+            // Measured on bash 3.2.57, including the condition that keeps it off
+            // most machines: that branch is taken only by a TOP-LEVEL shell, so
+            // an inherited SHLVL of 1 or more skips it. A `./gradlew` run from a
+            // terminal always has one; a JVM some CI agent forked need not, and
+            // which of those this is should not decide whether the test passes.
+            // The same branch is taken when stdin is a socket, and ProcessBuilder
+            // hands the child a pipe, so that half needs nothing done to it.
+            remove("SSH_CLIENT")
+            remove("SSH2_CLIENT")
             if (bashEnv != null) put("BASH_ENV", bashEnv)
             put("HOME", File(filesDir, "home").apply { mkdirs() }.path)
         }
