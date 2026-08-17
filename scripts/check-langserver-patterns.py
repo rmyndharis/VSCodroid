@@ -53,6 +53,14 @@ def patterns():
     it looked for. A traceback exits non-zero too, but it tells whoever hits it
     that this script broke rather than that the list moved, which sends them to
     the wrong file.
+
+    Each line is cut at its first `//` before any quoted string is taken from
+    it. The list is heavily commented, and those comments quote the names of
+    patterns that were tried and removed for matching nothing. Reading them as
+    entries turned this script into the thing it exists to prevent: a server
+    could be reported covered by a 'pattern' that lives only in prose, while the
+    monitor classified the same process 'unknown'. No pattern contains `//`, so
+    the cut can only ever remove commentary.
     """
     src = MONITOR.read_text()
     start = src.find("const LANG_SERVER_PATTERNS")
@@ -61,7 +69,18 @@ def patterns():
     end = src.find("];", start)
     if end < 0:
         return []
-    return re.findall(r"'([^']+)'", src[start:end])
+    code = "\n".join(line.split("//", 1)[0] for line in src[start:end].splitlines())
+    found = re.findall(r"'([^']*)'", code)
+    # A pattern is compared against one basename, so whitespace in one means the
+    # cut above stopped working and prose is being read as code again. An empty
+    # one is worse than wrong: the monitor's substring arm accepts '' inside
+    # every name, so one would classify every process a language server. Refuse
+    # the whole list rather than the offending entry, because a partial list
+    # silently narrows what this script checks, which is the failure it is here
+    # to catch.
+    if any(not p or re.search(r"\s", p) for p in found):
+        return []
+    return found
 
 
 def matches(name, pattern):

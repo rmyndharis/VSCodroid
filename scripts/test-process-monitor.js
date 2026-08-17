@@ -44,6 +44,10 @@ function writeProc(root, pid, argv, { uid = UID, ppid = 1 } = {}) {
 }
 
 const NODE = '/data/data/com.vscodroid/lib/arm64/libnode.so';
+// The interpreter FirstRunSetup writes into settings.json as
+// python.defaultInterpreterPath, which is what ms-python launches its server
+// with. Not every language server is a Node one, and the two rules differ there.
+const PY = '/data/user/0/com.vscodroid/files/usr/bin/python3';
 const REH = '/data/user/0/com.vscodroid/files/server/vscode-reh';
 // Marketplace and bundled-by-us extensions are extracted here, which is a
 // different tree from the editor's own extensions under REH.
@@ -244,6 +248,33 @@ function main() {
         [1015, ['/data/user/0/com.vscodroid/files/usr/bin/gopls', '-mode=stdio'], 'langserver'],
         [1016, [NODE, `${REH}/extensions/node_modules/typescript/lib/tsserver.js`,
             '--useInferredProjectPerProjectRoot'], 'langserver'],
+        // The three servers whose program name carries a bare pattern on the
+        // front rather than being one. They are here because the bare-word rule
+        // above cannot reach them and nothing else would say so: a server that
+        // stops being classified keeps running, keeps its slot against the
+        // 32-process budget, and reads exactly like no server running.
+        //
+        // The first two ship in this APK. The ESLint extension's client forks
+        // server/out/eslintServer.js, and ms-python runs
+        // python_files/run-jedi-language-server.py through the interpreter --
+        // that one on every stock install, because settings.json is written with
+        // python.languageServer set to Jedi.
+        [1017, [NODE, `${EXT}/dbaeumer.vscode-eslint-3.0.34/server/out/eslintServer.js`,
+            '--node-ipc', '--clientProcessId=1'], 'langserver'],
+        [1018, [PY, `${EXT}/ms-python.python-2026.4.0/python_files/run-jedi-language-server.py`],
+            'langserver'],
+        // Not bundled, and the reason the entry for it carries hyphens: pyright
+        // arrives with an extension the user installs.
+        [1019, [NODE, '/data/user/0/com.vscodroid/files/home/projects/node_modules/pyright/dist/pyright-langserver.js',
+            '--stdio'], 'langserver'],
+        // The other direction for two of those entries, so that neither is
+        // satisfied by a rule that matches everything: a user's own script whose
+        // name merely contains the server's, one of them under the very
+        // interpreter that runs the real one.
+        [1020, [PY, '/data/user/0/com.vscodroid/files/home/projects/tools/jedi-scraper.py'],
+            'unknown'],
+        [1021, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/eslintServer.config.js'],
+            'unknown'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);

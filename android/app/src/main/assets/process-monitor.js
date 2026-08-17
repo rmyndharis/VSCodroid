@@ -37,11 +37,32 @@ const PRESSURE_FILENAME = 'vscodroid-memory-pressure';
 // .cjs extension), while an entry carrying a separator is distinctive enough to
 // be found anywhere in the name. So 'gopls' matches gopls and gopls.js and
 // nothing else, while 'rust-analyzer' still matches rust-analyzer-wrapper.
+//
+// The extension list the bare-word arm allows is Node's, so a bare word can only
+// ever name a Node entry point. A server that launches as anything else, a .py
+// file or a versioned binary, needs an entry carrying a separator so that it
+// takes the substring arm instead. That is why run-jedi-language-server.py has
+// an entry of its own below rather than being left to the bare word inside it.
 const LANG_SERVER_PATTERNS = [
     'tsserver', 'typescript-language-server',
-    'pylsp', 'pyright', 'python-language-server', 'jedi',
+    'pylsp', 'python-language-server',
+    // Both of these launch as a name with the bare pattern on the front, so
+    // neither is reachable from 'pyright' or 'jedi' alone. ms-python runs
+    // python_files/run-jedi-language-server.py through the interpreter, and it
+    // is the default Python server this app writes into settings.json, so it is
+    // the one most likely to be holding a process slot on a stock install;
+    // pyright ships dist/pyright-langserver.js. Hyphens put both on the
+    // substring arm, which is what a .py entry point requires.
+    'pyright', 'pyright-langserver',
+    'jedi', 'jedi-language-server',
     'gopls', 'rust-analyzer', 'clangd',
-    'eslint', 'vscode-eslint',
+    // 'eslintServer' for the server the bundled ESLint extension forks, which
+    // its client names as server/out/eslintServer.js. A bare 'eslint' reaches
+    // the eslint CLI and nothing else now that a bare word has to be the whole
+    // basename, and 'vscode-eslint' reaches nothing at all: that string only
+    // ever appeared in the extension's directory name, which stopped being
+    // compared when classification moved to argument basenames.
+    'eslint', 'eslintServer', 'vscode-eslint',
     // The three bundled with VS Code, named as they actually launch. They were
     // 'css-languageserver', 'html-languageserver' and 'json-languageserver',
     // which match nothing: the processes are cssServerMain.js, htmlServerMain.js
