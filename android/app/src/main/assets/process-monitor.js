@@ -59,26 +59,47 @@ const LANG_SERVER_PATTERNS = [
     // 'eslintServer' for the server the bundled ESLint extension forks, which
     // its client names as server/out/eslintServer.js. A bare 'eslint' reaches
     // the eslint CLI and nothing else now that a bare word has to be the whole
-    // basename, and 'vscode-eslint' reaches nothing at all: that string only
+    // basename.
+    //
+    // 'vscode-eslint' was here and is gone. It reached nothing: that string only
     // ever appeared in the extension's directory name, which stopped being
-    // compared when classification moved to argument basenames.
-    'eslint', 'eslintServer', 'vscode-eslint',
-    // The three bundled with VS Code, named as they actually launch. They were
+    // compared when classification moved to argument basenames. Left in place it
+    // was worse than inert, because a hyphen puts it on the substring arm, where
+    // the only names it can still reach are a user's own: `node
+    // vscode-eslint-shim.js` was classified langserver, tracked, and eligible
+    // for the idle kill.
+    'eslint', 'eslintServer',
+    // The four bundled with the editor, named as they actually launch. They were
     // 'css-languageserver', 'html-languageserver' and 'json-languageserver',
-    // which match nothing: the processes are cssServerMain.js, htmlServerMain.js
+    // which match nothing: the files are cssServerMain.js, htmlServerMain.js
     // and jsonServerMain.js. So the servers most likely to be running were the
     // ones the monitor could not see, and the idle-kill never reclaimed them
     // while they counted against the phantom-process budget.
     //
     // Renaming them was not enough on its own, and the second half took another
     // release to find: classify() lower-cases the command line, so a pattern
-    // carrying a capital could never match it and these three stayed invisible
-    // under their correct names too. Matching is case-insensitive on both sides
-    // now, which is why they are still spelled the way the files are.
-    // scripts/check-langserver-patterns.py fails the build if these stop matching
-    // what ships; scripts/test-process-monitor.js fails it if the matching
-    // itself regresses.
-    'cssServerMain.js', 'htmlServerMain.js', 'jsonServerMain.js',
+    // carrying a capital could never match it and these stayed invisible under
+    // their correct names too. Matching is case-insensitive on both sides now,
+    // which is why they are still spelled the way the files are.
+    //
+    // No extension, and that is the third half. Each client passes an
+    // extensionless module path to `fork` -- cssClientMain.js builds
+    // `./server/.../node/cssServerMain` and the markdown client builds
+    // `./dist/serverWorkerMain` -- and Node puts that path in argv[1] verbatim.
+    // Measured: `fork("/tmp/x/child")` gives the child argv[1] "/tmp/x/child",
+    // so the basename classify() compares is "cssservermain", with nothing after
+    // it. A pattern spelled with .js carries a dot, which takes it to the
+    // substring arm, and "cssservermain".includes("cssservermain.js") is false.
+    // As bare words they take the extension arm instead, which accepts the name
+    // with no extension and with .js, so both spellings are covered whichever
+    // way a future client launches them.
+    //
+    // scripts/test-process-monitor.js is what fails the build if this regresses.
+    // check-langserver-patterns.py compares against the file name on disk, so it
+    // certified all three as covered for as long as they were wrong; it now
+    // requires the extensionless spelling too, which is the one that reaches
+    // argv.
+    'cssServerMain', 'htmlServerMain', 'jsonServerMain', 'serverWorkerMain',
     // 'tailwindcss' until the matching moved from the whole command line to the
     // basename of each argument. That string only ever appeared in the extension's
     // *directory* -- bradlc.vscode-tailwindcss-0.16.0 -- so the change quietly

@@ -304,6 +304,37 @@ function main() {
             'unknown'],
         [1021, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/eslintServer.config.js'],
             'unknown'],
+        // The editor's own servers as they actually launch, which is the spelling
+        // that was missing. Every one of these clients passes an extensionless
+        // module path to `fork`, and Node puts it in argv[1] verbatim, so the
+        // basename carries no `.js`. The fixtures above at 1002 and 1003 named
+        // the file on disk instead, which is why they passed for years while the
+        // real processes were classified 'unknown'. Both spellings are covered
+        // now, since a client is free to change which it passes.
+        [1022, [NODE, `${REH}/extensions/css-language-features/server/dist/node/cssServerMain`,
+            '--node-ipc'], 'langserver'],
+        [1023, [NODE, `${REH}/extensions/html-language-features/server/dist/node/htmlServerMain`,
+            '--node-ipc'], 'langserver'],
+        [1024, [NODE, `${REH}/extensions/json-language-features/server/dist/node/jsonServerMain`,
+            '--node-ipc'], 'langserver'],
+        // Markdown's, which no pattern reached at all before and which the gate
+        // could not even see: it globbed *ServerMain.js and this is
+        // serverWorkerMain.js. Its client builds `./dist/serverWorkerMain` and
+        // forks it over IPC, so it is a real process holding a slot.
+        [1025, [NODE, `${REH}/extensions/markdown-language-features/dist/serverWorkerMain`,
+            '--node-ipc'], 'langserver'],
+        // And the other direction, so none of the four is satisfied by a rule
+        // that matches too much. A bare word has to be the whole basename, so a
+        // user's own file merely starting with one of these names stays theirs.
+        [1026, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/cssServerMain.helper.js'],
+            'unknown'],
+        [1027, [NODE, '/data/user/0/com.vscodroid/files/home/projects/serverWorkerMain-shim.js'],
+            'unknown'],
+        // 'vscode-eslint' used to be a pattern, and a hyphen put it on the
+        // substring arm where the only names it could still reach were the
+        // user's. It is gone, and this is what its absence has to keep true.
+        [1028, [NODE, '/data/user/0/com.vscodroid/files/home/projects/vscode-eslint-shim.js'],
+            'unknown'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
