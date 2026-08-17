@@ -170,21 +170,27 @@ android {
         // what arrived after it was taken.
         //
         // An entry naming a file above this module carries whatever path lint
-        // recorded, and that depends on where the checkout sat. Written from
-        // under the home directory it goes in through lint's `$HOME` path
-        // variable and then matches only the checkout that produced it. Written
-        // from outside the home directory the same entry reads
-        // `../gradle/libs.versions.toml` and matches wherever the module is.
-        // Both forms were checked on two checkouts of this repository and
-        // against one CI report: the 39 entries removed for that file were of
-        // the first form and matched in neither the second checkout nor on the
-        // runner, while a regenerated `../` entry matched in both checkouts. So
-        // read which form an entry has before deleting it. Only the first is
-        // confined to one checkout, and only there do the warnings it had been
-        // hiding come back. Regenerating the baseline is not the answer, since
-        // lint writes such an entry straight back; lint already names the
-        // entries that stopped matching, under LintBaselineFixed, and those are
-        // the ones to delete by hand.
+        // recorded, and that depends on where the checkout sat. Regenerated
+        // from under the home directory, the location goes in through lint's
+        // `$HOME` variable, which lint expands when it reads the baseline back,
+        // so the entry matches only where that expansion lands on this module's
+        // own file. Regenerated from outside the home directory, the same
+        // location reads `../gradle/libs.versions.toml`, which resolves against
+        // the module and travels with it.
+        //
+        // Measured on two checkouts, one below the home directory and one
+        // outside it, plus the report from a CI run: one regenerated `../`
+        // file, the same bytes in both places, filtered all 92 of its entries
+        // in each, while the 39 entries removed here expanded to a third
+        // checkout and filtered nothing in either run, as on the runner, where
+        // they sit among the 42 it could not match. Pointing that expansion at
+        // the checkout under test brought six of them back. So read which form
+        // an entry has before deleting it. Only the `$HOME` form is confined to
+        // one checkout, and only there do the warnings it had been hiding come
+        // back. Regenerating the baseline is not the answer, since lint writes
+        // such an entry straight back; lint already names the entries that
+        // stopped matching, under LintBaselineFixed, and those are the ones to
+        // delete by hand.
         //
         // abortOnError was false alongside it, and the two cancel out. The
         // baseline narrows lint to new issues; the flag then discarded those
