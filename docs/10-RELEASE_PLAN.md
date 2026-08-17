@@ -236,7 +236,7 @@ Features:
 • A real editor — syntax highlighting, IntelliSense, multi-cursor
 • Extension support: install themes, linters and language support from Open VSX
 • Integrated terminal with Node.js, Python and Git pre-installed
-• Extra Key Row for Ctrl, Alt, Tab, Esc and arrow keys
+• Extra Key Row: Ctrl, Alt, Tab, Esc, F1-F12, symbols and a cursor trackpad
 • Offline-first — code without internet
 • Open folders from your device storage, including SD cards and cloud providers
 • Portrait, landscape and split-screen support

@@ -123,7 +123,7 @@ If you are **ready to learn**, you should be able to **start today**.
 - **Integrated Terminal** — Full bash terminal with real PTY support (vim, tmux, readline all work).
 - **Batteries Included** — Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
 - **Offline-First** — Code without an internet connection. Everything runs locally on your device.
-- **Mobile-Optimized** — Extra Key Row (Ctrl, Alt, Tab, Esc, F1-F12, symbols, cursor trackpad), touch-friendly UI, clipboard bridge.
+- **Mobile-Optimized**: Extra Key Row (Ctrl, Alt, Tab, Esc, F1-F12, symbols, cursor trackpad), touch-friendly UI, clipboard bridge.
 - **SSH Out of the Box** — Bundled OpenSSH client and `ssh-keygen`, preconfigured with sane defaults (ed25519, keepalive, `accept-new`).
 - **Language Picker** — Select your languages; Go/Ruby/Java install on demand — via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
 - **Dev Server Preview** — Preview a running dev server in an editor tab beside your code, or hand it to the device's browser.

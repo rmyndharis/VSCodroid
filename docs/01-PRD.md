@@ -120,7 +120,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 
 | Feature | Description | Milestone |
 |---------|-------------|-----------|
-| Extra Key Row | Tab, Esc, Ctrl, Alt, arrows, brackets above soft keyboard | M2 |
+| Extra Key Row | Tab, Esc, Ctrl, Alt, F1-F12, symbols and a cursor trackpad above soft keyboard | M2 |
 | Clipboard Bridge | Copy/paste between VSCodroid and other Android apps | M2 |
 | Keyboard Handling | Proper viewport resize, cursor scroll-into-view | M2 |
 | Touch Optimization | Long-press, context menu, scroll behavior | M2 |

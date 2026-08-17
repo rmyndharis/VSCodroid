@@ -24,7 +24,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 ### What Happens on First Open
 
 1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 135 MB, and you need about 875 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. That is the same ~875 MB named above, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. It only happens once.
+2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 810 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~875 MB above is that payload plus the working room setup insists on before it will start. It only happens once.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -93,7 +93,7 @@ which page you are on.
 | **Esc** | Close menus, cancel operations |
 | **Ctrl** | Modifier for shortcuts (Ctrl+S, Ctrl+Z, etc.) |
 | **Alt** | Modifier for shortcuts (Alt+Up/Down to move lines) |
-| **Shift** | Modifier for selections and uppercase |
+| **Shift** | Modifier for selections and for the row's own keys (Shift+Tab, Shift+F12) |
 | **trackpad** | The wide pad. Drag to move the cursor; see below |
 | **{}** | Opening curly brace |
 | **()** | Opening parenthesis |
@@ -149,9 +149,11 @@ long hold, the same press a tap sends. Nothing on this row repeats.
 
 **Ctrl, Alt, and Shift are sticky** -- tap once to activate for the next keypress. Tap again to deactivate. They highlight when active.
 
-Two things behave differently from "the next keypress". Shift stays held for a
+Three things behave differently from "the next keypress". Shift stays held for a
 whole trackpad drag, so dragging with Shift on selects text rather than moving
-the cursor once. And all three clear by themselves when the soft keyboard hides.
+the cursor once. All three clear by themselves when the soft keyboard hides. And
+Shift on this row does not reach the soft keyboard: it applies to the row's own
+keys, so for a capital letter hold the soft keyboard's own Shift instead.
 
 The keys on each page are defined in
 `android/app/src/main/kotlin/com/vscodroid/keyboard/KeyPageConfig.kt`, and the
