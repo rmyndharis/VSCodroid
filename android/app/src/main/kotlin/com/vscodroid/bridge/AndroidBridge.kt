@@ -219,7 +219,10 @@ class AndroidBridge(
     private val onOpenFolderPicker: () -> Unit = {},
     private val onOpenRecentFolder: (Uri) -> Unit = {},
     private val onShowAbout: () -> Unit = {},
-    private val safManager: SafStorageManager? = null
+    private val safManager: SafStorageManager? = null,
+    private val onDownloadNamed: (url: String, fileName: String) -> Unit = { _, _ -> },
+    private val onDownloadChunk: (requestId: String, base64: String) -> Boolean = { _, _ -> false },
+    private val onDownloadComplete: (requestId: String, error: String?) -> Unit = { _, _ -> },
 ) {
     private val tag = "AndroidBridge"
 
@@ -432,6 +435,52 @@ class AndroidBridge(
         val uri = Uri.parse(uriString)
         Logger.i(tag, "Opening recent SAF folder: $uri")
         onOpenRecentFolder(uri)
+    }
+
+    // -- Saving a download to the device --
+
+    /**
+     * Reports the name the page is about to download [url] under.
+     *
+     * Called from the anchor click, before the platform has decided the click
+     * is a download at all, and that is the point: a bridge call blocks the
+     * page until it returns, so the name is on this side before the download
+     * hook fires and the hook does not have to ask for it. A blob carries no
+     * name, so without this every file the editor downloads would be offered
+     * under a placeholder.
+     */
+    @JavascriptInterface
+    fun noteDownloadName(authToken: String, url: String, fileName: String) {
+        if (!security.validateToken(authToken)) return
+        onDownloadNamed(url, fileName)
+    }
+
+    /**
+     * Hands over one piece of a download the page is reading, base64 encoded
+     * because the bridge carries text.
+     *
+     * @return true when it was written. The page stops reading on false, which
+     *   is what keeps a failed write from being followed by the rest of a file
+     *   and a report of success.
+     */
+    @JavascriptInterface
+    fun writeDownloadChunk(authToken: String, requestId: String, base64: String): Boolean {
+        if (!security.validateToken(authToken)) return false
+        return onDownloadChunk(requestId, base64)
+    }
+
+    /**
+     * Ends a download the page was reading. [error] is empty on success and
+     * carries a reason otherwise.
+     *
+     * Empty rather than null because the value is written by JavaScript, where
+     * the absent case is easy to send by accident; an empty string is the one
+     * spelling both sides agree means "nothing went wrong".
+     */
+    @JavascriptInterface
+    fun finishDownload(authToken: String, requestId: String, error: String) {
+        if (!security.validateToken(authToken)) return
+        onDownloadComplete(requestId, error.ifEmpty { null })
     }
 
     // -- Storage Management --

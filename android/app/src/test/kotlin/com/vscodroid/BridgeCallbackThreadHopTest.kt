@@ -36,12 +36,17 @@ import java.io.File
  * executor satisfies this test and is just as broken. It also only reads this
  * one construction site; a second bridge built elsewhere is invisible to it.
  *
- * The exempt entry is deliberate rather than an oversight. `onBackPressed`
- * returns a `Boolean` the caller consumes immediately, and `runOnUiThread`
- * returns `Unit`, posting it would mean answering before the answer exists.
- * Its body must therefore stay free of UI calls, which is not something this
- * test can check; it is recorded here so the exemption is a decision on the
- * record rather than a gap someone finds later.
+ * The exempt entries are deliberate rather than oversights, and they share one
+ * shape: each is a callback whose answer or whose ordering is consumed before a
+ * posted body could run. `onBackPressed` and `onDownloadChunk` return a
+ * `Boolean` the caller consumes immediately, and `runOnUiThread` returns `Unit`,
+ * so posting them would mean answering before the answer exists. The two
+ * download callbacks beside them are ordered against calls that cannot be
+ * posted for that reason, and posting only some of a sequence reorders it.
+ *
+ * Every exempt body must therefore stay free of UI calls, which is not something
+ * this test can check; the reasons are recorded here so each exemption is a
+ * decision on the record rather than a gap someone finds later.
  */
 class BridgeCallbackThreadHopTest {
 
@@ -54,6 +59,13 @@ class BridgeCallbackThreadHopTest {
      */
     private val exempt = mapOf(
         "onBackPressed" to "returns a Boolean the caller reads synchronously",
+        "onDownloadChunk" to "returns a Boolean the caller reads synchronously",
+        "onDownloadNamed" to
+            "the platform's download hook runs immediately after the click that calls this, " +
+            "so a posted name would arrive after the download that needs it",
+        "onDownloadComplete" to
+            "ordered against onDownloadChunk, which cannot be posted; posting only this one " +
+            "would end the download before its last pieces were written",
     )
 
     /**

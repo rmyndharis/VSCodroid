@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.net.Uri
 import android.os.IBinder
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.text.util.Linkify
 import android.view.View
 import android.webkit.RenderProcessGoneDetail
@@ -28,6 +29,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.io.OutputStream
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -54,6 +56,9 @@ import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import com.vscodroid.util.Notices
+import com.vscodroid.webview.DownloadCoordinator
+import com.vscodroid.webview.DownloadHost
+import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
@@ -217,6 +222,98 @@ class MainActivity : AppCompatActivity() {
         }
         client.onFileChooserResult(uris)
     }
+
+    /**
+     * Where a downloaded file is written, chosen by the user.
+     *
+     * `CreateDocument` and not `OpenDocument`: saving needs a grant to write a
+     * document that does not exist yet, and the read grant the file picker
+     * returns cannot create one.
+     *
+     * The type is the wildcard because the name already carries the extension.
+     * That name comes from the anchor the editor clicked, so it is `App.kt`
+     * rather than a guess, and a picker told `text/plain` would offer to save
+     * it as `App.kt.txt`. Naming a concrete type buys nothing here either: this
+     * is the device's own storage picker, and it is being asked to create a
+     * file, not to filter a list.
+     */
+    private val downloadDestinationLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("*/*")
+    ) { uri -> downloads.onDestinationChosen(uri) }
+
+    /**
+     * Saving a file the editor asked to download.
+     *
+     * The Activity supplies the four things the coordinator cannot do itself:
+     * the picker, the document behind the picker's answer, the page that holds
+     * the bytes, and the user. Everything about *when* each of those happens is
+     * in [DownloadCoordinator].
+     *
+     * The type is spelled out because this and [downloadDestinationLauncher]
+     * name each other, and inference cannot start from either end.
+     */
+    private val downloads: DownloadCoordinator = DownloadCoordinator(object : DownloadHost {
+        override fun askDestination(fileName: String): Boolean = try {
+            downloadDestinationLauncher.launch(fileName)
+            true
+        } catch (e: ActivityNotFoundException) {
+            Logger.w(tag, "No document creator on this device", e)
+            false
+        }
+
+        override fun openDestination(destination: Uri): OutputStream? =
+            contentResolver.openOutputStream(destination)
+
+        /**
+         * Deletes a document a failed download created.
+         *
+         * The picker creates the file when the user confirms the name, so by
+         * the time anything can go wrong there is already a file in their
+         * folder wearing the name of the one they wanted. Left alone it is a
+         * download that looks finished until it is opened.
+         */
+        override fun discardDestination(destination: Uri) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, destination)
+            } catch (e: Exception) {
+                // Reported and not raised: this only ever runs on a path that has
+                // already failed, and a delete that fails leaves a file the user
+                // can delete themselves, which is not worth a second message.
+                Logger.w(tag, "Could not remove the unfinished download", e)
+            }
+        }
+
+        override fun requestBytes(requestId: String, url: String) {
+            // The answer is used, and only for the one case the page cannot
+            // report itself: the capture script not being there at all. Its own
+            // failures come back through finishDownload; a missing script has
+            // nothing to send one with, and without this the download would sit
+            // on a created file forever with nothing said.
+            val script = "(function() {" +
+                "  if (!window.__vscodroidDownload) return false;" +
+                "  return window.__vscodroidDownload.send(" +
+                "${JSONObject.quote(url)}, ${JSONObject.quote(requestId)});" +
+                "})()"
+            webView?.evaluateJavascript(script) { answer ->
+                if (answer == "false") {
+                    downloads.onComplete(requestId, "the page cannot read this download")
+                }
+            } ?: downloads.onComplete(requestId, "there is no page to read this download")
+        }
+
+        override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
+            if (detail != null) Logger.w(tag, "Download of $fileName: $detail")
+            val message = when (outcome) {
+                DownloadOutcome.SAVED -> "Saved $fileName"
+                DownloadOutcome.CANCELLED -> "Download cancelled"
+                DownloadOutcome.FAILED -> "Could not save $fileName"
+            }
+            // Hopped because the bytes arrive on the WebView's bridge thread, so
+            // the end of a download is reported from a thread that cannot touch
+            // a Toast.
+            runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
+        }
+    })
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -765,6 +862,14 @@ class MainActivity : AppCompatActivity() {
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
             applyWindowInsetsPadding(wv)
+            // Here and not in initBridge, which runs once per server lifecycle
+            // behind a guard: a WebView with no download listener drops every
+            // download on the floor without a word, which is exactly the state
+            // this fixes, and a replacement view created for a renderer crash
+            // has to come back with one.
+            wv.setDownloadListener { url, _, contentDisposition, _, _ ->
+                downloads.onDownloadStart(url, contentDisposition)
+            }
             wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
             // viewport-fit=cover enables rendering into display cutout area
@@ -1131,7 +1236,15 @@ class MainActivity : AppCompatActivity() {
             onOpenFolderPicker = { runOnUiThread { openFolderPicker() } },
             onOpenRecentFolder = { uri -> runOnUiThread { openRecentSafFolder(uri) } },
             onShowAbout = { runOnUiThread { showAboutDialog() } },
-            safManager = safManager
+            safManager = safManager,
+            // Not hopped to the UI thread, unlike the five above. These three
+            // carry a download's bytes, and the coordinator guards its own
+            // state precisely so they can be answered on the thread they
+            // arrive on: posting them would reorder chunks against each other
+            // and turn the write into an unbounded queue on the main thread.
+            onDownloadNamed = { url, fileName -> downloads.onDownloadNamed(url, fileName) },
+            onDownloadChunk = { requestId, base64 -> downloads.onBytes(requestId, base64) },
+            onDownloadComplete = { requestId, error -> downloads.onComplete(requestId, error) },
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
@@ -1255,6 +1368,8 @@ class MainActivity : AppCompatActivity() {
         injectTouchTargetCSS()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
+        // Keeps a downloaded blob readable long enough to be saved, and names it
+        injectDownloadCapture()
         // Open in Browser, SSH keys and About are contributed by the bundled bridge
         // extension, which registers them through the extension API and reaches Android
         // over the relay below. They cannot be injected from here: the workbench is an
@@ -1406,6 +1521,126 @@ class MainActivity : AppCompatActivity() {
                         if (t && AndroidBridge.openExternalUrl(url, t)) { return null; }
                     }
                     return orig.apply(window, arguments);
+                };
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Lets a file the editor downloads be saved to the device.
+     *
+     * Two jobs, both of which have to happen inside the page because both are
+     * about objects that only exist there.
+     *
+     * The first is keeping the bytes reachable. The editor reads a file into
+     * memory, wraps it in a blob, hands the platform a `blob:` URL for it and
+     * revokes that URL on the very next task. Saving needs the user to choose a
+     * destination first, which takes seconds, so by the time there is anywhere
+     * to write the URL names nothing at all and the download would fail every
+     * time. Revocation is therefore deferred, and only for URLs a download is
+     * actually using, so nothing else in the workbench is kept alive by this.
+     *
+     * The second is the name. A blob has none, and the platform's download hook
+     * is given the URL rather than the anchor, so `App.kt` would arrive as a
+     * UUID. The anchor knows, at the moment it is clicked, and a bridge call
+     * blocks the page until it returns, so reporting the name here puts it on
+     * the Android side before the download hook can ask for it.
+     *
+     * Both hooks call through unconditionally. Nothing here decides whether a
+     * click downloads, and a page that stopped downloading because our
+     * bookkeeping threw would be a worse failure than the one being fixed.
+     */
+    private fun injectDownloadCapture() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidDownload) return;
+
+                var HOLD_MS = 120000;
+                var held = new Set();
+
+                function token() { return (window.__vscodroid || {}).authToken; }
+
+                var revoke = URL.revokeObjectURL.bind(URL);
+                URL.revokeObjectURL = function(url) {
+                    if (held.has(url)) return;
+                    revoke(url);
+                };
+
+                // Each hold releases itself, so a download nobody completes
+                // costs one blob for two minutes rather than for the life of
+                // the page.
+                function hold(url) {
+                    if (held.has(url)) return;
+                    held.add(url);
+                    setTimeout(function() { held.delete(url); revoke(url); }, HOLD_MS);
+                }
+
+                var click = HTMLAnchorElement.prototype.click;
+                HTMLAnchorElement.prototype.click = function() {
+                    try {
+                        var name = this.getAttribute('download');
+                        var url = this.href;
+                        if (name !== null && url) {
+                            if (url.lastIndexOf('blob:', 0) === 0) hold(url);
+                            var t = token();
+                            if (t && window.AndroidBridge) {
+                                AndroidBridge.noteDownloadName(t, url, name);
+                            }
+                        }
+                    } catch (e) { /* the click matters more than the record of it */ }
+                    return click.apply(this, arguments);
+                };
+
+                function encode(bytes) {
+                    var text = '';
+                    for (var i = 0; i < bytes.length; i += 0x8000) {
+                        text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+                    }
+                    return btoa(text);
+                }
+
+                window.__vscodroidDownload = {
+                    // Reads url and pushes it back in pieces under id. Answers
+                    // whether it started, which is the one failure Android
+                    // cannot be told about any other way.
+                    send: function(url, id) {
+                        var t = token();
+                        var bridge = window.AndroidBridge;
+                        if (!t || !bridge) return false;
+                        fetch(url).then(function(response) {
+                            if (!response.ok) throw new Error('status ' + response.status);
+                            var reader = response.body.getReader();
+                            return (function pump() {
+                                return reader.read().then(function(step) {
+                                    if (step.done) {
+                                        bridge.finishDownload(t, id, '');
+                                        return;
+                                    }
+                                    // A refused chunk has already been explained
+                                    // on the Android side. Reporting it again
+                                    // here would replace that reason with this
+                                    // one, which says nothing.
+                                    if (!bridge.writeDownloadChunk(t, id, encode(step.value))) {
+                                        reader.cancel();
+                                        return;
+                                    }
+                                    // Yield between pieces: every bridge call
+                                    // blocks this thread, so a large file would
+                                    // otherwise freeze the editor for the whole
+                                    // transfer.
+                                    return new Promise(function(go) {
+                                        setTimeout(go, 0);
+                                    }).then(pump);
+                                });
+                            })();
+                        }).catch(function(e) {
+                            bridge.finishDownload(t, id, String((e && e.message) || e) || 'failed');
+                        });
+                        return true;
+                    }
                 };
             })();
             """.trimIndent(),
@@ -1620,6 +1855,12 @@ class MainActivity : AppCompatActivity() {
 
         // Reset bridge so initBridge() re-registers on the new WebView
         bridgeInitialized = false
+        // The page that owed the bytes for a download in flight is gone, so
+        // nothing will ever arrive for it. Dropped here rather than left to be
+        // displaced by the next download, which may never come: the document
+        // the picker created would sit in the user's folder as an empty file
+        // with the name of the one they wanted.
+        downloads.onPageGone()
         // The replacement has loaded nothing yet, so a callback arriving now has
         // to be held again rather than injected into a page that is not there.
         workbenchLoaded = false

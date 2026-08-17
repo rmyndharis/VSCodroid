@@ -1,0 +1,441 @@
+/**
+ * Self-check for the download capture script, which is what makes saving a
+ * file from the Explorer possible at all.
+ *
+ *   node scripts/test-download-capture.js
+ *
+ * The script is JavaScript written inside a Kotlin raw string and handed to
+ * `WebView.evaluateJavascript`. Nothing compiles it, nothing lints it, and no
+ * Kotlin test can reach it: the unit tests stop at the bridge methods it calls.
+ * So the half that decides whether a download has any bytes to save had no
+ * cover at all.
+ *
+ * What it is protecting is not obvious from reading it, so it is worth stating
+ * once. The editor reads a file into memory, wraps it in a blob, hands the
+ * platform a `blob:` URL and then revokes that URL on the very next task:
+ *
+ *     e = URL.createObjectURL(n), setTimeout(() => URL.revokeObjectURL(e))
+ *
+ * (`workbench.web.main.internal.js`, the body of `triggerDownload`.) Saving
+ * needs the user to choose a destination first, which takes seconds. So by the
+ * time there is anywhere to write, an untouched `blob:` URL names nothing and
+ * every download fails. Deferring that revocation is the whole reason this
+ * script exists, and it is a one-line behaviour that no other check would
+ * notice losing: remove the deferral and this file goes red, while the Kotlin
+ * suite, lint and the build all stay green and every download fails on device.
+ *
+ * Extraction is deliberately strict. If the raw string moves or changes shape
+ * this fails saying so, rather than quietly checking an empty string, which is
+ * the failure mode that makes a scan of nothing look like a pass.
+ */
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const ROOT = path.join(__dirname, '..');
+const MAIN_ACTIVITY = path.join(
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+);
+
+/** How a literal dollar is written inside a Kotlin raw string. */
+const DOLLAR_ESCAPE = "${'$'}";
+
+/**
+ * The body of the raw string in `injectDownloadCapture()`, with the indentation
+ * `trimIndent()` removes taken off, which is the text the WebView is given.
+ */
+function extractCapture() {
+    const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
+    const fn = lines.findIndex((l) => l.includes('private fun injectDownloadCapture()'));
+    assert.notStrictEqual(
+        fn, -1,
+        'injectDownloadCapture() is gone from MainActivity.kt, so this check has nothing to ' +
+        'run. If the script moved, point this at its new home rather than deleting the check.',
+    );
+
+    const open = lines.findIndex((l, i) => i > fn && l.trim() === '"""');
+    const close = lines.findIndex((l, i) => i > open && l.trim().startsWith('"""'));
+    assert.ok(open !== -1 && close !== -1 && close > open + 1,
+        'could not find the raw string in injectDownloadCapture(); its shape changed');
+
+    const body = lines.slice(open + 1, close);
+    const indent = Math.min(
+        ...body.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length),
+    );
+    const js = body.map((l) => (l.trim() ? l.slice(indent) : '')).join('\n');
+
+    // A bare $ is interpolated by Kotlin before the WebView ever sees the
+    // string, so the injected script would not be the one written here.
+    const withoutEscapes = js.split(DOLLAR_ESCAPE).join('');
+    assert.ok(
+        !withoutEscapes.includes('$'),
+        'the capture script contains a bare $, which Kotlin interpolates into the raw string ' +
+        'before the WebView sees it. Escape it, or the injected script is not what is written.',
+    );
+    assert.ok(js.includes('revokeObjectURL'),
+        'the extracted text does not mention revokeObjectURL, so the wrong block was extracted');
+    assert.ok(js.includes('writeDownloadChunk'),
+        'the extracted text does not mention writeDownloadChunk, so the wrong block was extracted');
+
+    return js.split(DOLLAR_ESCAPE).join('$');
+}
+
+const SCRIPT = extractCapture();
+
+// ---- the page, stubbed ----------------------------------------------------
+
+/**
+ * One run of the capture script against a fresh fake page.
+ *
+ * Rebuilt per case rather than shared. The script installs itself once per
+ * document and refuses to install twice, so a shared page would leave every
+ * case after the first testing the previous case's hooks.
+ */
+function newPage(options) {
+    const opts = options || {};
+    const state = {
+        revoked: [],          // urls that reached the real revokeObjectURL
+        clicked: [],          // urls whose click was passed through
+        named: [],            // {token, url, fileName} reported to the bridge
+        chunks: [],           // base64 pieces handed to the bridge
+        finished: [],         // {id, error} reported to the bridge
+        cancelled: false,     // whether the reader was cancelled
+        timers: [],
+    };
+
+    const URLStub = {
+        revokeObjectURL(url) { state.revoked.push(url); },
+    };
+
+    function HTMLAnchorElement() {}
+    HTMLAnchorElement.prototype.click = function () { state.clicked.push(this.href); };
+    HTMLAnchorElement.prototype.getAttribute = function (name) {
+        return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+    };
+
+    const AndroidBridge = {
+        noteDownloadName(token, url, fileName) {
+            if (opts.bridgeThrows) throw new Error('bridge is unhappy');
+            state.named.push({ token, url, fileName });
+        },
+        writeDownloadChunk(token, id, base64) {
+            state.chunks.push({ token, id, base64 });
+            return opts.refuseChunkAt === undefined
+                || state.chunks.length <= opts.refuseChunkAt;
+        },
+        finishDownload(token, id, error) {
+            state.finished.push({ token, id, error });
+        },
+    };
+
+    // A reader over fixed pieces, which is the shape fetch gives for both a
+    // blob and an http response.
+    function responseFor(url) {
+        if (opts.fetchRejects) return Promise.reject(new Error('network is down'));
+        if (opts.status && opts.status !== 200) {
+            return Promise.resolve({ ok: false, status: opts.status });
+        }
+        let next = 0;
+        const pieces = opts.pieces || [];
+        return Promise.resolve({
+            ok: true,
+            status: 200,
+            body: {
+                getReader() {
+                    return {
+                        read() {
+                            if (next >= pieces.length) return Promise.resolve({ done: true });
+                            const value = pieces[next];
+                            next += 1;
+                            return Promise.resolve({ done: false, value });
+                        },
+                        cancel() { state.cancelled = true; },
+                    };
+                },
+            },
+        });
+    }
+
+    // Zero-delay timers are the pump yielding between pieces and have to run
+    // for real. The hold expiry is two minutes away, so it is captured instead
+    // and fired on demand: waiting for it would make this check take longer
+    // than the whole suite, and stubbing the clock away would leave the release
+    // untested, which is how a hold that never expires ships as a memory leak.
+    state.pendingHolds = [];
+    const timer = (fn, ms) => {
+        if (ms >= 1000) {
+            state.pendingHolds.push(fn);
+            return 0;
+        }
+        return setTimeout(fn, ms);
+    };
+
+    const sandbox = {
+        console,
+        setTimeout: timer,
+        clearTimeout,
+        Promise,
+        Set,
+        Map,
+        String,
+        Error,
+        Object,
+        Uint8Array,
+        URL: URLStub,
+        HTMLAnchorElement,
+        btoa: (binary) => Buffer.from(binary, 'binary').toString('base64'),
+        fetch: responseFor,
+    };
+    sandbox.window = sandbox;
+    sandbox.AndroidBridge = AndroidBridge;
+    if (opts.token !== null) sandbox.__vscodroid = { authToken: opts.token || 'session-token' };
+    if (opts.noBridge) delete sandbox.AndroidBridge;
+
+    const context = vm.createContext(sandbox);
+    vm.runInContext(SCRIPT, context);
+
+    state.context = context;
+    state.sandbox = sandbox;
+    state.anchor = (href, attrs) => {
+        const a = new HTMLAnchorElement();
+        a.href = href;
+        a.attrs = attrs || {};
+        return a;
+    };
+    state.revoke = (url) => sandbox.URL.revokeObjectURL(url);
+    state.send = (url, id) => sandbox.window.__vscodroidDownload.send(url, id);
+    state.runScriptAgain = () => vm.runInContext(SCRIPT, context);
+    return state;
+}
+
+/** Lets every queued microtask and zero-delay timer run. */
+function settle() {
+    return new Promise((done) => setTimeout(done, 5));
+}
+
+const BLOB = 'blob:http://127.0.0.1:5000/6f1d2c30-9a4b-4c1e-8f77-2b0a5d3e91cc';
+
+// ---- the cases ------------------------------------------------------------
+
+const cases = [];
+function test(name, fn) { cases.push({ name, fn }); }
+
+/**
+ * The one that matters. The editor revokes the blob URL on the next task, and
+ * the user has not even seen the destination picker by then.
+ */
+test('a blob a download used stays resolvable after the editor revokes it', () => {
+    const page = newPage();
+    const anchor = page.anchor(BLOB, { download: 'App.kt' });
+
+    anchor.click();
+    page.revoke(BLOB);
+
+    assert.deepStrictEqual(page.revoked, [],
+        'the editor revoked the blob one task after clicking; letting that through leaves ' +
+        'nothing to save by the time the user has picked a destination');
+});
+
+/** Nothing else is held. A blanket deferral would keep every blob the workbench makes. */
+test('a blob no download used is revoked as the page asked', () => {
+    const page = newPage();
+    const other = 'blob:http://127.0.0.1:5000/unrelated';
+
+    page.anchor(BLOB, { download: 'App.kt' }).click();
+    page.revoke(other);
+
+    assert.deepStrictEqual(page.revoked, [other],
+        'only the URL a download is using may be held back');
+});
+
+/**
+ * A held URL releases itself rather than living as long as the page does.
+ *
+ * The hold pins the file's bytes in memory, so a hold that never expires is a
+ * download-shaped leak: click download, back out of the picker, repeat, and the
+ * page keeps every one of those files. Both halves are asserted, because a hold
+ * that expires immediately passes the release test and breaks the deferral, and
+ * one that never expires passes the deferral test and leaks.
+ */
+test('a held blob is revoked once its hold expires', () => {
+    const page = newPage();
+    page.anchor(BLOB, { download: 'App.kt' }).click();
+    page.revoke(BLOB);
+    assert.deepStrictEqual(page.revoked, [], 'still held while the download could be running');
+
+    assert.strictEqual(page.pendingHolds.length, 1, 'the hold has to have an expiry queued');
+    page.pendingHolds.forEach((fire) => fire());
+
+    assert.deepStrictEqual(page.revoked, [BLOB],
+        'an expired hold has to release the blob it was keeping alive');
+
+    // And the release is complete: the URL is no longer special, so a later
+    // revoke passes straight through rather than being swallowed forever.
+    page.revoke(BLOB);
+    assert.deepStrictEqual(page.revoked, [BLOB, BLOB]);
+});
+
+/** The name is the only thing that knows what the file is called. */
+test('a download click reports its name and token to Android', () => {
+    const page = newPage();
+
+    page.anchor(BLOB, { download: 'App.kt' }).click();
+
+    assert.deepStrictEqual(page.named, [
+        { token: 'session-token', url: BLOB, fileName: 'App.kt' },
+    ]);
+});
+
+/** An ordinary link is not a download and must not be touched. */
+test('a link with no download attribute is left entirely alone', () => {
+    const page = newPage();
+
+    page.anchor('https://example.com/page', {}).click();
+    page.revoke(BLOB);
+
+    assert.deepStrictEqual(page.named, [], 'a plain link is not a download');
+    assert.deepStrictEqual(page.revoked, [BLOB], 'and it holds nothing back');
+    assert.deepStrictEqual(page.clicked, ['https://example.com/page'],
+        'the click still happens');
+});
+
+/**
+ * Bookkeeping must never cost the page a click. A throw here is the difference
+ * between a download that does not save and a workbench where links stop
+ * working.
+ */
+test('a bridge that throws does not swallow the click', () => {
+    const page = newPage({ bridgeThrows: true });
+
+    page.anchor(BLOB, { download: 'App.kt' }).click();
+
+    assert.deepStrictEqual(page.clicked, [BLOB],
+        'the original click has to run whatever the recording did');
+});
+
+/** The whole transfer, asserted on the bytes rather than on the call count. */
+test('send streams the exact bytes and reports a clean finish', async () => {
+    const page = newPage({
+        pieces: [Uint8Array.from([0, 1, 2, 250]), Uint8Array.from([255, 65, 66])],
+    });
+
+    assert.strictEqual(page.send(BLOB, 'dl-1'), true, 'a started read reports that it started');
+    await settle();
+
+    const bytes = Buffer.concat(page.chunks.map((c) => Buffer.from(c.base64, 'base64')));
+    assert.deepStrictEqual(
+        Array.from(bytes), [0, 1, 2, 250, 255, 65, 66],
+        'the file that reaches Android must be the file the page read, byte for byte',
+    );
+    assert.deepStrictEqual(page.finished, [{ token: 'session-token', id: 'dl-1', error: '' }],
+        'an empty error is how success is spelled across the bridge');
+});
+
+/** Every piece is decodable on its own, because Android decodes them one at a time. */
+test('each piece decodes on its own', async () => {
+    const page = newPage({
+        pieces: [Uint8Array.from([1, 2]), Uint8Array.from([3]), Uint8Array.from([4, 5, 6])],
+    });
+
+    page.send(BLOB, 'dl-1');
+    await settle();
+
+    assert.strictEqual(page.chunks.length, 3, 'one bridge call per piece read');
+    const perPiece = page.chunks.map((c) => Array.from(Buffer.from(c.base64, 'base64')));
+    assert.deepStrictEqual(perPiece, [[1, 2], [3], [4, 5, 6]],
+        'a piece that only decodes when joined to its neighbours would corrupt the file');
+});
+
+/** A read that fails has to say so, or the download waits on a file forever. */
+test('a failed read is reported as an error', async () => {
+    const page = newPage({ fetchRejects: true });
+
+    page.send(BLOB, 'dl-1');
+    await settle();
+
+    assert.strictEqual(page.finished.length, 1, 'a failure still ends the download');
+    assert.strictEqual(page.finished[0].id, 'dl-1');
+    assert.ok(page.finished[0].error, 'an empty error would be read as success');
+});
+
+/** A URL that resolves but answers an error status is a failure too. */
+test('a non-ok response is reported as an error', async () => {
+    const page = newPage({ status: 404 });
+
+    page.send(BLOB, 'dl-1');
+    await settle();
+
+    assert.strictEqual(page.finished.length, 1);
+    assert.ok(/404/.test(page.finished[0].error),
+        `the status belongs in the reason; got ${page.finished[0].error}`);
+});
+
+/**
+ * Android refuses a piece when the write failed, and it has already told the
+ * user why. Reading on would send the rest of a file into a stream that is
+ * gone; finishing again would replace a real reason with a generic one.
+ */
+test('a refused piece stops the read without reporting a second reason', async () => {
+    const page = newPage({
+        pieces: [Uint8Array.from([1]), Uint8Array.from([2]), Uint8Array.from([3])],
+        refuseChunkAt: 1,
+    });
+
+    page.send(BLOB, 'dl-1');
+    await settle();
+
+    assert.strictEqual(page.chunks.length, 2, 'reading stops at the piece that was refused');
+    assert.strictEqual(page.cancelled, true, 'the reader is released rather than left open');
+    assert.deepStrictEqual(page.finished, [],
+        'Android already reported this failure; a second report would overwrite the reason');
+});
+
+/**
+ * Without a token or a bridge nothing can be sent, and Android has to hear that
+ * from the return value: there is no other channel left to say it on.
+ */
+test('send refuses when it has no way to answer', () => {
+    assert.strictEqual(newPage({ noBridge: true }).send(BLOB, 'dl-1'), false,
+        'no bridge means no route for the bytes or for the failure');
+    assert.strictEqual(newPage({ token: null }).send(BLOB, 'dl-1'), false,
+        'an unauthenticated call would be refused on the other side with nothing said');
+});
+
+/**
+ * The script is injected on every page load. Installing twice would wrap the
+ * revoke hook around itself, and a held URL would then be released by the inner
+ * copy while the outer one still refuses it.
+ */
+test('injecting the script twice changes nothing', () => {
+    const page = newPage();
+    page.runScriptAgain();
+
+    page.anchor(BLOB, { download: 'App.kt' }).click();
+    page.revoke(BLOB);
+
+    assert.deepStrictEqual(page.revoked, [], 'the hold still holds after a second injection');
+    assert.deepStrictEqual(page.named, [
+        { token: 'session-token', url: BLOB, fileName: 'App.kt' },
+    ], 'one click still reports one name');
+});
+
+// ---- run ------------------------------------------------------------------
+
+(async () => {
+    let failed = 0;
+    for (const c of cases) {
+        try {
+            await c.fn();
+            console.log(`ok   ${c.name}`);
+        } catch (e) {
+            failed += 1;
+            console.error(`FAIL ${c.name}`);
+            console.error(`     ${e.message}`);
+        }
+    }
+    console.log(`\n${cases.length - failed}/${cases.length} passed`);
+    process.exit(failed ? 1 : 0);
+})();

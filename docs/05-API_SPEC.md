@@ -64,7 +64,7 @@ compare.
    (`SecurityManager.generateToken`, in `bridge/`, not a `security/` package).
    `MainActivity.injectBridgeToken()` writes it to `window.__vscodroid.authToken`
    after the page loads.
-2. **Every method, not a chosen subset**: all 28 `@JavascriptInterface` methods take the
+2. **Every method, not a chosen subset**: all 31 `@JavascriptInterface` methods take the
    token and validate it before doing anything, returning without acting on refusal
    (§2.4 records the one method whose refusal value is not an empty one).
    `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
@@ -134,8 +134,8 @@ The OAuth pair described a flow this app does not implement — see §2.5.
 Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
-with a token that does not match is refused before the method acts. Twenty-seven of
-the twenty-eight then return an empty value — `false`, `null`, `""`, `"{}"`, `"[]"`,
+with a token that does not match is refused before the method acts. Thirty of
+the thirty-one then return an empty value — `false`, `null`, `""`, `"{}"`, `"[]"`,
 `0`, or nothing. **`generateSshKey` is the exception**: it returns
 `{"success":false,"error":"unauthorized"}`, a truthy string, so a caller testing
 `if (!result)` reads a refusal as success. Test its `success` field. Read the token from
@@ -144,7 +144,7 @@ the twenty-eight then return an empty value — `false`, `null`, `""`, `"{}"`, `
 added without the check, so this holds for the class rather than for the list below.
 
 **Registered is not the same as reachable, and the difference decides what an extension
-can do.** All 28 methods below live on the `AndroidBridge` object injected into the
+can do.** All 31 methods below live on the `AndroidBridge` object injected into the
 workbench page, so anything running in that page's own realm can call them directly. An
 extension cannot: it runs in the web extension host, which does not see objects added by
 `addJavascriptInterface`. Extensions reach the bridge over the BroadcastChannel relay
@@ -230,6 +230,47 @@ not opened through a picker at all — a `content://` URI has no POSIX path and 
 server only ever sees POSIX paths. And there is no `MANAGE_EXTERNAL_STORAGE` in the
 manifest to request: external storage is reached through SAF, one user-granted folder
 at a time.
+
+#### Saving a Download
+
+These three are not called by extensions. They are called by the capture script
+`MainActivity.injectDownloadCapture()` injects into the workbench page, and they exist
+because the bytes of a download live in the page and cannot be reached from Kotlin.
+The editor hands the platform a `blob:` URL for any file it could read into memory,
+revokes that URL on the next task, and a blob has no name. So the page reports the
+name at click time and streams the bytes back afterwards.
+
+```kotlin
+@JavascriptInterface
+fun noteDownloadName(authToken: String, url: String, fileName: String)
+// Reports the name the page is about to download `url` under, taken from the
+// anchor's `download` attribute.
+// Returns NOTHING. Called before the platform has decided the click is a
+// download at all; a bridge call blocks the page until it returns, so the name
+// is on the Android side before the download hook fires.
+
+@JavascriptInterface
+fun writeDownloadChunk(authToken: String, requestId: String, base64: String): Boolean
+// One piece of the download named by `requestId`, base64 because the bridge
+// carries text. Each piece is decoded on its own, so each must be encoded on
+// its own.
+// Returns: true when it was written. On false the page must STOP reading -- the
+// write failed, the user has already been told why, and the rest of the file
+// has nowhere to go.
+
+@JavascriptInterface
+fun finishDownload(authToken: String, requestId: String, error: String)
+// Ends the download named by `requestId`.
+// `error` is the EMPTY STRING on success and a reason otherwise. Empty rather
+// than null because the value is written by JavaScript, where the absent case
+// is easy to send by accident.
+// Returns NOTHING. Whether the file survived is reported to the user by the
+// Android side, not back to the page.
+```
+
+A `requestId` that is not the download currently in flight is ignored, in both methods.
+Chunks belonging to a download that has since been cancelled or displaced would otherwise
+be written into the file the user is waiting for now.
 
 #### Storage Management
 
