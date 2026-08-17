@@ -151,20 +151,23 @@ class HardwareKeyboardTest {
                 "activity declarations. It found: ${declared.keys}",
         )
 
+        // Rotation is included rather than left to the message. It is the same
+        // attribute, it costs the same teardown, and a message that says to keep
+        // the rest of the string while checking none of it is an invitation to
+        // trim the attribute down to what this test reads.
+        val required = listOf("keyboard", "keyboardHidden", "orientation", "screenSize")
         val unguarded = guarded.filterNot { name ->
-            val qualifiers = declared[name].orEmpty().split("|")
-            "keyboard" in qualifiers && "keyboardHidden" in qualifiers
+            declared[name].orEmpty().split("|").containsAll(required)
         }
 
         assertEquals(
             emptyList<String>(), unguarded,
-            "Plugging in or unplugging a keyboard is a configuration change. Without " +
-                "`keyboard` and `keyboardHidden` in android:configChanges, Android " +
-                "answers it by destroying the activity and creating a new one, which " +
+            "Plugging in or unplugging a keyboard is a configuration change, and so is " +
+                "turning the phone. Without $required in android:configChanges, Android " +
+                "answers one by destroying the activity and creating a new one, which " +
                 "takes the WebView with it: the open workspace, its editors and " +
                 "whatever was not yet saved all reload the moment a Bluetooth " +
-                "keyboard connects. Keep the rest of the attribute too; the same " +
-                "string is what stops a rotation doing the same thing.",
+                "keyboard connects or the screen rotates. Declared: $declared.",
         )
     }
 }
