@@ -46,4 +46,6 @@ echo "  ✓ Launched"
 
 echo ""
 echo "=== Deploy complete ==="
-echo "View logs: adb logcat -s VSCodroid"
+# Every tag is VSCodroid.<class>, so the bare tag matches nothing as a filterspec,
+# and logcat filterspecs take no wildcard.
+echo "View logs: adb logcat | grep VSCodroid"
