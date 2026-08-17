@@ -291,6 +291,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Build and release workflows no longer fail when the runner's package index is out of date.
 - Launching no longer crashes outright if refreshing tool paths fails, and comments and formatting in `settings.json` survive that refresh.
 - A Claude Code wrapper you pointed somewhere yourself is no longer overwritten on every launch.
+- The bundled npm tree keeps its licence files. A sweep aimed at READMEs took npm's own LICENSE and 28 dependency notices with it, so the shipped copy fell short of what those licences require.
 
 **Documentation**
 

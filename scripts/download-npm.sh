@@ -147,9 +147,12 @@ echo ""
 echo "Stripping docs, tests, and unnecessary files..."
 BEFORE_SIZE=$(du -sk "$NPM_SRC" | cut -f1)
 
-# Remove docs and changelogs
+# Remove docs and changelogs. Not LICENSE: npm is Artistic-2.0 and that file is
+# the notice the licence requires to travel with a copy. NOTICE.md attributes
+# npm by document and ships in the APK, but a document about the tree is not the
+# notice inside it, and this is the copy being redistributed.
 rm -rf "$NPM_SRC/docs" "$NPM_SRC/doc" "$NPM_SRC/man"
-rm -f "$NPM_SRC/CHANGELOG.md" "$NPM_SRC/README.md" "$NPM_SRC/LICENSE"
+rm -f "$NPM_SRC/CHANGELOG.md" "$NPM_SRC/README.md"
 rm -f "$NPM_SRC/changelogs"*
 
 # Remove Windows-specific files
@@ -163,14 +166,24 @@ find "$NPM_SRC" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 find "$NPM_SRC" -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
 find "$NPM_SRC" -type d -name "tap-snapshots" -exec rm -rf {} + 2>/dev/null || true
 
-# Remove other unnecessary files
-find "$NPM_SRC" -name "*.md" -not -name "package.json" -delete 2>/dev/null || true
+# Remove other unnecessary files.
+#
+# The *.md sweep is where most dependency licences went: npm's dependencies ship
+# theirs as LICENSE.md far more often than as a bare LICENSE, so a rule aimed at
+# READMEs took 28 of them with it. -iname rather than -name, because two are
+# lowercase (ms/license.md, debug/node_modules/ms/license.md).
+#
+# AUTHORS and CONTRIBUTORS are no longer swept either. There is one such file in
+# the tree, spdx-expression-parse/AUTHORS, and its LICENSE reads
+# "Copyright (c) 2015 Kyle E. Mitchell & other authors listed in AUTHORS" --
+# deleting it removes half of the notice the licence requires to be kept.
+find "$NPM_SRC" -name "*.md" -not -name "package.json" \
+    -not -iname "license*" -not -iname "licence*" \
+    -not -iname "copying*" -not -iname "notice*" -delete 2>/dev/null || true
 find "$NPM_SRC" -name ".npmignore" -delete 2>/dev/null || true
 find "$NPM_SRC" -name ".eslintrc*" -delete 2>/dev/null || true
 find "$NPM_SRC" -name ".gitignore" -delete 2>/dev/null || true
 find "$NPM_SRC" -name "Makefile" -delete 2>/dev/null || true
-find "$NPM_SRC" -name "AUTHORS" -delete 2>/dev/null || true
-find "$NPM_SRC" -name "CONTRIBUTORS" -delete 2>/dev/null || true
 
 AFTER_SIZE=$(du -sk "$NPM_SRC" | cut -f1)
 echo "  Before: $((BEFORE_SIZE / 1024))M -> After: $((AFTER_SIZE / 1024))M (saved $((( BEFORE_SIZE - AFTER_SIZE ) / 1024))M)"
