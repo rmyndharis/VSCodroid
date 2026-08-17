@@ -267,6 +267,27 @@ tasks.withType<Test> {
     inputs.file(layout.projectDirectory.file("build.gradle.kts"))
         .withPropertyName("appBuildScript")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // The manifest is read the same way and needs the same declaration. Editing
+    // only the manifest changes no compiled input, so without this the run that
+    // would catch a bad manifest edit is the one that reports
+    // `> Task :app:testDebugUnitTest UP-TO-DATE`, exit 0, over the previous
+    // run's results. Measured: repointing `<application android:name>` with the
+    // declaration absent kept the task up to date and the build successful in
+    // 1s; with it present the task re-ran and the assertion went red.
+    //
+    // One declaration is what makes every manifest-reading suite run, so
+    // narrowing it to a single reader's question silences the others, and they
+    // ask different questions. ProcessWideMemoryPressureTest asks whether
+    // `<application android:name>` still points at VSCodroidApp, the class that
+    // hears trim callbacks once no Activity is left. HardwareKeyboardTest,
+    // arriving with the hardware-keyboard guards, asks whether both activities
+    // still list every qualifier they need in `android:configChanges`. Treat
+    // that as a list of readers, not a limit on them:
+    //   grep -rn 'File("src/main/AndroidManifest.xml")' android/app/src/test/kotlin
+    inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
+        .withPropertyName("appManifest")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // The server tree in assets/ has to carry this checkout's patches, and nothing
