@@ -310,7 +310,6 @@ tasks.withType<Test> {
     //   grep -rn 'File("src/main/AndroidManifest.xml")' android/app/src/test/kotlin
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
         .withPropertyName("appManifest")
-    // Two suites read files no Kotlin compiles against, because the things they
     // Seven suites read files no Kotlin compiles against, because the things they
     // check cross a language boundary that has no compiler: the bootstrap's
     // adoption note (assets/server.js), the shutdown the worker hosts get
