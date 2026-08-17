@@ -169,15 +169,22 @@ android {
         // lint-baseline.xml are filtered out of every report, so what remains is
         // what arrived after it was taken.
         //
-        // An entry naming a file above this module is machine-specific. Lint
-        // records such a location through its `$HOME` path variable, so an
-        // entry for gradle/libs.versions.toml matches on a checkout sitting at
-        // that one place below the home directory and nowhere else, CI
-        // included. Deleting one is therefore visible only there, where the
-        // warnings it had been hiding come back. Regenerating the baseline
-        // is not the answer, since lint writes such an entry straight back;
-        // lint already names the entries that stopped matching, under
-        // LintBaselineFixed, and those are the ones to delete by hand.
+        // An entry naming a file above this module carries whatever path lint
+        // recorded, and that depends on where the checkout sat. Written from
+        // under the home directory it goes in through lint's `$HOME` path
+        // variable and then matches only the checkout that produced it. Written
+        // from outside the home directory the same entry reads
+        // `../gradle/libs.versions.toml` and matches wherever the module is.
+        // Both forms were checked on two checkouts of this repository and
+        // against one CI report: the 39 entries removed for that file were of
+        // the first form and matched in neither the second checkout nor on the
+        // runner, while a regenerated `../` entry matched in both checkouts. So
+        // read which form an entry has before deleting it. Only the first is
+        // confined to one checkout, and only there do the warnings it had been
+        // hiding come back. Regenerating the baseline is not the answer, since
+        // lint writes such an entry straight back; lint already names the
+        // entries that stopped matching, under LintBaselineFixed, and those are
+        // the ones to delete by hand.
         //
         // abortOnError was false alongside it, and the two cancel out. The
         // baseline narrows lint to new issues; the flag then discarded those
