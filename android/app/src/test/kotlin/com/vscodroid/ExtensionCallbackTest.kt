@@ -535,15 +535,24 @@ class AuthCallbackCallSiteTest {
 
     @Test
     fun `the launch arms the ids the address carries, not the fact that it launched`() {
-        // The narrowing, at the one place it can be undone in a line. Passing
-        // anything other than the ids read out of the address puts the old
-        // behaviour back: every browser launch opening the callback window,
-        // whether or not a sign-in was involved.
+        // The narrowing, at the bridge's arming site. Passing anything other
+        // than the ids read out of the address puts the old behaviour back:
+        // every browser launch opening the callback window, whether or not a
+        // sign-in was involved.
+        //
+        // Not the only arming site any more. `VSCodroidWebViewClient` arms the
+        // link-navigation hand-off as well, and this reads AndroidBridge.kt
+        // only; `ExternalUrlHandoffTest` holds that site to the same rule from
+        // the other end, by driving it with an address whose only number is not
+        // a request id.
         check(bridge.isFile) { "AndroidBridge.kt not found" }
 
         val arming = code(bridge).filter { it.contains("AuthTabWindow.arm(") }
 
-        assertEquals(1, arming.size, "expected exactly one arming site, found: $arming")
+        assertEquals(
+            1, arming.size,
+            "expected exactly one arming site in AndroidBridge.kt, found: $arming",
+        )
         assertTrue(
             arming.single().contains("authRequestIdsIn("),
             "the arming must be keyed on the request ids in the address; found: ${arming.single()}",

@@ -87,8 +87,19 @@ class ExternalUrlHandoffTest {
         /** A neighbouring id nothing here launched, and the one that must stay refused. */
         const val UNSOLICITED_REQUEST_ID = "910"
 
-        /** A link with no sign-in in it, which must open no window at all. */
-        const val DOCS = "https://code.visualstudio.com/docs"
+        /**
+         * A link with no sign-in in it, which must open no window at all.
+         *
+         * It carries a number on purpose. A hand-off that armed every digit run
+         * in the address rather than the ids `vscode-reqid` names would still
+         * satisfy the two cases above, since the id [SIGN_IN] carries is also a
+         * digit run of its own; only a control that carries an unrelated number
+         * tells the two apart.
+         */
+        const val DOCS = "https://code.visualstudio.com/docs/1234"
+
+        /** The number [DOCS] carries, which nothing may read as a request id. */
+        const val DOCS_NUMBER = "1234"
 
         /**
          * The clock reading every launch below is armed with. Distinctive so that
@@ -135,7 +146,9 @@ class ExternalUrlHandoffTest {
      */
     @AfterEach
     fun handBackArmedRequests() {
-        AuthTabWindow.disarm(listOf(SIGN_IN_REQUEST_ID, UNSOLICITED_REQUEST_ID))
+        AuthTabWindow.disarm(
+            listOf(SIGN_IN_REQUEST_ID, UNSOLICITED_REQUEST_ID, DOCS_NUMBER)
+        )
     }
 
     @BeforeEach
