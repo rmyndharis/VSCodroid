@@ -32,8 +32,49 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 JNI_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 WORK_DIR="$ROOT_DIR/toolchains/musl"
 
-ALPINE_BRANCH="${ALPINE_BRANCH:-v3.20}"
+# A branch Alpine still supports, and it has to be checked when it is changed:
+# an unsupported one keeps serving a signed index for years, so nothing here
+# fails when it stops receiving fixes. v3.20 was named here until 2026-08-17,
+# and it reached end of life on 2026-04-01 -- four months of building the
+# loader out of a branch upstream had stopped patching, with every signature
+# check passing.
+#
+# v3.23 rather than the newest, deliberately. It is supported to 2027-11-01 and
+# carries musl 1.2.5, the same upstream release the previous branch did (r23
+# against r3, so Alpine's own fixes on top of it); v3.24 has moved to 1.2.6,
+# and the loader here is the libc the Claude Code CLI runs against, which
+# nothing in this repository can test off-device. Taking maintenance without
+# taking a libc bump is the smaller step, and the bigger one is a decision for
+# a person with a device in hand.
+#
+#     curl -s https://alpinelinux.org/releases.json   # branch_date, eol_date
+ALPINE_BRANCH="${ALPINE_BRANCH:-v3.23}"
 MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
+
+# How stale a signed index may be, in days, matching the Termux side's default.
+#
+# APKINDEX carries no expiry, so a signature alone does not stop a host serving
+# an old index for ever and holding every build to whatever musl was current
+# then. Measured 2026-08-17, and it is why this is not hypothetical: the v3.20
+# index still verified against the pinned key four months after that branch
+# went end of life, and was 32 days old.
+#
+# The date is read from the APKINDEX tar member's mtime, which lives inside the
+# bytes the signature covers, so it cannot be set by whoever serves the file.
+ALPINE_INDEX_MAX_AGE_DAYS="${ALPINE_INDEX_MAX_AGE_DAYS:-30}"
+
+# Validated rather than compared as it arrives. A non-numeric value would make
+# the comparison below fail in a way that reads as a stale index, or -- worse,
+# depending on where it landed -- silently skip it. A gate that disappears on
+# bad input is worse than an absent one, because its output still says the
+# check ran.
+case "$ALPINE_INDEX_MAX_AGE_DAYS" in
+    ''|*[!0-9]*)
+        echo "  ERROR: ALPINE_INDEX_MAX_AGE_DAYS must be a whole number of days," \
+             "got '$ALPINE_INDEX_MAX_AGE_DAYS'" >&2
+        exit 1
+        ;;
+esac
 
 echo "=== musl loader ==="
 mkdir -p "$WORK_DIR" "$JNI_DIR"
@@ -42,11 +83,15 @@ mkdir -p "$WORK_DIR" "$JNI_DIR"
 # does. That was not true when this line was written -- download-node.sh wrote its
 # record before the digest of what it resolved had been checked -- and it is one
 # grep to confirm which state the tree is in:
-#     grep -nE '^[[:space:]]*: >' scripts/download-*.sh
+#     grep -nE '^[[:space:]]*: >' scripts/download-*.sh scripts/lib/*.sh
+# The second path is not padding: the five Termux scripts truncate their record
+# through scripts/lib/termux-packages.sh now, so a grep over scripts/download-*.sh
+# alone reports two writers where there are seven, and reads as an answer.
 # Note the anchor. An earlier form of this comment prescribed
 # grep -n ': > "$PKG_MAP_FILE"', which answered the wrong question in both
 # directions: it missed this script and download-node.sh, which truncate through
-# literal filenames rather than that variable, and it matched this file anyway --
+# literal filenames rather than that variable -- and the variable itself is gone
+# now, so that pattern matches nothing -- and it matched this file anyway,
 # on the comment quoting the pattern. A grep that can match its own documentation
 # cannot fail for the person who wrote it.
 #
@@ -112,6 +157,35 @@ PY
 openssl dgst -sha1 -verify "$ALPINE_KEY" \
     -signature "$WORK_DIR/index.sig" "$WORK_DIR/index.signed" > /dev/null
 echo "  signature : verified against the pinned Alpine key"
+
+# After the signature, never before it: an unverified mtime is whatever the host
+# chose to write, so checking it first would date the index by asking the party
+# the check exists to catch. index.signed is exactly the byte range openssl just
+# verified.
+python3 - "$WORK_DIR/index.signed" "$ALPINE_INDEX_MAX_AGE_DAYS" <<'PY'
+import io, sys, tarfile, time
+
+signed, limit = sys.argv[1], int(sys.argv[2])
+tar = tarfile.open(fileobj=io.BytesIO(open(signed, "rb").read()))
+try:
+    member = tar.getmember("APKINDEX")
+except KeyError:
+    # Fail closed, the way an absent C: field does below: every real index
+    # carries this entry, so its absence means the index cannot be dated, not
+    # that it may be used undated.
+    sys.exit("the signed stream carries no APKINDEX entry, so its age cannot be judged")
+
+age = int((time.time() - member.mtime) // 86400)
+if age > limit:
+    sys.exit(
+        "the Alpine index is signed but stale -- %d days old, limit %d.\n"
+        "  A valid signature does not stop a host replaying an old index, which would\n"
+        "  hold every build to whatever musl was current then. Check that the branch is\n"
+        "  still supported (curl -s https://alpinelinux.org/releases.json), or raise\n"
+        "  ALPINE_INDEX_MAX_AGE_DAYS if upstream really has paused." % (age, limit)
+    )
+print("  freshness : %d days old, limit %d" % (age, limit))
+PY
 # Unpacked to a file rather than piped: the parser stops at the first match, and
 # closing the pipe early makes tar fail the whole script under `set -o pipefail`.
 tar xzf "$WORK_DIR/APKINDEX.tar.gz" -C "$WORK_DIR" APKINDEX

@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The bundled SQLite engine is checked against the JavaScript shipped beside it. A mismatch shows up on device as chat failing to pick a model.
 - Node.js headers are checked against the digest nodejs.org publishes, the last download taken on trust.
 - All toolchain downloads use one package mirror. Three still pointed at a host the others had left while sharing a cached index, so a build could resolve from one and fetch from another.
+- The musl loader now comes from a supported Alpine branch, and an index older than 30 days fails the build. The previous branch stopped receiving fixes in April; its signature still verified.
 - The loopback bind on the editor server's command line is pinned by a test. A wildcard bind would have put the editor on the phone's network without failing anything.
 - Test suites stopped reporting results they had not measured: skipped device tests read as passing, one slept a minute and asserted nothing, and the four toolchain delivery functions had no test at all.
 - The on-device suite states when it is meant to run, checks that what shipped actually runs, and reads versions from the build rather than from literals two releases stale.
