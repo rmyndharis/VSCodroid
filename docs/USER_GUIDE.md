@@ -93,7 +93,7 @@ which page you are on.
 | **Esc** | Close menus, cancel operations |
 | **Ctrl** | Modifier for shortcuts (Ctrl+S, Ctrl+Z, etc.) |
 | **Alt** | Modifier for shortcuts (Alt+Up/Down to move lines) |
-| **Shift** | Modifier for selections and for the row's own keys (Shift+Tab, Shift+F12) |
+| **Shift** | Modifier for selections, for the row's own keys (Shift+Tab, Shift+F12), and for Ctrl or Alt chords typed on the soft keyboard (Ctrl+Shift+P) |
 | **trackpad** | The wide pad. Drag to move the cursor; see below |
 | **{}** | Opening curly brace |
 | **()** | Opening parenthesis |
@@ -152,8 +152,9 @@ long hold, the same press a tap sends. Nothing on this row repeats.
 Three things behave differently from "the next keypress". Shift stays held for a
 whole trackpad drag, so dragging with Shift on selects text rather than moving
 the cursor once. All three clear by themselves when the soft keyboard hides. And
-Shift on this row does not reach the soft keyboard: it applies to the row's own
-keys, so for a capital letter hold the soft keyboard's own Shift instead.
+Shift on its own is not applied to what you type on the soft keyboard, so for a
+capital letter hold the soft keyboard's own Shift; latch Ctrl or Alt as well and
+the row's Shift is carried into that chord, which is how Ctrl+Shift+P is typed.
 
 The keys on each page are defined in
 `android/app/src/main/kotlin/com/vscodroid/keyboard/KeyPageConfig.kt`, and the
