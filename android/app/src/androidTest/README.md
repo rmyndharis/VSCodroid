@@ -54,9 +54,10 @@ emulator to boot`. Measured on API 34 and API 36, identically, from a job that
 built and installed nothing so that a dead route cost nothing to find.
 
 So it is the same wall as `ubuntu-24.04-arm`, under a different name: no
-accessible hardware virtualisation for an arm64 guest. All three runner families
-GitHub offers have now been measured, and the sentence at the top of this file no
-longer rests on a gap.
+accessible hardware virtualisation for an arm64 guest. Three runner images have now been
+measured, one per family GitHub offers, and the sentence at the top of this file
+no longer rests on a gap. It is images rather than every image: nothing here has
+tried macos-14, and there is no reason to expect it to differ.
 
 What that leaves, none of it tried here:
 

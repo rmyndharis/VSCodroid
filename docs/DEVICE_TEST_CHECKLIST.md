@@ -94,7 +94,7 @@
 | BG-4 | Server process killed | `adb shell kill <node PID>` | Server auto-restarts, notification shows | | |
 | BG-5 | Foreground notification | Check notification shade while app runs | "VSCodroid running" notification visible | | |
 | BG-6 | Return after screen off | Lock screen, wait 2min, unlock | App resumes without crash | | |
-| BG-7 | Adopted session says its network is gone | Kill the **bootstrap** `server.js` only (`adb shell ps -A \| grep server.js`, kill the parent, leave the child holding the port), then relaunch the app | Editor loads against the surviving server, and the foreground notification reads "No network for extensions, git or npm". Confirm the claim: the marketplace and `npm view express` both fail in that session, and both work again after a full restart | | |
+| BG-7 | Adopted session says its network is gone | `adb shell ps -A \| grep libnode` shows two processes; **`kill -9` the parent** (the lower PID, the one the other lists as its PPID), then relaunch the app. It must be SIGKILL: the bootstrap handles SIGTERM and kills its child on the way out, so a plain `kill` leaves nothing to adopt. `ps` shows `libnode` rather than `server.js` because that is argv[0] | Editor loads against the surviving server, and the foreground notification reads "No network for extensions, git or npm". Confirm the claim: the marketplace and `npm view express` both fail in that session, and both work again after a full restart | | |
 
 BG-7 is the one case where the editor being healthy is the problem. An adopted
 server outlived the bootstrap that forked it, and the DNS proxy died with that
@@ -147,7 +147,7 @@ the device.
 | TC-4 | Ruby and Java run | `ruby -e 'puts 1+1'`; write and run a `Hello.java` with `java Hello.java` | Both print their output | | |
 | TC-5 | Go runs but does not compile | `go version`, then `go build` on any package | `go version` prints; `go build` **is expected to fail** with a permission error. Anything else is the surprise worth reporting | | |
 | TC-6 | Toolchain uninstall | Manage toolchains > uninstall one | Files removed, command no longer found in a new terminal | | |
-| TC-7 | A sideloaded install pins one release | Install any toolchain on a build that is NOT from Play, with `adb logcat -s ToolchainManager` running | One line reading `Pinned this install to .../releases/download/<tag>`, naming a concrete tag rather than `latest`, and the install completes. A `Falling back to the unpinned release URL` line instead is not a failure, but record it: it means the resolve did not work on this network | | |
+| TC-7 | A sideloaded install pins one release | Install any toolchain on a build that is NOT from Play, with `adb logcat -s VSCodroid.ToolchainManager` running (Logger prefixes every tag, so the bare name matches nothing) | One line reading `Pinned this install to .../releases/download/<tag>`, naming a concrete tag rather than `latest`, and the install completes. A `Falling back to the unpinned release URL` line instead is not a failure, but record it: it means the resolve did not work on this network | | |
 
 TC-5 is written as an expected failure on purpose. `go` starts its compiler and
 linker as separate programs from the app's own storage, and Android refuses to

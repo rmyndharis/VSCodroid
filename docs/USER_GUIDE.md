@@ -595,13 +595,32 @@ If the app shows a white screen after opening:
 > backed up, and on Android 11 and later that directory is not reachable from
 > most file managers, so the files cannot be recovered afterwards.
 
-Rescue anything unsaved first:
+Rescue anything unsaved first. Which route is open to you depends on whether the
+editor still works, and on a white screen it does not:
 
-- Push to a remote, if the project is a git repository.
+**If the editor will not open**, the only routes are from a computer, because
+every in-app route needs the editor. With USB debugging on:
+
+```
+adb pull /storage/emulated/0/Android/data/com.vscodroid/files/projects
+```
+
+Some devices also expose that path over MTP when plugged in, so a file manager on
+the computer can copy it. Both work while the app is unusable, which is the
+situation this section is about.
+
+**If the editor does open** and you are clearing data for some other reason, two
+in-app routes exist:
+
+- Push to a remote, if the project is a git repository. This is the only route
+  that preserves history.
 - Or run **VSCodroid: Open Folder from Device** from the Command Palette
   (**Ctrl+Shift+P**), choose a folder outside the app such as Documents, and copy
   your work there. A folder opened that way lives outside the app's storage, so
-  Clear Data does not touch it.
+  Clear Data does not touch it. **It does not carry `.git` or `.env`**, along
+  with `node_modules`, `.gradle`, `.idea`, `venv` and `__pycache__`: the
+  device-folder sync skips those directories, so this rescues your files but not
+  your repository history and not your local configuration.
 
 Then clear app data from Settings > Apps > VSCodroid > Clear Data and relaunch.
 

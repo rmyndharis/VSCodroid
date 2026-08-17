@@ -322,9 +322,11 @@ class FirstRunSetup(
      * Recreates the projects directory if it has gone.
      *
      * Alone among the directories above, this one lives in app-external storage
-     * -- /storage/emulated/0/Android/data/<pkg>/files/projects -- which shows up
-     * in every file manager and is exactly the kind of path a cleaner app
-     * removes. The rest are under filesDir, where nothing outside the app can
+     * -- /storage/emulated/0/Android/data/<pkg>/files/projects -- which some routes
+     * outside the app can still reach (MTP over USB, a few OEM managers) and
+     * which Clear Data wipes outright. Android 11 closed Android/data to the
+     * system Files app and to other apps, so this is narrower than the "shows up
+     * in every file manager" it used to say, and still enough to lose it. The rest are under filesDir, where nothing outside the app can
      * reach them, so they only ever need creating. This one needs repairing.
      *
      * Creating it once per version was not enough. isFirstRun() gates on

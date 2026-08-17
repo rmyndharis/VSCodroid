@@ -252,7 +252,7 @@ applied to the downloaded server. There are no `.diff` files anywhere in the bui
 
 ```bash
 # View logs
-adb logcat -s VSCodroid
+adb logcat -s VSCodroid.MainActivity VSCodroid.NodeService VSCodroid.ProcessManager VSCodroid.ToolchainManager
 
 # View all app logs
 adb logcat --pid=$(adb shell pidof com.vscodroid)

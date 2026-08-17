@@ -97,7 +97,8 @@ class SplashActivity : AppCompatActivity() {
         repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
         // Beside the other idempotent repairs, for the same reason they are
         // here: it can disappear between launches. This one because it is
-        // visible in a file manager, not because the app moved it.
+        // reachable from outside the app by some routes, and wiped by Clear
+        // Data, not because the app moved it.
         repair("the projects directory") { setup.ensureProjectsDir() }
         // A toolchain keeps the manifest it was installed with, so a
         // packaging fix never reaches an install that already exists. This
