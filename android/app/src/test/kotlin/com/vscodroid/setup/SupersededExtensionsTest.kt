@@ -65,7 +65,10 @@ class SupersededExtensionsTest {
     }
 
     @Test
-    fun `leaves alone anything whose version is not numeric`() {
+    fun `leaves alone a name that does not split into a bundled id`() {
+        // None of these three splits into an id the bundled set knows, so what
+        // they guard is that lookup and not the version comparison below it,
+        // which they never reach. The case after this one covers that.
         val present = bundled + listOf(
             "ms-python.python-2026.4.0-rc1",
             "extensions.json",
