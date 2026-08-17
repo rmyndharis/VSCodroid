@@ -239,7 +239,27 @@ class MainActivity : AppCompatActivity() {
      */
     private val downloadDestinationLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("*/*")
-    ) { uri -> downloads.onDestinationChosen(uri) }
+    ) { uri ->
+        val requestId = pickerRequestId
+        pickerRequestId = null
+        downloads.onDestinationChosen(requestId, uri)
+    }
+
+    /**
+     * The download the picker on screen was opened for.
+     *
+     * The contract answers with a `Uri` and nothing else, so the request has to
+     * be carried across the launch by hand. Without it the coordinator would
+     * have to take whatever it is holding as the owner of the answer, and a
+     * result belonging to a download that has since been dropped would be
+     * adopted by the one that replaced it: bytes written into a document
+     * created under the wrong file's name.
+     *
+     * Main thread only, which is what makes a plain field enough: it is set
+     * inside the post below and read in the callback above, and
+     * [DownloadCoordinator] launches one picker at a time.
+     */
+    private var pickerRequestId: String? = null
 
     /**
      * Saving a file the editor asked to download.
@@ -253,12 +273,23 @@ class MainActivity : AppCompatActivity() {
      * name each other, and inference cannot start from either end.
      */
     private val downloads: DownloadCoordinator = DownloadCoordinator(object : DownloadHost {
-        override fun askDestination(fileName: String): Boolean = try {
-            downloadDestinationLauncher.launch(fileName)
-            true
-        } catch (e: ActivityNotFoundException) {
-            Logger.w(tag, "No document creator on this device", e)
-            false
+        /**
+         * Posted rather than launched here. A download that waited its turn is
+         * started from whatever thread finished the one before it, which is the
+         * WebView's bridge thread, and the activity result registry is main
+         * thread state.
+         */
+        override fun askDestination(requestId: String, fileName: String) {
+            runOnUiThread {
+                pickerRequestId = requestId
+                try {
+                    downloadDestinationLauncher.launch(fileName)
+                } catch (e: ActivityNotFoundException) {
+                    Logger.w(tag, "No document creator on this device", e)
+                    pickerRequestId = null
+                    downloads.onDestinationUnavailable(requestId)
+                }
+            }
         }
 
         override fun openDestination(destination: Uri): OutputStream? =

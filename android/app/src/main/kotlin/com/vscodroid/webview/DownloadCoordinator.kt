@@ -20,6 +20,16 @@ enum class DownloadOutcome { SAVED, CANCELLED, FAILED }
 private const val MAX_NAMES = 8
 
 /**
+ * How many downloads may wait for their turn at the picker.
+ *
+ * There is one picker and it takes the user seconds to answer, so downloads
+ * started while it is open queue behind it. A bound rather than a capacity:
+ * every waiting download is holding a file's bytes in the page, and the page
+ * decides how many downloads to start.
+ */
+private const val MAX_QUEUED = 8
+
+/**
  * Everything [DownloadCoordinator] needs from the Activity it runs inside.
  *
  * An interface rather than the pile of lambdas the chrome client uses, because
@@ -29,12 +39,16 @@ private const val MAX_NAMES = 8
  */
 interface DownloadHost {
     /**
-     * Starts the create-document picker for a file named [fileName]. Answers
-     * whether anything took the request, on the same terms as the file chooser:
-     * false means no picker opened, so no result will ever arrive and whoever
-     * is waiting has to be told now.
+     * Starts the create-document picker for [requestId], offering [fileName].
+     *
+     * The answer comes back at [DownloadCoordinator.onDestinationChosen]
+     * carrying the same [requestId], or at
+     * [DownloadCoordinator.onDestinationUnavailable] when no picker opened at
+     * all. Nothing is returned from here because a download that waited its
+     * turn is started from whatever thread finished the one before it, while a
+     * picker can only be launched from the main thread.
      */
-    fun askDestination(fileName: String): Boolean
+    fun askDestination(requestId: String, fileName: String)
 
     /** Opens the document the user chose for writing, or null when it will not open. */
     fun openDestination(destination: Uri): OutputStream?
@@ -71,6 +85,13 @@ interface DownloadHost {
  * was a menu entry that did nothing and said nothing, and a fix that fails
  * quietly is the same defect wearing more code.
  *
+ * One at a time is a rule about the picker, not a simplification. Downloading a
+ * multi-select starts one download per file at once, and only one picker can be
+ * open and answerable: a second one launched over the first produces two
+ * results that nothing can tell apart, and the file the user named for one gets
+ * the bytes of the other. So the rest queue, keep their own names, and get
+ * their own picker in turn.
+ *
  * Thread confinement is not available. [onDownloadStart] and
  * [onDestinationChosen] arrive on the UI thread, while [onBytes] and
  * [onComplete] arrive on the WebView's bridge thread, so the state is guarded
@@ -83,15 +104,37 @@ class DownloadCoordinator(private val host: DownloadHost) {
     /**
      * The download being worked on, or null.
      *
-     * One at a time, and the id is what makes that safe rather than a
-     * simplification that leaks. The page is told which request it is answering
-     * and every answer is checked against the live one, so bytes belonging to a
-     * download that has already been displaced are dropped instead of being
-     * written into the file the user is currently waiting for. Without the
-     * check, cancelling one download and starting another would silently
-     * interleave two files.
+     * The page is told which request it is answering and every answer is
+     * checked against this one, so bytes belonging to a download that is
+     * already over are dropped instead of being written into the file the user
+     * is waiting for now. Without the check, a download that failed while the
+     * page was still reading it would spill the rest of its file into the next
+     * one.
      */
     private var pending: Pending? = null
+
+    /**
+     * Downloads started while the picker was busy, in the order they arrived.
+     *
+     * Multi-select download starts one download per file, and there is one
+     * picker: two of them open at once produce two results that cannot be told
+     * apart from one another, and the file the user named for one is filled
+     * with the bytes of the other. So the later ones wait here and are offered
+     * their own picker, under their own name, when their turn comes.
+     */
+    private val waiting = ArrayDeque<Pending>()
+
+    /**
+     * The request the picker on screen belongs to, or null when none is open.
+     *
+     * Kept apart from [pending] because the two stop agreeing exactly when it
+     * matters. A picker outlives the download that opened it: the renderer can
+     * die under it, and the request is then dropped while the picker is still
+     * on screen. Its result still arrives, having already created a document,
+     * and the id is what says that document belongs to nobody and has to go.
+     * It is also what keeps a second picker from being opened over the first.
+     */
+    private var awaitingPicker: String? = null
 
     private var requestCounter = 0L
 
@@ -139,37 +182,80 @@ class DownloadCoordinator(private val host: DownloadHost) {
 
     /**
      * A download has started in the page. Works out what to call it and asks
-     * the user where to put it.
+     * the user where to put it, or queues it when the picker is busy.
      */
     @Synchronized
     fun onDownloadStart(url: String, contentDisposition: String?) {
-        // Anything still in flight loses, and loses loudly. It cannot be kept:
-        // there is one create-document result callback and it is about to be
-        // claimed by this download, so the previous one would wait for an
-        // answer that now belongs to somebody else.
-        abandon("replaced by a later download")
-
         // Consumed, not read. The page reports a name per click, so leaving it
         // behind would let a later download of the same URL that the page did
         // not name inherit this one's filename.
         val fileName = downloadFileName(url, contentDisposition, reportedNames.remove(url))
         requestCounter += 1
         val request = Pending("dl-$requestCounter", url, fileName)
-        pending = request
 
-        if (!host.askDestination(fileName)) {
-            // No picker opened, so no result will arrive to close this out. The
-            // user asked for a file and has to hear that they are not getting
-            // one, here, because nothing downstream will ever run.
-            Logger.w(tag, "No create-document picker started for $fileName")
-            pending = null
-            host.report(DownloadOutcome.FAILED, fileName, "no picker")
+        if (pending != null || awaitingPicker != null) {
+            if (waiting.size >= MAX_QUEUED) {
+                // Refused rather than dropped from the other end: the downloads
+                // already waiting were asked for first, and a queue that
+                // silently forgets its tail is the failure this class exists to
+                // rule out.
+                Logger.w(tag, "Refusing $fileName; ${waiting.size} downloads already waiting")
+                host.report(DownloadOutcome.FAILED, fileName, "too many downloads at once")
+                return
+            }
+            waiting.addLast(request)
+            return
         }
+        start(request)
+    }
+
+    /** Hands [request] the picker. Only ever called with nothing else holding it. */
+    private fun start(request: Pending) {
+        pending = request
+        awaitingPicker = request.id
+        host.askDestination(request.id, request.fileName)
     }
 
     /**
-     * The create-document picker answered. [destination] is null when the user
-     * backed out.
+     * Gives the picker to the next download waiting for it, if it is free.
+     *
+     * Called from every path that ends a download, including the ones that end
+     * it badly. A download that fails must not take the queue behind it down,
+     * and a queue that stops being drained is a page waiting on files that will
+     * never be asked for.
+     */
+    private fun startNextIfIdle() {
+        if (pending != null || awaitingPicker != null) return
+        start(waiting.removeFirstOrNull() ?: return)
+    }
+
+    /**
+     * No picker opened for [requestId], so no result will ever arrive for it.
+     *
+     * The user asked for a file and has to hear that they are not getting one,
+     * from here, because nothing downstream will run.
+     */
+    @Synchronized
+    fun onDestinationUnavailable(requestId: String) {
+        if (awaitingPicker == requestId) awaitingPicker = null
+        val request = live(requestId)
+        if (request == null) {
+            startNextIfIdle()
+            return
+        }
+        Logger.w(tag, "No create-document picker started for ${request.fileName}")
+        fail(request, "no picker")
+    }
+
+    /**
+     * The create-document picker answered [requestId]. [destination] is null
+     * when the user backed out.
+     *
+     * The id is checked rather than assumed, and a result that does not match
+     * the download waiting for one loses its document. The picker creates the
+     * file the moment the user confirms a name, so a result nobody is waiting
+     * on has already put an empty file in their folder wearing the name of a
+     * file they will not get.
      *
      * Cancelling is the ordinary case and it is deliberately not silent. It is
      * also the cheapest to get right: the picker creates nothing until the user
@@ -177,11 +263,19 @@ class DownloadCoordinator(private val host: DownloadHost) {
      * go of the request.
      */
     @Synchronized
-    fun onDestinationChosen(destination: Uri?) {
-        val request = pending ?: return
+    fun onDestinationChosen(requestId: String?, destination: Uri?) {
+        if (requestId != null && requestId == awaitingPicker) awaitingPicker = null
+        val request = pending?.takeIf { it.id == requestId }
+        if (request == null) {
+            Logger.w(tag, "Destination for $requestId belongs to no download in flight")
+            destination?.let { host.discardDestination(it) }
+            startNextIfIdle()
+            return
+        }
         if (destination == null) {
             pending = null
             host.report(DownloadOutcome.CANCELLED, request.fileName, null)
+            startNextIfIdle()
             return
         }
         // Recorded before the stream is opened, so a failure to open still has
@@ -258,23 +352,28 @@ class DownloadCoordinator(private val host: DownloadHost) {
         }
         pending = null
         host.report(DownloadOutcome.SAVED, request.fileName, null)
+        startNextIfIdle()
     }
 
     /**
-     * Drops a download that can no longer be completed, without reporting.
+     * Drops every download that can no longer be completed, without reporting.
      *
      * For the WebView going away underneath one. The page that owed the bytes
-     * no longer exists, so nothing will ever arrive, and the document created
-     * for it has to go rather than stay as an empty file the user did not ask
-     * for. Silent because the user is watching a renderer crash recover, and a
+     * no longer exists, so nothing will ever arrive for the download in flight
+     * or for any of the ones queued behind it, and the document created for it
+     * has to go rather than stay as an empty file the user did not ask for.
+     * Silent because the user is watching a renderer crash recover, and a
      * download failure toast on top of that explains nothing.
+     *
+     * A picker still on screen is left alone, because it belongs to the user
+     * rather than to the page. Its result arrives naming a download that is
+     * gone, and [onDestinationChosen] removes the document it created.
      */
     @Synchronized
-    fun onPageGone() = abandon("the page went away")
-
-    private fun abandon(reason: String) {
+    fun onPageGone() {
+        waiting.clear()
         val request = pending ?: return
-        Logger.w(tag, "Abandoning the download of ${request.fileName}: $reason")
+        Logger.w(tag, "Abandoning the download of ${request.fileName}: the page went away")
         pending = null
         closeAndDiscard(request)
     }
@@ -283,6 +382,7 @@ class DownloadCoordinator(private val host: DownloadHost) {
         pending = null
         closeAndDiscard(request)
         host.report(DownloadOutcome.FAILED, request.fileName, detail)
+        startNextIfIdle()
     }
 
     /**
@@ -309,7 +409,7 @@ class DownloadCoordinator(private val host: DownloadHost) {
     private fun live(requestId: String): Pending? {
         val request = pending
         if (request == null || request.id != requestId) {
-            Logger.d(tag, "Ignoring bytes for $requestId; it is not the live download")
+            Logger.d(tag, "Ignoring an answer for $requestId; it is not the live download")
             return null
         }
         return request

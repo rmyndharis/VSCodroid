@@ -41,6 +41,9 @@ class DownloadCoordinatorTest {
     /** What the fake picker was asked to create, one entry per request. */
     private val asked = mutableListOf<String>()
 
+    /** The request each of those pickers was opened for, in the same order. */
+    private val pickerIds = mutableListOf<String>()
+
     /** Documents the fake picker created and did not delete. */
     private val documents = mutableMapOf<Uri, RecordingStream>()
 
@@ -97,9 +100,10 @@ class DownloadCoordinatorTest {
     }
 
     private val host = object : DownloadHost {
-        override fun askDestination(fileName: String): Boolean {
+        override fun askDestination(requestId: String, fileName: String) {
             asked += fileName
-            return pickerOpens
+            pickerIds += requestId
+            if (!pickerOpens) coordinator.onDestinationUnavailable(requestId)
         }
 
         override fun openDestination(destination: Uri): OutputStream? {
@@ -130,6 +134,7 @@ class DownloadCoordinatorTest {
         every { Logger.w(any(), any()) } just Runs
         every { Logger.w(any(), any(), any()) } just Runs
         asked.clear()
+        pickerIds.clear()
         documents.clear()
         discarded.clear()
         reported.clear()
@@ -152,10 +157,14 @@ class DownloadCoordinatorTest {
     /** The id the page is told to answer under, for the request just started. */
     private fun liveRequestId(): String = readRequests.last().first
 
+    /** Answers the picker on screen the way the Activity does, naming its request. */
+    private fun chooseDestination(target: Uri?) =
+        coordinator.onDestinationChosen(pickerIds.last(), target)
+
     /** Drives one whole download to the point where the page is reading it. */
     private fun startAndChoose(url: String = "blob:x", target: Uri = destination()): String {
         coordinator.onDownloadStart(url, null)
-        coordinator.onDestinationChosen(target)
+        chooseDestination(target)
         return liveRequestId()
     }
 
@@ -192,7 +201,7 @@ class DownloadCoordinatorTest {
     fun `cancelling says so and leaves nothing behind`() {
         coordinator.onDownloadStart("blob:x", null)
 
-        coordinator.onDestinationChosen(null)
+        chooseDestination(null)
 
         assertEquals(listOf(DownloadOutcome.CANCELLED to FALLBACK_DOWNLOAD_NAME), reported,
             "a cancellation the user cannot see is the failure this replaces")
@@ -265,7 +274,7 @@ class DownloadCoordinatorTest {
         destinationOpens = false
         coordinator.onDownloadStart("blob:x", null)
 
-        coordinator.onDestinationChosen(target)
+        chooseDestination(target)
 
         assertEquals(listOf(DownloadOutcome.FAILED to FALLBACK_DOWNLOAD_NAME), reported)
         assertEquals(listOf(target), discarded,
@@ -286,27 +295,161 @@ class DownloadCoordinatorTest {
         assertEquals(listOf(DownloadOutcome.FAILED to FALLBACK_DOWNLOAD_NAME), reported)
         // Nothing is left waiting: a later result would otherwise be taken as
         // this request's answer and write into a file nobody asked for.
-        coordinator.onDestinationChosen(destination())
+        val stray = destination("stray")
+        chooseDestination(stray)
         assertEquals(1, reported.size, "the abandoned request must not be revived by a stray result")
+        assertEquals(listOf(stray), discarded, "and the document it created does not stay behind")
     }
 
     /**
-     * Bytes belonging to a download that has already been displaced.
+     * Multi-select download: one download per file, arriving before the user has
+     * answered anything.
+     *
+     * The measured failure was two pickers open at once, whose results are two
+     * `Uri`s and nothing else. Matched by arrival they cross over, and the file
+     * created under the first name is filled with the second file's bytes while
+     * an empty one keeps the other name. So each file has to reach the
+     * destination chosen for it, and that is what is asserted here, not the
+     * order the pickers happened to open in.
+     */
+    @Test
+    fun `two downloads at once each land in the destination chosen for them`() {
+        coordinator.onDownloadNamed("blob:one", "first.txt")
+        coordinator.onDownloadNamed("blob:two", "second.txt")
+        coordinator.onDownloadStart("blob:one", null)
+        coordinator.onDownloadStart("blob:two", null)
+
+        assertEquals(listOf("first.txt"), asked,
+            "a second picker cannot be told apart from the first, so it must not be opened")
+
+        val first = destination("first")
+        chooseDestination(first)
+        val firstId = liveRequestId()
+        coordinator.onBytes(firstId, encode("one"))
+        coordinator.onComplete(firstId, null)
+
+        assertEquals(listOf("first.txt", "second.txt"), asked,
+            "the download that waited gets its turn, under its own name")
+        val second = destination("second")
+        chooseDestination(second)
+        val secondId = liveRequestId()
+        coordinator.onBytes(secondId, encode("two"))
+        coordinator.onComplete(secondId, null)
+
+        assertEquals("one", documents[first]!!.written.toString())
+        assertEquals("two", documents[second]!!.written.toString())
+        assertEquals(
+            listOf(DownloadOutcome.SAVED to "first.txt", DownloadOutcome.SAVED to "second.txt"),
+            reported,
+        )
+        assertEquals(emptyList<Uri>(), discarded, "neither file was left empty or removed")
+    }
+
+    /**
+     * A queued download still gets a picker after the one ahead of it failed.
+     *
+     * The queue is drained from the paths that end a download, and the ones that
+     * end badly are the easy half to forget. Forgetting them leaves the page
+     * waiting on a file it will never be asked to read, with nothing said.
+     */
+    @Test
+    fun `a download waiting behind a failed one still gets its turn`() {
+        coordinator.onDownloadNamed("blob:two", "second.txt")
+        val firstId = startAndChoose("blob:one", destination("first"))
+        coordinator.onDownloadStart("blob:two", null)
+
+        coordinator.onComplete(firstId, "the page could not read it")
+
+        assertEquals(listOf(FALLBACK_DOWNLOAD_NAME, "second.txt"), asked)
+        val second = destination("second")
+        chooseDestination(second)
+        coordinator.onBytes(liveRequestId(), encode("two"))
+        coordinator.onComplete(liveRequestId(), null)
+        assertEquals("two", documents[second]!!.written.toString())
+    }
+
+    /**
+     * The picker outlives the download that opened it. A renderer crash drops
+     * the request while the user is still choosing a folder, and their answer
+     * arrives afterwards having already created the file.
+     *
+     * Taking it would fill a document named for a file the page can no longer
+     * read; leaving it would leave that document empty in the user's folder.
+     */
+    @Test
+    fun `a destination chosen for a download that is gone is not adopted`() {
+        coordinator.onDownloadStart("blob:one", null)
+        coordinator.onPageGone()
+
+        val orphan = destination("orphan")
+        chooseDestination(orphan)
+
+        assertEquals(listOf(orphan), discarded)
+        assertEquals(emptyList<Pair<String, String>>(), readRequests,
+            "there is no page left to read anything")
+        // And the next download is not locked out by the picker that answered
+        // too late.
+        coordinator.onDownloadStart("blob:two", null)
+        assertEquals(2, asked.size)
+    }
+
+    /**
+     * A result carrying an id that is not the one the picker was opened for.
+     *
+     * The download in flight is left exactly as it was, because its own answer
+     * is still coming, and the document the stray result created is removed.
+     */
+    @Test
+    fun `a destination that names another request never displaces the live one`() {
+        coordinator.onDownloadStart("blob:one", null)
+        val stray = destination("stray")
+
+        coordinator.onDestinationChosen("dl-not-this-one", stray)
+
+        assertEquals(listOf(stray), discarded)
+        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported)
+        val target = destination("target")
+        chooseDestination(target)
+        val id = liveRequestId()
+        coordinator.onBytes(id, encode("mine"))
+        coordinator.onComplete(id, null)
+        assertEquals("mine", documents[target]!!.written.toString(),
+            "the download that was waiting still gets the destination it was promised")
+    }
+
+    /**
+     * The queue is bounded, and the refusal is reported. What it protects is not
+     * a size: every waiting download is a file the page is holding in memory for
+     * it, so an unbounded queue is unbounded memory driven by page clicks.
+     */
+    @Test
+    fun `downloads beyond what the queue holds are refused out loud`() {
+        coordinator.onDownloadStart("blob:live", null)
+        repeat(8) { coordinator.onDownloadStart("blob:queued$it", null) }
+
+        coordinator.onDownloadStart("blob:overflow", null)
+
+        assertEquals(listOf(DownloadOutcome.FAILED to FALLBACK_DOWNLOAD_NAME), reported,
+            "a download that will never be started has to say so")
+        assertEquals(1, asked.size, "and nothing ahead of it in the queue was disturbed")
+    }
+
+    /**
+     * Bytes belonging to a download that is already over.
      *
      * The page is told which request it is answering precisely so this can be
-     * refused. Without the check, a slow first download and a second one started
-     * over it would interleave into the file the user is currently waiting for,
-     * and the result would be a corrupt file reported as saved.
+     * refused. The page reads on its own schedule and is only asked to stop
+     * between pieces, so a download that failed here can still have pieces in
+     * flight when the next one opens its file. Without the check they would
+     * land in it, and the result would be a corrupt file reported as saved.
      */
     @Test
     fun `bytes from a stale request never reach the live file`() {
-        val first = destination("first")
-        val firstId = startAndChoose("blob:one", first)
+        val firstId = startAndChoose("blob:one", destination("first"))
+        coordinator.onComplete(firstId, "the read failed")
 
         val second = destination("second")
-        coordinator.onDownloadStart("blob:two", null)
-        coordinator.onDestinationChosen(second)
-        val secondId = liveRequestId()
+        val secondId = startAndChoose("blob:two", second)
 
         assertEquals(false, coordinator.onBytes(firstId, encode("stale")),
             "an answer for a request that is over is refused")
@@ -318,21 +461,25 @@ class DownloadCoordinatorTest {
     }
 
     /**
-     * Starting a second download over one still in flight. The first cannot be
-     * kept: there is one picker result to claim and the second has just claimed
-     * it. So its file has to go, and it must not be reported as saved.
+     * A second download started over one still being written.
+     *
+     * The first is not displaced. It has a document open and a page reading into
+     * it, and the second has nothing yet, so the second waits: displacing here
+     * was what left a file behind under the wrong name.
      */
     @Test
-    fun `a second download removes the file the first was filling`() {
+    fun `a second download waits rather than taking the first one's place`() {
         val first = destination("first")
         val firstId = startAndChoose("blob:one", first)
         coordinator.onBytes(firstId, encode("partial"))
 
         coordinator.onDownloadStart("blob:two", null)
 
-        assertEquals(listOf(first), discarded, "the displaced download's file must not survive")
-        assertTrue(reported.none { it.first == DownloadOutcome.SAVED },
-            "a download that was cut short is not a saved one")
+        assertEquals(1, asked.size, "the second download has no picker yet")
+        assertEquals(emptyList<Uri>(), discarded, "and the first one keeps the file it is filling")
+        coordinator.onComplete(firstId, null)
+        assertEquals("partial", documents[first]!!.written.toString())
+        assertTrue(reported.contains(DownloadOutcome.SAVED to FALLBACK_DOWNLOAD_NAME))
     }
 
     /**
@@ -368,7 +515,7 @@ class DownloadCoordinatorTest {
         coordinator.onDownloadNamed("blob:x", "report.pdf")
 
         coordinator.onDownloadStart("blob:x", null)
-        coordinator.onDestinationChosen(null)
+        chooseDestination(null)
         coordinator.onDownloadStart("blob:x", null)
 
         assertEquals(listOf("report.pdf", FALLBACK_DOWNLOAD_NAME), asked,
@@ -403,7 +550,7 @@ class DownloadCoordinatorTest {
         repeat(64) { coordinator.onDownloadNamed("blob:$it", "file$it.txt") }
 
         coordinator.onDownloadStart("blob:0", null)
-        coordinator.onDestinationChosen(null)
+        chooseDestination(null)
         coordinator.onDownloadStart("blob:63", null)
 
         assertEquals(listOf(FALLBACK_DOWNLOAD_NAME, "file63.txt"), asked,
