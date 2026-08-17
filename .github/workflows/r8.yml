@@ -86,6 +86,23 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          # Pinned to the open-source implementation, not left to the default.
+          #
+          # gradle/actions v6 added cache-provider and defaults it to 'enhanced',
+          # which the action's own description calls "the full-featured commercial
+          # caching service (gradle-actions-caching)"; 'basic' is "a simple
+          # open-source caching implementation based on GitHub Actions cache".
+          # v4 declared no such input, so the version bump moved every Gradle job
+          # here onto the commercial one without anything in this repository
+          # saying so, including the job that holds the signing keystore.
+          #
+          # This project drops dependencies over their licences (Berkeley DB went
+          # for being AGPL) and publishes a source offer covering 39 components.
+          # Taking on a commercial service silently is not a decision a dependency
+          # bump gets to make here. Naming the value also means a later default
+          # change cannot move it again.
+          cache-provider: basic
 
       # The shrinker needs compiled classes and processed resources, not the
       # 874 MB asset tree. Measured with --dry-run, which computes the graph

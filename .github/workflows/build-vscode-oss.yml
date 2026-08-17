@@ -33,9 +33,9 @@ jobs:
 
     steps:
       # Write permission is real here and cannot be dropped: this job publishes
-      # its own release. What it does not need is a push token sitting in
-      # .git/config while it clones the VS Code source and runs a full npm
-      # install against it. The release is created through the API.
+      # its own release. What it does not need is a persisted push token while
+      # it clones the VS Code source and runs a full npm install against it.
+      # The release is created through the API.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

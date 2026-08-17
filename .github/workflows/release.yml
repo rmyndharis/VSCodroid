@@ -56,8 +56,10 @@ jobs:
           # This job runs Gradle plugins, npm postinstalls and several download
           # scripts, and it holds the signing secrets. It never pushes: the one
           # step that reaches GitHub asks the API with GH_TOKEN scoped to itself,
-          # and the git commands here only read local history. A token left in
-          # .git/config would be reachable by all of that for ninety minutes.
+          # and the git commands here only read local history. A persisted token
+          # would be readable by all of that for ninety minutes. Where checkout
+          # stores it is deliberately not named here: it has moved between major
+          # versions, and this setting is right whatever the location is.
           persist-credentials: false
 
       # A tag whose versionName does not match the one in build.gradle.kts is the
@@ -132,6 +134,23 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          # Pinned to the open-source implementation, not left to the default.
+          #
+          # gradle/actions v6 added cache-provider and defaults it to 'enhanced',
+          # which the action's own description calls "the full-featured commercial
+          # caching service (gradle-actions-caching)"; 'basic' is "a simple
+          # open-source caching implementation based on GitHub Actions cache".
+          # v4 declared no such input, so the version bump moved every Gradle job
+          # here onto the commercial one without anything in this repository
+          # saying so, including the job that holds the signing keystore.
+          #
+          # This project drops dependencies over their licences (Berkeley DB went
+          # for being AGPL) and publishes a source offer covering 39 components.
+          # Taking on a commercial service silently is not a decision a dependency
+          # bump gets to make here. Naming the value also means a later default
+          # change cannot move it again.
+          cache-provider: basic
 
       # The gates the pull request path runs, applied to the bits actually being
       # published. They were reachable on no other trigger: lint.yml fires on
@@ -588,8 +607,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nothing here pushes, and the release is created through the API with
-          # its own token. Leaving the checkout token in .git/config would make
-          # it readable by anything this job runs.
+          # its own token. A persisted checkout token would be readable by
+          # anything this job runs, wherever checkout chooses to keep it.
           persist-credentials: false
 
       - name: Download build artifacts
