@@ -20,7 +20,7 @@ import java.io.File
  * They are guarded one at a time because a single `try` made the first failure
  * cost the rest, and the first is not the least likely to fail: `.npmrc` is
  * rewritten on the first launch after any reinstall, and a full disk turns that
- * into an exception that used to take the twelve calls behind it, including the
+ * into an exception that used to take the thirteen calls behind it, including the
  * only pass that gives disk back, down with it.
  *
  * Read out of the source, following [com.vscodroid.DownloadStateWiringTest],
@@ -78,6 +78,7 @@ class LaunchRepairWiringTest {
         "createNpmWrappers",
         "ensureToolchainEnvSourcing",
         "ensurePromptFix",
+        "createBashEnvFile",
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
         "repairInstalledToolchains",
@@ -274,10 +275,10 @@ class LaunchRepairWiringTest {
     }
 
     /**
-     * The other direction, and the order with it. Without this, a fourteenth
+     * The other direction, and the order with it. Without this, a fifteenth
      * repair could be added inside the shared `try` this class exists to keep
      * dismantled and every assertion above would still pass, because they name
-     * only the thirteen they know.
+     * only the fourteen they know.
      *
      * Order is checked because the list above says "in call order" and because
      * one pair genuinely depends on it: `repairTruncatedSetupFiles` clears a
@@ -300,7 +301,7 @@ class LaunchRepairWiringTest {
         /**
          * `repair("...") { <receiver>.<name>() }` and nothing else. The receiver
          * is optional and may be a constructor call, which is how two of the
-         * thirteen are written.
+         * fourteen are written.
          */
         val BARE_REPAIR_CALL =
             Regex("""^repair\("[^"]*"\)\s*\{\s*(?:[A-Za-z_]\w*(?:\([^()]*\))?\.)?([A-Za-z_]\w*)\(\)\s*}$""")

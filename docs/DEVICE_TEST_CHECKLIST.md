@@ -169,6 +169,7 @@ as a known outcome keeps an unchecked box meaning "not tested" rather than
 | TT-8 | tmux | `tmux new-session -d && tmux ls` | Session listed | | |
 | TT-9 | ripgrep | `rg "pattern" .` | Search results shown | | |
 | TT-10 | VS Code Search | Use Search sidebar (Ctrl+Shift+F) | Results appear, file navigation works | | |
+| TT-11 | Commands outside the terminal | `bash -c 'type -t npm; type -t npx'`, then a `"type": "shell"` task running `npm -v` | Each reports `function`, and the task prints a version rather than "command not found". A toolchain command behaves the same once one is installed. `sh -c 'type npm'` still fails, which is the boundary, not a regression | | |
 
 ## 12. SAF & External Files
 

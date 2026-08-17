@@ -95,6 +95,10 @@ class SplashActivity : AppCompatActivity() {
         repair("the npm wrappers") { setup.createNpmWrappers() }
         repair("the toolchain env sourcing") { setup.ensureToolchainEnvSourcing() }
         repair("the prompt block") { setup.ensurePromptFix() }
+        // The same commands for shells that never read .bashrc. Outside the
+        // three above rather than inside them: it writes its own file whole, so
+        // it neither needs a .bashrc to exist nor leaves anything behind in one.
+        repair("the non-interactive shell env") { setup.createBashEnvFile() }
         repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
         // Beside the other idempotent repairs, for the same reason they are
         // here: it can disappear between launches. This one because it is
@@ -162,7 +166,7 @@ class SplashActivity : AppCompatActivity() {
      *
      * [what] names the repair in the log, and that is the second half of the
      * reason this exists: the single catch it replaced logged one message for
-     * thirteen calls, so the trace said something had failed without saying
+     * fourteen calls, so the trace said something had failed without saying
      * which, and the next line of the log was whatever the app did after
      * skipping the rest.
      *

@@ -1124,6 +1124,65 @@ class FirstRunSetup(
     }
 
     /**
+     * Writes the file `BASH_ENV` points at, which is what gives a NON-interactive
+     * shell the commands the terminal has.
+     *
+     * npm, npx, claude and every toolchain binary are bash functions rather than
+     * files, because SELinux denies execve under filesDir. They were defined in
+     * `.bashrc` alone, and bash reads `.bashrc` only when it is interactive. So
+     * everything that runs a command through `bash -c` -- a VS Code task, an npm
+     * lifecycle script, a build step an extension spawns -- was told
+     * "command not found" for a command the terminal beside it ran fine, and a
+     * toolchain that had installed correctly looked broken from the editor.
+     *
+     * Measured against bash 3.2.57, and it is the rule rather than the version
+     * that is being relied on. `bash -c 'type -t npm'`, `bash script.sh` and
+     * `bash -lc` all report the function once BASH_ENV names this file; an
+     * interactive shell reports nothing, because it reads `.bashrc` and never
+     * this. So the two files do not overlap in practice and nothing is defined
+     * twice.
+     *
+     * WHAT THIS DOES NOT FIX, because the gap is narrower than "commands work
+     * now" and the rest needs a different mechanism:
+     *
+     *  - a direct execve of the bare name. `child_process.spawn("go", ...)` with
+     *    no shell reaches no shell, so no function exists; and the file it would
+     *    have to find is under filesDir, which cannot be executed at all.
+     *  - `sh -c`. Android's `sh` is mksh, which has never heard of BASH_ENV, and
+     *    bash itself ignores the variable when it is invoked as `sh` or with
+     *    `--posix` -- both measured. Node's `child_process.exec()` and make's
+     *    default recipe shell are `/bin/sh`, so neither is covered.
+     *  - anything started before this file is written. It is regenerated at every
+     *    launch, ahead of the server, so that only matters on the very first one.
+     *
+     * Rewritten whole whenever the contents differ rather than appended to: it is
+     * generated state, so there is no user edit to preserve and no guard string
+     * whose presence could certify a half-written file. `.bashrc` remains the
+     * interactive shell's, and keeps its appenders.
+     */
+    fun createBashEnvFile() {
+        val envFile = File(Environment.getBashEnvPath(context))
+        val content = BASH_ENV_HEADER + npmBashFunctions() + claudeBashFunction() + """
+
+# On-demand toolchain env vars (Go, Ruby, Java, etc.)
+[ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
+"""
+        if (envFile.isFile && runCatching { envFile.readText() }.getOrNull() == content) return
+
+        envFile.parentFile?.mkdirs()
+        // Atomic because every non-interactive shell in the app sources this
+        // file: a truncated copy is not a missing command but a syntax error
+        // printed by every task, npm script and build the editor starts, with
+        // PATH possibly half-built behind it. A failure leaves the previous
+        // file, which is the last one that worked.
+        if (writeAtomically(envFile) { it.write(content.toByteArray()) }) {
+            Logger.i(tag, "Wrote ${envFile.name} for non-interactive shells")
+        } else {
+            Logger.w(tag, "Could not write ${envFile.name}; it keeps whatever it held before")
+        }
+    }
+
+    /**
      * Brings the .bashrc prompt block up to [PROMPT_VERSION], rewriting whatever
      * older shape is there.
      *
@@ -2209,6 +2268,25 @@ claude() {
  * moved the repair would silently stop recognising its own output.
  */
 private const val BASHRC_HEADER = "# VSCodroid bash configuration"
+
+/**
+ * What opens the file `BASH_ENV` names.
+ *
+ * Says out loud that the file is generated, because it is rewritten whenever its
+ * contents change and an edit made here would be gone by the next launch. The
+ * `.bashrc` beside it is the opposite: appended to, never regenerated, so a user
+ * may edit that one freely.
+ */
+private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE bash through BASH_ENV.
+# Generated at every launch -- edit ~/.bashrc instead, which is yours.
+#
+# npm, npx, claude and the toolchain binaries are shell functions because
+# SELinux will not execute a file under this app's data directory. Functions
+# live in .bashrc, which only an INTERACTIVE bash reads, so without this file a
+# task or an npm lifecycle script gets "command not found" for a command the
+# terminal runs fine. Interactive shells never read this file, so nothing here
+# is defined twice.
+"""
 
 /**
  * The prompt block written into `.bashrc`, shared by the first-run write and by

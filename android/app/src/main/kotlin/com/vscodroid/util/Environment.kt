@@ -71,6 +71,22 @@ object Environment {
             "NODE_PATH" to "$filesDir/server/vscode-reh/node_modules",
             "NODE_OPTIONS" to nodeOptions,
             "SHELL" to shell,
+            // What a NON-interactive bash reads at startup, and the only way the
+            // bundled commands exist for one. npm, npx, claude and every
+            // toolchain binary are bash FUNCTIONS, not files: SELinux denies
+            // execve under filesDir, so there is nothing on PATH for a plain
+            // `npm` to find. Those functions were written into .bashrc alone,
+            // which bash reads only when interactive -- so a VS Code task, an
+            // npm lifecycle script, or anything an extension runs through
+            // `bash -c` got "command not found" for a command the terminal
+            // beside it runs fine.
+            //
+            // Measured against bash 3.2.57, and it is the shape of the rule
+            // rather than the version that matters: `bash -c`, `bash script.sh`
+            // and `bash -lc` all source this file; an interactive shell does
+            // not, so nothing is defined twice. What it does NOT reach is
+            // written out at [FirstRunSetup.createBashEnvFile].
+            "BASH_ENV" to getBashEnvPath(context),
             "TERM" to term,
             "TERMINFO" to "$filesDir/usr/share/terminfo",
             "LANG" to "en_US.UTF-8",
@@ -204,6 +220,17 @@ object Environment {
      */
     fun getConnectionTokenPath(context: Context): String =
         "${getUserDataDir(context)}/data/token"
+
+    /**
+     * The file `BASH_ENV` names, written by [FirstRunSetup.createBashEnvFile].
+     *
+     * Beside `toolchain-env.sh` rather than in `home/`, because it is generated
+     * state and not something a user edits: it is rewritten whole whenever its
+     * contents change. `.bashrc` stays the interactive shell's file and is
+     * appended to, never regenerated.
+     */
+    fun getBashEnvPath(context: Context): String =
+        "${getUserDataDir(context)}/bash-env.sh"
 
     fun getExtensionsDir(context: Context): String =
         "${context.filesDir}/home/.vscodroid/extensions"
