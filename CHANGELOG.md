@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The on-device suite now checks toolchain installs and the terminal's shell configuration, and reports skipped rather than passed where adb cannot reach, instead of leaving both to a human checklist.
 - The extra key row's trackpad now has tests covering its speed gears and arrow output. It is the only way a touch user moves the cursor, and nothing guarded it.
 - Hardware keyboard support is now pinned by tests: no key event is intercepted, and the manifest still keeps a keyboard or a rotation from rebuilding the window.
+- A test now pins that the port scan steps over a bound port rather than abandoning the range for an ephemeral one, which costs the workbench origin its stability.
 - Removed twenty-six tracked files that nothing built, ran or opened, including the cross-compilation scripts replaced when binaries began coming from Termux.
 - Six releases that shipped without a changelog entry now have one, reconstructed from commit history and marked as such. Two footer links named a tag that never existed.
 

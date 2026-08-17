@@ -148,9 +148,28 @@ class PortFinderTest {
             // environmental failure, not a verdict on PortFinder -- on any machine
             // already using that port.
             val taken = PortFinder.findAvailablePort()
+            assertTrue(taken < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+
             hold(taken).use {
                 val port = PortFinder.findAvailablePort()
                 assertNotEquals(taken, port, "the scan must step over a bound port")
+                // Stepping over the bound port and giving up on the range both
+                // return something that is neither `taken` nor bound, so the two
+                // assertions around this one cannot tell them apart. Measured:
+                // with the scan range shrunk to a single port, every bound port
+                // falls straight through to the ServerSocket(0) fallback and both
+                // stay green.
+                //
+                // The fallback is not a harmless second answer. It hands back a
+                // port from the kernel's ephemeral range, which getOrAllocatePort
+                // deliberately refuses to remember, so the workbench origin stops
+                // being stable across cold starts and the IndexedDB behind it is
+                // dropped on every launch.
+                assertTrue(
+                    port < EPHEMERAL_BASE,
+                    "the scan must step over $taken, not abandon the range for the " +
+                        "ephemeral fallback; got $port",
+                )
                 assertTrue(PortFinder.isPortAvailable(port))
             }
         }
