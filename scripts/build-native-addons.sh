@@ -30,6 +30,20 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/android/app/src/main/assets/vscode-reh}"
 # cannot drift apart silently.
 NODE_VERSION="${NODE_VERSION:-24.18.0}"
 
+# What node-v$NODE_VERSION-headers.tar.gz must hash to, for the version on the
+# line above; move the two together. Recorded here rather than read from
+# nodejs.org's SHASUMS256.txt, because that file and the archive it describes
+# come from one host under one path prefix: together they say the bytes arrived
+# intact and nothing about whose bytes they are. These headers define the ABI
+# every addon here is compiled against, so a substituted archive is a
+# substituted ABI.
+#
+# What it does not buy: the value was taken from nodejs.org once, by hand, and
+# all it does is stop changing afterwards. SHASUMS256.txt is still read below,
+# only to say whether a mismatch is a bad download or a pin left behind by a
+# version bump.
+NODE_HEADERS_SHA256="6c7d41d83c3481d2301115b8ce4a44b7d4fbfa52859b1aac14f445d460137887"
+
 TARGET=aarch64-linux-android
 API=33
 
@@ -87,37 +101,36 @@ if [ ! -d "$NODE_INCLUDE" ]; then
     # last fetch in the tree still taking bytes on trust after every other one
     # was made to verify.
     #
-    # Same shape as download-npm.sh: nodejs.org publishes SHASUMS256.txt per
-    # release, and the digest is kept in a sidecar so an offline rebuild against
-    # an already-verified archive still verifies rather than dying in the fetch.
-    # With neither the network nor a sidecar, fail closed.
+    # Same shape as download-npm.sh: the expected value is the digest this
+    # repository pins, which is also the answer offline and on a cold cache
+    # alike. That is what the sidecar beside the cache used to buy, and why it
+    # is gone: two records of one expected value is one record too many.
     HEADERS_TARBALL="node-v$NODE_VERSION-headers.tar.gz"
     HEADERS_PATH="$WORK_DIR/$HEADERS_TARBALL"
-    HEADERS_SIDECAR="$HEADERS_PATH.sha256"
     [ -f "$HEADERS_PATH" ] || curl -fsSL --show-error \
         "https://nodejs.org/dist/v$NODE_VERSION/$HEADERS_TARBALL" -o "$HEADERS_PATH"
 
-    expected=$(curl -sL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" 2>/dev/null \
+    published=$(curl -sL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" 2>/dev/null \
         | awk -v f="$HEADERS_TARBALL" '$2 == f { print $1; exit }' || true)
-    if [ -n "$expected" ]; then
-        printf '%s\n' "$expected" > "$HEADERS_SIDECAR"
-    elif [ -f "$HEADERS_SIDECAR" ]; then
-        expected=$(cat "$HEADERS_SIDECAR")
-        echo "  sha256: using cached digest (SHASUMS256.txt unreachable)"
-    fi
-    if [ -z "$expected" ]; then
-        echo "  ERROR: no digest for $HEADERS_TARBALL (SHASUMS256.txt unreachable, no cached sidecar)" >&2
-        exit 1
+    if [ -n "$published" ] && [ "$published" != "$NODE_HEADERS_SHA256" ]; then
+        echo "  WARNING : nodejs.org does not agree with the pinned digest" >&2
+        echo "    pinned    : $NODE_HEADERS_SHA256" >&2
+        echo "    published : $published" >&2
+        echo "    If NODE_VERSION moved, update NODE_HEADERS_SHA256 to match." >&2
     fi
     actual=$( (sha256sum "$HEADERS_PATH" 2>/dev/null || shasum -a 256 "$HEADERS_PATH") | cut -d' ' -f1)
-    if [ "$actual" != "$expected" ]; then
-        echo "  ERROR: $HEADERS_TARBALL does not match SHASUMS256.txt" >&2
-        echo "    published : $expected" >&2
+    if [ "$actual" != "$NODE_HEADERS_SHA256" ]; then
+        # Left on disk, unlike before. With the expected value coming from
+        # upstream a mismatch meant a damaged download; now it just as easily
+        # means the pin is behind NODE_VERSION, in which case this is the right
+        # archive and deleting it changes nothing but the download time.
+        echo "  ERROR: $HEADERS_TARBALL does not match the pinned digest" >&2
+        echo "    pinned    : $NODE_HEADERS_SHA256" >&2
         echo "    downloaded: $actual" >&2
-        rm -f "$HEADERS_PATH"
+        echo "    Remove $HEADERS_PATH to refetch it." >&2
         exit 1
     fi
-    echo "  sha256  : verified"
+    echo "  sha256  : matches the pinned digest"
     tar xz -C "$WORK_DIR" -f "$HEADERS_PATH"
 fi
 [ -d "$NODE_INCLUDE" ] || { echo "ERROR: headers missing at $NODE_INCLUDE" >&2; exit 1; }

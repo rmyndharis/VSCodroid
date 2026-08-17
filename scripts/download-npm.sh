@@ -41,6 +41,23 @@ NPM_VERSION="11.16.0"
 NODE_TARBALL="node-${NODE_VERSION}-linux-arm64.tar.xz"
 NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
 
+# What that file must hash to, recorded here rather than read from
+# SHASUMS256.txt. nodejs.org serves the payload and the checksum from one host
+# under one path prefix, so together they prove only that the bytes arrived
+# intact: whoever can substitute one can substitute the other, and this side
+# would compare the substitution against itself and call it verified. Pinning it
+# makes this repository the party that says what the tarball is, which is the
+# same reason download-java.sh carries SPAWN_SHA_*.
+#
+# What it does not buy: nothing here establishes that this digest was ever the
+# right one. It was taken from nodejs.org once, by hand, and its whole value is
+# that it stops changing after that. A first fetch of a substituted tarball
+# would have pinned the substitution.
+#
+# Bound to NODE_VERSION above; bump the two together. The published file is
+# still fetched below, as the cross-check that says which of the two is stale.
+NODE_TARBALL_SHA256="58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6"
+
 DEST_DIR="$ASSETS_DIR/usr/lib/node_modules/npm"
 
 echo "=== Downloading npm ${NPM_VERSION} (from Node.js ${NODE_VERSION}) ==="
@@ -57,33 +74,38 @@ else
     echo "  Downloaded: $(du -sh "$WORK_DIR/$NODE_TARBALL" | cut -f1)"
 fi
 
-# nodejs.org publishes SHASUMS256.txt per release; npm ships inside the APK, so
-# the tarball it comes from gets the same verification as every other payload.
-# The digest is kept in a sidecar next to the cache so an offline rebuild with
-# an already-verified tarball still verifies instead of dying in the fetch;
-# with neither the network nor a sidecar, fail closed.
-SIDECAR="$WORK_DIR/$NODE_TARBALL.sha256"
-expected=$(curl -sL "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt" 2>/dev/null \
+# npm ships inside the APK, so the tarball it comes from is held to the digest
+# above. A pin is also the answer offline and on a cold cache alike, which is
+# what the sidecar beside the cache used to buy and why it is gone: two records
+# of one expected value is one record too many.
+#
+# SHASUMS256.txt is still read, and only to tell the two failure modes apart. A
+# file that matches nothing has either been substituted in transit or is the
+# right file for a NODE_VERSION the pin has not caught up with, and those want
+# opposite responses from whoever is reading.
+published=$(curl -sL "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt" 2>/dev/null \
     | awk -v f="$NODE_TARBALL" '$2 == f { print $1; exit }' || true)
-if [ -n "$expected" ]; then
-    printf '%s\n' "$expected" > "$SIDECAR"
-elif [ -f "$SIDECAR" ]; then
-    expected=$(cat "$SIDECAR")
-    echo "  sha256: using cached digest (SHASUMS256.txt unreachable)"
-fi
-if [ -z "$expected" ]; then
-    echo "  ERROR: no digest for $NODE_TARBALL (SHASUMS256.txt unreachable, no cached sidecar)" >&2
-    exit 1
+if [ -n "$published" ] && [ "$published" != "$NODE_TARBALL_SHA256" ]; then
+    echo "  WARNING: nodejs.org does not agree with the digest this script pins" >&2
+    echo "    pinned    : $NODE_TARBALL_SHA256" >&2
+    echo "    published : $published" >&2
+    echo "    If NODE_VERSION moved, update NODE_TARBALL_SHA256 to the published" >&2
+    echo "    value. If it did not, a release was republished and that is worth" >&2
+    echo "    understanding before this build is trusted." >&2
 fi
 actual=$( (sha256sum "$WORK_DIR/$NODE_TARBALL" 2>/dev/null || shasum -a 256 "$WORK_DIR/$NODE_TARBALL") | cut -d' ' -f1)
-if [ "$actual" != "$expected" ]; then
-    echo "  ERROR: $NODE_TARBALL does not match SHASUMS256.txt" >&2
-    echo "    published : $expected" >&2
-    echo "    file      : $actual" >&2
-    rm -f "$WORK_DIR/$NODE_TARBALL"
+if [ "$actual" != "$NODE_TARBALL_SHA256" ]; then
+    # Left on disk. When the expected value came from upstream a mismatch meant
+    # a damaged download and deleting it was the fix; now it just as easily
+    # means a stale pin, in which case the file is the correct one and deleting
+    # it throws away a 28 MB download on every run without changing the verdict.
+    echo "  ERROR: $NODE_TARBALL does not match the digest this script pins" >&2
+    echo "    pinned : $NODE_TARBALL_SHA256" >&2
+    echo "    file   : $actual" >&2
+    echo "    Remove $WORK_DIR/$NODE_TARBALL to refetch it." >&2
     exit 1
 fi
-echo "  sha256: verified"
+echo "  sha256: matches the pinned digest"
 
 # --- Step 2: Extract only npm ---
 echo ""
