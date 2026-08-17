@@ -53,6 +53,17 @@ import java.lang.reflect.InvocationTargetException
  */
 class ExtensionsManifestWriteTest {
 
+    /**
+     * The key these rules are about, named rather than matched with any().
+     *
+     * any() was an accurate stand-in while this was the only string set the
+     * setup wrote. It stopped being one when a second key arrived, and it failed
+     * in both directions at once: the two negative tests went red for a write
+     * they do not care about, and the control went green on that write alone,
+     * so it would have passed with the bundled ids not recorded at all.
+     */
+    private val BUNDLED_IDS_KEY = "bundled_extension_ids"
+
     @TempDir
     lateinit var filesDir: File
 
@@ -192,7 +203,7 @@ class ExtensionsManifestWriteTest {
         assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
 
         verify(exactly = 0) {
-            editor.putStringSet(any(), any())
+            editor.putStringSet(BUNDLED_IDS_KEY, any())
         }
     }
 
@@ -206,7 +217,7 @@ class ExtensionsManifestWriteTest {
         extractBundledExtensions()
 
         assertTrue(manifestFile.isFile, "the manifest was not written; the harness is wrong")
-        verify { editor.putStringSet(any(), any()) }
+        verify { editor.putStringSet(BUNDLED_IDS_KEY, any()) }
     }
 
     /**
@@ -238,7 +249,7 @@ class ExtensionsManifestWriteTest {
 
         assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
 
-        verify(exactly = 0) { editor.putStringSet(any(), any()) }
+        verify(exactly = 0) { editor.putStringSet(BUNDLED_IDS_KEY, any()) }
     }
 
     /** The control: the same upgrade, unobstructed, does record. */
@@ -248,7 +259,7 @@ class ExtensionsManifestWriteTest {
 
         extractBundledExtensions()
 
-        verify { editor.putStringSet(any(), any()) }
+        verify { editor.putStringSet(BUNDLED_IDS_KEY, any()) }
     }
 
     /**

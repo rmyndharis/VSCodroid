@@ -256,4 +256,47 @@ class BundledExtractionSplitTest {
         assertEquals(listOf(fetchedPython), bundledDirsToExtract(present = present, bundled = bundled))
         assertEquals(listOf(fetchedIcons), bundledDirsToExtract(present = bundled, bundled = present))
     }
+
+    @Test
+    fun `a retired id is owed a sweep until one has run`() {
+        assertEquals(listOf("eamodio.gitlens"), retiredIdsToSweep(emptySet()))
+        assertTrue(retiredIdsToSweep(setOf("eamodio.gitlens")).isEmpty())
+    }
+
+    @Test
+    fun `retiring a second extension later sweeps only that one`() {
+        // Kills a boolean in place of the set. With one flag, adding an id to
+        // RETIRED_FETCHED_IDS would either sweep nothing on a device that had
+        // already run, or sweep both again on one that had not.
+        assertEquals(
+            listOf("some.newlyretired"),
+            retiredIdsToSweep(
+                alreadySwept = setOf("eamodio.gitlens"),
+                retiredIds = listOf("eamodio.gitlens", "some.newlyretired"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a reinstalled extension survives once the sweep has run`() {
+        // The defect this pair exists for, stated end to end. The sweep cannot
+        // tell a leftover from a deliberate reinstall -- both are the same
+        // directory name -- so the only thing that can protect the second is
+        // not looking a second time.
+        val reinstalled = "eamodio.gitlens-2026.8.1"
+        val present = listOf(reinstalled, "vscodroid.vscodroid-welcome-1.2.1")
+
+        val firstRun = retiredIdsToSweep(emptySet())
+        assertEquals(
+            listOf(reinstalled),
+            retiredFetchedExtensionDirs(present, firstRun),
+            "the leftover must be removed the first time",
+        )
+
+        val laterRun = retiredIdsToSweep(setOf("eamodio.gitlens"))
+        assertTrue(
+            retiredFetchedExtensionDirs(present, laterRun).isEmpty(),
+            "a later update must not take the user's reinstall away",
+        )
+    }
 }

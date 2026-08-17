@@ -212,6 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Extensions and commands**
 
+- An extension retired from the bundle is cleaned up once instead of on every app update, so reinstalling it from the marketplace no longer loses it at the next upgrade.
 - **Open in Browser, Generate SSH Key, Copy SSH Public Key and About now exist.** All four were registered through a loader API the editor does not ship, so every attempt failed silently.
 - **Open in Browser** told you it had worked when it had not. The bridge method returned nothing, so the relay answered success unconditionally.
 - A link opened from inside the editor no longer disappears when the bridge declines it; the click falls through to the WebView's own handling.

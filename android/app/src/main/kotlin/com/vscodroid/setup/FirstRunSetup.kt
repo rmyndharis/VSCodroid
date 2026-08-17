@@ -1678,10 +1678,21 @@ claude() {
         // ever would. Ordered before the manifest work below on purpose --
         // reconcileExtensionsManifest drops any entry whose directory is gone,
         // so removing the directory here is also what unlists it.
-        for (name in retiredFetchedExtensionDirs(present)) {
-            if (File(extensionsDir, name).deleteRecursively()) {
-                Logger.i(tag, "Removed a bundled extension this build no longer ships: $name")
+        // Once per id, not once per update. See [retiredIdsToSweep]: this
+        // cannot distinguish a leftover from a deliberate reinstall, so running
+        // it every time takes the extension away from a user who chose it.
+        val sweptAlready = prefs.getStringSet(KEY_RETIRED_SWEPT, emptySet()) ?: emptySet()
+        val owed = retiredIdsToSweep(sweptAlready)
+        if (owed.isNotEmpty()) {
+            for (name in retiredFetchedExtensionDirs(present, owed)) {
+                if (File(extensionsDir, name).deleteRecursively()) {
+                    Logger.i(tag, "Removed a bundled extension this build no longer ships: $name")
+                }
             }
+            // Recorded whether or not anything was found: the debt is discharged
+            // by looking, and a device that never had the directory must not go
+            // on looking for it at every update either.
+            prefs.edit().putStringSet(KEY_RETIRED_SWEPT, HashSet(sweptAlready + owed)).apply()
         }
 
         // The server manages this file for marketplace installs, so it is never
@@ -2164,6 +2175,14 @@ claude() {
          */
         private const val KEY_BUNDLED_IDS = "bundled_extension_ids"
 
+        /**
+         * Retired extension ids whose one-time cleanup has already run.
+         *
+         * A string set rather than a boolean, so retiring a second extension
+         * later sweeps only that one and leaves the rest alone.
+         */
+        private const val KEY_RETIRED_SWEPT = "retired_extension_ids_swept"
+
         // Process-wide: each Splash instance builds its own FirstRunSetup, so an
         // instance field would serialize nothing.
         private val setupMutex = Mutex()
@@ -2414,6 +2433,25 @@ internal fun retiredFetchedExtensionDirs(
 ): List<String> = present.filter { name ->
     retiredIds.any { id -> name == id || name.startsWith("$id-") }
 }
+
+/**
+ * Which retired ids still have a sweep owed to them.
+ *
+ * The sweep exists to clear what an earlier bundle left behind, which is a
+ * one-time debt against a device. It was running on every app update instead,
+ * and it cannot tell a leftover from a deliberate reinstall: both are a
+ * directory named `eamodio.gitlens-<version>`. So a user who liked the
+ * extension, saw it vanish, and installed it again from the marketplace lost it
+ * again on the next update, and every update after that.
+ *
+ * Recording the ids already swept turns it back into what it was meant to be.
+ * A device that has swept before will sweep once more, because nothing recorded
+ * the earlier runs and nothing can reconstruct them; after that it stops.
+ */
+internal fun retiredIdsToSweep(
+    alreadySwept: Set<String>,
+    retiredIds: List<String> = RETIRED_FETCHED_IDS,
+): List<String> = retiredIds.filterNot { it in alreadySwept }
 
 /**
  * The publisher this project ships extensions under.
