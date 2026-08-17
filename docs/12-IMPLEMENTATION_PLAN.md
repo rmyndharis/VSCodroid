@@ -2687,6 +2687,6 @@ Every task is "done" when:
 | Security controls       | [06-SECURITY](./06-SECURITY.md)                   | §3                         |
 | Test plans              | [07-TESTING_STRATEGY](./07-TESTING_STRATEGY.md)   | §3                         |
 | Risk mitigations        | [08-RISK_MATRIX](./08-RISK_MATRIX.md)             | §3                         |
-| Dev environment         | [09-DEVELOPMENT_GUIDE](./09-DEVELOPMENT_GUIDE.md) | §1-§3                      |
+| Dev environment         | [CONTRIBUTING](../CONTRIBUTING.md)                | Setup, Assets, Building    |
 | Release process         | [10-RELEASE_PLAN](./10-RELEASE_PLAN.md)           | §1-§6                      |
 | Milestone criteria      | [MILESTONES](../MILESTONES.md)                    | All                        |

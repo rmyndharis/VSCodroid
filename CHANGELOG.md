@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CONTRIBUTING.md` describes both toolchain delivery paths. It named only Play Asset Delivery, while every non-Play install takes the HTTP path that developers themselves run on.
 - The contributing guide's repository map matches the shipped binaries: Python never lived in `jniLibs`, while git's HTTPS helper and the musl loader do.
 - The contributing guide records that findings not fixed in the same pull request get an issue, and rejected ones a stated reason.
+- The planning-era development guide is now a pointer at `CONTRIBUTING.md`. It named a build script that no longer exists and a launch command that skips first-run extraction.
+- The contributing guide covers device debugging and the version bump: which log carries the server's output, how to probe readiness, and why `versionCode` alone does not re-extract assets.
 - README realigned with how the project builds: local builds fetch the prebuilt server, SSH ships as OpenSSH plus `ssh-keygen`, toolchains install on sideloaded devices, and the size table is measured.
 - The user guide no longer documents Command Palette entries that were never registered. Each now describes a route that works or says plainly it is not reachable.
 - The user guide no longer claims sideloaded builds carry every toolchain inside the APK. They download on demand and land in app storage.

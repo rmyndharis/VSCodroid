@@ -17,7 +17,7 @@ They record what was planned, not what was built — see [Document Status](#docu
 | 06 | [Security Design](./06-SECURITY.md) | Threat model, security controls, data protection | Everyone |
 | 07 | [Testing Strategy](./07-TESTING_STRATEGY.md) | Test plan, types, environments, coverage | QA, Developers |
 | 08 | [Risk Assessment](./08-RISK_MATRIX.md) | Risk identification, analysis, mitigation | Project leads |
-| 09 | [Development Guide](./09-DEVELOPMENT_GUIDE.md) | Setup, conventions, workflow, contribution | Developers |
+| 09 | [Development Guide](./09-DEVELOPMENT_GUIDE.md) | Superseded by `CONTRIBUTING.md`; a pointer at where each topic lives now | Developers |
 | 10 | [Release Plan](./10-RELEASE_PLAN.md) | CI/CD, versioning, Play Store, rollout | DevOps, Project leads |
 | 11 | [Glossary](./11-GLOSSARY.md) | Terms, acronyms, technology definitions | Everyone |
 | 12 | [Implementation Plan](./12-IMPLEMENTATION_PLAN.md) | Week-by-week task breakdown, dependencies, checkpoints | Project leads, Developers |
@@ -63,11 +63,15 @@ The **planning suite** (01–12) was written before the app existed and is kept 
 as a description of the build. Where one contradicts the code, the code is right. Two forms of note
 appear in them, and they mean different things:
 
-- **A banner at the top** (01, 03, 04, 07, 08, 09, 12, and on §2 of 10, which is stale where the
+- **A banner at the top** (01, 03, 04, 07, 08, 12, and on §2 of 10, which is stale where the
   rest of that document is not) says the document is a dated record and names what has since
   overtaken it. The body below a banner is mostly left as written, on purpose: a plan, an ADR or a
   risk score is a record of what was thought at the time, and editing it would destroy the record
   rather than update it.
+- **A pointer** (09) replaces the body outright. That document was procedure rather than
+  reasoning: setup commands, gulp tasks, a branch strategy. Commands that no longer run leave no
+  record to preserve, only something to copy by mistake, so the instructions were removed and what
+  is left says where each topic lives now.
 - **A correction inside the text**, a struck-through clause with what shipped beside it (02), or a
   rewritten definition (11), is used where a document's job is to describe rather than to
   remember. 05 and 06 are corrected the same way and carry no banner, because they have been kept

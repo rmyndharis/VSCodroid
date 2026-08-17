@@ -286,7 +286,7 @@ Quick links:
 | [Security](docs/06-SECURITY.md)                                              | Security model and threat analysis                         |
 | [Testing Strategy](docs/07-TESTING_STRATEGY.md)                              | Test plan and quality assurance                            |
 | [Risk Matrix](docs/08-RISK_MATRIX.md)                                        | Known risks and mitigation strategies                      |
-| [Development Guide](docs/09-DEVELOPMENT_GUIDE.md)                            | How to set up and build the project                        |
+| [Development Guide](docs/09-DEVELOPMENT_GUIDE.md)                            | Superseded; points at CONTRIBUTING.md, which is kept current |
 | [Release Plan](docs/10-RELEASE_PLAN.md)                                      | Release strategy, CI/CD, Play Store                        |
 | [User Guide](docs/USER_GUIDE.md)                                             | How to use VSCodroid (keyboard, terminal, extensions, SSH) |
 | [Milestones](MILESTONES.md)                                                  | Development milestones M0–M6                               |

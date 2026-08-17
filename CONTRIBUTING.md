@@ -451,6 +451,14 @@ cd android && ./gradlew assembleDebug
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk` (debug package name: `com.vscodroid.debug`)
 
+### Version Bump
+
+`versionCode` and `versionName` both live in `android/app/build.gradle.kts`, and both have
+to move. They are not interchangeable: `FirstRunSetup.isFirstRun()` compares the stored
+`versionName` against the installed one, so a release that bumps only `versionCode` never
+re-extracts the assets, while `getPreviousVersionCode()` and the migrations it feeds read
+`versionCode`. `markSetupComplete()` stores the pair together.
+
 ### Release Build
 
 Release builds require a signing keystore configured via environment variables:
@@ -518,6 +526,49 @@ After deploying, verify these core flows:
 5. **Git** works in terminal and SCM panel
 6. **Extra Key Row** appears when keyboard is open, Ctrl+S / Ctrl+P work
 7. **Crash recovery** -- kill Node.js process (`adb shell kill <PID>`), app auto-restarts
+
+### Debugging on Device
+
+```bash
+# The app's own log lines, by component
+adb logcat -s VSCodroid.MainActivity VSCodroid.NodeService VSCodroid.ProcessManager VSCodroid.ToolchainManager
+
+# Everything the app process writes
+adb logcat --pid=$(adb shell pidof com.vscodroid.debug)
+
+# Memory
+adb shell dumpsys meminfo com.vscodroid.debug
+
+# The Node process the server runs in
+adb shell ps -A | grep libnode
+```
+
+There is no `server.log`; nothing here writes one. The Node process's stdout and stderr are
+merged and forwarded line by line to logcat by `ProcessManager`, under
+`VSCodroid.ProcessManager` with a `[node]` prefix. That goes through `Logger.d`, which emits
+only when the package is debuggable, so the lines are in a debug build and not in a release
+one. The editor server keeps its own logs on device, in the directory `ProcessManager` hands
+it as `--logsPath` (`Environment.getLogsDir`):
+
+```bash
+adb shell run-as com.vscodroid.debug ls files/home/.vscodroid/data/logs
+```
+
+To probe the server yourself, take the port from logcat (`Server is ready on port NNNN`,
+logged by `NodeService` at info level, so it is there in both build types) and reach it
+through a forward:
+
+```bash
+adb forward tcp:$PORT tcp:$PORT
+curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$PORT/version"
+adb forward --remove tcp:$PORT
+```
+
+`/version` specifically, and only a `200` counts. There is no `/healthz`. `/` is not a
+substitute: the server requires a connection token on every route but `/version`,
+`/delay-shutdown` and `/callback`, so an unauthenticated `/` answers 403, and a check that
+accepts anything below 500 calls a server healthy while it refuses every request it gets.
+`scripts/device-test.sh` probes it exactly this way.
 
 ## How to Add a New Bundled Tool
 
