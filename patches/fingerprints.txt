@@ -36,10 +36,29 @@
 # That second check is necessary, not sufficient. It catches a pattern lifted from
 # surrounding code; it cannot prove the same text appears nowhere else in the
 # tree. Proving that still wants an unpatched build, and nothing here does it.
+#
+# A row proves the patch ARRIVED, not which version of it did, and that is the
+# trap this file is easiest to fall into. Editing a patch that already has a row
+# changes nothing the check can see: the pattern still matches, so a published
+# server built before the edit passes, the APK is built from it, and the only
+# thing describing the new behaviour is a CHANGELOG line. A row therefore has to
+# move with a revision whose behaviour is the point of the revision. 0003 is the
+# worked example: its pattern was `__vsc_disconnect`, which its first version
+# already added, and it now names the exit wait a later version added, so a
+# server predating that wait is refused instead of accepted.
+#
+# Choosing the replacement is the original problem with less freedom, since the
+# revision has to have introduced something durable of its own. `this._worker.once`
+# qualifies because the packaged bundle already emits `this._worker.terminate()`
+# from this same class, so neither the field nor the method is being mangled, and
+# `'exit'` is a string literal. Both halves were read out of the bundle rather
+# than assumed. A revision that introduces no such text leaves this file unable
+# to see it, and the honest move then is to say so where the behaviour is
+# claimed, not to pick a pattern that cannot fail.
 
 0001 platform|out/server-main.js|platform==="android"
 0002 userDataPath|out/vs/platform/terminal/node/ptyHostMain.js|case"android"
-0003 ptyHost worker|out/server-main.js|__vsc_disconnect
+0003 ptyHost worker|out/server-main.js|this._worker.once('exit'
 0004 extHost worker|out/server-main.js|worker_thread Extension Host
 0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback

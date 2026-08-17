@@ -22,12 +22,15 @@ import java.io.File
  * removing the bound.
  *
  * This reads patch text, which is the weaker kind of test, and it is here because
- * nothing else would notice. The change lives in a diff applied to the VS Code
- * source before the server is built, so no Kotlin compiles against it and the
- * suite cannot run it. `patches/fingerprints.txt` proves the patch as a whole
- * reached the packaged tree by looking for `__vsc_disconnect`, which a revert of
- * the wait would leave exactly where it is. What this buys is that a rebase onto a
- * new VS Code version cannot quietly drop the wait; what it does not buy is any
+ * nothing else would notice this early. The change lives in a diff applied to the
+ * VS Code source before the server is built, so no Kotlin compiles against it and
+ * the suite cannot run it. `patches/fingerprints.txt` used to prove the patch as a
+ * whole reached the packaged tree by looking for `__vsc_disconnect`, which its
+ * first version already added and a revert of the wait would leave exactly where
+ * it is; its row now names the wait itself, so a tree built before the wait is
+ * refused. That row judges a packaged tree, though, and only a rebuilt server can
+ * produce one that passes it. What this buys is that a rebase onto a new VS Code
+ * version cannot quietly drop the wait from the patch; what it does not buy is any
  * evidence that the patch applies, compiles, or behaves.
  */
 class WorkerHostShutdownPatchTest {

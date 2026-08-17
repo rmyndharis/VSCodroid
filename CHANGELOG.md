@@ -296,7 +296,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Build and release**
 
-- Unit tests re-run when the bootstrap script or a server patch changes. Neither was a declared input, so an incremental run served the previous run's verdict for a file it had not read.
+- Unit tests re-run when a patch, the bootstrap script, a bundled extension manifest or a documented requirement changes. None was a declared input, so incremental runs served stale verdicts.
+- A server tree built before the current terminal-host shutdown is refused rather than packaged; the patch check matched text an earlier version of that patch had already added.
 - A server build release could take over the `latest` release pointer, which breaks toolchain downloads for every non-Play install. It is now kept out of that pointer permanently.
 - A release can no longer be published with one of its files missing. Upload and publish both defaulted to warning rather than failing.
 - Builds no longer re-download every bundled package. The cache pointed one directory above where packages are written, so it matched none of the 72 files there.

@@ -311,19 +311,51 @@ tasks.withType<Test> {
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
         .withPropertyName("appManifest")
     // Two suites read files no Kotlin compiles against, because the things they
+    // Seven suites read files no Kotlin compiles against, because the things they
     // check cross a language boundary that has no compiler: the bootstrap's
-    // adoption note (assets/server.js) and the shutdown the worker hosts get
-    // (patches/). Gradle knows nothing about either, so it answered UP-TO-DATE
-    // for a run that had to notice one of them change, and served the previous
-    // run's results. Measured here: the patch was reverted in place and the guard
-    // reported green without running. Declaring them makes the answer follow the
-    // question. A clean CI checkout was never affected; an incremental run always
-    // was.
+    // adoption note (assets/server.js), the shutdown the worker hosts get
+    // (patches/), the manifests of the bundled extensions, and the documents that
+    // restate a requirement the code owns. Gradle knew about none of them, so it
+    // answered UP-TO-DATE for a run that had to notice one of them change, and
+    // served the previous run's results. Measured on this module: a signature
+    // edited in docs/05-API_SPEC.md left the task UP-TO-DATE and the build
+    // successful, and with the file declared the same edit re-runs the suite and
+    // turns BridgeApiSpecParityTest red. Renaming a command title to a name of
+    // the same length does the same for CommandReferenceTest, and that length is
+    // the point: the only thing that already noticed an assets edit was the byte
+    // total in BuildConfig, which a size-neutral one leaves exactly where it was.
+    // A clean CI checkout was never affected; an incremental run always was.
+    //
+    // The set is the whole of what those File(...) reads reach, so check the
+    // suites before narrowing any of it:
+    //
+    //   assets/*.js           AdoptionNoteWireTest
+    //   assets/extensions     BundledExtensionHostTest, CommandReferenceTest,
+    //                         WalkthroughCompletionEventTest
+    //   patches/              WorkerHostShutdownPatchTest
+    //   README.md, docs/*.md  WebViewVersionTest, BridgeApiSpecParityTest
+    //
+    // Sources under src/main/kotlin are read by other suites the same way and are
+    // deliberately not listed: they are compiled into the classpath this task
+    // already depends on, so editing one re-runs the tests without any
+    // declaration. Nothing else here has a compiler standing behind it.
     inputs.files(fileTree("src/main/assets") { include("*.js") })
         .withPropertyName("bootstrapScripts")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(fileTree("src/main/assets/extensions"))
+        .withPropertyName("bundledExtensions")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.files(fileTree(rootProject.projectDir.parentFile.resolve("patches")))
         .withPropertyName("serverPatches")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // Top-level markdown only. docs/ also carries a site, screenshots and a logo
+    // directory, and no test reads any of them; hashing them on every run would
+    // buy nothing and 2.6 MB of it is images.
+    inputs.files(
+        rootProject.projectDir.parentFile.resolve("README.md"),
+        fileTree(rootProject.projectDir.parentFile.resolve("docs")) { include("*.md") },
+    )
+        .withPropertyName("statedRequirements")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

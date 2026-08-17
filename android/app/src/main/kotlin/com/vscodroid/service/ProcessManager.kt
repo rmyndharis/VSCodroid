@@ -297,20 +297,30 @@ class ProcessManager(private val context: Context) {
             startAdoptionWatch()
             return true
         }
-        // An editor server of ours that is alive, holds the port, and answers nothing is
-        // the one shape worth ending before spawning over it. Adoption already declined it
-        // just above, and leaving it there guarantees the spawn below hits EADDRINUSE:
-        // that child does not exit, so the run ends in CANNOT_BIND with two processes
-        // where the user wanted one, and the survivor outlives every retry.
+        // An editor server of ours that is alive, holds the port, and is not one this
+        // start can adopt is the one shape worth ending before spawning over it. Adoption
+        // already declined it just above, and leaving it there guarantees the spawn below
+        // hits EADDRINUSE: that child does not exit, so the run ends in CANNOT_BIND with
+        // two processes where the user wanted one, and the survivor outlives every retry.
         //
-        // The judgement is `/version` not answering within a second, which a server still
-        // starting up could fail. Ending it is still the better error: the alternative is
-        // not "wait for it to come up" but a failed launch, because nothing here can bind
-        // the port while it is held. A server killed a second early is restarted by the
-        // line below; one left alone is not.
+        // Three declines reach here and only one of them is silence, so the reason is not
+        // repeated in the reap: [recordedServerIsServing] has already logged which of them
+        // it was. `/version` did not answer within a second, which a server still starting
+        // up could fail; or it answered as a different build, which an orphan left by an
+        // earlier app version does; or this build could not read its own commit, so the
+        // port was never asked at all.
+        //
+        // The last two end a process that may be serving perfectly well, and that is a
+        // decision rather than an oversight. What it is serving is not this build, or
+        // cannot be shown to be, and the alternative is not "leave the user's editor
+        // alone" but a launch that fails for as long as the holder lives, because nothing
+        // here can bind the port while it is held and `_port` is never re-derived. A
+        // server ended a second early is restarted by the line below; one left alone is
+        // not.
         var reapedThisStart = false
         if (!portIsFree && portHeldByOurEditorServer()) {
-            reapedThisStart = reapRecordedEditorServer("holding port $_port without serving")
+            reapedThisStart =
+                reapRecordedEditorServer("not adoptable by this start, for the reason logged above")
         }
 
         // Reaching here means the port was free, or was held by something that is
@@ -696,7 +706,7 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
-     * Whether the port is answering right now.
+     * Whether the port is answering, and answering as this build.
      *
      * The second half of the adoption test, and it is not a restatement of the
      * first. [portHeldByOurEditorServer] proves the recorded process is alive and
@@ -731,13 +741,18 @@ class ProcessManager(private val context: Context) {
      * satisfies, and binding a loopback port on Android needs no permission.
      *
      * Read what this does and does not settle, because the difference decides
-     * what may be built on it. It settles that the holder serves this exact build,
-     * which no ordinary stranger on the port does. It does NOT settle that the
-     * holder is the recorded pid: the commit is public, so a process written to
-     * imitate this app can answer it, and attributing a socket to a pid would need
-     * the `/proc/net/tcp` read SELinux refuses an app outright. The two halves
-     * therefore still narrow rather than prove, and the note stays the ownership
-     * half.
+     * what may be built on it. It settles which VS Code source the holder was
+     * built from, and no more than that: the value is `microsoft/vscode`'s tag SHA
+     * for the pinned version, the same one the tracked `VSCODE_COMMIT` file
+     * records, so every VSCodroid build at that pin answers identically and the
+     * value is app-private in no sense at all. That excludes an ordinary stranger
+     * on the port, which is what adoption needs, and nothing stronger may be built
+     * on it: it does not tell two builds of this app apart. It does NOT settle
+     * that the holder is the recorded pid either: the commit is public, so a
+     * process written to imitate this app can answer it, and attributing a socket
+     * to a pid would need the `/proc/net/tcp` read SELinux refuses an app
+     * outright. The two halves therefore still narrow rather than prove, and the
+     * note stays the ownership half.
      *
      * Refusing here is not final and deletes nothing, so a recorded server that
      * was merely slow to answer is adopted by a later attempt. Being wrong in this
