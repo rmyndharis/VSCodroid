@@ -520,6 +520,13 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
 // produced the mixture, not here.
 val jniLibsStubCeiling = 1000L
 
+// Asked by both packaging gates below, so they arm and skip together on one
+// answer rather than on two copies of it: a tree worth examining for one is
+// worth examining for the other, and a placeholder tree is neither's business.
+fun jniLibsHoldsRealBinary(): Boolean =
+    file("src/main/jniLibs/arm64-v8a").listFiles()
+        ?.any { it.name.endsWith(".so") && it.length() >= jniLibsStubCeiling } == true
+
 // Every binary in jniLibs, checked where it is packaged rather than only where
 // it was downloaded.
 //
@@ -543,8 +550,6 @@ val jniLibsStubCeiling = 1000L
 val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     group = "verification"
     description = "Checks every bundled binary in jniLibs can load on Android."
-
-    val jniDir = file("src/main/jniLibs/arm64-v8a")
 
     workingDir = rootProject.projectDir.parentFile
     commandLine(
@@ -579,11 +584,7 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     // mean distinguishing a truncated binary from the placeholder by content
     // rather than size, and that trade is not worth failing the three jobs that
     // legitimately write a placeholder.
-    onlyIf {
-        jniDir.listFiles()?.any {
-            it.name.endsWith(".so") && it.length() >= jniLibsStubCeiling
-        } == true
-    }
+    onlyIf { jniLibsHoldsRealBinary() }
 
     isIgnoreExitValue = true
     val result = executionResult
@@ -602,6 +603,56 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
                     "In CI this most likely means a cached jniLibs restored a binary\n" +
                     "that predates a change to scripts/verify-android-elf.py, which is\n" +
                     "in neither cache key: bust the assets cache rather than refetching."
+            )
+        }
+    }
+}
+
+// No bundled binary may name a shell it cannot reach.
+//
+// Termux compiles /data/data/com.termux/files/usr/bin/sh into the binaries this
+// app ships, and that directory belongs to another application. The download
+// scripts rewrite it, but they name their files one by one, which is the shape
+// that misses the next binary added beside them. This asks the directory instead,
+// so a binary nobody thought to list is still answered for.
+//
+// Here rather than in verify-android-elf.py, which every installer already calls
+// per file: the toolchain downloads run it over their whole pack, and libruby.so
+// and Ruby's pty.so carry this same path without being rewritten, so folding the
+// question into the shared checker would fail builds that are correct.
+//
+// What it costs when it goes wrong is silence of the worst kind: make runs every
+// recipe line through the compiled-in shell and never reads SHELL, so every
+// target that runs a command fails on a path the user never chose.
+val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
+    group = "verification"
+    description = "Checks no bundled binary names Termux's prefix as its shell."
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/patch-default-shell.py",
+        "--check", "android/app/src/main/jniLibs/arm64-v8a",
+    )
+
+    onlyIf { jniLibsHoldsRealBinary() }
+
+    isIgnoreExitValue = true
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(
+                "A bundled binary names a shell inside Termux's data directory.\n" +
+                    "The FAIL line above names the file. This app cannot read or\n" +
+                    "create that path, so whatever the binary wanted a shell for\n" +
+                    "fails with ENOENT wherever it runs on a device.\n" +
+                    "\n" +
+                    "Re-run the script that places the file --\n" +
+                    "scripts/download-termux-tools.sh, or download-node.sh for\n" +
+                    "libnode.so -- which rewrites the path where it installs it.\n" +
+                    "A binary neither of them places needs a call adding there.\n" +
+                    "\n" +
+                    "In CI this most likely means a cached jniLibs restored a binary\n" +
+                    "placed before that rewrite existed: bust the assets cache."
             )
         }
     }
@@ -647,6 +698,7 @@ val bundleNotices = tasks.register<Copy>("bundleNotices") {
 // already did.
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
-        dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries)
+        dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
+            verifyBundledShellPaths)
         dependsOn(bundleNotices)
     }

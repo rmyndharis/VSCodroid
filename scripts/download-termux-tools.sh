@@ -227,7 +227,7 @@ fi
 # rescue them: make ignores it by design and git does not consult it for
 # run-command at all.
 #
-# Before step 5's ELF gate, so what that gate examines is what ships. The
+# Before step 8's ELF gate, so what that gate examines is what ships. The
 # rewrite is length-preserving and fails closed: if a package changes where its
 # default shell comes from and the string stops matching, the build stops here
 # rather than shipping a binary whose shell nobody has established.

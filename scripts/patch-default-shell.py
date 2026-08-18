@@ -2,6 +2,7 @@
 """Points a bundled binary's default shell at one this app is allowed to run.
 
     patch-default-shell.py <binary>...
+    patch-default-shell.py --check <directory>
 
 Every executable in jniLibs comes from Termux, which builds for a prefix inside
 its own application, and the shell it compiles in is
@@ -65,10 +66,20 @@ Exactly one occurrence is required; anything else stops the build:
 
 Idempotent, so an existing jniLibs binary can be handed to it to find out
 whether it is already correct, rather than refetching to be sure.
+
+--check is the sweep, and it is what the per-binary calls cannot do. Those name
+five files at one call site, which is the shape where the sixth binary added
+later is missed; --check walks every *.so that ships and fails if any of them
+still names Termux's prefix as a shell, whether or not a download step ran in
+that build. It only ever reads. Deliberately not folded into
+verify-android-elf.py, whose per-file callers include the toolchain downloads:
+libruby.so and Ruby's pty.so carry this same path, and those packs are not
+rewritten, so the shared checker would fail builds that are correct.
 """
 
 import argparse
 import pathlib
+import stat
 import sys
 import typing
 
@@ -106,7 +117,16 @@ FORMS = (
     # The NUL is part of the match. Without it this would also fire on a longer
     # path that merely starts with the shell's, and the rewrite would truncate
     # whatever followed.
-    Form("C string constant", TERMUX_SH + b"\0", ANDROID_SH + b"\0", b"\0"),
+    #
+    # The marker here is the whole padded run, not the bare path, which is the
+    # opposite of the row above and for the opposite reason: there is no stock
+    # build of these tools that already names our shell, so nothing is lost by
+    # requiring the exact bytes a rewrite leaves. A bare "/system/bin/sh\0"
+    # would report a binary as already patched on the strength of fifteen bytes
+    # it may carry for some unrelated reason, while its actual default had moved
+    # to some third path this app cannot reach either.
+    Form("C string constant", TERMUX_SH + b"\0",
+         ANDROID_SH + b"\0" * (len(TERMUX_SH) - len(ANDROID_SH) + 1), b"\0"),
 )
 
 for _form in FORMS:
@@ -121,10 +141,18 @@ for _form in FORMS:
     if _form.old.endswith(b"\0") and not _form.marker.endswith(b"\0"):
         raise SystemExit(f"patch-default-shell.py: the {_form.what} rewrite drops "
                          "the terminator its match consumed")
+    # And the mirror of that one, which is the hazard the docstring spends a
+    # paragraph on: a form matching source rather than data, filled with NUL.
+    # Nothing downstream catches it. The rewrite reads as applied, the sweep
+    # passes because Termux's path is gone, and the parse throws when the
+    # engine reaches those bytes.
+    if not _form.old.endswith(b"\0") and _form.pad == b"\0":
+        raise SystemExit(f"patch-default-shell.py: the {_form.what} rewrite pads "
+                         "source with NUL, which is not whitespace there")
 
 
 def carries_termux_shell(data: bytes) -> bool:
-    """The invariant this exists to restore, on the bytes of one file."""
+    """The invariant --check enforces, on the bytes of one file."""
     return TERMUX_SH in data
 
 
@@ -176,14 +204,64 @@ def patch(path: pathlib.Path) -> bool:
     return True
 
 
+def check(directory: pathlib.Path) -> bool:
+    """Fail if any binary that ships still names Termux's prefix as a shell."""
+    # One stream for the whole sweep, matching verify-android-elf.py: its reader
+    # is a build log, and a FAIL split onto stderr arrives out of order against
+    # the count that says how much was looked at. Measured in the Gradle gate:
+    # the summary printed above the failure it summarised.
+    targets = sorted(directory.glob("*.so"))
+    if not targets:
+        # An empty directory is not a clean result. Reporting success here would
+        # make "nothing was checked" indistinguishable from "everything passed",
+        # which is the failure this check exists to avoid.
+        print(f"  FAIL   no *.so in {directory}")
+        return False
+
+    ok = True
+    for target in targets:
+        # Regular files only, checked before opening, and OSError caught per
+        # file. read_bytes() on a FIFO blocks forever waiting for a writer, and a
+        # dangling symlink named *.so raises out of the loop, abandoning every
+        # binary after it. This globs whatever is in the directory rather than a
+        # path it just created, so both are reachable here -- the same hazards
+        # verify-android-elf.py measured, in the same directory.
+        try:
+            if not stat.S_ISREG(target.stat().st_mode):
+                print(f"  FAIL   {target.name} is not a regular file")
+                ok = False
+                continue
+            carries = carries_termux_shell(target.read_bytes())
+        except OSError as e:
+            print(f"  FAIL   {target.name}: {e}")
+            ok = False
+            continue
+        if carries:
+            print(f"  FAIL   {target.name} names {TERMUX_SH.decode()}")
+            ok = False
+
+    n = len(targets)
+    print(f"  {n} binar{'y' if n == 1 else 'ies'} checked for a shell under "
+          "Termux's prefix")
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("binary", type=pathlib.Path, nargs="*",
                     help="binary to rewrite in place")
+    ap.add_argument("--check", type=pathlib.Path, metavar="DIR",
+                    help="rewrite nothing; fail if any *.so in DIR names "
+                         "Termux's prefix as a shell")
     args = ap.parse_args()
 
+    if args.check is not None:
+        if args.binary:
+            ap.error("--check reads a directory; it does not take binaries")
+        return 0 if check(args.check) else 1
+
     if not args.binary:
-        ap.error("give a binary to rewrite")
+        ap.error("give a binary to rewrite, or --check DIR to sweep one")
 
     # Every binary, not the first failure: a build that stops on libgit.so hides
     # whether the other four moved too, and that is the difference between one
