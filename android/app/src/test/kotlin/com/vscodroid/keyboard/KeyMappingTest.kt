@@ -15,6 +15,22 @@ import org.junit.jupiter.params.provider.ValueSource
  */
 class KeyMappingTest {
 
+    /**
+     * Every key the table holds. The table is private, so covering all of it
+     * means naming the keys, and a named list is only as good as its last
+     * update: `carries one entry per mapping` counts the entries the table
+     * emits and fails when this list is not all of them, so an added mapping
+     * cannot slip past the tests that walk it.
+     */
+    private val allMappedKeys = listOf(
+        "Tab", "Escape", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown",
+        "Home", "End", "PageUp", "PageDown",
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+        "{", "}", "(", ")", ";", ":", "\"", "/", "[", "]", "|", "\\", "~", "`",
+        "'", "=", "!", "#", "@", "&", "_", "<", ">", ",", ".", "-", "+", "*",
+        "%", "?", "^", "$", "Enter", "Backspace", " "
+    )
+
     @Nested
     inner class GetKeyDefTest {
 
@@ -95,13 +111,13 @@ class KeyMappingTest {
 
         @Test
         fun `all mappings have non-empty key and code`() {
-            // Test via known keys that should exist
-            val expectedKeys = listOf(
-                "Tab", "Escape", "Enter", "Backspace", " ",
-                "{", "}", "(", ")", ";", ":", "/", "[", "]",
-                "|", "\\", "~", "`", "'", "=", "!", "#", "@", "&", "_"
-            )
-            for (key in expectedKeys) {
+            // The whole table, which is what the name says. The hand-written 25
+            // this walked instead left out 32 of the 57 entries, among them all
+            // four arrows, whose code and keyCode are pinned by nothing else
+            // here: giving ArrowUp an empty code left the entire suite green,
+            // and that value goes straight into the KeyboardEvent's `code` at
+            // KeyInjector.injectKey.
+            for (key in allMappedKeys) {
                 val keyDef = KeyMapping.getKeyDef(key)
                 assertNotNull(keyDef, "KeyDef for '$key' should exist")
                 assertTrue(keyDef!!.key.isNotEmpty(), "key should not be empty for '$key'")
@@ -279,16 +295,8 @@ class KeyMappingTest {
             // Every entry contributes exactly one `:[`, so this counts entries without
             // needing to parse, and moves when the table does.
             val entries = Regex(":\\[").findAll(lookup).count()
-            val known = listOf(
-                "Tab", "Escape", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown",
-                "Home", "End", "PageUp", "PageDown",
-                "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-                "{", "}", "(", ")", ";", ":", "\"", "/", "[", "]", "|", "\\", "~", "`",
-                "'", "=", "!", "#", "@", "&", "_", "<", ">", ",", ".", "-", "+", "*",
-                "%", "?", "^", "$", "Enter", "Backspace", " "
-            )
-            assertEquals(known.size, entries, "one entry per mapping")
-            for (key in known) {
+            assertEquals(allMappedKeys.size, entries, "one entry per mapping")
+            for (key in allMappedKeys) {
                 assertNotNull(KeyMapping.getKeyDef(key), "'$key' should be in the table")
             }
         }
