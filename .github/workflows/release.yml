@@ -249,7 +249,7 @@ jobs:
             toolchains/build/npm/
             toolchains/extensions/
             toolchains/musl/
-          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh') }}
+          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-node-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh') }}
           restore-keys: |
             downloads-
 

@@ -294,6 +294,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The glibc shim's ctype table misclassified five of twelve character classes, and its `environ`, `stdout` and `stderr` exports loaded as NULL.
 - Python's compression and database modules were dead on device: `bz2`, `lzma`, `compression.zstd`, `curses.panel` and `dbm.gnu` all failed on missing libraries.
 - Native terminal and file-watcher addons are built from the same versions as the JavaScript beside them, and the build fails on a mismatch.
+- Every shell command an extension runs failed. The bundled runtime's default shell was a path inside Termux's data directory, which this app cannot reach; it now uses Android's own.
 
 **Storage management and reporting**
 

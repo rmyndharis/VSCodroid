@@ -49,6 +49,15 @@ cd "$WORK_DIR"
 # with a fresh and wrong one rather than merely leaving a stale one.
 : > "$WORK_DIR/resolved-node.tsv"
 
+# Same reasoning, one directory over. The marker is written last, and the span
+# before it now contains a step that fails on purpose, so a run that stops there
+# would leave a new binary beside a marker naming the previous runtime.
+# build-native-addons.sh trusts the marker and only reads the version out of the
+# binary when it is absent, so a stale one pairs the wrong headers silently and
+# the addons are rejected at load on device. Removed rather than emptied: that
+# script tests for the file, not for its contents.
+rm -f "$JNILIBS_DIR/.libnode-version"
+
 if [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
     curl -sL --fail --show-error -o Packages "$PACKAGES_URL"
 fi
@@ -123,6 +132,16 @@ fi
 
 cp "$src" "$JNILIBS_DIR/libnode.so"
 chmod +x "$JNILIBS_DIR/libnode.so"
+
+# Termux's build defaults child_process to a shell inside Termux's own data
+# directory, which this app can neither read nor create, so every exec() and
+# every shell-based spawn from the server or an extension dies with ENOENT.
+# Before the ELF gate below, so what that gate examines is what ships. The
+# rewrite is length-preserving and fails closed: if Termux changes the default
+# and the string stops matching, the build stops here rather than shipping a
+# runtime whose shell nobody has established.
+python3 "$SCRIPT_DIR/patch-node-shell.py" "$JNILIBS_DIR/libnode.so"
+
 # The Termux version string ("24.18.0-1") with the package revision dropped.
 # build-native-addons.sh reads this marker to pair its headers against the
 # runtime actually installed - the binary itself is gitignored, so the marker
