@@ -12,6 +12,8 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.util.padForSystemBars
+import com.vscodroid.setup.ToolchainAction
+import com.vscodroid.setup.ToolchainCardMode
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.util.Logger
@@ -53,19 +55,19 @@ class ToolchainActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener { finish() }
 
         // Set up grid with MANAGER mode adapter
-        adapter = ToolchainPickerAdapter(ToolchainPickerAdapter.Mode.MANAGER)
+        adapter = ToolchainPickerAdapter(ToolchainCardMode.MANAGER)
         adapter.setInstalled(toolchainManager.getInstalledToolchains())
 
         adapter.onAction = { packName, action ->
             when (action) {
-                ToolchainPickerAdapter.Action.INSTALL,
-                ToolchainPickerAdapter.Action.RETRY -> {
+                ToolchainAction.INSTALL,
+                ToolchainAction.RETRY -> {
                     toolchainManager.install(packName)
                 }
-                ToolchainPickerAdapter.Action.REMOVE -> {
+                ToolchainAction.REMOVE -> {
                     showRemoveConfirmation(packName)
                 }
-                ToolchainPickerAdapter.Action.CANCEL -> {
+                ToolchainAction.CANCEL -> {
                     toolchainManager.cancel(packName)
                     adapter.updateState(packName, AssetPackStatus.NOT_INSTALLED, 0)
                 }

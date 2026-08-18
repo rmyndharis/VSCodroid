@@ -22,6 +22,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.setup.ToolchainManager
+import com.vscodroid.setup.ToolchainCardMode
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
@@ -278,7 +279,7 @@ class SplashActivity : AppCompatActivity() {
         val continueBtn = findViewById<Button>(R.id.continueButton)
         val skipBtn = findViewById<TextView>(R.id.skipButton)
 
-        val adapter = ToolchainPickerAdapter(ToolchainPickerAdapter.Mode.PICKER)
+        val adapter = ToolchainPickerAdapter(ToolchainCardMode.PICKER)
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
 

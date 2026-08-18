@@ -1,0 +1,141 @@
+package com.vscodroid.setup
+
+import com.google.android.play.core.assetpacks.model.AssetPackStatus
+
+/** Which screen the cards are on. */
+enum class ToolchainCardMode {
+    /** First-run selection: tapping a card ticks it. */
+    PICKER,
+
+    /** Settings screen: each card offers one action. */
+    MANAGER,
+}
+
+/** What a card's action button offers. */
+enum class ToolchainAction { INSTALL, REMOVE, CANCEL, RETRY }
+
+/** What a card's status line says. */
+enum class ToolchainBadge { NONE, INSTALLED, FAILED }
+
+/**
+ * Everything one toolchain card shows, decided without a View.
+ *
+ * The nullable fields are absences rather than defaults: no progress bar at all
+ * is not the same card as a progress bar reading zero, and no button at all is
+ * not the same card as a disabled one.
+ */
+data class ToolchainCard(
+    /** PICKER only: the card is ticked and outlined. */
+    val selected: Boolean = false,
+    val badge: ToolchainBadge = ToolchainBadge.NONE,
+    /** Progress bar percentage, or null when the card carries no progress bar. */
+    val progressPercent: Int? = null,
+    /** The action button's offer, or null when the card carries no button. */
+    val action: ToolchainAction? = null,
+)
+
+/**
+ * The toolchain card's data logic, with no Android types in it.
+ *
+ * It holds what the two screens know about each toolchain (ticked, installed,
+ * last download report) and turns that into the card to draw. Kept apart from
+ * [ToolchainPickerAdapter] so the decisions can be asserted without a
+ * RecyclerView: which report counts as "still downloading", which of installed
+ * and failed wins, and whether a name from the install record matches a pack
+ * name at all. Getting any of those wrong offers "Install" for something already
+ * on disk, or hides the only button that starts a download, and both are silent.
+ */
+class ToolchainCardState(private val mode: ToolchainCardMode) {
+
+    /** The cards, in the order they are drawn. */
+    val items: List<ToolchainRegistry.ToolchainInfo> = ToolchainRegistry.available
+
+    private val selected = mutableSetOf<String>()
+    private val installed = mutableSetOf<String>()
+    private val downloadStatus = mutableMapOf<String, Int>()
+    private val downloadPercent = mutableMapOf<String, Int>()
+
+    /** Position of [packName] among [items], or -1 when no card shows it. */
+    fun positionOf(packName: String): Int = items.indexOfFirst { it.packName == packName }
+
+    /**
+     * Replaces what is on disk with [packNames].
+     *
+     * The install record names toolchains the short way ("go"), the cards name
+     * them the pack way ("toolchain_go"), so each name is normalised on the way
+     * in. Both spellings are accepted because both reach here.
+     */
+    fun setInstalled(packNames: Collection<String>) {
+        installed.clear()
+        installed.addAll(packNames.map { name ->
+            if (name.startsWith("toolchain_")) name else "toolchain_$name"
+        })
+    }
+
+    /**
+     * Folds one download report in and returns the position whose card it
+     * changed, or -1 for a pack no card shows.
+     *
+     * COMPLETED and NOT_INSTALLED also move the pack in and out of the installed
+     * set, so a card is right immediately rather than after the next
+     * [setInstalled].
+     */
+    fun updateState(packName: String, status: Int, percent: Int): Int {
+        downloadStatus[packName] = status
+        downloadPercent[packName] = percent
+
+        if (status == AssetPackStatus.COMPLETED) {
+            installed.add(packName)
+        }
+        if (status == AssetPackStatus.NOT_INSTALLED) {
+            installed.remove(packName)
+        }
+        return positionOf(packName)
+    }
+
+    /** PICKER: ticks [packName] if it is not ticked, unticks it if it is. */
+    fun toggleSelection(packName: String) {
+        if (!selected.remove(packName)) selected.add(packName)
+    }
+
+    /** A snapshot of what is ticked, safe to hold while the user carries on tapping. */
+    fun selectedPackNames(): Set<String> = selected.toSet()
+
+    /** The card to draw for [packName] on this screen. */
+    fun card(packName: String): ToolchainCard = when (mode) {
+        ToolchainCardMode.PICKER -> ToolchainCard(selected = packName in selected)
+        ToolchainCardMode.MANAGER -> managerCard(packName)
+    }
+
+    private fun managerCard(packName: String): ToolchainCard {
+        val status = downloadStatus[packName]
+        return when {
+            status in IN_FLIGHT -> ToolchainCard(
+                progressPercent = downloadPercent[packName] ?: 0,
+                action = ToolchainAction.CANCEL,
+            )
+            status == AssetPackStatus.FAILED -> ToolchainCard(
+                badge = ToolchainBadge.FAILED,
+                action = ToolchainAction.RETRY,
+            )
+            packName in installed -> ToolchainCard(
+                badge = ToolchainBadge.INSTALLED,
+                action = ToolchainAction.REMOVE,
+            )
+            else -> ToolchainCard(action = ToolchainAction.INSTALL)
+        }
+    }
+
+    private companion object {
+        /**
+         * Reports that mean the download is still going somewhere, so the card
+         * keeps offering Cancel rather than a second Install.
+         */
+        val IN_FLIGHT = listOf(
+            AssetPackStatus.DOWNLOADING,
+            AssetPackStatus.PENDING,
+            AssetPackStatus.WAITING_FOR_WIFI,
+            AssetPackStatus.TRANSFERRING,
+        )
+    }
+}

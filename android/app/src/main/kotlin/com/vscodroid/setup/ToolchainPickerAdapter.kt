@@ -10,7 +10,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
-import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.R
 
 /**
@@ -19,52 +18,34 @@ import com.vscodroid.R
  * Two modes:
  * - PICKER: first-run selection (tap toggles checkmark, reports via [onSelectionChanged])
  * - MANAGER: settings screen (shows installed/downloading/action buttons, reports via [onAction])
+ *
+ * What each card should say is decided by [ToolchainCardState], which has no
+ * Android types in it and is pinned by ToolchainCardStateTest. This class only
+ * puts that decision on screen.
  */
 class ToolchainPickerAdapter(
-    private val mode: Mode,
+    private val mode: ToolchainCardMode,
 ) : RecyclerView.Adapter<ToolchainPickerAdapter.ViewHolder>() {
-
-    enum class Mode { PICKER, MANAGER }
-
-    enum class Action { INSTALL, REMOVE, CANCEL, RETRY }
 
     /** PICKER mode: called when selection set changes. */
     var onSelectionChanged: ((selected: Set<String>) -> Unit)? = null
 
     /** MANAGER mode: called when an action button is tapped. */
-    var onAction: ((packName: String, action: Action) -> Unit)? = null
+    var onAction: ((packName: String, action: ToolchainAction) -> Unit)? = null
 
-    private val items = ToolchainRegistry.available.toList()
-    private val selected = mutableSetOf<String>()
-    private val installed = mutableSetOf<String>()
-    private val downloadStatus = mutableMapOf<String, Int>()
-    private val downloadPercent = mutableMapOf<String, Int>()
+    private val cards = ToolchainCardState(mode)
 
-    fun getSelectedPackNames(): Set<String> = selected.toSet()
+    fun getSelectedPackNames(): Set<String> = cards.selectedPackNames()
 
     @SuppressLint("NotifyDataSetChanged")
     fun setInstalled(packNames: Collection<String>) {
-        installed.clear()
-        installed.addAll(packNames.map { name ->
-            if (name.startsWith("toolchain_")) name else "toolchain_$name"
-        })
+        cards.setInstalled(packNames)
         notifyDataSetChanged()
     }
 
     fun updateState(packName: String, status: Int, percent: Int) {
-        downloadStatus[packName] = status
-        downloadPercent[packName] = percent
-        val pos = items.indexOfFirst { it.packName == packName }
+        val pos = cards.updateState(packName, status, percent)
         if (pos >= 0) notifyItemChanged(pos)
-
-        // On COMPLETED, add to installed set
-        if (status == AssetPackStatus.COMPLETED) {
-            installed.add(packName)
-        }
-        // On NOT_INSTALLED (after uninstall), remove from installed set
-        if (status == AssetPackStatus.NOT_INSTALLED) {
-            installed.remove(packName)
-        }
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -74,7 +55,7 @@ class ToolchainPickerAdapter(
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val info = items[position]
+        val info = cards.items[position]
         val ctx = holder.itemView.context
 
         holder.name.text = info.shortLabel
@@ -90,15 +71,15 @@ class ToolchainPickerAdapter(
         )
 
         when (mode) {
-            Mode.PICKER -> bindPickerMode(holder, info)
-            Mode.MANAGER -> bindManagerMode(holder, info, ctx)
+            ToolchainCardMode.PICKER -> bindPickerMode(holder, info)
+            ToolchainCardMode.MANAGER -> bindManagerMode(holder, info, ctx)
         }
     }
 
-    override fun getItemCount() = items.size
+    override fun getItemCount() = cards.items.size
 
     private fun bindPickerMode(holder: ViewHolder, info: ToolchainRegistry.ToolchainInfo) {
-        val isSelected = info.packName in selected
+        val isSelected = cards.card(info.packName).selected
         val card = holder.card
 
         // Visual selection state
@@ -115,13 +96,9 @@ class ToolchainPickerAdapter(
         holder.downloadProgress.visibility = View.GONE
 
         card.setOnClickListener {
-            if (info.packName in selected) {
-                selected.remove(info.packName)
-            } else {
-                selected.add(info.packName)
-            }
+            cards.toggleSelection(info.packName)
             notifyItemChanged(holder.bindingAdapterPosition)
-            onSelectionChanged?.invoke(selected.toSet())
+            onSelectionChanged?.invoke(cards.selectedPackNames())
         }
     }
 
@@ -131,9 +108,7 @@ class ToolchainPickerAdapter(
         ctx: android.content.Context,
     ) {
         val card = holder.card
-        val isInstalled = info.packName in installed
-        val status = downloadStatus[info.packName]
-        val percent = downloadPercent[info.packName] ?: 0
+        val state = cards.card(info.packName)
 
         // No selection visuals in manager mode
         card.strokeWidth = 0
@@ -142,55 +117,36 @@ class ToolchainPickerAdapter(
         card.setOnClickListener(null)
         card.isClickable = false
 
-        val isDownloading = status in listOf(
-            AssetPackStatus.DOWNLOADING,
-            AssetPackStatus.PENDING,
-            AssetPackStatus.WAITING_FOR_WIFI,
-            AssetPackStatus.TRANSFERRING,
-        )
-        val isFailed = status == AssetPackStatus.FAILED
-
-        when {
-            isDownloading -> {
-                holder.statusBadge.visibility = View.GONE
-                holder.downloadProgress.visibility = View.VISIBLE
-                holder.downloadProgress.progress = percent
-                holder.actionButton.visibility = View.VISIBLE
-                holder.actionButton.text = ctx.getString(R.string.toolchain_cancel)
-                holder.actionButton.setOnClickListener {
-                    onAction?.invoke(info.packName, Action.CANCEL)
-                }
-            }
-            isFailed -> {
+        when (state.badge) {
+            ToolchainBadge.NONE -> holder.statusBadge.visibility = View.GONE
+            ToolchainBadge.FAILED -> {
                 holder.statusBadge.visibility = View.VISIBLE
                 holder.statusBadge.text = ctx.getString(R.string.progress_failed)
                 holder.statusBadge.setTextColor(ctx.getColor(R.color.colorError))
-                holder.downloadProgress.visibility = View.GONE
-                holder.actionButton.visibility = View.VISIBLE
-                holder.actionButton.text = ctx.getString(R.string.progress_retry)
-                holder.actionButton.setOnClickListener {
-                    onAction?.invoke(info.packName, Action.RETRY)
-                }
             }
-            isInstalled -> {
+            ToolchainBadge.INSTALLED -> {
                 holder.statusBadge.visibility = View.VISIBLE
                 holder.statusBadge.text = ctx.getString(R.string.toolchain_installed)
                 holder.statusBadge.setTextColor(ctx.getColor(R.color.colorSuccess))
-                holder.downloadProgress.visibility = View.GONE
-                holder.actionButton.visibility = View.VISIBLE
-                holder.actionButton.text = ctx.getString(R.string.toolchain_remove)
-                holder.actionButton.setOnClickListener {
-                    onAction?.invoke(info.packName, Action.REMOVE)
-                }
             }
-            else -> {
-                holder.statusBadge.visibility = View.GONE
-                holder.downloadProgress.visibility = View.GONE
-                holder.actionButton.visibility = View.VISIBLE
-                holder.actionButton.text = ctx.getString(R.string.toolchain_install)
-                holder.actionButton.setOnClickListener {
-                    onAction?.invoke(info.packName, Action.INSTALL)
-                }
+        }
+
+        val percent = state.progressPercent
+        if (percent == null) {
+            holder.downloadProgress.visibility = View.GONE
+        } else {
+            holder.downloadProgress.visibility = View.VISIBLE
+            holder.downloadProgress.progress = percent
+        }
+
+        val action = state.action
+        if (action == null) {
+            holder.actionButton.visibility = View.GONE
+        } else {
+            holder.actionButton.visibility = View.VISIBLE
+            holder.actionButton.text = ctx.getString(labelFor(action))
+            holder.actionButton.setOnClickListener {
+                onAction?.invoke(info.packName, action)
             }
         }
     }
@@ -207,6 +163,13 @@ class ToolchainPickerAdapter(
     }
 
     companion object {
+        private fun labelFor(action: ToolchainAction): Int = when (action) {
+            ToolchainAction.INSTALL -> R.string.toolchain_install
+            ToolchainAction.REMOVE -> R.string.toolchain_remove
+            ToolchainAction.CANCEL -> R.string.toolchain_cancel
+            ToolchainAction.RETRY -> R.string.progress_retry
+        }
+
         private fun Int.dpToPx(view: View): Int =
             (this * view.resources.displayMetrics.density).toInt()
     }
