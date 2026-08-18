@@ -40,11 +40,12 @@ class FirstRunSetup(
 
     enum class SetupResult { SUCCESS, LOW_STORAGE, ERROR }
 
-    fun isFirstRun(): Boolean {
-        val installedVersion = prefs.getString(KEY_VERSION, null)
-        val currentVersion = getCurrentVersion()
-        return installedVersion != currentVersion
-    }
+    fun isFirstRun(): Boolean = setupIsStale(
+        prefs.getString(KEY_VERSION, null),
+        prefs.getInt(KEY_VERSION_CODE, 0),
+        getCurrentVersion(),
+        getCurrentVersionCode(),
+    )
 
     suspend fun runSetup(): SetupResult = setupMutex.withLock {
         // Two Splash instances can exist at once (noHistory + standard
@@ -2694,6 +2695,40 @@ internal const val OWN_EXTENSION_PREFIX = "vscodroid."
  */
 internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>): List<String> =
     bundled.filter { it.startsWith(OWN_EXTENSION_PREFIX) || it !in present }
+
+/**
+ * Whether the setup recorded on this device belongs to a build other than the
+ * one now running, and therefore has to be redone.
+ *
+ * Both halves of the identity are compared, and the versionCode is the half
+ * that carries the guarantee. A versionName is a label a build declares about
+ * itself and nothing stops two builds declaring the same one: 1.1.0 was
+ * published under versionCode 11 and then again under 12. Comparing the label
+ * alone, which is what this did, answers "same build" for those two -- so a
+ * device holding the first takes the second, skips setup entirely, and keeps
+ * running the older server tree under the newer app. Nothing reports it,
+ * because from the app's side setup completed; it completed for a different
+ * build.
+ *
+ * Play refuses an upload whose versionCode is not greater than the last, so the
+ * code cannot repeat where the name can. Comparing both means the name stays
+ * free to be whatever a release wants to call itself.
+ *
+ * A stored code of 0 is the value getInt returns when the
+ * key was never written, which is any install predating the code being
+ * recorded. Those are treated as stale, which redoes an extraction that is
+ * idempotent, rather than trusting a record that was never made.
+ *
+ * Pure, and takes the four values rather than a Context, so the decision can be
+ * pinned by a unit test; the reads themselves are one call each and have no
+ * branch to get wrong.
+ */
+internal fun setupIsStale(
+    storedName: String?,
+    storedCode: Int,
+    currentName: String,
+    currentCode: Int,
+): Boolean = storedName != currentName || storedCode != currentCode
 
 /**
  * The manifest rewrite failed, as distinct from the manifest being unreadable.

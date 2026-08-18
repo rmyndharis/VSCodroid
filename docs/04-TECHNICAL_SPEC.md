@@ -805,7 +805,8 @@ this side, which is not the `User/` path it looks like it should be; see
 restored copy survives the new device's first run.
 
 Notably excluded by omission, and least obvious: `sharedpref`.
-`FirstRunSetup.isFirstRun()` answers from `setup_version` in those preferences, so
+`FirstRunSetup.isFirstRun()` answers from `setup_version` and `setup_version_code`
+in those preferences, so
 restoring them onto a device with an empty `filesDir` would make the app conclude
 setup had already run, skip extraction entirely, and start a server that is not
 there.

@@ -481,10 +481,11 @@ Output: `android/app/build/outputs/apk/debug/app-debug.apk` (debug package name:
 ### Version Bump
 
 `versionCode` and `versionName` both live in `android/app/build.gradle.kts`, and both have
-to move. They are not interchangeable: `FirstRunSetup.isFirstRun()` compares the stored
-`versionName` against the installed one, so a release that bumps only `versionCode` never
-re-extracts the assets, while `getPreviousVersionCode()` and the migrations it feeds read
-`versionCode`. `markSetupComplete()` stores the pair together.
+to move. They are not interchangeable. `FirstRunSetup.setupIsStale()` compares both, so either one
+moving re-extracts the assets, and the versionCode is what makes that reliable: Play
+refuses a repeated versionCode, while nothing stops two builds declaring one versionName.
+`getPreviousVersionCode()` and the migrations it feeds threshold on `versionCode` alone.
+`markSetupComplete()` stores the pair together.
 
 ### Release Build
 

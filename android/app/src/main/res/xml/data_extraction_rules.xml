@@ -28,8 +28,8 @@
   - `saf-mirrors` — local copies of folders the user picked through SAF. The
     originals are the documents; these are rebuilt on reopening.
   - `sharedpref` — load-bearing, and the least obvious entry on this list.
-    `FirstRunSetup.isFirstRun()` answers from `setup_version` in those
-    preferences. Restore them onto a device whose `filesDir` is empty and the app
+    `FirstRunSetup.isFirstRun()` answers from `setup_version` and
+    `setup_version_code` in those preferences. Restore them onto a device whose `filesDir` is empty and the app
     concludes setup has already run, skips extraction entirely, and starts a
     server with no server to start. `PortFinder` keeps the port there too, which
     the workbench's IndexedDB is bound to and which means nothing on a new

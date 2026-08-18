@@ -77,12 +77,13 @@ jobs:
           # versions, and this setting is right whatever the location is.
           persist-credentials: false
 
-      # A tag whose versionName does not match the one in build.gradle.kts is the
-      # quietest way to ship a broken upgrade. FirstRunSetup.isFirstRun() gates on
-      # versionName, so an unchanged one means existing installs skip setup
-      # entirely: no extraction, and no migration, while the release itself looks
-      # completely normal. Nothing downstream notices, and the symptom on a device
-      # is an app running against files from the previous version.
+      # A tag that does not name the version it builds makes every later question
+      # about what a device is running unanswerable: the tag is the only durable
+      # record tying a published artefact to a tree. Setup itself no longer rests
+      # on the name alone, FirstRunSetup.setupIsStale compares the versionCode
+      # too, but the release notes, the store listing and any bug report still
+      # say the name, and a tag that disagrees with it points them all at the
+      # wrong commit.
       - name: Check the tag matches the app version
         env:
           TAG: ${{ github.ref_name }}
