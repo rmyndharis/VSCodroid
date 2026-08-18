@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-19
+
 ### Changed
 
 - The build manifest now records the app version, versionCode and commit, so a published artifact can be traced to the build that produced it.
@@ -519,7 +521,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.9...v1.0.0
 [0.2.9]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.5...v0.2.8
