@@ -11,6 +11,62 @@ rootProject.file("signing.properties").takeIf { it.exists() }?.inputStream()?.us
 fun signingProp(key: String, envVar: String, fallback: String = "") =
     signingProps.getProperty(key) ?: System.getenv(envVar) ?: fallback
 
+// The attribution documents, copied into the APK so a person holding the
+// binaries can read the notices that have to travel with them.
+//
+// This matters most for the copyleft ones. Bash, Git, Make, readline, libiconv,
+// gdbm, liblzma and zstd are all GPL or LGPL, and the GPL's written offer of
+// source has to accompany the binary rather than sit in a repository the holder
+// of an APK has no reason to know exists. NOTICE.md and docs/LEGAL_NOTICES.md
+// carried that offer and shipped nowhere; every device ran the binaries with no
+// notice of any kind on it.
+//
+// Naming a licence is not supplying it, and the three licences/ files are the
+// half that was missing. GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1
+// section 1 each require a copy of the licence itself to accompany the binary;
+// the documents above carried a gnu.org URL instead, which discharges nothing,
+// least of all on the offline device this app is built to be usable on. They are
+// the FSF texts as shipped in Termux's liblzma package, which is one of the
+// packages this APK redistributes, and they are verbatim: NoticesTest pins each
+// one's sha256, because a licence text that has been edited is not the licence.
+//
+// Copied from the repository root rather than committed under src/main/assets,
+// because a second copy is a copy that goes stale, and a stale licence notice is
+// worse than an absent one: it is a claim about terms that is no longer true.
+// The markdown is ~48 KiB and the licence texts ~78 KiB, which together deflate
+// to roughly 50 KiB in the APK, well under 0.1% of the base module. The markdown
+// grows as the tree does, since every binary in it has to be named in both, so
+// treat that as the order of magnitude rather than as a figure to check against.
+//
+// They are read out of the APK by MainActivity's licences dialog and never
+// extracted, which is why they are a separate assets source directory: it keeps
+// them out of the src/main/assets sum that sizes first-run extraction.
+//
+// Sync rather than Copy, because the app opens these by basename and a Copy
+// leaves behind whatever the last run wrote. Measured: with COPYING.GPLv3
+// removed from the tree, the Copy ran, succeeded, and left the previous run's
+// COPYING.GPLv3 in the output directory, where the next incremental APK
+// packaged it. A licence text still shipping under a name the repository no
+// longer has is the stale copy this task exists to avoid, arriving by the back
+// door. Only this task writes that directory, so deleting what it did not write
+// costs nothing.
+val bundleNotices = tasks.register<Sync>("bundleNotices") {
+    group = "build"
+    description = "Copies the attribution and licence documents into the APK's assets."
+
+    val repoRoot = rootProject.projectDir.parentFile
+    from(File(repoRoot, "NOTICE.md"))
+    from(File(repoRoot, "docs/LEGAL_NOTICES.md"))
+    from(File(repoRoot, "licenses/COPYING.GPLv2"))
+    from(File(repoRoot, "licenses/COPYING.GPLv3"))
+    from(File(repoRoot, "licenses/COPYING.LGPLv2.1"))
+    into(layout.buildDirectory.dir("generated/notices"))
+
+    // The names the app opens. Kept beside the copy so a rename here fails the
+    // build rather than emptying the dialog on a device: com.vscodroid.util
+    // .Notices lists the same five, and NoticesTest compares the lists.
+}
+
 android {
     namespace = "com.vscodroid"
     compileSdk = 36
@@ -162,7 +218,14 @@ android {
     // The attribution documents, packaged so they reach the device. See
     // `bundleNotices` at the foot of this file for why they are copied rather
     // than committed here.
-    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/notices"))
+    //
+    // Named by the task, not by its directory, and that is what carries the
+    // dependency. A bare path is a directory something happens to fill, so
+    // every consumer has to declare the producer itself or Gradle refuses the
+    // build at validation. Lint has several such consumers and AGP adds more
+    // between versions; naming the task answers for all of them at once.
+    // `bundleNotices` is registered above for this reason and no other.
+    sourceSets["main"].assets.srcDir(bundleNotices)
 
     lint {
         // The baseline is what makes this affordable: the 17 issues recorded in
@@ -729,61 +792,20 @@ val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") 
     }
 }
 
-// The attribution documents, copied into the APK so a person holding the
-// binaries can read the notices that have to travel with them.
-//
-// This matters most for the copyleft ones. Bash, Git, Make, readline, libiconv,
-// gdbm, liblzma and zstd are all GPL or LGPL, and the GPL's written offer of
-// source has to accompany the binary rather than sit in a repository the holder
-// of an APK has no reason to know exists. NOTICE.md and docs/LEGAL_NOTICES.md
-// carried that offer and shipped nowhere; every device ran the binaries with no
-// notice of any kind on it.
-//
-// Naming a licence is not supplying it, and the three licences/ files are the
-// half that was missing. GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1
-// section 1 each require a copy of the licence itself to accompany the binary;
-// the documents above carried a gnu.org URL instead, which discharges nothing,
-// least of all on the offline device this app is built to be usable on. They are
-// the FSF texts as shipped in Termux's liblzma package, which is one of the
-// packages this APK redistributes, and they are verbatim: NoticesTest pins each
-// one's sha256, because a licence text that has been edited is not the licence.
-//
-// Copied from the repository root rather than committed under src/main/assets,
-// because a second copy is a copy that goes stale, and a stale licence notice is
-// worse than an absent one: it is a claim about terms that is no longer true.
-// The markdown is ~48 KiB and the licence texts ~78 KiB, which together deflate
-// to roughly 50 KiB in the APK, well under 0.1% of the base module. The markdown
-// grows as the tree does, since every binary in it has to be named in both, so
-// treat that as the order of magnitude rather than as a figure to check against.
-//
-// They are read out of the APK by MainActivity's licences dialog and never
-// extracted, which is why they are a separate assets source directory: it keeps
-// them out of the src/main/assets sum that sizes first-run extraction.
-//
-// Sync rather than Copy, because the app opens these by basename and a Copy
-// leaves behind whatever the last run wrote. Measured: with COPYING.GPLv3
-// removed from the tree, the Copy ran, succeeded, and left the previous run's
-// COPYING.GPLv3 in the output directory, where the next incremental APK
-// packaged it. A licence text still shipping under a name the repository no
-// longer has is the stale copy this task exists to avoid, arriving by the back
-// door. Only this task writes that directory, so deleting what it did not write
-// costs nothing.
-val bundleNotices = tasks.register<Sync>("bundleNotices") {
-    group = "build"
-    description = "Copies the attribution and licence documents into the APK's assets."
 
-    val repoRoot = rootProject.projectDir.parentFile
-    from(File(repoRoot, "NOTICE.md"))
-    from(File(repoRoot, "docs/LEGAL_NOTICES.md"))
-    from(File(repoRoot, "licenses/COPYING.GPLv2"))
-    from(File(repoRoot, "licenses/COPYING.GPLv3"))
-    from(File(repoRoot, "licenses/COPYING.LGPLv2.1"))
-    into(layout.buildDirectory.dir("generated/notices"))
-
-    // The names the app opens. Kept beside the copy so a rename here fails the
-    // build rather than emptying the dialog on a device: com.vscodroid.util
-    // .Notices lists the same five, and NoticesTest compares the lists.
-}
+// Lint's own tasks read the asset directories by path rather than through the
+// source set, so naming the task above does not reach them and they have to be
+// told separately. Two do it today, `generateReleaseLintVitalReportModel` and
+// `lintVitalAnalyzeRelease`, and AGP has moved that set between versions, so
+// this matches the family rather than the two names: a task added later would
+// otherwise fail the build at validation, and only in the release graph.
+//
+// That graph is the one nothing exercises. `release.yml` runs `assembleRelease`
+// at tag time, `r8.yml` runs a lint task alone against a stub tree, and no other
+// workflow runs a release task at all, so the build that cannot be retried
+// casually is the one that would have found out.
+tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
+    .configureEach { dependsOn(bundleNotices) }
 
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that

@@ -349,13 +349,25 @@ Notes:
 - **Play Console**: Android Vitals for crash clusters and ANR analysis
 - **User-initiated reports**: "Report a Bug" option in app settings → generates log bundle
 
-**A stack trace from v1.0.0 cannot be read back.** That build ran R8, and its
-`mapping.txt` was never published or archived; the only copy would have been in a
-local build directory, which holds one build at a time and has since been
-overwritten. Measured: the published v1.0.0 APK carries `pg-map-id 7e59ec8`,
-while the map still on disk is `bd8a693`, so they do not correspond. A trace from
-that build can be triaged by its message and its unobfuscated frames and no
-further.
+**A v1.0.0 trace can be read back through Play, and not otherwise.** AGP puts the
+map inside the App Bundle as
+`BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map` (measured: 14 MB
+in the release AAB), so Play received v1.0.0's own map with the upload and
+deobfuscates the crashes it collects without anyone doing anything. That covers
+the channel that gathers traces at scale.
+
+What is not covered is a trace someone pastes into an issue from a sideloaded
+APK. The GitHub release for v1.0.0 attached no `mapping.txt`, and the only other
+copy would have been a local build directory, which holds one build at a time and
+has long since been overwritten. Measured: the published v1.0.0 APK carries
+`pg-map-id 7e59ec8`, while the map on disk is from a later build. Such a trace can
+be triaged by its message and its unobfuscated frames and no further.
+
+One R8 run serves both artefacts, so this is a publishing gap and not a
+correspondence problem. Measured on one tree: `assembleRelease` then
+`bundleRelease` leave a single `pg_map_id`, and that same id is stamped in the
+APK's dex, embedded in the AAB, and carried by the `mapping.txt` the release
+attaches. The map on a release describes the APK on that release.
 
 Later releases do not have this problem. `release.yml` attaches `mapping.txt` to
 the release it builds, and `r8.yml` keeps it as a workflow artifact, so the map

@@ -88,11 +88,22 @@ class NoticesTest {
         // Copying the documents is not packaging them. The destination has to be
         // an assets source directory or they land in build/ and stop there,
         // leaving the dialog with nothing but its two missing-document markers.
+        //
+        // Either spelling counts, because both register the same directory and
+        // only one of them is a path. Naming the task is the better one: a bare
+        // path leaves every consumer to declare the producer itself, and Gradle
+        // fails the build when one does not, which is a thing that happens in
+        // the release graph and nowhere a pull request would see it. Pinning the
+        // path spelling alone would have turned that improvement red.
+        val registersPath = Regex("assets\\.srcDir\\([^)]*" + Regex.escape(destination!!) + "[^)]*\\)")
+            .containsMatchIn(script)
+        val registersTask = Regex("""assets\.srcDir\(\s*bundleNotices\s*\)""")
+            .containsMatchIn(script)
         assertTrue(
-            Regex("assets\\.srcDir\\([^)]*" + Regex.escape(destination!!) + "[^)]*\\)")
-                .containsMatchIn(script),
-            "bundleNotices writes to $destination, which no assets.srcDir(...) " +
-                "registers. The documents would be copied and never packaged."
+            registersPath || registersTask,
+            "bundleNotices writes to $destination, and no assets.srcDir(...) " +
+                "registers it, by that path or by naming the task. The documents " +
+                "would be copied and never packaged."
         )
 
         // And the copy has to be made to run. Nothing infers it from the source

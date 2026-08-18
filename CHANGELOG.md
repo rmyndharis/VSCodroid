@@ -310,6 +310,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Build and release**
 
+- Release builds run again. Packaging the licence documents left a step nothing declared, and the only build that reaches it is the one a tag starts.
 - A stalled package mirror no longer eats a whole build. Refreshing the index was unbounded, so it could consume the job's entire budget and report every later step as skipped.
 - Unit tests re-run when a patch, the bootstrap script, a bundled extension manifest or a documented requirement changes. None was a declared input, so incremental runs served stale verdicts.
 - A server tree built before the current terminal-host shutdown is refused rather than packaged; the patch check matched text an earlier version of that patch had already added.
