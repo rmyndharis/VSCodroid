@@ -325,6 +325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The next VS Code upgrade will build. One of the twelve patches had prose rewritten without its hunk header adjusted, which `git apply` refuses to read. Pull requests now parse every patch.
 - Five checks that could not fail now can, each confirmed by breaking what it guards and watching it go red.
 - The on-device suite no longer passes git's HTTPS helper when the helper is absent, or when the check could not run at all.
+- Two on-device checks no longer report a working install as broken, and the toolchain shortcut check now proves the shortcut opens its screen, not merely that it exists.
 - The rule deciding which addresses may open in your browser is actually exercised by tests. Its `http://` branch had never run, because the URL parser it used is unavailable off-device and the failure was swallowed.
 - Building from source reports a missing Android NDK immediately instead of twenty minutes in. Set `REQUIRE_NDK=0` to skip.
 - Following the contributing guide's build steps produces the same app CI builds. Three steps were missing, and a check now fails the build when the documented steps and CI diverge.

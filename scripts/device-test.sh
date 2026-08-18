@@ -11,7 +11,9 @@
 #   --skip-install   Test already-running app (skip install + clear)
 #   --device SERIAL  Target specific device (passed as adb -s SERIAL)
 #   --verbose        Show full adb output
-#   --timeout N      Server-ready timeout in seconds (default: 120)
+#   --timeout N      First-run setup timeout in seconds (default: 120). The
+#                    server-ready wait is not this: it is read from the app's own
+#                    restart budget, see derive_ready_budget_seconds.
 #   --self-check     Resolve every expectation this suite derives, then exit.
 #                    Needs no device, so CI can run it.
 #   --instrumented   Check the preconditions, then run the instrumented suite
@@ -118,6 +120,58 @@ derive_toolchain_release_urls() {
     # second one in this file would be free to drift from it.
     sed -n 's/.*downloadUrl = "\(https:[^"]*\)".*/\1/p' \
         "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt"
+}
+
+derive_app_path() {
+    # The value the app puts in environment variable $1, relative to filesDir,
+    # read from the map Environment.buildProcessEnvironment hands every process
+    # it starts. Written here instead, it was wrong: this suite looked for git's
+    # helpers under usr/libexec/git-core, which no install has ever had, and
+    # reported the HTTPS helper missing on a device where `git ls-remote https://`
+    # returns the real HEAD. The app puts them in usr/lib/git-core and that is
+    # the only copy of the answer worth reading.
+    sed -n "s|^ *\"$1\" to \"\\\$filesDir/\([^\"]*\)\",\$|\1|p" \
+        "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/util/Environment.kt" | head -1
+}
+
+derive_shortcut_target() {
+    # The activity the launcher shortcut opens, read from the call that publishes
+    # it. Bounded to that function because SplashActivity starts MainActivity the
+    # same way a few lines up, and the first match in the file is that one.
+    awk '/private fun publishToolchainShortcut/, /^    }$/' \
+        "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/SplashActivity.kt" \
+        | sed -n 's/.*Intent(this, \([A-Za-z0-9_]*\)::class\.java).*/\1/p' | head -1
+}
+
+derive_ready_budget_seconds() {
+    # How long the app itself keeps trying to start a server before it gives up,
+    # in seconds: one readiness poll per attempt, plus the backoff before each
+    # restart. Nothing else is a defensible deadline for the wait below. Sooner
+    # than this and the suite reports a failure the app has not reached yet,
+    # which on a cold device is what a 60-second constant did while the server
+    # was still coming up; later and it is waiting for a decision already made.
+    #
+    # The backoff is summed the way NodeService computes it, doubling with the
+    # shift held at MAX_BACKOFF_SHIFT, rather than assumed flat.
+    local pm="$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt"
+    local ns="$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/service/NodeService.kt"
+    local poll restarts delay cap total n shift_by
+    poll=$(sed -n 's/^internal const val READY_POLL_TIMEOUT_MS = \([0-9_]*\)L.*/\1/p' "$pm" | head -1 | tr -d _)
+    restarts=$(sed -n 's/^internal const val MAX_RESTARTS = \([0-9_]*\).*/\1/p' "$ns" | head -1 | tr -d _)
+    delay=$(sed -n 's/^internal const val RESTART_DELAY_MS = \([0-9_]*\)L.*/\1/p' "$ns" | head -1 | tr -d _)
+    cap=$(sed -n 's/^internal const val MAX_BACKOFF_SHIFT = \([0-9_]*\).*/\1/p' "$ns" | head -1 | tr -d _)
+    # All four or nothing: a budget assembled from three of them would be a
+    # number that looks derived and is not.
+    [ -n "$poll" ] && [ -n "$restarts" ] && [ -n "$delay" ] && [ -n "$cap" ] || return 0
+    total=$(( (restarts + 1) * poll ))
+    n=1
+    while [ "$n" -le "$restarts" ]; do
+        shift_by=$((n - 1))
+        [ "$shift_by" -gt "$cap" ] && shift_by=$cap
+        total=$((total + delay * (1 << shift_by)))
+        n=$((n + 1))
+    done
+    echo $(( (total + 999) / 1000 ))
 }
 
 # ── Readers of files the app writes ────────────────────────────────
@@ -406,6 +460,45 @@ if $SELF_CHECK; then
     else
         fail "toolchain release URLs" \
             "no downloadUrl readable in ToolchainRegistry.kt; the toolchain phase would check nothing"
+    fi
+
+    # The three expectations a device phase would otherwise have to spell out for
+    # itself. Two of them were spelled out here once and were wrong for it: a
+    # git-core directory no install has, and a 60-second deadline no measurement
+    # chose. The third named an id, which is a weaker question than the component
+    # and had to be found inside a block the header shape can narrow away.
+    #
+    # Only the exec path is a verdict here. A check reads it: unread, the git
+    # helper check looks in filesDir itself and reports the helper gone. The CA
+    # bundle path is carried into run_tool for any git command that reaches the
+    # network, and no check in this suite makes one, so failing the run over it
+    # would be a verdict about a reading nothing consumes. It is reported
+    # instead, and the day an HTTPS check is added it becomes a verdict too.
+    GIT_EXEC_REL=$(derive_app_path GIT_EXEC_PATH)
+    GIT_CAINFO_REL=$(derive_app_path GIT_SSL_CAINFO)
+    if [ -n "$GIT_EXEC_REL" ]; then
+        pass "git exec path ($GIT_EXEC_REL, from Environment.kt; CA bundle ${GIT_CAINFO_REL:-unread})"
+    else
+        fail "git exec path" \
+            "no GIT_EXEC_PATH readable in Environment.kt; the git helper check would look in filesDir itself"
+    fi
+
+    SHORTCUT_TARGET=$(derive_shortcut_target)
+    if [ -n "$SHORTCUT_TARGET" ]; then
+        pass "toolchain shortcut target ($SHORTCUT_TARGET, from SplashActivity.kt)"
+    else
+        fail "toolchain shortcut target" \
+            "no Intent(this, ...::class.java) readable in publishToolchainShortcut(); the shortcut check would have nothing to match"
+    fi
+
+    # A budget of zero would wait for nothing and report every device dead, so
+    # resolving is not enough on its own here.
+    READY_BUDGET=$(derive_ready_budget_seconds)
+    if [ -n "$READY_BUDGET" ] && [ "$READY_BUDGET" -gt 0 ]; then
+        pass "server-ready budget (${READY_BUDGET}s, from NodeService.kt and ProcessManager.kt)"
+    else
+        fail "server-ready budget" \
+            "could not read READY_POLL_TIMEOUT_MS, MAX_RESTARTS, RESTART_DELAY_MS and MAX_BACKOFF_SHIFT; the server wait would have no deadline"
     fi
 
     # The three readings the device phases make of files the app writes. Each is
@@ -745,12 +838,31 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 # TEST 7: server_ready
 # ═══════════════════════════════════════════════════════════════════
-# Wait for "Server is ready on port" or "Server ready after" in logcat
-READY_TIMEOUT=60
+# Wait for "Server is ready on port" or "Server ready after" in logcat, for as
+# long as the app is still trying.
+#
+# The deadline was 60 seconds, which fits a warm device and nothing else: a first
+# run unpacks the whole asset tree before the server is started at all, and on a
+# cold emulator the server arrived after this had already called it dead. Both
+# the number and the reason for it now come from the app -- see
+# derive_ready_budget_seconds -- so a server that keeps crashing is given every
+# attempt the app itself would make before this calls the start dead.
+#
+# That budget covers the crash path and only that path. A process that stays
+# alive without ever answering is handed to NodeService.awaitLateReadiness,
+# which polls it for as long as it lives and queues no restart, so the line
+# below is never logged and nothing the app does bounds the wait. Running out
+# of budget there means this suite stopped waiting, not that the app did.
+#
+# And it does not sit out that budget when the answer is already in: the service
+# says so when its restarts are spent, and reading that line ends the wait with
+# the reason rather than with a stopwatch.
+READY_TIMEOUT=$(derive_ready_budget_seconds)
 ELAPSED=0
 READY_OK=false
+GAVE_UP=false
 
-while [ $ELAPSED -lt $READY_TIMEOUT ]; do
+while [ -n "$READY_TIMEOUT" ] && [ $ELAPSED -lt "$READY_TIMEOUT" ]; do
     LOGCAT=$($ADB logcat -d -s VSCodroid.NodeService:I VSCodroid.ProcessManager:I 2>/dev/null)
     # Extract port from "Server is ready on port NNNN"
     PORT_LINE=$(echo "$LOGCAT" | grep -o "Server is ready on port [0-9]*" | tail -1)
@@ -771,14 +883,33 @@ while [ $ELAPSED -lt $READY_TIMEOUT ]; do
         READY_OK=true
         break
     fi
+    # NodeService logs this once its restart budget is gone, and nothing after it
+    # is coming.
+    if echo "$LOGCAT" | grep -q "Max restarts exceeded"; then
+        GAVE_UP=true
+        break
+    fi
     sleep 2
     ELAPSED=$((ELAPSED + 2))
+    # Printed whether or not --verbose was asked for. This wait is minutes long
+    # on a cold device, and silence that long reads as a hung run rather than a
+    # slow one, so it gets interrupted just before it would have had a verdict.
+    if [ $((ELAPSED % 30)) -eq 0 ]; then
+        printf "       Waiting for the server... %ss/%ss\n" "$ELAPSED" "$READY_TIMEOUT"
+    fi
 done
 
-if $READY_OK && [ -n "$SERVER_PORT" ]; then
-    pass "server_ready (port=$SERVER_PORT)"
+if [ -z "$READY_TIMEOUT" ]; then
+    fail "server_ready" \
+        "could not read the app's start budget from NodeService.kt and ProcessManager.kt, so there is no deadline to wait to"
+elif $READY_OK && [ -n "$SERVER_PORT" ]; then
+    pass "server_ready (port=$SERVER_PORT, waited ${ELAPSED}s of ${READY_TIMEOUT}s)"
+elif $GAVE_UP; then
+    fail "server_ready" \
+        "the app spent its restart budget after ${ELAPSED}s and stopped trying"
 else
-    fail "server_ready" "Server did not become ready within ${READY_TIMEOUT}s"
+    fail "server_ready" \
+        "Server did not become ready within ${READY_TIMEOUT}s, which is the whole of the app's own start budget"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
@@ -844,6 +975,15 @@ check_symlink "ssh"     "libssh.so"
 # ═══════════════════════════════════════════════════════════════════
 printf "\n${BOLD}Phase 4: Tool Versions${RESET}\n"
 
+# The two paths git needs, taken from the app's own environment rather than
+# spelled out here. GIT_SSL_CAINFO is not decoration: without it git falls back
+# to the bundle path compiled into the Termux build,
+# /data/data/com.termux/files/usr/etc/tls/cert.pem, which exists in no install of
+# this app, and every HTTPS remote fails on a trust-anchor error that belongs to
+# the environment this suite built rather than to the device.
+GIT_EXEC_REL=$(derive_app_path GIT_EXEC_PATH)
+GIT_CAINFO_REL=$(derive_app_path GIT_SSL_CAINFO)
+
 # Helper: run a tool inside the app sandbox with proper env
 run_tool() {
     local tool_path="$1"; shift
@@ -852,7 +992,8 @@ run_tool() {
         "PATH=$DATA_DIR/files/usr/bin:$NATIVE_LIB_DIR" \
         "LD_LIBRARY_PATH=$DATA_DIR/files/usr/lib:$NATIVE_LIB_DIR" \
         "PYTHONHOME=$DATA_DIR/files/usr" \
-        "GIT_EXEC_PATH=$DATA_DIR/files/usr/libexec/git-core" \
+        "GIT_EXEC_PATH=$DATA_DIR/files/$GIT_EXEC_REL" \
+        "GIT_SSL_CAINFO=$DATA_DIR/files/$GIT_CAINFO_REL" \
         "$tool_path" "$@" 2>&1
 }
 
@@ -993,9 +1134,17 @@ fi
 # error and no helper output at all. Both printed PASS while measuring nothing,
 # and "the helper going missing" is one of the two regressions this test names
 # as its reason for existing.
-HELPER_OUT=$(run_tool "files/usr/libexec/git-core/git-remote-https" 2>&1)
+#
+# Which directory holds it is read from the app, never written here. Written
+# here it was usr/libexec/git-core, a directory no install has: the helpers go
+# to usr/lib/git-core (FirstRunSetup.setupGitCore), so this reported the helper
+# gone, with rc=127, on devices where git clones over HTTPS perfectly well.
+HELPER_OUT=$(run_tool "files/$GIT_EXEC_REL/git-remote-https" 2>&1)
 HELPER_RC=$?
-if [ "$HELPER_RC" -eq 126 ] || echo "$HELPER_OUT" | grep -qi "permission denied"; then
+if [ -z "$GIT_EXEC_REL" ]; then
+    fail "git_remote_helper" \
+        "could not read GIT_EXEC_PATH from Environment.kt, so nothing names the directory to look in"
+elif [ "$HELPER_RC" -eq 126 ] || echo "$HELPER_OUT" | grep -qi "permission denied"; then
     fail "git_remote_helper" "cannot execute git-remote-https (rc=$HELPER_RC): $HELPER_OUT"
 elif [ "$HELPER_RC" -eq 127 ] || echo "$HELPER_OUT" | grep -qiE "not found|no such file"; then
     fail "git_remote_helper" "git-remote-https is not there (rc=$HELPER_RC): $HELPER_OUT"
@@ -1094,21 +1243,36 @@ printf "\n${BOLD}Phase 6: Toolchains${RESET}\n"
 #
 # The control is the dump having any Package section at all: without one, this
 # cannot tell "no shortcut" from "cannot see shortcuts on this Android version".
+#
+# What is then looked for is one line, and that line carries both halves of the
+# question itself: `cmp=<package>/<activity>` inside the shortcut's intent.
+# Nothing about it depends on where a block begins or ends.
+#
+# The reading it replaces did depend on that. It kept the lines between one
+# `Package:` header and the next, deciding which package a block belonged to by
+# the header's second whitespace-separated field, and searched only those lines
+# for an id. On the header AOSP prints today that works, indent and all, since
+# awk drops leading blanks before it counts fields: a healthy device passes
+# either reading. It holds for that shape only. Measured on a real dump with one
+# token inserted before `Package:`, the narrowing keeps no lines at all and the
+# id is reported missing while the record sits in the dump untouched, so a
+# published shortcut would read as a screen with no way in.
+#
+# The line is also the stronger question. An id proves a record exists; the
+# component proves that record opens this app's toolchain screen.
 SHORTCUT_DUMP=$($ADB shell dumpsys shortcut 2>/dev/null | tr -d '\r')
+SHORTCUT_TARGET=$(derive_shortcut_target)
 if ! echo "$SHORTCUT_DUMP" | grep -q "Package:"; then
     skip "toolchain_shortcut" \
         "dumpsys shortcut listed no packages here, so an empty result proves nothing"
+elif [ -z "$SHORTCUT_TARGET" ]; then
+    fail "toolchain_shortcut" \
+        "could not read which activity publishToolchainShortcut() opens, so there is nothing to look for"
+elif echo "$SHORTCUT_DUMP" | grep -q "cmp=$PKG/[^ }]*$SHORTCUT_TARGET"; then
+    pass "toolchain_shortcut (a published shortcut opens $SHORTCUT_TARGET)"
 else
-    PKG_SHORTCUTS=$(echo "$SHORTCUT_DUMP" | awk -v pkg="$PKG" '
-        /Package:/ { inpkg = ($2 == pkg) }
-        inpkg { print }
-    ')
-    if echo "$PKG_SHORTCUTS" | grep -q "id=toolchains"; then
-        pass "toolchain_shortcut (the launcher shortcut is published)"
-    else
-        fail "toolchain_shortcut" \
-            "no id=toolchains shortcut for $PKG; the toolchain screen has no entry point"
-    fi
+    fail "toolchain_shortcut" \
+        "no published shortcut opens $PKG/$SHORTCUT_TARGET; the toolchain screen has no entry point"
 fi
 
 # Test 25: the release still carries the ZIPs a non-Play install downloads.
