@@ -383,7 +383,6 @@ jobs:
       # could ship Go 1.24 through Play and Go 1.25 through GitHub.
       - name: Download toolchain assets
         run: |
-          bash scripts/download-go.sh
           bash scripts/download-ruby.sh
           bash scripts/download-java.sh
 
@@ -553,8 +552,9 @@ jobs:
           # ones already on it. Failing here is the cheap end of that.
           # awk with an exact string compare rather than grep with a pattern.
           # Every one of these names carries a dot, and to grep a dot is "any
-          # character", so `toolchain_goXzip` in the manifest would satisfy the
-          # check for `toolchain_go.zip`. False positive only -- it can accept a
+          # character", so `toolchain_rubyXzip` in the manifest would satisfy
+          # the check for `toolchain_ruby.zip`. False positive only, it can
+          # accept a
           # wrong name, never reject a right one -- and unreachable while
           # sha256sum generates this file from the real ZIPs. But a gate is here
           # to be relied on, and the field is a filename, so compare it as one.

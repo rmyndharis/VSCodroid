@@ -21,8 +21,8 @@ class ToolchainRegistryTest {
     inner class CatalogTest {
 
         @Test
-        fun `has exactly 3 toolchains`() {
-            assertEquals(3, ToolchainRegistry.available.size)
+        fun `has exactly 2 toolchains`() {
+            assertEquals(2, ToolchainRegistry.available.size)
         }
 
         @Test
@@ -75,10 +75,18 @@ class ToolchainRegistryTest {
         }
 
         @Test
-        fun `contains Go toolchain`() {
-            val go = ToolchainRegistry.available.find { it.shortLabel == "Go" }
-            assertNotNull(go)
-            assertEquals("toolchain_go", go!!.packName)
+        fun `offers nothing it has retired`() {
+            // The catalog is what the picker and the manage screen render, so an
+            // entry here is an offer. Go left it because it could not compile,
+            // and putting it back would need the sweep in ToolchainManager to go
+            // too, or a fresh install would download 179 MB that the next launch
+            // deletes.
+            val offered = ToolchainRegistry.available.map { it.packName }.toSet()
+            assertTrue(
+                "toolchain_go" !in offered,
+                "Go is offered again; ToolchainManager still sweeps it on launch, " +
+                    "so an install would be undone by the next start",
+            )
         }
 
         @Test
@@ -102,7 +110,7 @@ class ToolchainRegistryTest {
     inner class FindTest {
 
         @ParameterizedTest(name = "find by full pack name: {0}")
-        @ValueSource(strings = ["toolchain_go", "toolchain_ruby", "toolchain_java"])
+        @ValueSource(strings = ["toolchain_ruby", "toolchain_java"])
         fun `finds by full pack name`(packName: String) {
             val result = ToolchainRegistry.find(packName)
             assertNotNull(result, "Should find toolchain by pack name: $packName")
@@ -110,7 +118,7 @@ class ToolchainRegistryTest {
         }
 
         @ParameterizedTest(name = "find by short name: {0} → toolchain_{0}")
-        @CsvSource("go,toolchain_go", "ruby,toolchain_ruby", "java,toolchain_java")
+        @CsvSource("ruby,toolchain_ruby", "java,toolchain_java")
         fun `finds by short name`(shortName: String, expectedPack: String) {
             val result = ToolchainRegistry.find(shortName)
             assertNotNull(result, "Should find toolchain by short name: $shortName")

@@ -9,17 +9,15 @@ set -euo pipefail
 #
 # Prerequisites:
 #   Run the download scripts first to populate the asset packs:
-#     ./scripts/download-go.sh
 #     ./scripts/download-ruby.sh
 #     ./scripts/download-java.sh
 #
 # Usage:
 #   ./scripts/package-toolchains.sh              # Package all toolchains
-#   ./scripts/package-toolchains.sh go            # Package only Go
+#   ./scripts/package-toolchains.sh ruby          # Package only Ruby
 #   ./scripts/package-toolchains.sh ruby java     # Package Ruby and Java
 #
 # Output:
-#   toolchain-zips/toolchain_go.zip    (~53 MB)
 #   toolchain-zips/toolchain_ruby.zip  (~10 MB)
 #   toolchain-zips/toolchain_java.zip  (~55 MB)
 #
@@ -34,7 +32,7 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$ROOT_DIR/toolchain-zips"
 
 # Available toolchains (parallel arrays for bash 3.2 — no associative arrays)
-ALL_TOOLCHAINS=(go ruby java)
+ALL_TOOLCHAINS=(ruby java)
 
 get_assets_dir() {
     echo "$ROOT_DIR/android/toolchain_$1/src/main/assets"
@@ -114,7 +112,7 @@ for tc in "${REQUESTED[@]}"; do
 
     # Create ZIP from the assets directory contents.
     # cd into the assets dir so paths inside the ZIP are relative
-    # (e.g., toolchain_go.json, usr/lib/go/bin/go).
+    # (e.g., toolchain_ruby.json, usr/lib/ruby).
     # -r: recursive, -y: store symlinks as symlinks, -q: quiet
     (cd "$assets_dir" && zip -r -y -q "$zip_file" .)
 
@@ -147,7 +145,6 @@ fi
 if [ "$PACKAGED" -eq 0 ]; then
     echo ""
     echo "No toolchains were packaged. Run the download scripts first:"
-    echo "  ./scripts/download-go.sh"
     echo "  ./scripts/download-ruby.sh"
     echo "  ./scripts/download-java.sh"
     exit 1

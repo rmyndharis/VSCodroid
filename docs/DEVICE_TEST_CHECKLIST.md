@@ -142,19 +142,20 @@ the device.
 
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| TC-1 | Go install | Long-press app icon > Manage toolchains > Install Go | Downloads, extracts, `go version` prints a version | | |
 | TC-2 | Ruby install | Long-press app icon > Manage toolchains > Install Ruby | Downloads, extracts, `ruby --version` prints a version | | |
 | TC-3 | Java install | Long-press app icon > Manage toolchains > Install Java | Downloads, extracts, `java -version` prints a version | | |
 | TC-4 | Ruby and Java run | `ruby -e 'puts 1+1'`; write and run a `Hello.java` with `java Hello.java` | Both print their output | | |
-| TC-5 | Go runs but does not compile | `go version`, then `go build` on any package | `go version` prints; `go build` **is expected to fail** with a permission error. Anything else is the surprise worth reporting | | |
 | TC-6 | Toolchain uninstall | Manage toolchains > uninstall one | Files removed, command no longer found in a new terminal | | |
 | TC-7 | A sideloaded install pins one release | Install any toolchain on a build that is NOT from Play, with `adb logcat -s VSCodroid.ToolchainManager` running (Logger prefixes every tag, so the bare name matches nothing) | One line reading `Pinned this install to .../releases/download/<tag>`, naming a concrete tag rather than `latest`, and the install completes. A `Falling back to the unpinned release URL` line instead is not a failure, but record it: it means the resolve did not work on this network | | |
+| TC-8 | A retired toolchain is reclaimed | On a device with Go installed from an earlier build, update and launch once, then open Manage toolchains | Go is gone from the list, `go` is not found in a new terminal, and its files are off the disk. `adb logcat -s VSCodroid.ToolchainManager` shows `Removing go: this build no longer offers it` | | |
 
-TC-5 is written as an expected failure on purpose. `go` starts its compiler and
-linker as separate programs from the app's own storage, and Android refuses to
-execute anything stored there — a limit no packaging change reaches. Recording it
-as a known outcome keeps an unchecked box meaning "not tested" rather than
-"tested and broken".
+Go was here as TC-1 and TC-5, the second of them recording `go build` as an
+expected failure. It is no longer offered. `go` starts its compiler and linker as
+separate programs from the app's own storage, and Android refuses to execute
+anything stored there, a limit no packaging change reaches and one that
+`-toolexec` cannot route around: it governs how `go` runs its tools, and `go`
+itself is what fails to start. An install that still carries it is removed on the
+first launch of a build that has this line, so the row to run instead is TC-8.
 
 ## 11. Terminal & Tools
 

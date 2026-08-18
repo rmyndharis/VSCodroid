@@ -11,7 +11,7 @@ object ToolchainRegistry {
     data class ToolchainInfo(
         val packName: String,
         val displayName: String,
-        /** Short label for the toolchain card (e.g. "Go", "Ruby", "Java 17"). */
+        /** Short label for the toolchain card (e.g. "Ruby", "Java 17"). */
         val shortLabel: String,
         val description: String,
         /**
@@ -39,27 +39,24 @@ object ToolchainRegistry {
         val downloadUrl: String? = null,
     )
 
+    /**
+     * What the picker and the manage screen offer.
+     *
+     * Go was here and is not any more. Its card carried the honest sentence,
+     * that it runs but cannot compile, and an honest label on 179 MB that does
+     * not do the thing people install a compiler for is still 179 MB that does
+     * not do it. Android refuses to execute a file under the app's data
+     * directory, and `go build` and `go run` fork the compiler, assembler and
+     * linker themselves, so those forks are refused however the `go` command is
+     * reached. Measured in the app's own SELinux domain: a plain shell script
+     * placed there and marked executable is refused too, and `-toolexec`, the
+     * one idea that looked like a way round it, never reaches the problem.
+     *
+     * Removing an entry here is not the whole job. See
+     * [ToolchainManager.removeRetiredToolchainsSync]: installs that already
+     * have it lose their Remove button along with the entry, so they are swept.
+     */
     val available = listOf(
-        ToolchainInfo(
-            packName = "toolchain_go",
-            displayName = "Go",
-            shortLabel = "Go",
-            // The second sentence is not padding, and removing it would put the
-            // picker back to selling 179 MB for something the user cannot use as
-            // advertised. Android refuses to execute a file under the app's data
-            // directory, so binaries are reached through a bash function that
-            // hands them to the system loader. A function reaches only as far as
-            // the shell: `go build` and `go run` start the compiler, assembler
-            // and linker themselves, those forks hit the binaries directly, and
-            // they are refused. The card renders this text verbatim
-            // (ToolchainPickerAdapter), so it is the only place a user is told
-            // before choosing.
-            description = "Go programming language (CGO_ENABLED=0). Runs on device, " +
-                "but cannot compile: go build and go run are refused by Android.",
-            estimatedSize = 179_000_000,
-            downloadSize = 59_800_000,
-            downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_go.zip",
-        ),
         ToolchainInfo(
             packName = "toolchain_ruby",
             displayName = "Ruby",
@@ -80,11 +77,11 @@ object ToolchainRegistry {
         ),
     )
 
-    /** Look up toolchain info by pack name (e.g. "toolchain_go") or short name (e.g. "go"). */
+    /** Look up toolchain info by pack name (e.g. "toolchain_ruby") or short name (e.g. "ruby"). */
     fun find(nameOrPack: String): ToolchainInfo? =
         available.find { it.packName == nameOrPack || it.packName == "toolchain_$nameOrPack" }
 
-    /** Format byte count as human-readable size (e.g. "179 MB"). */
+    /** Format byte count as human-readable size (e.g. "146 MB"). */
     fun formatSize(bytes: Long): String = when {
         bytes >= 1_000_000_000 -> "${bytes / 1_000_000_000} GB"
         bytes >= 1_000_000 -> "${bytes / 1_000_000} MB"

@@ -127,9 +127,9 @@ class ToolchainStateIntegrityTest {
      */
     @Test
     fun `a successful write replaces the record and leaves no temporary file`() {
-        writeState(JSONArray("""[{"name":"go"}]"""))
+        writeState(JSONArray("""[{"name":"java"}]"""))
 
-        assertEquals(listOf("go"), namesInState())
+        assertEquals(listOf("java"), namesInState())
         assertFalse(
             File(filesDir, "home/.vscodroid/toolchains.json.tmp~").exists(),
             "the temporary file survived a successful write"
@@ -172,8 +172,8 @@ class ToolchainStateIntegrityTest {
 
     @Test
     fun `both name forms map to the recorded name`() {
-        assertEquals("go", toolchainShortName("go"))
-        assertEquals("go", toolchainShortName("toolchain_go"))
+        assertEquals("java", toolchainShortName("java"))
+        assertEquals("java", toolchainShortName("toolchain_java"))
         assertEquals("java", toolchainShortName("toolchain_java"))
     }
 
@@ -211,7 +211,7 @@ class ToolchainStateIntegrityTest {
      */
     @Test
     fun `an unrecorded toolchain removes nothing`() {
-        uninstallSync("toolchain_go")
+        uninstallSync("toolchain_java")
 
         assertEquals(listOf("ruby"), namesInState(), "an unrecorded name disturbed the record")
     }

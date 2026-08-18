@@ -357,10 +357,10 @@ class ToolchainManager(private val context: Context) {
      * disagreed about which one they take and only one of them said so.
      *
      * [install] resolves through [ToolchainRegistry.find], so `go` and
-     * `toolchain_go` both work there. This side matched the persisted short name
+     * `toolchain_ruby` both work there. This side matched the persisted short name
      * only, and the form JavaScript actually holds is the pack name --
      * `getAvailableToolchains` hands it out as `packName`. So the natural call,
-     * `removeToolchain("toolchain_go")`, logged "not found in state" and removed
+     * `removeToolchain("toolchain_ruby")`, logged "not found in state" and removed
      * nothing, while the same string passed to `installToolchain` worked.
      * `ToolchainActivity` never hit it because it strips the prefix itself
      * before calling; the bridge did not.
@@ -1412,6 +1412,13 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Toolchain repair pass failed: ${e.message}")
             }
             try {
+                // Before the env file is rewritten, so a retired toolchain's
+                // wrappers go with it rather than being written out again.
+                removeRetiredToolchainsSync()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not remove a retired toolchain: ${e.message}")
+            }
+            try {
                 // Unconditionally, and separately from the repair above, because
                 // the two answer different questions. The repair is marked done per
                 // toolchain and never runs again; this has to run on every launch,
@@ -1430,6 +1437,41 @@ class ToolchainManager(private val context: Context) {
             } catch (e: Exception) {
                 Logger.w(tag, "Could not refresh toolchain-env.sh: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Removes a toolchain the app no longer offers.
+     *
+     * A toolchain leaves [ToolchainRegistry.available] when it stops being worth
+     * its payload, and that alone would strand every install that already has
+     * it. The card list is built from the registry
+     * ([ToolchainCardState.items]), so the Remove button disappears with the
+     * entry, while the install record, the payload and the loader wrappers are
+     * all read from `toolchains.json` and carry on. The result is a toolchain
+     * the user cannot get rid of and cannot use, which is worse than either.
+     *
+     * So the removal is done for them, once, on the first launch that carries
+     * the retirement. [uninstallLocked] reads the install record rather than the
+     * registry, so it can still find what it is deleting.
+     *
+     * No marker is kept and none is needed: a retired pack has no registry entry
+     * and no download URL, so nothing can put it back, and the pass costs one
+     * state read on every later launch. That is the same read
+     * [regenerateEnvFileLocked] does immediately afterwards.
+     */
+    private fun removeRetiredToolchainsSync() = synchronized(stateLock) {
+        val installed = readState()
+        val present = mutableListOf<String>()
+        for (i in 0 until installed.length()) {
+            val name = installed.optJSONObject(i)?.optString("name").orEmpty()
+            if (name.isNotEmpty() && toolchainShortName(name) in RETIRED_TOOLCHAINS) {
+                present.add(name)
+            }
+        }
+        for (name in present) {
+            Logger.i(tag, "Removing $name: this build no longer offers it")
+            uninstallLocked(name)
         }
     }
 
@@ -1743,6 +1785,23 @@ internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (error
 }
 
 /** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
+/**
+ * Toolchains this build removes from any install that still has one.
+ *
+ * Short names, the form `toolchains.json` records. An entry belongs here when it
+ * has left [ToolchainRegistry.available]: see [ToolchainManager.removeRetiredToolchainsSync]
+ * for why leaving it alone is the one option that helps nobody.
+ *
+ * `go` is here because it could not compile. Android refuses to execute a file
+ * under the app's data directory, and `go build` and `go run` fork the compiler,
+ * assembler and linker themselves, so those forks are refused however the `go`
+ * command itself is reached. Measured in the app's own SELinux domain, with a
+ * control: a plain shell script placed there and marked executable is refused
+ * too. It ran, it printed a version, and it could not build a program, for
+ * 179 MB.
+ */
+private val RETIRED_TOOLCHAINS = setOf("go")
+
 private const val MANIFEST_NAME = "toolchains.sha256"
 
 /**
@@ -1910,7 +1969,7 @@ internal fun sha256Of(file: File): String {
 /**
  * The name a toolchain is persisted under, from either form callers use.
  *
- * `toolchain_go` and `go` name the same thing: the first is the asset pack and
+ * `toolchain_ruby` and `ruby` name the same thing: the first is the asset pack and
  * the URL, the second is what goes in `toolchains.json` and what the shell
  * environment is built from. [ToolchainRegistry.find] already accepts both, so
  * this asks it and then takes the recorded form, rather than stripping the

@@ -92,11 +92,11 @@ class PackStatusTest {
  */
 class CurrentDownloadTest {
 
-    private val queue = listOf("toolchain_go", "toolchain_ruby", "toolchain_java")
+    private val queue = listOf("toolchain_ruby", "toolchain_java")
 
     @Test
     fun `the pack being downloaded advances the queue`() {
-        assertTrue(isCurrentDownload("toolchain_ruby", queue, 1))
+        assertTrue(isCurrentDownload("toolchain_ruby", queue, 0))
     }
 
     @Test
@@ -104,7 +104,7 @@ class CurrentDownloadTest {
         // The skip that mattered: java reporting anything while ruby is
         // downloading would have stepped over ruby and left it uninstalled,
         // with its row still reading "installing".
-        assertFalse(isCurrentDownload("toolchain_java", queue, 1))
+        assertFalse(isCurrentDownload("toolchain_java", queue, 0))
     }
 
     @Test
@@ -112,7 +112,7 @@ class CurrentDownloadTest {
         // This is also how a repeat is handled. The first report moves the
         // index, so a second report for the same pack is no longer current --
         // no separate bookkeeping needed.
-        assertFalse(isCurrentDownload("toolchain_go", queue, 1))
+        assertFalse(isCurrentDownload("toolchain_ruby", queue, 1))
     }
 
     @Test

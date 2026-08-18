@@ -10,9 +10,11 @@
 #     termux_download_packages "${REQUIRED_PACKAGES[@]}"
 #     termux_extract_packages "${REQUIRED_PACKAGES[@]}"
 #
-# Five scripts carried these four steps as identical copies: download-go.sh,
-# download-java.sh, download-python.sh, download-ruby.sh and
-# download-termux-tools.sh. Every one of them fetched the index, called
+# Four scripts source this today: download-java.sh, download-python.sh,
+# download-ruby.sh and download-termux-tools.sh. There were five, and the fifth,
+# download-go.sh, is why the count is worth stating: it went away with the Go
+# toolchain and the library did not notice, which is the point of the library.
+# Every one of them fetched the index, called
 # verify-termux-index.sh, resolved filenames and digests with the same awk, and
 # checked each .deb against the digest with the same function. A correction to
 # any of it had to be made five times and was worth nothing until it had been,

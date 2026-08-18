@@ -392,14 +392,14 @@ M6 (Release)   → Play Store release
    - [x] Extensions load correctly under worker_thread mode
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
-2. **On-demand toolchain download scripts** (`scripts/download-go.sh`, `download-ruby.sh`, `download-java.sh`)
-   - [x] Go from Termux `golang` package (179 MB asset pack, CGO_ENABLED=0)
+2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`)
    - [x] Ruby from Termux `ruby` + libgmp + libyaml (34 MB asset pack)
    - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn (146 MB asset pack)
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
+   - Go shipped here and was withdrawn: it ran but could not compile, because Android refuses to execute a file under the app's data directory and `go build` forks its own compiler.
 
 3. **Play Asset Delivery integration** (`ToolchainManager.kt`, `ToolchainRegistry.kt`)
-   - [x] Gradle asset pack modules (`toolchain_go/`, `toolchain_ruby/`, `toolchain_java/`)
+   - [x] Gradle asset pack modules (`toolchain_ruby/`, `toolchain_java/`)
    - [x] `ToolchainManager`: fetch, progress tracking, copy to filesDir, chmod +x, symlinks, uninstall
    - [x] `ToolchainRegistry`: catalog of available toolchains with sizes
    - [x] `Environment.kt`: dynamic toolchain env vars merged into server process

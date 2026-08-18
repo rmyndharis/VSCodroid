@@ -89,16 +89,16 @@ class ToolchainDownloadTest {
     fun `cancelling one pack does not cancel another pack's download`() {
         val manager = ToolchainManager(context)
         val outstanding = outstandingOf(manager)
-        val go = newDownloadToken()
-        val ruby = newDownloadToken()
-        outstanding["toolchain_go"] = go
-        outstanding["toolchain_ruby"] = ruby
+        val javaToken = newDownloadToken()
+        val rubyToken = newDownloadToken()
+        outstanding["toolchain_java"] = javaToken
+        outstanding["toolchain_ruby"] = rubyToken
 
-        manager.cancel("toolchain_go")
+        manager.cancel("toolchain_java")
 
-        assertTrue(isCancelled(go), "the pack the user cancelled was not cancelled")
+        assertTrue(isCancelled(javaToken), "the pack the user cancelled was not cancelled")
         assertFalse(
-            isCancelled(ruby),
+            isCancelled(rubyToken),
             "cancelling one pack cancelled another one's download, which is what a single " +
                 "shared flag did to every queued toolchain"
         )
@@ -112,15 +112,15 @@ class ToolchainDownloadTest {
     fun `the short name form cancels the right pack`() {
         val manager = ToolchainManager(context)
         val outstanding = outstandingOf(manager)
-        val go = newDownloadToken()
-        val ruby = newDownloadToken()
-        outstanding["toolchain_go"] = go
-        outstanding["toolchain_ruby"] = ruby
+        val javaToken = newDownloadToken()
+        val rubyToken = newDownloadToken()
+        outstanding["toolchain_java"] = javaToken
+        outstanding["toolchain_ruby"] = rubyToken
 
-        manager.cancel("go")
+        manager.cancel("java")
 
-        assertTrue(isCancelled(go), "cancel(\"go\") did not reach toolchain_go")
-        assertFalse(isCancelled(ruby), "cancel(\"go\") reached toolchain_ruby")
+        assertTrue(isCancelled(javaToken), "cancel(\"java\") did not reach toolchain_java")
+        assertFalse(isCancelled(rubyToken), "cancel(\"java\") reached toolchain_ruby")
     }
 
     /**
@@ -131,12 +131,12 @@ class ToolchainDownloadTest {
     fun `cancelling an unknown toolchain disturbs nothing`() {
         val manager = ToolchainManager(context)
         val outstanding = outstandingOf(manager)
-        val go = newDownloadToken()
-        outstanding["toolchain_go"] = go
+        val javaToken = newDownloadToken()
+        outstanding["toolchain_java"] = javaToken
 
         manager.cancel("toolchain_rust")
 
-        assertFalse(isCancelled(go), "an unknown name cancelled a running download")
+        assertFalse(isCancelled(javaToken), "an unknown name cancelled a running download")
     }
 
     /**
@@ -148,12 +148,12 @@ class ToolchainDownloadTest {
     fun `cancelling a pack with no download outstanding is harmless`() {
         val manager = ToolchainManager(context)
         val outstanding = outstandingOf(manager)
-        val ruby = newDownloadToken()
-        outstanding["toolchain_ruby"] = ruby
+        val rubyToken = newDownloadToken()
+        outstanding["toolchain_ruby"] = rubyToken
 
-        manager.cancel("toolchain_go")
+        manager.cancel("toolchain_java")
 
-        assertFalse(isCancelled(ruby), "cancelling an idle pack reached a different one")
+        assertFalse(isCancelled(rubyToken), "cancelling an idle pack reached a different one")
     }
 
     /**

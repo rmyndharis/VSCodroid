@@ -62,7 +62,7 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * Replaces what is on disk with [packNames].
      *
      * The install record names toolchains the short way ("go"), the cards name
-     * them the pack way ("toolchain_go"), so each name is normalised on the way
+     * them the pack way ("toolchain_ruby"), so each name is normalised on the way
      * in. Both spellings are accepted because both reach here.
      */
     fun setInstalled(packNames: Collection<String>) {

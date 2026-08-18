@@ -124,9 +124,9 @@ class ToolchainInstallTest {
     fun `a Play install fetches the asset pack and downloads nothing`() {
         installedBy("com.android.vending")
 
-        manager().install("toolchain_go")
+        manager().install("toolchain_java")
 
-        verify(exactly = 1) { packManager.fetch(listOf("toolchain_go")) }
+        verify(exactly = 1) { packManager.fetch(listOf("toolchain_java")) }
         // The HTTP branch reports PENDING synchronously, before it queues anything,
         // so an empty list here is what distinguishes the two routes.
         assertEquals(emptyList<Int>(), statuses(), "the HTTP branch ran on a Play install")
@@ -136,7 +136,7 @@ class ToolchainInstallTest {
     fun `a sideloaded install downloads over HTTP and never asks Play`() {
         installedBy("com.example.sideloader")
 
-        manager().install("toolchain_go")
+        manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
         assertEquals(
@@ -160,7 +160,7 @@ class ToolchainInstallTest {
         // toolchain that never arrives and no error.
         every { packageManager.getInstallSourceInfo(any()) } throws SecurityException("denied")
 
-        manager().install("toolchain_go")
+        manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
         assertEquals(AssetPackStatus.PENDING, statuses().first())
@@ -183,7 +183,7 @@ class ToolchainInstallTest {
     fun `a pack with no manifest reports FAILED rather than stalling the queue`() {
         val emptyPack = File(filesDir, "pack-empty").apply { mkdirs() }
 
-        installFromDirectory(manager(), "toolchain_go", emptyPack)
+        installFromDirectory(manager(), "toolchain_java", emptyPack)
 
         assertEquals(listOf(AssetPackStatus.FAILED), statuses())
     }
@@ -191,9 +191,9 @@ class ToolchainInstallTest {
     @Test
     fun `a manifest with no name reports FAILED rather than stalling the queue`() {
         val pack = File(filesDir, "pack-nameless").apply { mkdirs() }
-        File(pack, "toolchain_go.json").writeText("""{"installRoot":"usr/opt/go"}""")
+        File(pack, "toolchain_java.json").writeText("""{"installRoot":"usr/opt/java"}""")
 
-        installFromDirectory(manager(), "toolchain_go", pack)
+        installFromDirectory(manager(), "toolchain_java", pack)
 
         assertEquals(listOf(AssetPackStatus.FAILED), statuses())
     }
@@ -202,14 +202,14 @@ class ToolchainInstallTest {
     fun `a valid manifest is recorded and reported COMPLETED`() {
         // The positive control for the three refusals above: without it they would
         // all still pass if installFromDirectory reported FAILED unconditionally.
-        val pack = File(filesDir, "pack-go").apply { mkdirs() }
-        File(pack, "toolchain_go.json").writeText("""{"name":"go","installRoot":"usr/opt/go"}""")
+        val pack = File(filesDir, "pack-java").apply { mkdirs() }
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
 
-        installFromDirectory(manager(), "toolchain_go", pack)
+        installFromDirectory(manager(), "toolchain_java", pack)
 
         assertEquals(listOf(AssetPackStatus.COMPLETED), statuses())
         val state = File(filesDir, "home/.vscodroid/toolchains.json").readText()
-        assertTrue(state.contains("\"go\""), "the install was reported but not recorded: $state")
+        assertTrue(state.contains("\"java\""), "the install was reported but not recorded: $state")
     }
 
     /**
@@ -232,15 +232,15 @@ class ToolchainInstallTest {
      */
     @Test
     fun `an install whose record cannot be written reports FAILED rather than COMPLETED`() {
-        val pack = File(filesDir, "pack-go").apply { mkdirs() }
-        File(pack, "toolchain_go.json").writeText("""{"name":"go","installRoot":"usr/opt/go"}""")
+        val pack = File(filesDir, "pack-java").apply { mkdirs() }
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
         // Non-empty, so the cleanup delete() cannot quietly reclaim it and let the
         // write through, the point is that this write fails.
         val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
         assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
         File(blocker, "occupied").writeText("x")
 
-        installFromDirectory(manager(), "toolchain_go", pack)
+        installFromDirectory(manager(), "toolchain_java", pack)
 
         assertEquals(
             listOf(AssetPackStatus.FAILED), statuses(),

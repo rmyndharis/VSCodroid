@@ -236,6 +236,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Toolchains**
 
+- The Go toolchain is withdrawn. It ran but could not compile, and an install that still has it is removed on first launch, freeing 179 MB.
 - A toolchain install that fails now says why: out of space, no connection, not in this release, or a download that did not match. It said only "Failed".
 - On a Play Store install that reason is given too. Play's error code went only to the log, so a full disk and a dropped connection read alike there.
 - A sideloaded toolchain install resolves `latest` once and takes both the digest and the payload from that release, so a release published mid-download no longer refuses the install.

@@ -213,7 +213,7 @@ android {
     }
 
     // On-demand toolchain asset packs (Play Asset Delivery)
-    assetPacks += listOf(":toolchain_go", ":toolchain_ruby", ":toolchain_java")
+    assetPacks += listOf(":toolchain_ruby", ":toolchain_java")
 
     // The attribution documents, packaged so they reach the device. See
     // `bundleNotices` at the foot of this file for why they are copied rather

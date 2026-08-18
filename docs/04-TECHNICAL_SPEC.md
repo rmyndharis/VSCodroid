@@ -607,7 +607,7 @@ This patch is implemented in M4 (M1-M3 still use `child_process.fork()`).
       "name": "Go",
       "version": "1.22",
       "size_mb": 60,
-      "asset_pack": "toolchain_go",
+      "asset_pack": "toolchain_ruby",
       "env": {
         "GOROOT": "$PREFIX/lib/go",
         "GOPATH": "$HOME/go"
@@ -638,23 +638,20 @@ flowchart TD
 ```kotlin
 // settings.gradle.kts
 assetPacks += listOf(
-    ":toolchain_go",
-    ":toolchain_rust",
-    ":toolchain_java",
-    ":toolchain_clang",
-    ":toolchain_ruby"
+    ":toolchain_ruby",
+    ":toolchain_java"
 )
 ```
 
 Each asset pack module:
 
 ```kotlin
-// toolchain_go/build.gradle.kts
+// toolchain_ruby/build.gradle.kts
 plugins {
     id("com.android.asset-pack")
 }
 assetPack {
-    packName.set("toolchain_go")
+    packName.set("toolchain_ruby")
     dynamicDelivery {
         deliveryType.set("on-demand")
     }
