@@ -14,6 +14,27 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets/extensions"
 WORK_DIR="$ROOT_DIR/toolchains/extensions"
 
+# Transformations this build applies to an extracted tree, as distinct from the
+# verifications beside them.
+#
+# Called from both the skip path and the extraction path, and that is the whole
+# point of it being a function. The skip path's own comment states the rule it
+# was written to: skip the download and the extraction, never the verification.
+# A rewrite is neither, and putting it only on the extraction path meant a cached
+# tree shipped without it, which is precisely what CI did on the first run of
+# this change.
+#
+# Every step here must be safe to run twice, because on a cached tree it is.
+apply_tree_rewrites() {
+    local dir_name="$1" dest="$2"
+    case "$dir_name" in
+        ms-python.python-*)
+            python3 "$SCRIPT_DIR/patch-python-platform.py" "$dest" || return 1
+            ;;
+    esac
+    return 0
+}
+
 # Extensions to bundle: publisher.name@version#sha256
 #
 # Every one is pinned to the newest STABLE version whose engines.vscode is
@@ -274,6 +295,11 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
             # stale, and the failure it catches is silent -- the extension is
             # registered, never activates, and logs nothing.
             python3 "$SCRIPT_DIR/check-extension.py" "$DEST_DIR" "$ROOT_DIR/VSCODE_VERSION"
+            apply_tree_rewrites "$DIR_NAME" "$DEST_DIR" || {
+                echo "  ERROR: could not rewrite the cached $DIR_NAME tree" >&2
+                rm -rf "$DEST_DIR" "$STAMP"
+                continue
+            }
             continue
         fi
     elif [ -d "$DEST_DIR" ]; then
@@ -354,15 +380,11 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     # Safe against the usual objection to patching minified output because this
     # input is not rebuilt: the VSIX is pinned by sha256 above, so the shape is
     # fixed until the pin moves, and both checks fail loudly when it does.
-    case "$DIR_NAME" in
-        ms-python.python-*)
-            python3 "$SCRIPT_DIR/patch-python-platform.py" "$DEST_DIR" || {
-                echo "  ERROR: could not teach the Python extension this platform" >&2
-                rm -rf "$DEST_DIR"
-                continue
-            }
-            ;;
-    esac
+    apply_tree_rewrites "$DIR_NAME" "$DEST_DIR" || {
+        echo "  ERROR: could not rewrite the $DIR_NAME tree" >&2
+        rm -rf "$DEST_DIR"
+        continue
+    }
 
     # Last, so a tree that failed any step above carries no record saying it
     # passed. Kept out of $ASSETS_DIR on purpose: a file there would ship inside
