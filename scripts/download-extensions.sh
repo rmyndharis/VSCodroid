@@ -344,6 +344,26 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     # it is registered, never activates, and nothing is logged.
     python3 "$SCRIPT_DIR/check-extension.py" "$DEST_DIR" "$ROOT_DIR/VSCODE_VERSION"
 
+    # The Python extension decides the platform for itself and has no android
+    # branch, so it answers OSType.Unknown here and then refuses to compose any
+    # environment-activation command. Rewritten rather than worked around,
+    # because the only alternative lever is process.platform, and changing that
+    # for the whole extension host would mislead every other extension that
+    # resolves a native binary by platform name.
+    #
+    # Safe against the usual objection to patching minified output because this
+    # input is not rebuilt: the VSIX is pinned by sha256 above, so the shape is
+    # fixed until the pin moves, and both checks fail loudly when it does.
+    case "$DIR_NAME" in
+        ms-python.python-*)
+            python3 "$SCRIPT_DIR/patch-python-platform.py" "$DEST_DIR" || {
+                echo "  ERROR: could not teach the Python extension this platform" >&2
+                rm -rf "$DEST_DIR"
+                continue
+            }
+            ;;
+    esac
+
     # Last, so a tree that failed any step above carries no record saying it
     # passed. Kept out of $ASSETS_DIR on purpose: a file there would ship inside
     # the APK, and a dot-name there would be swept by the dotfile rename above.

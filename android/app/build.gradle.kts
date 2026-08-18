@@ -879,6 +879,54 @@ val checkBundleSize = tasks.register<Exec>("checkBundleSize") {
     }
 }
 
+/**
+ * Refuses a build whose bundled Python extension still decides this platform is
+ * unknown.
+ *
+ * The extension carries its own detection, tests only win/darwin/linux, and
+ * answers Unknown for android. `getEnvironmentActivationShellCommands` returns
+ * immediately on Unknown, so selecting a virtual environment never activates it,
+ * and the shell table maps Unknown to "other" while the shell really is bash.
+ * `download-extensions.sh` rewrites the conditional; this is what stops a tree
+ * assembled from an older extraction shipping without it.
+ *
+ * Armed by the directory rather than unconditionally: the lint and unit-test
+ * jobs stub an empty extensions tree, and checking one would report a pass for
+ * a question it never asked.
+ */
+val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
+    group = "verification"
+    description = "Checks the bundled Python extension answers Linux on this platform."
+
+    val extensions = File(projectDir, "src/main/assets/extensions")
+    val tree = extensions.listFiles()
+        ?.firstOrNull { it.name.startsWith("ms-python.python-") }
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/patch-python-platform.py", "--check",
+        tree?.let { "android/app/src/main/assets/extensions/${it.name}" } ?: "missing",
+    )
+
+    onlyIf { tree != null }
+
+    isIgnoreExitValue = true
+    val pyResult = executionResult
+    doLast {
+        if (pyResult.get().exitValue != 0) {
+            throw GradleException(
+                "The bundled Python extension still answers OSType.Unknown on this\n" +
+                    "platform. Selecting a virtual environment would silently fail to\n" +
+                    "activate it, which is the symptom users report as the interpreter\n" +
+                    "not being found.\n" +
+                    "\n" +
+                    "Re-run scripts/download-extensions.sh, which applies the rewrite\n" +
+                    "after verifying the VSIX against its pinned digest."
+            )
+        }
+    }
+}
+
 fun rubyPackHoldsPayload(): Boolean =
     File(rootProject.projectDir, "toolchain_ruby/src/main/assets/usr").isDirectory
 
@@ -953,7 +1001,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
         dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
             verifyBundledShellPaths, verifyRubyPackShellPaths, verifyNativeAddons,
-            checkPackOverlap)
+            checkPackOverlap, verifyPythonPlatform)
         dependsOn(bundleNotices)
     }
 
