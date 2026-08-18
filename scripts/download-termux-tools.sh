@@ -217,6 +217,32 @@ else
     exit 1
 fi
 
+# --- Step 4b: Point the compiled-in default shell at one this app can run ---
+#
+# Termux builds these for its own prefix, so each of the five carries
+# /data/data/com.termux/files/usr/bin/sh as a compiled-in constant. That
+# directory belongs to another application and this one cannot reach it, so
+# every make recipe line, every git hook, `!` alias, clean/smudge filter and
+# pager, and ssh's ProxyCommand run a shell that is not there. $SHELL does not
+# rescue them: make ignores it by design and git does not consult it for
+# run-command at all.
+#
+# Before step 5's ELF gate, so what that gate examines is what ships. The
+# rewrite is length-preserving and fails closed: if a package changes where its
+# default shell comes from and the string stops matching, the build stops here
+# rather than shipping a binary whose shell nobody has established.
+#
+# Not libbash.so and not libssh-keygen.so: neither carries the path, and handing
+# them to the script would fail for the right reason at the wrong file.
+echo ""
+echo "Pointing compiled-in default shells at /system/bin/sh..."
+python3 "$SCRIPT_DIR/patch-default-shell.py" \
+    "$JNILIBS_DIR/libgit.so" \
+    "$JNILIBS_DIR/libgit-remote-curl.so" \
+    "$JNILIBS_DIR/libtmux.so" \
+    "$JNILIBS_DIR/libmake.so" \
+    "$JNILIBS_DIR/libssh.so"
+
 # --- Step 5: Place shared libraries in assets/usr/lib/ ---
 echo ""
 echo "Placing shared libraries in assets/usr/lib/..."

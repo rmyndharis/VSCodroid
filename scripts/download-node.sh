@@ -140,7 +140,7 @@ chmod +x "$JNILIBS_DIR/libnode.so"
 # rewrite is length-preserving and fails closed: if Termux changes the default
 # and the string stops matching, the build stops here rather than shipping a
 # runtime whose shell nobody has established.
-python3 "$SCRIPT_DIR/patch-node-shell.py" "$JNILIBS_DIR/libnode.so"
+python3 "$SCRIPT_DIR/patch-default-shell.py" "$JNILIBS_DIR/libnode.so"
 
 # The Termux version string ("24.18.0-1") with the package revision dropped.
 # build-native-addons.sh reads this marker to pair its headers against the
