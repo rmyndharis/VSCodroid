@@ -230,15 +230,37 @@ class PortFinderTest {
             // The workbench keys IndexedDB by origin, and the port is part of the
             // origin: a different port here empties secret storage and every
             // extension's globalState, with nothing in any log to explain it.
-            val first = PortFinder.getOrAllocatePort(context)
-            val second = PortFinder.getOrAllocatePort(context)
-            assertEquals(first, second)
+            //
+            // A cold start begins from what the previous process left in prefs, so
+            // the remembered port is seeded rather than allocated here, and it has
+            // to be one a fresh scan would not hand back on its own. Allocating
+            // twice in a row cannot tell the two apart: findAvailablePort() scans
+            // upward from a fixed base, so while that base is free the scan returns
+            // the same number the remembered branch would, and the assertion holds
+            // with the reuse branch deleted.
+            val base = PortFinder.findAvailablePort()
+            assertTrue(base < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+            val remembered = hold(base).use { PortFinder.findAvailablePort() }
+            assertNotEquals(base, remembered, "precondition failed: the scan did not step over $base")
+            assertTrue(
+                remembered < EPHEMERAL_BASE,
+                "precondition failed: the scan abandoned the range for an ephemeral port",
+            )
+
+            stored = remembered
+
+            assertEquals(
+                remembered, PortFinder.getOrAllocatePort(context),
+                "the port the previous process left behind must come back while it is " +
+                    "free; rediscovering $base puts the workbench on a new origin and " +
+                    "drops the storage keyed to $remembered",
+            )
         }
 
         @Test
         fun `does not drift back to a lower port once it has moved`() {
-            // `returns the same port on the next cold start` cannot see whether
-            // the port was remembered. findAvailablePort() scans upward from a
+            // Allocating twice over a free scan base cannot see whether the
+            // port was remembered. findAvailablePort() scans upward from a
             // fixed default, so while that default is free -- the ordinary case --
             // a fresh scan returns the same number the remembered branch would
             // have. Both calls move together, and the assertion holds with the
