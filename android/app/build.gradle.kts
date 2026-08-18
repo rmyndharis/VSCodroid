@@ -702,7 +702,16 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
 // They are read out of the APK by MainActivity's licences dialog and never
 // extracted, which is why they are a separate assets source directory: it keeps
 // them out of the src/main/assets sum that sizes first-run extraction.
-val bundleNotices = tasks.register<Copy>("bundleNotices") {
+//
+// Sync rather than Copy, because the app opens these by basename and a Copy
+// leaves behind whatever the last run wrote. Measured: with COPYING.GPLv3
+// removed from the tree, the Copy ran, succeeded, and left the previous run's
+// COPYING.GPLv3 in the output directory, where the next incremental APK
+// packaged it. A licence text still shipping under a name the repository no
+// longer has is the stale copy this task exists to avoid, arriving by the back
+// door. Only this task writes that directory, so deleting what it did not write
+// costs nothing.
+val bundleNotices = tasks.register<Sync>("bundleNotices") {
     group = "build"
     description = "Copies the attribution and licence documents into the APK's assets."
 

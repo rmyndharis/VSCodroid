@@ -43,10 +43,16 @@ class NoticesTest {
     private val buildScript = File("build.gradle.kts")
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
-    /** The `from(File(repoRoot, "..."))` arguments of the bundleNotices task. */
+    /**
+     * The `from(File(repoRoot, "..."))` arguments of the bundleNotices task.
+     *
+     * Found by name, not by task type. The type has an assertion of its own
+     * below, and a parse anchored on it would answer a change of type with
+     * "the task is gone", which is a different defect and the wrong one to fix.
+     */
     private fun copiedPaths(): List<String> {
         val script = buildScript.readText()
-        val task = script.substringAfter("tasks.register<Copy>(\"bundleNotices\")", "")
+        val task = script.substringAfter("(\"bundleNotices\") {", "")
         assertFalse(task.isEmpty(), "bundleNotices task is gone from build.gradle.kts")
         val body = task.substringBefore("\n}")
         return Regex("""from\(File\(repoRoot,\s*"([^"]+)"\)\)""")
@@ -73,7 +79,7 @@ class NoticesTest {
     @Test
     fun `what the copy writes is packaged, and something makes the copy run`() {
         val script = buildScript.readText()
-        val body = script.substringAfter("tasks.register<Copy>(\"bundleNotices\")", "")
+        val body = script.substringAfter("(\"bundleNotices\") {", "")
             .substringBefore("\n}")
         val destination = Regex("""into\(layout\.buildDirectory\.dir\("([^"]+)"\)\)""")
             .find(body)?.groupValues?.get(1)
@@ -96,6 +102,18 @@ class NoticesTest {
             Regex("dependsOn\\([^)]*bundleNotices").containsMatchIn(script),
             "Nothing depends on bundleNotices, so a clean build packages an empty " +
                 "notices directory."
+        )
+
+        // And it has to clear out what it no longer writes. A plain Copy leaves
+        // the last run's files where they are: with a document renamed or
+        // removed, the old one stayed in that directory and went into the next
+        // incremental APK under a name the repository no longer had. CI checks
+        // out clean and never saw it, which is what makes it worth a gate rather
+        // than a habit.
+        assertTrue(
+            script.contains("tasks.register<Sync>(\"bundleNotices\")"),
+            "bundleNotices is not a Sync, so a document removed or renamed stays " +
+                "in the notices directory and ships from any incremental build."
         )
     }
 
