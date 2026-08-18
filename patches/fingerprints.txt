@@ -68,3 +68,4 @@
 0010 moduleignore keep|-|edits build/.moduleignore, so its proof is the file surviving into the tree; verify-server-tree.py requires that path
 0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
 0012 callback route|out/server-main.js|==="/callback"
+0013 level grace|out/server-main.js|while another client is connected

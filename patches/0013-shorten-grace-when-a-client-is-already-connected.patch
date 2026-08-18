@@ -1,0 +1,116 @@
+Shorten the reconnection grace when another client is already connected.
+
+Every WebView renderer crash leaks one file watcher process, and it holds it
+for three hours. Measured on an API 33 emulator by crashing the renderer three
+times: bootstrap-fork --type=fileWatcher went 2, 3, 4, 5, one per crash, none
+reaped, all five still parented to the editor server. Android caps an app at 32
+phantom processes and kills the whole app past that; this project's own budget
+is 3 to 5.
+
+The watcher's life is the management connection's life. A SessionFileWatcher is
+created per client session and disposed when the last listener on its fileChange
+emitter goes away; that listener is the IPC subscription, removed only by
+ChannelServer.dispose(), which runs only from onDidClientDisconnect, which is
+ManagementConnection.onClose. So a connection that lingers keeps a forked
+watcher for exactly as long as it lingers.
+
+Upstream already has the mechanism for not lingering, and it does not fire here.
+shortenReconnectionGraceTimeIfNecessary is edge-triggered: the server sweeps
+every connection when a NEW one arrives, and each sweep returns early unless
+that connection is already in the disconnected state. On Android the order is
+inverted and it is inverted every time. A crashed renderer never sends a
+graceful disconnect, the dead socket is not observed for a further 30 seconds,
+and MainActivity recreates the WebView immediately, so the replacement connects
+about 0.6 seconds after the crash. Measured across four crashes: the new
+connection arrived at +0.6s and the old socket closed at +30.000s, every time.
+The sweep therefore runs while the doomed connection still looks connected, does
+nothing, and half a minute later that connection schedules the full grace with
+nothing left to shorten it.
+
+The one connection that was reaped in that run is the control: a second crash
+happened 52 seconds after the first, which is after the first connection's
+detection window, so the sweep found it disconnected and shortened it. It died
+on schedule five minutes later.
+
+This makes the same decision level-triggered instead. When a socket closes, ask
+whether another management connection is live right now, and if one is, take the
+short grace immediately rather than waiting to be swept by an arrival that has
+already happened. The policy is unchanged: this is the same conclusion
+shortenReconnectionGraceTimeIfNecessary reaches, reached at the moment the
+information is actually available.
+
+The last remaining connection still gets the full grace, which is the case the
+long timer exists for: nothing has superseded it, so a client may yet come back
+to it.
+
+The predicate is passed in rather than reaching for the server, and it defaults
+to returning false, so the class keeps working unchanged for any caller that
+does not supply one.
+
+diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+index e7ae07d..8a77dcc 100644
+--- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
++++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+@@ -421,7 +421,14 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+ 				}
+ 
+ 				protocol.sendControl(VSBuffer.fromString(JSON.stringify({ type: 'ok' })));
+-				const con = new ManagementConnection(this._logService, reconnectionToken, remoteAddress, protocol, this._reconnectionGraceTime);
++				const con = new ManagementConnection(this._logService, reconnectionToken, remoteAddress, protocol, this._reconnectionGraceTime, () => {
++					for (const key in this._managementConnections) {
++						if (key !== reconnectionToken && !this._managementConnections[key].isAwaitingDisposal) {
++							return true;
++						}
++					}
++					return false;
++				});
+ 				this._socketServer.acceptConnection(con.protocol, con.onClose);
+ 				this._managementConnections[reconnectionToken] = con;
+ 				this._allReconnectionTokens.add(reconnectionToken);
+diff --git a/src/vs/server/node/remoteExtensionManagement.ts b/src/vs/server/node/remoteExtensionManagement.ts
+index 4a38e83..017d747 100644
+--- a/src/vs/server/node/remoteExtensionManagement.ts
++++ b/src/vs/server/node/remoteExtensionManagement.ts
+@@ -53,7 +53,8 @@ export class ManagementConnection {
+ 		private readonly _reconnectionToken: string,
+ 		remoteAddress: string,
+ 		protocol: PersistentProtocol,
+-		reconnectionGraceTime: number
++		reconnectionGraceTime: number,
++		private readonly _hasOtherLiveConnection: () => boolean = () => false
+ 	) {
+ 		this._reconnectionGraceTime = reconnectionGraceTime;
+ 		const defaultShortGrace = ProtocolConstants.ReconnectionShortGraceTime;
+@@ -76,6 +77,17 @@ export class ManagementConnection {
+ 			this._cleanResources();
+ 		});
+ 		this._socketCloseListener = this.protocol.onSocketClose(() => {
++			// Level triggered, because the edge has already passed. A renderer that
++			// crashes never disconnects gracefully and its dead socket is noticed
++			// tens of seconds later, by which time the replacement client has long
++			// since connected and swept a connection that still looked alive. Asking
++			// here reaches the same conclusion shortenReconnectionGraceTimeIfNecessary
++			// would have, at the moment the answer exists.
++			if (this._hasOtherLiveConnection()) {
++				this._log(`The client has disconnected while another client is connected, will wait for reconnection ${printTime(this._reconnectionShortGraceTime)} before disposing...`);
++				this._disconnectRunner2.schedule();
++				return;
++			}
+ 			this._log(`The client has disconnected, will wait for reconnection ${printTime(this._reconnectionGraceTime)} before disposing...`);
+ 			// The socket has closed, let's give the renderer a certain amount of time to reconnect
+ 			this._disconnectRunner1.schedule();
+@@ -88,6 +100,14 @@ export class ManagementConnection {
+ 		this._logService.info(`[${this._remoteAddress}][${this._reconnectionToken.substr(0, 8)}][ManagementConnection] ${_str}`);
+ 	}
+ 
++	/**
++	 * True once the socket has closed and this connection is only waiting to be
++	 * reclaimed. Read by other connections deciding which grace time to take.
++	 */
++	public get isAwaitingDisposal(): boolean {
++		return this._disconnectRunner1.isScheduled() || this._disconnectRunner2.isScheduled();
++	}
++
+ 	public shortenReconnectionGraceTimeIfNecessary(): void {
+ 		if (this._disconnectRunner2.isScheduled()) {
+ 			// we are disconnected and already running the short reconnection timer

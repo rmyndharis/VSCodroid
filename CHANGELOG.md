@@ -162,8 +162,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An unreadable `toolchains.json` no longer deletes `toolchain-env.sh` on every launch, which took working Go and Ruby commands out of every new terminal.
 
 **Server lifecycle**
-- A server that has stopped for good now says so on the page, with a Try again button, instead of leaving "Starting server..." on screen for the life of the app.
 
+- A crashed editor window no longer leaves a file watcher running for three hours. Enough of them and Android kills the whole app.
+- A server that has stopped for good now says so on the page, with a Try again button, instead of leaving "Starting server..." on screen for the life of the app.
 - A session that adopted a surviving server now says on its notification that extensions, git and npm cannot reach the network, and that restarting fixes it. It failed silently.
 - Reopening the app while the server is still coming up no longer lands on a connection-refused page. Readiness now comes from the health check rather than from whether a process exists.
 - A start that fails while no window is open is reported to the next window that opens, instead of leaving a loading screen that never changes.
