@@ -10,7 +10,6 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
@@ -46,8 +45,21 @@ class SecurityManagerTest {
     inner class TokenGenerationTest {
 
         @Test
-        fun `generates non-null token`() {
-            assertNotNull(manager.getSessionToken())
+        fun `generates a token with more than one distinct character`() {
+            // `assertNotNull` stood here and could not fail. getSessionToken()
+            // returns a non-null Kotlin type, so the only production change it
+            // refused was one that threw before any test ran, and a generator
+            // emitting one character 64 times satisfied it exactly as readily as
+            // a random one. Length and alphabet are pinned next door and accept
+            // that value too, since "aaaa..." is 64 lowercase hex characters.
+            //
+            // The floor, then, is that the value varies within itself at all.
+            // How far it varies is SessionTokenEntropyTest's question.
+            val token = manager.getSessionToken()
+            assertTrue(
+                token.toSet().size > 1,
+                "the token is one character repeated, so it is a constant: $token",
+            )
         }
 
         @Test
