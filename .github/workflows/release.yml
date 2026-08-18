@@ -216,8 +216,17 @@ jobs:
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops
         # superseded versions from the pool, so refresh it before installing.
+        # Bounded and retried for the reason given there, which applies harder
+        # here: this job's budget is 90 minutes, so an unbounded stall costs an
+        # hour and a half of a release before anything says why.
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
+          for attempt in 1 2 3; do
+            if sudo timeout 120 apt-get update; then
+              break
+            fi
+            echo "  apt-get update stalled or failed (attempt $attempt of 3)"
+          done
           # gnupg named explicitly: verify-termux-index.sh refuses to run without
           # it, and a release is the worst place to discover a runner image
           # changed what it bakes in.

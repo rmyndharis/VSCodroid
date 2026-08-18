@@ -111,8 +111,23 @@ jobs:
         # The runner image ships a baked apt index. Ubuntu keeps only the current
         # version of a package in the pool, so once the indexed one is superseded
         # the download 404s. Refresh the index before installing.
+        #
+        # Bounded, because an unbounded refresh is not a slow step, it is a lost
+        # job: when the Azure mirror stops answering apt falls through to the
+        # public archive and can sit there without output until the job's whole
+        # 30 minute budget is gone, and every later step is reported as skipped
+        # rather than as never reached. Measured twice on the same commit. Three
+        # short attempts clear a transient stall; a real outage now fails in
+        # minutes with the mirror named, and still fails, because installing off
+        # a stale index is what the refresh above exists to prevent.
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
+          for attempt in 1 2 3; do
+            if sudo timeout 120 apt-get update; then
+              break
+            fi
+            echo "  apt-get update stalled or failed (attempt $attempt of 3)"
+          done
           # gnupg is on the runner image today, but the Termux index check is a
           # gate: naming it here keeps it from depending on what the image
           # happens to bake in.
