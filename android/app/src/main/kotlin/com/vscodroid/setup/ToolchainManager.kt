@@ -1405,18 +1405,21 @@ class ToolchainManager(private val context: Context) {
     fun repairInstalledToolchains() {
         ioExecutor.execute {
             try {
+                // First, and before the env file is rewritten below. A retired
+                // toolchain's wrappers go with it rather than being written out
+                // again, and the repair that follows does not spend the launch
+                // walking and chmod-ing several thousand files that are about to
+                // be deleted. Go's tree alone is that size.
+                removeRetiredToolchainsSync()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not remove a retired toolchain: ${e.message}")
+            }
+            try {
                 repairInstalledToolchainsSync()
             } catch (e: Exception) {
                 // A failed repair leaves the marker unset, so the next launch
                 // tries again. Nothing else depends on it having run.
                 Logger.w(tag, "Toolchain repair pass failed: ${e.message}")
-            }
-            try {
-                // Before the env file is rewritten, so a retired toolchain's
-                // wrappers go with it rather than being written out again.
-                removeRetiredToolchainsSync()
-            } catch (e: Exception) {
-                Logger.w(tag, "Could not remove a retired toolchain: ${e.message}")
             }
             try {
                 // Unconditionally, and separately from the repair above, because
@@ -1800,7 +1803,21 @@ internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (error
  * too. It ran, it printed a version, and it could not build a program, for
  * 179 MB.
  */
-private val RETIRED_TOOLCHAINS = setOf("go")
+/**
+ * Toolchains no longer offered, against the space each still occupies on a
+ * device that installed one before it was withdrawn.
+ *
+ * The size is here rather than left to `ToolchainRegistry.find`, which answers
+ * null for anything it no longer offers. A caller reading a size through the
+ * registry gets 0 for exactly these, and the storage pre-flight is one such
+ * caller: 0 makes it believe more of `filesDir` is reusable than is, which is
+ * the direction that admits a device it should have refused and then runs out
+ * of disk partway through extraction.
+ *
+ * Keyed by short name, the form [toolchainShortName] produces, so a record
+ * written as either `go` or `toolchain_go` resolves.
+ */
+internal val RETIRED_TOOLCHAINS = mapOf("go" to 179_000_000L)
 
 private const val MANIFEST_NAME = "toolchains.sha256"
 

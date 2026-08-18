@@ -77,12 +77,28 @@ INNOCENT = re.compile(
 
 
 def retired_ids():
-    """The identifiers `ToolchainManager` says are withdrawn."""
+    """The identifiers `ToolchainManager` says are withdrawn.
+
+    Reads the declaration rather than a copy, and treats a declaration it cannot
+    parse as a failure rather than as an empty answer. Those two outcomes look
+    identical downstream -- no identifiers, so nothing to look for, so every file
+    passes -- and only one of them means the tree is clean.
+    """
     text = MANAGER.read_text(encoding="utf-8")
-    match = re.search(r"RETIRED_TOOLCHAINS\s*=\s*setOf\(([^)]*)\)", text)
+    match = re.search(
+        r"RETIRED_TOOLCHAINS\s*(?::[^=]+)?=\s*(setOf|mapOf)\(([^)]*)\)", text
+    )
     if not match:
         sys.exit("FAIL could not read RETIRED_TOOLCHAINS from ToolchainManager.kt")
-    return re.findall(r'"([^"]+)"', match.group(1))
+    body = match.group(2)
+    # mapOf entries are `"name" to <size>`; setOf entries are bare strings.
+    ids = re.findall(r'"([^"]+)"\s+to\b', body) or re.findall(r'"([^"]+)"', body)
+    if body.strip() and not ids:
+        sys.exit(
+            "FAIL RETIRED_TOOLCHAINS was found but no identifier could be read "
+            f"from it: {body.strip()[:80]!r}. Passing here would check nothing."
+        )
+    return ids
 
 
 def main():

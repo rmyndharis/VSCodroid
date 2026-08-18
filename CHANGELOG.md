@@ -145,6 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Setup and storage**
 
 - Upgrading re-extracts even when the version name is unchanged. Setup compared the name alone, and two builds have carried 1.1.0, so the first would have kept the old server tree.
+- The storage check counts a withdrawn toolchain's space. It read sizes through the registry, which no longer lists Go, so a device holding it could run out of disk mid-setup.
 - First run asks for as much free space as unpacking needs, measured from what the app carries. The old figure was 500 MB against a tree now over 800 MB, so devices in between failed partway with "Setup failed".
 - Updating no longer asks for room the install already occupies. What is unpacked is credited, so an update asks about 177 MB instead of 874 MB.
 - That credit now covers `usr/` and the extensions directory too, not just the server tree. Both are shared with installed toolchains and gallery extensions, which are subtracted, so a device with 177 MB free is no longer refused an update that needed 334 MB only on paper.

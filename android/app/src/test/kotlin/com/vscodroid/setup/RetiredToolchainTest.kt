@@ -152,7 +152,7 @@ class RetiredToolchainTest {
             .getDeclaredField("RETIRED_TOOLCHAINS")
         retiredField.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val retired = retiredField.get(null) as Set<String>
+        val retired = (retiredField.get(null) as Map<String, Long>).keys
 
         assertTrue(retired.isNotEmpty(), "nothing is retired, so this test proves nothing; delete it or the sweep")
         val offered = ToolchainRegistry.available

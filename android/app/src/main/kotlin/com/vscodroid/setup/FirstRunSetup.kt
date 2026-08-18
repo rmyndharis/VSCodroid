@@ -89,10 +89,11 @@ class FirstRunSetup(
             0L
         } else {
             val state = JSONArray(record.readText())
-            (0 until state.length()).sumOf { i ->
-                val name = state.optJSONObject(i)?.optString("name").orEmpty()
-                ToolchainRegistry.find(name)?.estimatedSize ?: 0L
-            }
+            toolchainBytesFor(
+                (0 until state.length()).mapNotNull {
+                    state.optJSONObject(it)?.optString("name")?.ifEmpty { null }
+                }
+            )
         }
     } catch (e: Exception) {
         Logger.w(tag, "Could not read installed toolchains; crediting none of usr/: ${e.message}")
@@ -2723,6 +2724,34 @@ internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>):
  * pinned by a unit test; the reads themselves are one call each and have no
  * branch to get wrong.
  */
+/**
+ * How much of `filesDir` the toolchains named in `toolchains.json` occupy.
+ *
+ * A withdrawn toolchain is still counted. `ToolchainRegistry.find` answers null
+ * for one, and reading a size through it alone therefore returns 0 for the
+ * toolchains most likely to be sitting on a device right now: the ones
+ * installed before the withdrawal. The pre-flight subtracts this figure from
+ * what it credits as reusable, so a 0 credits space that is occupied, passes a
+ * device that should have been refused, and the extraction it admits runs out
+ * of disk partway with the toolchain still where it was.
+ *
+ * The retired lookup strips the prefix itself rather than going through
+ * [toolchainShortName], which resolves through the registry and so returns a
+ * retired name unchanged by design -- the pass-through that keeps an uninstall
+ * working after a row is dropped. `toolchains.json` records the short form
+ * today (see the manifests written by `download-ruby.sh` and `download-java.sh`)
+ * and this reads either, because the cost of guessing wrong is a toolchain that
+ * silently counts as nothing.
+ *
+ * An unrecognised name contributes nothing, which is the same answer as before
+ * for a record this build has never heard of.
+ */
+internal fun toolchainBytesFor(names: List<String>): Long = names.sumOf { name ->
+    ToolchainRegistry.find(name)?.estimatedSize
+        ?: RETIRED_TOOLCHAINS[name.removePrefix("toolchain_")]
+        ?: 0L
+}
+
 internal fun setupIsStale(
     storedName: String?,
     storedCode: Int,
