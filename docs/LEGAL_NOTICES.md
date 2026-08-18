@@ -502,7 +502,7 @@ VSCodroid is built using the Android SDK and NDK provided by Google.
 
 ## Google Play Asset Delivery
 
-On Play Store installs, on-demand toolchain packs (Go, Ruby, Java) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
+On Play Store installs, on-demand toolchain packs (Ruby, Java) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
 
 - **Terms**: https://play.google.com/about/developer-distribution-agreement.html
 
@@ -580,13 +580,6 @@ others under **GPL Source Code Availability** above.
 
 The following toolchains are available as optional downloads and have their own licenses:
 
-### Go
-
-- **Project**: https://go.dev
-- **License**: BSD-3-Clause License
-- **Copyright**: Copyright (c) 2009-2024 The Go Authors
-- **Full license**: https://go.dev/LICENSE
-
 ### Ruby
 
 - **Project**: https://www.ruby-lang.org
@@ -612,7 +605,6 @@ The following toolchains are available as optional downloads and have their own 
 - **Python** is a trademark of the Python Software Foundation.
 - **npm** is a trademark of npm, Inc.
 - **Java** and **OpenJDK** are trademarks of Oracle Corporation.
-- **Go** and the Go Gopher are trademarks of Google LLC.
 - **Ruby** is a trademark of Yukihiro Matsumoto.
 - **Google Play** is a trademark of Google LLC.
 

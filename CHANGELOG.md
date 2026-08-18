@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Holding Ctrl, Alt or Shift on the key row now matches tapping it. Behaviour change: holding a modifier that is already on switches it off.
 - When a previous editor server survives, the app serves that one instead of starting a second it cannot use. It still cannot stop a server it did not start, and now says so.
 - Any address the editor asks to open now opens. Previously a LAN dev server was dropped or opened depending on which internal route the editor used, with nothing said either way.
-- The Get Started screen no longer states bundled tool versions, which had been wrong for two releases, and no longer says Go, Java and Ruby are coming; all three install today.
+- The Get Started screen no longer states bundled tool versions, which had been wrong for two releases, and no longer says Java and Ruby are coming; both install today.
 - The Get Started terminal step shows command and output in the step text. The illustration carrying them is hidden on any phone under 950 CSS pixels wide.
 - The Get Started screen names **Manage toolchains**, the label the launcher actually shows, instead of **Toolchains**.
 - VSCodroid no longer offers itself in Android's "Open with" list for source files. It advertised twenty file types and opened none of them.
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The three release-only gates (code shrinker, resource shrinker, lintVital) now run weekly and when their inputs change, instead of first running on the day a release is tagged.
 - The release checks the bundle against store size limits before publishing, rather than failing at upload with the download release already public.
 - Every bundled executable and shared library is checked before packaging for architecture, resolvable dependencies and 16 KB page alignment. Previously only Node and the native addons were.
-- The same check now covers the Go, Ruby and Java toolchain downloads, the Python bundling step, and the glibc compatibility layer, each of which previously shipped unexamined.
+- The same check now covers the Ruby and Java toolchain downloads, the Python bundling step, and the glibc compatibility layer, each of which previously shipped unexamined.
 - The Python bundling step fails when the interpreter's runtime library is absent, installs it under the name the launcher links against, and removes standard libraries from earlier versions.
 - The bundled SQLite engine is checked against the JavaScript shipped beside it. A mismatch shows up on device as chat failing to pick a model.
 - Node.js headers are checked against the digest nodejs.org publishes, the last download taken on trust.
@@ -159,7 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python stopped working after some app updates, because the interpreter is replaced every time while its libraries were unpacked only on a version change. The app now repairs that at launch.
 - Two app instances could run first-run setup concurrently; setup is now single-flight.
 - Deleting the projects folder from a file manager no longer leaves the app permanently broken until you clear app data.
-- An unreadable `toolchains.json` no longer deletes `toolchain-env.sh` on every launch, which took working Go and Ruby commands out of every new terminal.
+- An unreadable `toolchains.json` no longer deletes `toolchain-env.sh` on every launch, which took working toolchain commands out of every new terminal.
 
 **Server lifecycle**
 
@@ -240,13 +240,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Toolchains**
 
 - The Go toolchain is withdrawn. It ran but could not compile, and an install that still has it is removed on first launch, freeing 179 MB.
+- The Get Started screen no longer offers Go, and neither do the README, user guide or privacy policy. The picker had already dropped it.
 - A toolchain install that fails now says why: out of space, no connection, not in this release, or a download that did not match. It said only "Failed".
 - On a Play Store install that reason is given too. Play's error code went only to the log, so a full disk and a dropped connection read alike there.
 - A sideloaded toolchain install resolves `latest` once and takes both the digest and the payload from that release, so a release published mid-download no longer refuses the install.
-- Installed toolchains can be run. Android refuses to execute any file in an app's data directory, so terminal commands are handed to the system loader. **The redirect is shell functions, so its reach is the shell's reach**: `make`, directly executed scripts and extension-spawned processes still hit the binary directly and are refused. **Go cannot compile** even in the terminal, because `go build` starts its own compiler directly.
+- Installed toolchains can be run. Android refuses to execute any file in an app's data directory, so terminal commands are handed to the system loader. **The redirect is shell functions, so its reach is the shell's reach**: `make`, directly executed scripts and extension-spawned processes still hit the binary directly and are refused.
 - Tasks, npm scripts and anything run through `bash -c` now find npm, npx and the toolchain commands, which existed only in interactive shells. Direct execution and `sh -c` still cannot.
 - You can add and remove languages after first run. Touch and hold the app icon and choose **Manage toolchains**. The picker is shown once and previously had no other way in.
-- **`go build` would have failed with a permission error in the next release.** The Go manifest named only `go` and `gofmt`, leaving the compiler, linker and assembler unrunnable. The manifest is now built from the toolchain itself.
 - **The Ruby toolchain was missing six commands**, `rake` among them. It shipped a fixed list; it now installs whatever the Ruby release provides.
 - Ruby's `fiddle` could never load, because the library it links was not part of the download.
 - **The Java toolchain could not start on 16 KB page devices.** A JDK dependency was built for 4 KB pages, and three further libraries that could never load no longer ship.
@@ -340,9 +340,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Documentation**
 
 - The white-screen fix no longer sends readers to Clear Data without saying it deletes every project, and now lists how to rescue unsaved work first.
-- The Go toolchain card and the user guide now say Go cannot compile on device. The guide demonstrated `go run`, while the limit was stated only here and in the device checklist.
 - The user guide's list of bundled extensions matches what ships. It named two that are not included and listed an included one under "extensions to install".
-- The on-device toolchain checklist can be followed. Its five rows pointed at a Settings screen that does not exist, and expected `go build` to succeed.
+- The on-device toolchain checklist can be followed. Its five rows pointed at a Settings screen that does not exist.
 - Fourteen disagreements between the bridge API documentation and the bridge, including an SSH argument documented as a key type when it is the comment, and seven methods missing entirely.
 - Several documents described things the app no longer does: a fork rather than an MIT build, Rust and C/C++ toolchains, Play-only delivery, and a release-asset list omitting the toolchain downloads.
 - The attribution for Code - OSS reproduces the copyright line exactly as the shipped licence file has it.

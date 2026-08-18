@@ -139,7 +139,6 @@ GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest.
 
 | Software | License | URL |
 |----------|---------|-----|
-| Go | BSD 3-Clause | https://go.dev |
 | Ruby | BSD 2-Clause | https://www.ruby-lang.org |
 | OpenJDK | GPL v2 + Classpath | https://openjdk.org |
 

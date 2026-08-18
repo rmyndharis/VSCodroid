@@ -199,6 +199,9 @@ jobs:
       - name: Check the welcome screen states nothing that goes stale
         run: python3 scripts/check-welcome-claims.py
 
+      - name: Check no document offers a withdrawn toolchain
+        run: python3 scripts/check-toolchain-claims.py
+
       - name: Check the device suite can still read what it asserts
         run: bash scripts/device-test.sh --self-check
 

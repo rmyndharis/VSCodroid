@@ -30,21 +30,18 @@
   <!-- Divider -->
   <line x1="40" y1="118" x2="240" y2="118" stroke="var(--vscode-editorWidget-border)" stroke-width="1" stroke-dasharray="4 3"/>
 
-  <!-- Installable on demand. Not dimmed and not labelled "coming soon": all
-       three ship today, and the picture saying otherwise is what sent users
+  <!-- Installable on demand. Not dimmed and not labelled "coming soon": both
+       ship today, and the picture saying otherwise is what sent users
        away from toolchains already sitting on their device. Rust and C/C++
        were deferred with no module, pack or registry entry, so they are not
        here at all rather than promised. -->
   <text x="140" y="140" font-family="sans-serif" font-size="10" fill="var(--vscode-descriptionForeground)" text-anchor="middle">Install on demand</text>
 
   <g>
-    <rect x="40" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
-    <text x="70" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Go</text>
+    <rect x="75" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
+    <text x="105" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Java 17</text>
 
-    <rect x="110" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
-    <text x="140" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Java 17</text>
-
-    <rect x="180" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
-    <text x="210" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Ruby</text>
+    <rect x="145" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
+    <text x="175" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Ruby</text>
   </g>
 </svg>

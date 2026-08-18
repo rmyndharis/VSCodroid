@@ -25,7 +25,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 135 MB, and you need about 875 MB free for the extraction that follows.
 2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 810 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~875 MB above is that payload plus the working room setup insists on before it will start. It only happens once.
-3. **Language Picker** -- A prompt asks "What do you code in?" with options for Go, Ruby, and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
+3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
@@ -461,7 +461,6 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Go | On-demand | ~179 MB | go, gofmt |
 | Ruby | On-demand | ~34 MB | ruby, gem, irb |
 | Java (OpenJDK) | On-demand | ~146 MB | java, javac, jar |
 
@@ -491,13 +490,6 @@ it.
 New terminals automatically pick up toolchain PATH changes. No app restart is needed.
 
 ```bash
-# Go: the toolchain installs and runs, but it cannot compile on Android.
-# `go build` and `go run` are refused. See Known Limitations below.
-go version
-go env GOROOT
-mkdir hello && cd hello
-go mod init hello
-
 # Ruby
 ruby -v
 gem install sinatra
@@ -577,12 +569,12 @@ The status bar shows a phantom process count. This tells you how many background
 
 Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because there is no C compiler on the device. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
 
-### Toolchains Run Only Through bash, and Go Cannot Compile
+### Toolchains Run Only Through bash
 
 Android refuses to execute any file inside an app's data directory, which is
 where installed toolchains live. VSCodroid works around this by defining a shell
 function for each toolchain binary that hands the file to the system loader, so
-typing `go`, `ruby` or `javac` in a terminal works.
+typing `ruby` or `javac` in a terminal works.
 
 The same definitions reach bash when it is not your terminal, so a VS Code task,
 an npm lifecycle script and `bash -c "..."` find them too. `npm` and `npx` are
@@ -595,11 +587,6 @@ receive the file rather than the function, and Android refuses it:
 - processes an extension starts, including language servers
 - a compiler that starts its own sub-tools
 - a script run by its own path instead of through bash
-
-That third case is why **Go cannot compile on VSCodroid**. `go build` and
-`go run` start the compiler, assembler and linker as separate programs, and
-those starts do not go through the shell function. `go version`, `go env` and
-`go mod` work; building does not.
 
 Ruby and Java are reached the same way and hit the same wall whenever something
 starts them without a shell, an extension or a Makefile recipe for example.

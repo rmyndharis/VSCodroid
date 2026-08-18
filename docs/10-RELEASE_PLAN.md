@@ -154,7 +154,7 @@ PATCH: Bug fixes, security patches
 
 Examples:
   1.0.0  — First public release
-  1.1.0  — Updated to VS Code 1.97, added Go toolchain
+  1.1.0  - Updated to VS Code 1.133, withdrew the Go toolchain
   1.1.1  — Fixed WebView crash on Samsung devices
   2.0.0  — Major architecture change (hypothetical)
 ```

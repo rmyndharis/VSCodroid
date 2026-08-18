@@ -2831,7 +2831,7 @@ private val ATOMIC_WRITE_LOCK = Any()
  * `server/` is 700 of the tree's 810 MiB and nothing but extraction writes
  * there, so every byte counted is a byte the next unpack genuinely writes over.
  * The other two are shared ground: toolchains install into `usr/`, Java is
- * 146 MB unpacked, Go 163 MB, `npm install -g` lands there too, and
+ * 146 MB unpacked, `npm install -g` lands there too, and
  * `home/.vscodroid/extensions` fills with whatever the user takes from the
  * gallery. Crediting those would subtract bytes that overwriting does not give
  * back, and that failure is the worse one: the gate passes, extraction runs out

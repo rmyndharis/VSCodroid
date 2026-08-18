@@ -125,7 +125,7 @@ If you are **ready to learn**, you should be able to **start today**.
 - **Offline-First** — Code without an internet connection. Everything runs locally on your device.
 - **Mobile-Optimized**: Extra Key Row (Ctrl, Alt, Tab, Esc, F1-F12, symbols, cursor trackpad), touch-friendly UI, clipboard bridge.
 - **SSH Out of the Box** — Bundled OpenSSH client and `ssh-keygen`, preconfigured with sane defaults (ed25519, keepalive, `accept-new`).
-- **Language Picker** — Select your languages; Go/Ruby/Java install on demand — via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
+- **Language Picker** — Select your languages; Ruby and Java install on demand — via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
 - **Dev Server Preview** — Preview a running dev server in an editor tab beside your code, or hand it to the device's browser.
 
 ## 📸 Screenshots
@@ -186,7 +186,7 @@ flowchart TD
 
 1. **Install** from [Google Play](https://play.google.com/store/apps/details?id=com.vscodroid).
 2. Open the app. Core binaries extract automatically the first time, behind a progress bar.
-3. Pick your languages (Go, Ruby, Java). They install automatically.
+3. Pick your languages (Ruby, Java). They install automatically.
 4. Start coding. Editor, terminal, and tools are ready.
 
 > You can also download APKs directly from [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases).
@@ -196,7 +196,7 @@ flowchart TD
 | Tier                         | What                                                        | How                                                      |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
 | **Core (Base APK)**          | Node.js, npm, Python 3, Git, Bash, SSH, tmux, make, ripgrep | Available immediately                                    |
-| **Toolchains (Asset Packs)** | Go, Ruby, Java                                              | Select in Language Picker — Play Asset Delivery, or direct download on sideloaded installs |
+| **Toolchains (Asset Packs)** | Ruby, Java                                                  | Select in Language Picker — Play Asset Delivery, or direct download on sideloaded installs |
 
 ## 🔨 Building from Source
 

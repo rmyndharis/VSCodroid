@@ -128,6 +128,13 @@ jobs:
       - name: Check the bundled extensions match the notices
         run: python3 scripts/check-bundled-extensions.py
 
+      # The picker is built from ToolchainRegistry.available; nothing else that
+      # names a toolchain is. Withdrawing one left seven documents and the
+      # in-app walkthrough still offering it, so the app promised a language it
+      # would then refuse to install.
+      - name: Check no document offers a withdrawn toolchain
+        run: python3 scripts/check-toolchain-claims.py
+
       # `git apply --stat` parses a patch without needing the tree it applies to,
       # so the one thing that cannot be checked on a pull request -- whether the
       # patches still apply -- is separated here from the thing that can: whether
