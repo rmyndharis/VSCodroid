@@ -112,7 +112,9 @@ file in it is answered for. Two are:
     which is the moment a binary restored from a cache no download step re-ran
     would otherwise ship;
   * the Ruby asset pack, swept by download-ruby.sh once it has placed the pack,
-    which is the only step that ever fills it.
+    which is the only step that ever fills it, and again by the
+    verifyRubyPackShellPaths Gradle task, because what a bundle packages is the
+    directory in the checkout rather than the download that last wrote it.
 
 The Python stdlib is deliberately not one of them. Three files under it name the
 path in a `#!` line rather than as a default they hand to execve, none of them

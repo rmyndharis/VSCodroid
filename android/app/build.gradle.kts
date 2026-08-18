@@ -617,9 +617,11 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
 // so a binary nobody thought to list is still answered for.
 //
 // Here rather than in verify-android-elf.py, which every installer already calls
-// per file: the toolchain downloads run it over their whole pack, and libruby.so
-// and Ruby's pty.so carry this same path without being rewritten, so folding the
-// question into the shared checker would fail builds that are correct.
+// per file: Go's pack carries Termux shebangs in two syscall generators and a
+// clang wrapper, and Java's lib/modules carries the path inside a jimage archive.
+// None of those is reachable on Android and the archive cannot be rewritten in
+// place, so folding the question into the shared checker would fail builds that
+// are correct.
 //
 // What it costs when it goes wrong is silence of the worst kind: make runs every
 // recipe line through the compiled-in shell and never reads SHELL, so every
@@ -653,6 +655,61 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
                     "\n" +
                     "In CI this most likely means a cached jniLibs restored a binary\n" +
                     "placed before that rewrite existed: bust the assets cache."
+            )
+        }
+    }
+}
+
+// The pack is a directory in the checkout whether or not anything has filled it:
+// its manifest is tracked and its payload is downloaded, so usr/ is what says a
+// download has run.
+fun rubyPackHoldsPayload(): Boolean =
+    File(rootProject.projectDir, "toolchain_ruby/src/main/assets/usr").isDirectory
+
+// The same question asked of the Ruby asset pack, which is in neither jniLibs
+// nor the app module's assets.
+//
+// download-ruby.sh sweeps the pack once it has placed it, so a pack this build
+// has just downloaded is answered for by the script that filled it. What that
+// leaves open is the pack already sitting in the checkout: bundleRelease
+// packages whatever is in that directory, and nothing between the two asks
+// again. Ordering in release.yml, download before bundle, is what covers it
+// today, and ordering is not a gate -- a local AAB built over an older pack, or
+// a reordering, meets no check at all.
+//
+// Ruby alone, deliberately. Go's and Java's packs carry the same path in files
+// that are unreachable on Android and are left as they are, so sweeping those
+// would fail builds that are correct. scripts/patch-default-shell.py records
+// which directories qualify and what each one had to answer first.
+val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") {
+    group = "verification"
+    description = "Checks no file in the Ruby asset pack names Termux's prefix as its shell."
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/patch-default-shell.py",
+        "--check", "android/toolchain_ruby/src/main/assets",
+    )
+
+    // Armed by the payload rather than by the directory: a checkout that has
+    // never run download-ruby.sh holds the pack's manifest and nothing else, and
+    // sweeping that would report a pack clean on the strength of one JSON file.
+    onlyIf { rubyPackHoldsPayload() }
+
+    isIgnoreExitValue = true
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(
+                "The Ruby toolchain pack names a shell inside Termux's data\n" +
+                    "directory. The FAIL line above names the file, relative to the\n" +
+                    "pack's assets. This app cannot read or create that path, so\n" +
+                    "Ruby's system(), its backticks and the Makefiles mkmf writes\n" +
+                    "all fail with ENOENT on a device.\n" +
+                    "\n" +
+                    "Re-run scripts/download-ruby.sh, which rewrites the path in the\n" +
+                    "files it places and sweeps the pack afterwards. A pack left\n" +
+                    "over from a run that predates that rewrite is the likely cause."
             )
         }
     }
@@ -699,6 +756,6 @@ val bundleNotices = tasks.register<Copy>("bundleNotices") {
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
         dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
-            verifyBundledShellPaths)
+            verifyBundledShellPaths, verifyRubyPackShellPaths)
         dependsOn(bundleNotices)
     }
