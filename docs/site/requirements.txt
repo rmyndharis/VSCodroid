@@ -1,0 +1,8 @@
+# The Markdown renderer the published pages are built with.
+#
+# Pinned by hash rather than by version alone, because the site's HTML is this
+# package's output: a different build of the same version would change what is
+# published with no commit to point at. --require-hashes in the workflow makes
+# the pin binding rather than advisory.
+markdown==3.8 \
+    --hash=sha256:794a929b79c5af141ef5ab0f2f642d0f7b1872981250230e72682346f7cc90dc

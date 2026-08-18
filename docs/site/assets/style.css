@@ -1,0 +1,735 @@
+/* VSCodroid documentation site.
+ *
+ * One stylesheet, no external requests. Nothing here reaches a CDN, a font
+ * service or an analytics endpoint, which is the same commitment the app itself
+ * makes and the only version of it a reader can verify by watching the network
+ * tab.
+ *
+ * Dark first, because the audience reads code on a phone and almost always in
+ * the dark. Light is a full palette rather than an afterthought: the app ships
+ * both and the walkthrough screenshots are light.
+ */
+
+:root {
+  /* Light is the base so that every token has a value outside a media query.
+   * A colour whose only definition lives inside one is a colour that vanishes
+   * when the query does not match. */
+  --bg: #ffffff;
+  --bg-sunken: #f6f7f9;
+  --bg-raised: #ffffff;
+  --border: #e3e6ea;
+  --border-strong: #cfd4da;
+  --text: #16191d;
+  --text-dim: #5a626c;
+  --text-faint: #858d97;
+  --accent: #0a63c9;
+  --accent-hover: #084d9e;
+  --accent-quiet: #e8f0fb;
+  --code-bg: #f2f4f7;
+  --shadow: 0 1px 2px rgb(16 25 40 / 6%), 0 8px 24px rgb(16 25 40 / 6%);
+  --shadow-lift: 0 2px 4px rgb(16 25 40 / 8%), 0 24px 48px rgb(16 25 40 / 12%);
+
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo,
+    Consolas, monospace;
+
+  --measure: 68ch;
+  --page: 1120px;
+  --radius: 10px;
+  --radius-lg: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --bg-sunken: #0a0d11;
+    --bg-raised: #151a21;
+    --border: #232a33;
+    --border-strong: #333c48;
+    --text: #e6eaf0;
+    --text-dim: #a2acba;
+    --text-faint: #6e7885;
+    --accent: #4da3ff;
+    --accent-hover: #7bbcff;
+    --accent-quiet: #14243a;
+    --code-bg: #11161c;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 30%);
+    --shadow-lift: 0 2px 4px rgb(0 0 0 / 50%), 0 24px 48px rgb(0 0 0 / 45%);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+/* --- Layout ------------------------------------------------------------- */
+
+.wrap {
+  max-width: var(--page);
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.prose {
+  max-width: var(--measure);
+}
+
+/* --- Skip link ---------------------------------------------------------- */
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.6rem 1rem;
+  border-radius: 0 0 var(--radius) 0;
+  z-index: 100;
+}
+
+.skip:focus {
+  left: 0;
+}
+
+/* --- Header ------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header .wrap {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  min-height: 62px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 1.02rem;
+}
+
+.brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.site-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: clamp(0.75rem, 2.5vw, 1.6rem);
+  font-size: 0.94rem;
+}
+
+.site-nav a {
+  color: var(--text-dim);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-nav a:hover,
+.site-nav a[aria-current="page"] {
+  color: var(--text);
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.72rem 1.35rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-weight: 560;
+  font-size: 0.97rem;
+  text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+.btn-ghost {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: transparent;
+}
+
+.btn-ghost:hover {
+  background: var(--bg-sunken);
+  color: var(--text);
+}
+
+/* --- Hero --------------------------------------------------------------- */
+
+.hero {
+  padding-block: clamp(3rem, 9vw, 6rem) clamp(2.5rem, 7vw, 4.5rem);
+  border-bottom: 1px solid var(--border);
+  background:
+    radial-gradient(
+      60rem 30rem at 15% -10%,
+      var(--accent-quiet),
+      transparent 65%
+    ),
+    var(--bg);
+}
+
+.hero-grid {
+  display: grid;
+  gap: clamp(2.5rem, 6vw, 4rem);
+  grid-template-columns: 1fr;
+  align-items: center;
+}
+
+@media (min-width: 900px) {
+  .hero-grid {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  }
+}
+
+.hero h1 {
+  font-size: clamp(2.4rem, 6.5vw, 3.6rem);
+  line-height: 1.05;
+  letter-spacing: -0.033em;
+  margin: 0 0 1rem;
+  font-weight: 700;
+}
+
+.hero .lede {
+  font-size: clamp(1.08rem, 2.1vw, 1.28rem);
+  color: var(--text-dim);
+  margin: 0 0 2rem;
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  margin-bottom: 1.4rem;
+}
+
+.hero-note {
+  font-size: 0.88rem;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+/* The screenshot, presented as the device it was taken on rather than as a
+ * floating rectangle. The frame is drawn in CSS so it costs no image. */
+.device {
+  position: relative;
+  width: min(300px, 78vw);
+  margin-inline: auto;
+  border: 9px solid #1b1f24;
+  border-radius: 34px;
+  box-shadow: var(--shadow-lift);
+  overflow: hidden;
+  background: #1b1f24;
+}
+
+.device img {
+  border-radius: 25px;
+  display: block;
+}
+
+/* --- Sections ----------------------------------------------------------- */
+
+.section {
+  padding-block: clamp(3rem, 8vw, 5.5rem);
+}
+
+.section-sunken {
+  background: var(--bg-sunken);
+  border-block: 1px solid var(--border);
+}
+
+.section h2 {
+  font-size: clamp(1.6rem, 3.4vw, 2.1rem);
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+  margin: 0 0 0.75rem;
+  font-weight: 670;
+}
+
+.section-intro {
+  color: var(--text-dim);
+  max-width: 58ch;
+  margin: 0 0 clamp(2rem, 4vw, 3rem);
+}
+
+/* --- Feature grid ------------------------------------------------------- */
+
+.features {
+  display: grid;
+  gap: 1.15rem;
+  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.feature {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 1.45rem;
+}
+
+.feature h3 {
+  margin: 0 0 0.45rem;
+  font-size: 1.03rem;
+  font-weight: 620;
+  letter-spacing: -0.008em;
+}
+
+.feature p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.94rem;
+  line-height: 1.6;
+}
+
+/* --- Numbered steps ----------------------------------------------------- */
+
+.steps {
+  counter-reset: step;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 1.6rem;
+  max-width: var(--measure);
+}
+
+.steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.steps li::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--accent-quiet);
+  color: var(--accent);
+  font-size: 0.86rem;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps h3 {
+  margin: 0.15rem 0 0.3rem;
+  font-size: 1.02rem;
+  font-weight: 615;
+}
+
+.steps p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+
+/* --- Screenshot strip --------------------------------------------------- */
+
+/* A row that scrolls rather than a grid that stacks. These are phone
+ * screenshots: at one per row on a phone they are taller than the viewport and
+ * turn the page into eight thousand pixels of scrolling. Bleeding to the screen
+ * edge is what says the row moves. */
+.shots {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: min(230px, 62vw);
+  gap: 1.15rem;
+  list-style: none;
+  margin: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  padding-block: 0 1.1rem;
+  margin-inline: calc(-1 * clamp(1.25rem, 4vw, 2.5rem));
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.shot {
+  scroll-snap-align: start;
+}
+
+.shot figure {
+  margin: 0;
+}
+
+.shot img {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  background: var(--bg-raised);
+}
+
+.shot figcaption {
+  margin-top: 0.7rem;
+  font-size: 0.86rem;
+  color: var(--text-faint);
+}
+
+/* --- Prose (the guide and the policy) ----------------------------------- */
+
+.doc {
+  padding-block: clamp(2.5rem, 6vw, 4rem);
+}
+
+.doc-layout {
+  display: grid;
+  gap: clamp(2rem, 5vw, 3.5rem);
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+@media (min-width: 1000px) {
+  .doc-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+
+.toc {
+  position: sticky;
+  top: 84px;
+  font-size: 0.9rem;
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
+}
+
+@media (max-width: 999px) {
+  .toc {
+    position: static;
+    border-left: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.15rem;
+    background: var(--bg-sunken);
+  }
+}
+
+.toc p {
+  margin: 0 0 0.6rem;
+  font-size: 0.76rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 620;
+}
+
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.42rem;
+}
+
+.toc a {
+  color: var(--text-dim);
+  text-decoration: none;
+  display: block;
+  line-height: 1.35;
+}
+
+.toc a:hover {
+  color: var(--accent);
+}
+
+.content {
+  max-width: var(--measure);
+}
+
+.content h1 {
+  font-size: clamp(2rem, 5vw, 2.7rem);
+  letter-spacing: -0.028em;
+  line-height: 1.12;
+  margin: 0 0 0.6rem;
+  font-weight: 700;
+}
+
+.content h2 {
+  font-size: 1.45rem;
+  letter-spacing: -0.018em;
+  margin: 2.75rem 0 0.85rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-weight: 650;
+  scroll-margin-top: 80px;
+}
+
+.content h3 {
+  font-size: 1.1rem;
+  margin: 1.9rem 0 0.55rem;
+  font-weight: 620;
+  scroll-margin-top: 80px;
+}
+
+.content h4 {
+  font-size: 0.98rem;
+  margin: 1.5rem 0 0.4rem;
+  font-weight: 620;
+  color: var(--text-dim);
+}
+
+.content p,
+.content li {
+  color: var(--text);
+}
+
+.content p {
+  margin: 0 0 1.1rem;
+}
+
+.content ul,
+.content ol {
+  margin: 0 0 1.2rem;
+  padding-left: 1.35rem;
+}
+
+.content li {
+  margin-bottom: 0.4rem;
+}
+
+.content li::marker {
+  color: var(--text-faint);
+}
+
+.content strong {
+  font-weight: 640;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.1em 0.36em;
+  white-space: nowrap;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  margin: 0 0 1.3rem;
+  line-height: 1.55;
+}
+
+.content pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+  font-size: 0.87em;
+}
+
+.content blockquote {
+  margin: 0 0 1.3rem;
+  padding: 0.9rem 1.15rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-sunken);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--text-dim);
+}
+
+.content blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.content hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+/* Wide content scrolls inside its own box; the page never does. */
+.table-scroll {
+  overflow-x: auto;
+  margin: 0 0 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+
+.content th,
+.content td {
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.content th {
+  background: var(--bg-sunken);
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.content tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* --- Callout ------------------------------------------------------------ */
+
+.callout {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  border-radius: var(--radius-lg);
+  padding: 1.35rem 1.5rem;
+  margin: 2rem 0;
+}
+
+.callout h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  font-weight: 630;
+}
+
+.callout p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Footer ------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+  padding-block: 2.75rem 3.25rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+
+.footer-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.75rem 3rem;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+
+.footer-links a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.footer-links a:hover {
+  color: var(--accent);
+}
+
+.disclaimer {
+  max-width: 62ch;
+  margin: 1.75rem 0 0;
+  font-size: 0.84rem;
+  color: var(--text-faint);
+  line-height: 1.55;
+}

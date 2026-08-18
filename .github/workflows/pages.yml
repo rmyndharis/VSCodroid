@@ -1,12 +1,34 @@
 name: Deploy Docs
 
+# The site is built here and published from the artifact, which means the
+# repository setting has to be "GitHub Actions" rather than a branch.
+#
+# It was a branch, serving `main:/docs` through Jekyll, and that is worth
+# recording because the symptom was confusing rather than obvious. Two
+# publishers were pointed at one site: this workflow uploading `docs/site`, and
+# GitHub's own Jekyll build rendering the whole of `docs/`. The setting picked
+# Jekyll, so what a visitor got was the product requirements, the architecture
+# and technical specifications, the risk matrix and the implementation plans,
+# with `docs/site` buried as a subdirectory nothing linked to. This workflow ran
+# on every push, reported success, and changed nothing anyone could see.
+
 on:
   push:
     branches: [main]
+    # Every input the site is built from, not only the site directory. The two
+    # documents below are rendered into pages by build-docs-site.py, so a
+    # correction to the user guide that did not appear on the site was the
+    # obvious failure to leave available here.
     paths:
       - "docs/site/**"
+      - "docs/USER_GUIDE.md"
+      - "docs/PRIVACY_POLICY.md"
+      - "scripts/build-docs-site.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
 
 permissions:
+  contents: read
   pages: write
   id-token: write
 
@@ -25,6 +47,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the Markdown renderer
+        # Pinned, because the site's HTML is this package's output and an
+        # unpinned renderer changes the published pages without a commit.
+        run: python -m pip install --require-hashes -r docs/site/requirements.txt
+
+      - name: Render the documents into pages
+        run: python3 scripts/build-docs-site.py
 
       - name: Setup Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
