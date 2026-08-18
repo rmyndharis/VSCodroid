@@ -145,11 +145,12 @@ class FirstRunSetup(
             // [installedExtractionBytes] the reasons for measuring only `server/`.
             //
             // Asking for the whole asset total unconditionally is what this replaced,
-            // and it was survivable only by accident: PIVOT_VERSION_CODE happens to
-            // equal the current versionCode, so every upgrade reaching this line so
-            // far had its old server tree deleted a few lines above and measured a
-            // device with that room already given back. The next release has no such
-            // deletion, and the demand would have been 874 MiB free ON TOP OF the
+            // and it was survivable only by accident: while PIVOT_VERSION_CODE was
+            // still ahead of every installed build, each upgrade reaching this line
+            // had its old server tree deleted a few lines above and measured a device
+            // with that room already given back. That accident has now expired, which
+            // is what this arithmetic exists for: an upgrade from the Code - OSS tree
+            // deletes nothing, and the demand would have been 874 MiB free ON TOP OF the
             // 810 MiB the install already occupies, refused on the splash screen,
             // with a Retry button that measures the same thing for ever and a
             // MainActivity that never runs, so nothing the app offers can free a byte.
@@ -2293,9 +2294,18 @@ claude() {
          * built from source. Upgrades from anything earlier need the old server
          * tree removed rather than merged into.
          *
-         * Must match versionCode in app/build.gradle.kts for the release that
-         * ships the new tree; a mismatch means the migration either never runs or
-         * runs for users who do not need it.
+         * Frozen, and deliberately not tied to the shipping versionCode. The
+         * comparison is `fromVersionCode < PIVOT`, asked of the code a device is
+         * upgrading FROM, so the value has to name the boundary in history where
+         * the tree changed origin and then never move again. versionCode 10 is
+         * the last release carrying the pre-built server and must trigger; 12 is
+         * the first carrying the Code - OSS tree and must not. 11 sits between
+         * them and was burned by a failed upload, so no device holds it.
+         *
+         * Raising it to match a later versionCode is the tempting mistake: every
+         * upgrade would then delete a 700 MB server tree it already had correct
+         * and unpack it again, on every release, with no symptom but the wait.
+         * [ServerTreePivotTest] fails if it moves.
          */
         private const val PIVOT_VERSION_CODE = 11
     }

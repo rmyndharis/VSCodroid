@@ -27,10 +27,11 @@ import java.nio.file.Files
  *
  * The gate used to ask every install for the whole asset tree plus slack,
  * 874 MiB at the current pin, whether or not the device already held 810 MiB
- * of it. That was survivable only by coincidence: `PIVOT_VERSION_CODE` equals
- * the shipping `versionCode`, so every upgrade that has reached the check so far
+ * of it. That was survivable only by coincidence: while `PIVOT_VERSION_CODE`
+ * was still ahead of every installed build, each upgrade that reached the check
  * had its previous server tree deleted a few lines earlier and measured a device
- * with that room given back. The next release has no such deletion, and the
+ * with that room given back. That coincidence has expired, an upgrade from the
+ * Code - OSS tree deletes nothing, and the
  * demand would have been 874 MiB free on top of the 810 MiB already occupied:
  * refused on the splash screen, with a Retry button that measures the same thing
  * for ever and a `MainActivity` that never runs, so nothing the app offers can
