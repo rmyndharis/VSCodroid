@@ -997,7 +997,8 @@ class FirstRunSetup(
         // Update .npmrc on every launch — nativeLibDir changes on APK reinstall
         val npmrc = File(context.filesDir, "home/.npmrc")
         val bashPath = "$nativeLibDir/libbash.so"
-        // script-shell: use bundled bash for npm lifecycle scripts (Android has no /bin/sh)
+        // script-shell: use bundled bash for npm lifecycle scripts, because
+        // npm's fallback is a POSIX shell and this app's scripts assume bash
         // os[]: install optional deps for both linux and android so tools like
         // @rollup/rollup-android-arm64 get installed alongside linux fallbacks
         val expectedContent = "script-shell=$bashPath\nos[]=linux\nos[]=android\n"
@@ -1007,9 +1008,12 @@ class FirstRunSetup(
             // before it writes, so a write that runs out of disk leaves an empty
             // `.npmrc` rather than the previous one. Empty means no
             // `script-shell`, and npm then hands every lifecycle script to
-            // `/bin/sh`, which Android does not have, so `npm install` fails on
-            // any package with a postinstall, for a reason nothing on screen
-            // connects to storage.
+            // `/bin/sh`. That path does exist on Android, as a symlink into
+            // `/system/bin` -- measured on an API 36 emulator, `ls -l /bin/sh`
+            // and `/system/bin/sh` are the same 312024-byte mksh. So the failure
+            // is not ENOENT but a shell that is not bash: a postinstall using
+            // `[[`, arrays or `source` dies with a syntax error, for a reason
+            // nothing on screen connects to storage.
             //
             // Nothing repairs it either: repairTruncatedSetupFiles covers
             // `.bashrc` and `settings.json`, and an empty `.npmrc` is

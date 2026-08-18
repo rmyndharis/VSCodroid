@@ -147,6 +147,7 @@ so the shared checker would fail builds that are correct.
 
 import argparse
 import pathlib
+import re
 import stat
 import sys
 import typing
@@ -247,9 +248,26 @@ for _form in FORMS:
                          "source with NUL, which is not whitespace there")
 
 
-def carries_termux_shell(data: bytes) -> bool:
-    """The invariant --check enforces, on the bytes of one file."""
-    return TERMUX_SH in data
+# Any shell under any app's private data directory, not only Termux's.
+#
+# The rewriter knows one spelling and pads it in place, so it can only fix the
+# Termux one. The detector has no such excuse, and had the same narrowness: the
+# failure that motivated this whole file was reported as
+# `/data/data/com.vscodroid/files/usr/bin/sh`, the app's OWN prefix, which the
+# Termux literal does not match. SELinux refuses `execve` on anything under
+# `app_data_file` whoever owns it, so every such path is unrunnable and the
+# check should say so rather than only recognising the one it can repair.
+APP_DATA_SH = re.compile(rb"/data/data/[A-Za-z0-9._]+/files/usr/bin/sh")
+
+
+def carries_unrunnable_shell(data: bytes) -> "bytes | None":
+    """The invariant --check enforces, on the bytes of one file.
+
+    Returns the offending path, so a hit on a prefix this file cannot rewrite
+    can say which one it found instead of naming Termux's.
+    """
+    hit = APP_DATA_SH.search(data)
+    return hit.group(0) if hit else None
 
 
 def patch(path: pathlib.Path) -> bool:
@@ -320,7 +338,7 @@ def patch(path: pathlib.Path) -> bool:
     # to keep it.
     after = path.read_bytes()
     kept_length = len(after) == len(data) or not form.pad
-    if not kept_length or carries_termux_shell(after) or form.marker not in after:
+    if not kept_length or carries_unrunnable_shell(after) or form.marker not in after:
         print(f"  ERROR: {path} is not what the rewrite intended", file=sys.stderr)
         return False
 
@@ -379,18 +397,23 @@ def check(directory: pathlib.Path) -> bool:
                 print(f"  FAIL   {name} is not a regular file")
                 ok = False
                 continue
-            carries = carries_termux_shell(target.read_bytes())
+            carries = carries_unrunnable_shell(target.read_bytes())
         except OSError as e:
             print(f"  FAIL   {name}: {e}")
             ok = False
             continue
         if carries:
-            print(f"  FAIL   {name} names {TERMUX_SH.decode()}")
+            print(f"  FAIL   {name} names {carries.decode()}")
+            if carries != TERMUX_SH:
+                print("         and that is not a prefix this file can rewrite. "
+                      "SELinux refuses execve on anything under an app's data "
+                      "directory, so no such path is runnable; the binary has to "
+                      "be built or fetched with a shell outside one.")
             ok = False
 
     n = len(targets)
     print(f"  {n} file{'' if n == 1 else 's'} checked for a shell under "
-          "Termux's prefix")
+          "any app's data directory")
     return ok
 
 

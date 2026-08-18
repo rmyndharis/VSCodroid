@@ -280,9 +280,10 @@ class BashrcAtomicityTest {
      * `.npmrc` is written by the same call and matters for a different reason.
      *
      * It carries `script-shell`, which points npm at the bundled bash. Without
-     * that line npm falls back to `/bin/sh`, which Android does not have, so every
-     * package with a lifecycle script fails to install, and nothing on screen
-     * connects that to storage.
+     * that line npm falls back to `/bin/sh`. That path exists on Android, as a
+     * symlink into `/system/bin`, so the failure is not ENOENT: it is mksh
+     * running a script written for bash, which dies on `[[`, arrays or `source`.
+     * Nothing on screen connects that to storage.
      *
      * The file also sits outside every repair: `repairTruncatedSetupFiles` covers
      * `.bashrc` and `settings.json`, and an emptied `.npmrc` cannot be told from
@@ -302,8 +303,8 @@ class BashrcAtomicityTest {
             "script-shell=/old/bash\n",
             npmrc.readText(),
             "the previous .npmrc was destroyed by a write that could not finish; an empty " +
-                "one means no script-shell, and npm then hands lifecycle scripts to a " +
-                "/bin/sh that does not exist on Android",
+                "one means no script-shell, and npm then hands lifecycle scripts to " +
+                "/bin/sh, which on Android is mksh rather than the bash they assume",
         )
     }
 

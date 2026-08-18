@@ -583,7 +583,7 @@ the same kind of function and are reached the same way.
 What a function cannot reach is anything that never gets to bash. Those starts
 receive the file rather than the function, and Android refuses it:
 
-- `make`, whose recipes run under `/bin/sh` rather than the bash VSCodroid sets up
+- `make`, whose recipes run under `/system/bin/sh` rather than the bash VSCodroid sets up
 - processes an extension starts, including language servers
 - a compiler that starts its own sub-tools
 - a script run by its own path instead of through bash
