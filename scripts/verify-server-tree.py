@@ -94,8 +94,10 @@ def main(tree):
     if found is not None:
         check(not found, "no bundled GNU/Linux node", "prune it before packaging")
 
-    # Every native module is built for the build host, and only node-pty and
-    # @parcel/watcher are overlaid for Bionic afterwards. ripgrep is the one that
+    # Every native module is built for the build host, and four are dealt with
+    # for Bionic afterwards by build-native-addons.sh: node-pty, @parcel/watcher
+    # and @vscode/sqlite3 are recompiled, @vscode/spdlog is replaced by a
+    # JavaScript implementation and its .node deleted. ripgrep is the one that
     # bites: its postinstall downloads a binary for whatever os.platform() and
     # arch() report, so an x86-64 build host yields a tree that installs cleanly,
     # passes every other check, and then fails at exec with Search silently

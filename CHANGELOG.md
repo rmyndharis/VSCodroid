@@ -144,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Setup and storage**
 
+- Generating an SSH key stops blocking the app when it hangs. The wait was twelve times longer than the editor's, so every other bridge call queued behind it.
 - A build whose native addons were left as the desktop Linux versions is now refused at packaging. Nothing checked them, and the failure only appeared on a device.
 - Show Storage Usage says which rows can be cleared and clears only those. Every row ran the cache clear, which freed nothing and then reported success.
 - Device folders you have not opened for a while stop holding disk for ever. Their local copies were unreachable by any action in the app.

@@ -129,11 +129,12 @@ development server active" here, the degradation is silent again.
 
 ## 10. Toolchains (On-Demand)
 
-| ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
-|----|----------|-------|-----------------|-----------|-------|
 There is no Settings entry for this screen. Touch and hold the app icon on the
 home screen and pick **Manage toolchains** — `strings.xml` calls that the only
 entry point there is, and every row below starts from it.
+
+| ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
+|----|----------|-------|-----------------|-----------|-------|
 
 Run each command in the app's own terminal. `adb shell run-as` will not answer
 these: it runs in a different SELinux domain, one that is allowed to execute
@@ -213,13 +214,13 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 8 | | | |
 | Extensions | 6 | | | |
-| Background/Foreground | 7 | | | |
+| Background/Foreground | 8 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
-| Toolchains | 7 | | | |
-| Terminal & Tools | 10 | | | |
+| Toolchains | 6 | | | |
+| Terminal & Tools | 11 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **84** | | | |
+| **Total** | **85** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

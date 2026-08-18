@@ -8,7 +8,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 
 | Software | License | Source |
 |----------|---------|--------|
-| Code - OSS (VS Code Server + Web) | MIT — `LICENSE.txt` and `ThirdPartyNotices.txt` ship inside the server tree | Built from https://github.com/microsoft/vscode at the tag pinned in `VSCODE_VERSION`, with the patches in `patches/` and the branding in `branding/` applied before the build |
+| Code - OSS (VS Code Server + Web) | MIT — `LICENSE.txt` and `ThirdPartyNotices.txt` ship inside the server tree | Built from https://github.com/microsoft/vscode at the commit pinned in `VSCODE_COMMIT`, with the patches in `patches/` and the branding in `branding/` applied before the build |
 | GitHub Copilot Chat extension | See the license files inside `extensions/copilot/` in the server tree; its `@github/copilot` SDK dependency carries GitHub, Inc.'s own `LICENSE.md` | Produced by the same Code - OSS build |
 | Node.js | MIT | Termux build of `nodejs-lts`, https://github.com/nodejs/node |
 | npm | Artistic License 2.0 | https://github.com/npm/cli |

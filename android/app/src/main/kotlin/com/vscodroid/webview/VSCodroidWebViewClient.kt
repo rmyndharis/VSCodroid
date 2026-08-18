@@ -428,12 +428,25 @@ class VSCodroidWebViewClient(
         /**
          * Register a ServiceWorkerClient to intercept service worker script fetches.
          *
-         * Android WebView does NOT route service worker fetches through
-         * WebViewClient.shouldInterceptRequest — they bypass it entirely.
-         * Without this, webview iframes at *.vscode-cdn.net origins fail to
-         * register their service-worker.js (needed for vscode-resource: loading).
+         * Android WebView does not route service worker fetches through
+         * `WebViewClient.shouldInterceptRequest`; they bypass it entirely, so a
+         * page that registers a worker would fetch its script past every rule
+         * the client applies.
          *
-         * Must be called before the WebView loads any page that uses service workers.
+         * No page does, in this build. Patch 0005 sets `disableServiceWorker` to
+         * a constant true in the webview bootstrap, so `workerReady` resolves
+         * before it reaches `navigator.serviceWorker.register`, and nothing else
+         * in the packaged tree registers one. Webview resources reach the page
+         * through `shouldInterceptRequest` on this side instead: that is what
+         * makes them load, and this registration is not.
+         *
+         * Kept anyway, and cheaply. It costs one call at bridge setup and it is
+         * the thing that holds if patch 0005 is ever lost in a rebase or a future
+         * page registers a worker of its own -- in which case the fetch would
+         * otherwise be answered by no rules at all rather than by these.
+         *
+         * Must be called before the WebView loads any page, since a registration
+         * that has already happened is not intercepted retroactively.
          *
          * Takes the same roots and the same open-folder supplier as the client
          * constructor, and for the same reason: this is the second way a

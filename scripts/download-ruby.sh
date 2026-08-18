@@ -268,10 +268,11 @@ echo "=== Verifying Ruby binaries ==="
 # The link is only created once its target is known to exist, and that check is
 # not decoration. The verifier resolves a dependency by looking for its name in
 # a lib-dir, not by following it, so a dangling link here would answer for a
-# runtime that is not in the pack -- and the placement step above only warns
-# when a library is missing rather than failing. Without this the gate could
-# report all 104 objects satisfied while the one library they all need was
-# absent, which is precisely the failure it exists to catch.
+# runtime that is not in the pack: the gate would report every object satisfied
+# while the one library they all need was absent, which is precisely the failure
+# it exists to catch. The placement step above does fail on a library it cannot
+# find, so this is the second of two doors rather than the only one -- it covers
+# libruby arriving by some route that step does not police.
 if [ ! -f "$PACK_ASSETS/usr/lib/libruby.so" ]; then
     echo "  ERROR: libruby.so is not in the pack -- every binary here links it," >&2
     echo "         so the toolchain cannot work and the gate cannot be trusted" >&2

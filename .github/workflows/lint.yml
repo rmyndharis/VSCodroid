@@ -135,6 +135,12 @@ jobs:
       - name: Check no document offers a withdrawn toolchain
         run: python3 scripts/check-toolchain-claims.py
 
+      # Reads one Markdown file and no assets. The summary it checks is derived
+      # data kept by hand, and it is the only record of whether a manual test
+      # pass covered everything, so a wrong count is a coverage claim nobody made.
+      - name: Check the device-test checklist accounts for its own rows
+        run: python3 scripts/check-checklist-totals.py
+
       # `git apply --stat` parses a patch without needing the tree it applies to,
       # so the one thing that cannot be checked on a pull request -- whether the
       # patches still apply -- is separated here from the thing that can: whether

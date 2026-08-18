@@ -58,9 +58,6 @@ else
     exit 1
 fi
 
-# Initialize submodules
-echo ""
-echo "Initializing git submodules..."
 cd "$ROOT_DIR"
 
 # Create required directories

@@ -24,12 +24,23 @@ import java.io.File
 /**
  * How long generateSshKey waits for ssh-keygen before killing it.
  *
- * Generous relative to the work -- key generation is arithmetic and finishes in
- * well under a second -- because the number is not a performance budget. It is
- * the point at which "slow" becomes "never", and the caller is a WebView bridge
- * method whose JavaScript side has no timeout of its own.
+ * Bounded by the caller rather than by the work. Key generation is arithmetic
+ * and finishes in well under a second, so any figure above that is only about
+ * when "slow" becomes "never" -- and that decision is already made one layer up.
+ * Every call arrives through the bridge relay, whose JavaScript side rejects at
+ * five seconds (`sendBridgeCommand` in the bundled extension), so the user has
+ * been told the key failed long before a longer wait here ends.
+ *
+ * This was sixty, justified by the claim that the JavaScript side has no timeout
+ * of its own, which the shipped relay contradicts. What that bought was
+ * fifty-five further seconds of a blocked bridge thread after the answer was
+ * already given, and the bridge thread is shared: clipboard, storage and
+ * toolchain calls all queue behind it.
+ *
+ * Four rather than five, so this side gives up first and the failure is reported
+ * by the layer that knows why.
  */
-private const val KEYGEN_TIMEOUT_SECONDS = 60L
+private const val KEYGEN_TIMEOUT_SECONDS = 4L
 
 /**
  * How long generateSshKey waits for the stdout drain after the child has exited.
@@ -770,12 +781,11 @@ class AndroidBridge(
             drain.isDaemon = true
             drain.start()
 
-            // Bounded, because an unbounded wait here parks the JavaScript caller
-            // for as long as the binary hangs -- and the caller is a WebView
-            // bridge method, so what the user sees is a dialog that never
-            // returns and a UI element stuck mid-action. Key generation is
-            // arithmetic and finishes in well under a second; a minute means it
-            // is not going to finish at all.
+            // Bounded, and bounded under the relay's own five seconds so this
+            // side gives up first. An unbounded wait parks the bridge thread,
+            // which every other bridge call queues behind, and the JavaScript
+            // caller has already rejected by then, so the extra time buys a
+            // frozen clipboard and storage rather than a key.
             if (!process.waitFor(KEYGEN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 Logger.e(tag, "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s; killed")

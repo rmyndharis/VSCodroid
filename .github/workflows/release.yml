@@ -522,8 +522,8 @@ jobs:
           # install for every sideloaded user -- including ones already on it.
           registry=android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt
 
-          # [a-z0-9_] rather than [a-z]: the three names in the registry today
-          # are all letters, so the narrower pattern matched every one of them
+          # [a-z0-9_] rather than [a-z]: every name in the registry today is
+          # all letters, so the narrower pattern matched every one of them
           # and looked correct, while a toolchain_java21.zip added tomorrow
           # would not be extracted and so would never be looked for. A gate that
           # silently stops covering what it is added to cover is worse than one

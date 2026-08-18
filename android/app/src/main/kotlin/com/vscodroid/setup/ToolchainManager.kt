@@ -1238,9 +1238,12 @@ class ToolchainManager(private val context: Context) {
 
             sb.appendLine("# $name toolchain")
             for (key in env.keys()) {
+                // $HOME is deliberately left alone: the shell expands it when
+                // it sources this file, which is what the manifest intends. It
+                // used to be "replaced" with itself, which reads as a deliberate
+                // transformation and is not one.
                 val value = env.getString(key)
                     .replace("\$FILESDIR", "\$PREFIX/..")
-                    .replace("\$HOME", "\$HOME")
                 sb.appendLine("export $key=\"$value\"")
             }
             sb.appendLine()
