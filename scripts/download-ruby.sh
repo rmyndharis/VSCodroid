@@ -62,6 +62,11 @@ termux_resolve_packages resolved-ruby.tsv "${REQUIRED_PACKAGES[@]}"
 RUBY_VERSION="$(termux_pkg_version ruby)"
 echo "  Ruby version: $RUBY_VERSION"
 
+# Detect Ruby minor version for RUBYLIB path (e.g. 3.4.1-2 → 3.4.0)
+# Read here rather than beside the manifest it also feeds, because the shell
+# rewrite below reaches into usr/lib/ruby/$RUBY_MINOR and runs first.
+RUBY_MINOR=$(echo "$RUBY_VERSION" | sed 's/^[0-9]*://; s/\([0-9]*\.[0-9]*\)\..*/\1.0/')
+
 # --- Step 2: Download .deb files, each checked against the signed index ---
 termux_download_packages "${REQUIRED_PACKAGES[@]}"
 
@@ -151,6 +156,34 @@ find "$PACK_ASSETS/usr" -type d -name "man" -exec rm -rf {} + 2>/dev/null || tru
 AFTER_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 echo "  Ruby: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SIZE))K)"
 
+# --- Step 5b: Point the compiled-in default shells at one this app can run ---
+#
+# Termux builds Ruby for its own prefix, so three files in the pack name
+# /data/data/com.termux/files/usr/bin/sh. libruby.so and the pty extension carry
+# it as a C constant; mkmf.rb writes it into the SHELL line of every Makefile it
+# generates for a native gem extension. That directory belongs to another
+# application and this one can neither read nor create it.
+#
+# mkmf.rb is the one repointing make does not cover. make takes SHELL from the
+# makefile and never from the environment (measured: an assignment of a
+# nonexistent shell fails the build, the same value exported does nothing), so
+# the assignment mkmf emits overrides the value compiled into libmake.so and
+# every recipe line runs a shell that is not there. That path is latent rather
+# than live today: building a native gem also needs a C compiler, and none is
+# bundled. It is fixed here so the compiler is the only thing still missing.
+#
+# Before the ELF gate below, so what that gate examines is what ships. The
+# rewrite keeps the length of the two ELF objects and fails closed on all three:
+# a package that moves its default shell stops the build rather than shipping a
+# pack whose shell nobody has established.
+echo ""
+echo "Pointing compiled-in default shells at /system/bin/sh..."
+RUBY_LIB="$PACK_ASSETS/usr/lib/ruby/$RUBY_MINOR"
+python3 "$SCRIPT_DIR/patch-default-shell.py" \
+    "$PACK_ASSETS/usr/lib/libruby.so" \
+    "$RUBY_LIB/aarch64-linux-android/pty.so" \
+    "$RUBY_LIB/mkmf.rb"
+
 # --- Step 6: Write toolchain_ruby.json ---
 echo ""
 echo "Writing toolchain_ruby.json..."
@@ -183,9 +216,6 @@ for cmd in "$PACK_ASSETS/usr/bin"/*; do
 done
 BINARIES+=']'
 SCRIPT_WRAPPERS+='}'
-
-# Detect Ruby minor version for RUBYLIB path (e.g. 3.4.1-2 → 3.4.0)
-RUBY_MINOR=$(echo "$RUBY_VERSION" | sed 's/^[0-9]*://; s/\([0-9]*\.[0-9]*\)\..*/\1.0/')
 
 cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
@@ -289,6 +319,16 @@ if [ "$verify_failures" -gt 0 ]; then
     exit 1
 fi
 echo "  $verify_checked binaries verified: architecture, dependencies, 16 KB alignment"
+
+# The same question asked of the pack as a whole, rather than of the three files
+# named in step 5b. Naming files at one call site is the shape that misses the
+# fourth, and here that fourth would be a stdlib extension picking up Termux's
+# shell after a version bump, found on a device rather than in this log. Every
+# regular file at any depth, which is the whole pack: after step 5b it holds
+# none, and that is the invariant this keeps true.
+echo ""
+echo "=== Verifying no file in the pack names a shell it cannot reach ==="
+python3 "$SCRIPT_DIR/patch-default-shell.py" --check "$PACK_ASSETS"
 
 # --- Step 8: Size summary ---
 echo ""

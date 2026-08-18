@@ -296,6 +296,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native terminal and file-watcher addons are built from the same versions as the JavaScript beside them, and the build fails on a mismatch.
 - Every shell command an extension runs failed. The bundled runtime's default shell was a path inside Termux's data directory, which this app cannot reach; it now uses Android's own.
 - Every make target that runs a command failed, and git hooks, `!` aliases, filters and the pager with it: five more bundled tools carried that same unreachable shell.
+- Anything the bundled Python or Ruby ran through a shell failed on a path inside another app's data directory: `subprocess(shell=True)`, Ruby's `system` and backticks. A Ruby toolchain installed before this release keeps the old files until it is removed and installed again.
 
 **Storage management and reporting**
 

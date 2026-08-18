@@ -156,6 +156,30 @@ else
     exit 1
 fi
 
+# --- Step 5b: Point the compiled-in default shell at one this app can run ---
+#
+# Termux builds Python for its own prefix, so subprocess.py names
+# /data/data/com.termux/files/usr/bin/sh as the shell _execute_child hands to
+# execve for shell=True. That directory belongs to another application and this
+# one cannot reach it, so every subprocess.run(cmd, shell=True) from the bundled
+# interpreter raises FileNotFoundError on a path the caller never chose, as does
+# every library that reaches for a shell underneath. $SHELL does not rescue it:
+# the constant becomes argv[0] directly.
+#
+# Fails closed, like every other call to this script. If Termux changes where
+# that default comes from and the line stops matching, the build stops here
+# rather than shipping an interpreter whose shell nobody has established.
+#
+# One named file rather than a sweep of the stdlib, which is deliberate. Three
+# other files under it carry the same path in a `#!` line (config-*/makesetup,
+# config-*/install-sh, ctypes/macholib/fetch_macholib), none of them an
+# importable module, and SELinux refuses execve on any script under filesDir, so
+# those shebangs are dead text. Sweeping the directory would fail a build that
+# is correct.
+echo ""
+echo "Pointing the stdlib's default shell at /system/bin/sh..."
+python3 "$SCRIPT_DIR/patch-default-shell.py" "$STDLIB_DST/subprocess.py"
+
 # --- Step 6: Place pip ---
 echo ""
 echo "Placing pip..."
