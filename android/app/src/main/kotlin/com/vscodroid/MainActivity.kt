@@ -112,6 +112,15 @@ class MainActivity : AppCompatActivity() {
     private var watchedSafFolder: Pair<File, Uri>? = null
 
     /**
+     * The folder [openSafFolder] is currently syncing, if any.
+     *
+     * `navigateToFolder` loads `/?folder=..&tkn=..` and the server redirects, so
+     * two page-finished callbacks arrive per switch. Without this, the second one
+     * sees a watcher that is not yet installed and starts the same sync again.
+     */
+    private var syncingFolder: Uri? = null
+
+    /**
      * The directories this app publishes into the WebView, resolved once.
      *
      * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
@@ -590,7 +599,46 @@ class MainActivity : AppCompatActivity() {
      * 2. Syncs folder contents to a local mirror (with progress dialog)
      * 3. Reloads VS Code with the mirror path
      */
-    private fun handleSafFolderSelected(uri: Uri) {
+    /**
+     * Starts watching a mirror the workbench opened without going through Kotlin.
+     *
+     * VS Code switches folders by navigating its own WebView: Open Recent, the
+     * Get Started list and Open Folder all build a `?folder=` URL and load it.
+     * The picker is the only thing that ever started a watcher, so a folder
+     * reached any of those ways was served read-write with nothing syncing it.
+     * Every save, every `git checkout`, every terminal write stayed in the mirror
+     * and never reached the device folder, and nothing on screen said so. If the
+     * grant later lapsed, the launch reclaim deleted the mirror and the work with
+     * it, having never existed anywhere the user could see.
+     *
+     * Reopening through the picker did not rescue those edits either: the sync
+     * keeps a mirror copy that is newer and moves on without uploading it, and
+     * writes only enter the upload journal from a write-back, so nothing retried.
+     *
+     * Three things are checked before acting, and each excludes a different way
+     * of doing this twice: a path that is not under any mirror is an ordinary
+     * project folder; a mirror already watched needs nothing; and a folder this
+     * activity is itself mid-sync on will start its own watcher when it finishes.
+     */
+    private fun adoptWorkbenchFolder(folderPath: String) {
+        val folder = safManager.folderForOpenedPath(folderPath) ?: return
+        if (watchedSafFolder?.first?.path == folder.mirrorPath) return
+        if (syncingFolder == folder.uri) return
+        Logger.i(tag, "Adopting a device folder the workbench opened on its own")
+        openSafFolder(folder.uri, navigate = false)
+    }
+
+    private fun handleSafFolderSelected(uri: Uri) = openSafFolder(uri, navigate = true)
+
+    /**
+     * Syncs a device folder down, starts watching it, and points the editor at it.
+     *
+     * @param navigate whether to load the mirror in the WebView afterwards. False
+     *   when the workbench has already navigated there itself, which is how Open
+     *   Recent, the Get Started list and Open Folder reach a mirror: reloading
+     *   would throw away the page the user just opened.
+     */
+    private fun openSafFolder(uri: Uri, navigate: Boolean) {
         Logger.i(tag, "SAF folder selected: $uri")
 
         // Persist permission so we can access this folder after app restart
@@ -607,6 +655,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
 
         val previouslyWatched = watchedSafFolder
+        syncingFolder = uri
 
         lifecycleScope.launch {
             try {
@@ -648,7 +697,7 @@ class MainActivity : AppCompatActivity() {
                 dialog.dismiss()
 
                 // Reload VS Code with the mirror directory
-                if (serverPort > 0) {
+                if (navigate && serverPort > 0) {
                     navigateToFolder(serverPort, mirrorDir.absolutePath)
                 }
             } catch (e: CancellationException) {
@@ -691,6 +740,12 @@ class MainActivity : AppCompatActivity() {
                     "Failed to open folder: ${e.message}.",
                     restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
+            } finally {
+                // Cleared however this ends, cancellation included: a folder left
+                // marked as syncing would make every later page load into its
+                // mirror a no-op, which is the defect this marker exists to avoid
+                // rather than one to introduce.
+                if (syncingFolder == uri) syncingFolder = null
             }
         }
     }
@@ -1329,7 +1384,10 @@ class MainActivity : AppCompatActivity() {
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
             onPageLoaded = { url ->
-                folderFromUrl(url)?.let { openWorkspaceFolder = it }
+                folderFromUrl(url)?.let {
+                    openWorkspaceFolder = it
+                    adoptWorkbenchFolder(it)
+                }
                 // Only for a page the server served. onPageFinished fires for
                 // every main-frame load under this client, and one of them is the
                 // server-gave-up page, which is a local `about:blank` document

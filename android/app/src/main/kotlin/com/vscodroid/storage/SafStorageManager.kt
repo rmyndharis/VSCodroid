@@ -90,6 +90,18 @@ class SafStorageManager(private val context: Context) {
      * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
      * and in [revokePermission] now.
      */
+    /**
+     * The device folder whose mirror the workbench has opened, if it opened one.
+     *
+     * VS Code switches folders by navigating its own WebView, so a folder reached
+     * through Open Recent, the Get Started list or Open Folder never passes
+     * through the picker and never starts a watcher. Kotlin sees only the
+     * finished page load, and this is what turns that URL back into the grant it
+     * belongs to.
+     */
+    fun folderForOpenedPath(opened: String): SafFolderInfo? =
+        folderForOpenedPath(getPersistedFolders(), opened)
+
     fun getPersistedFolders(): List<SafFolderInfo> {
         val json = prefs.getString(KEY_RECENT_FOLDERS, "[]") ?: "[]"
         val array = JSONArray(json)
@@ -458,6 +470,25 @@ class SafStorageManager(private val context: Context) {
         ): Boolean {
             val prefix = mirrorsRoot + File.separator + mirrorName + File.separator
             return strandedPaths.none { it.startsWith(prefix) }
+        }
+
+        /**
+         * The persisted folder whose mirror contains [opened], if any.
+         *
+         * The subdirectory case is not a nicety. Open Folder can point at a
+         * directory *inside* a mirror, and the watcher's root has to be the
+         * mirror root or every relative path the sync computes is resolved
+         * against the wrong base.
+         *
+         * The separator matters for the same reason it does in the reclaim gate:
+         * mirror names are a hash prefix, so one being a prefix of another is
+         * ordinary, and a bare `startsWith` would match the wrong folder.
+         */
+        internal fun folderForOpenedPath(
+            folders: List<SafFolderInfo>,
+            opened: String,
+        ): SafFolderInfo? = folders.firstOrNull {
+            opened == it.mirrorPath || opened.startsWith(it.mirrorPath + File.separator)
         }
 
         internal val MIRROR_ENTRY =
