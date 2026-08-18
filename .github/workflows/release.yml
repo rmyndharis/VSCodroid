@@ -203,6 +203,14 @@ jobs:
       - name: Check no document offers a withdrawn toolchain
         run: python3 scripts/check-toolchain-claims.py
 
+      # Needs real history, which is why it is here and not in lint.yml: that
+      # workflow takes actions/checkout's default single-commit clone, where
+      # `git log -1 -- <file>` reports the tip for everything it can see. The
+      # check refuses a shallow clone rather than skipping, so a wrong placement
+      # fails loudly instead of reporting a pass it never earned.
+      - name: Check the shipped documents are not dated before their contents
+        run: python3 scripts/check-document-dates.py
+
       - name: Check the device suite can still read what it asserts
         run: bash scripts/device-test.sh --self-check
 
@@ -253,7 +261,7 @@ jobs:
             toolchains/build/npm/
             toolchains/extensions/
             toolchains/musl/
-          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh') }}
+          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py') }}
           restore-keys: |
             downloads-
 

@@ -540,6 +540,68 @@ val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
 //
 // 0.56s on the real 699 MB tree, no network: one walk for native binaries, plus
 // product.json and workbench.css.
+/**
+ * Refuses a packaged tree whose native addons are still the upstream glibc builds.
+ *
+ * Nothing else asks this. `verifyServerTree` reads `e_machine` and stops there,
+ * which is all it *can* ask: it also runs from `build-vscode-oss.sh` and
+ * `fetch-vscode-oss.sh`, on trees whose addons are legitimately still glibc
+ * because the overlay has not happened yet. `verifyBundledBinaries` sweeps
+ * `jniLibs/` and passes `assets/usr/lib` only as a place to resolve names from,
+ * never opening those files. So a tree carrying the pristine `pty.node`,
+ * `watcher.node` and `vscode-sqlite3.node` packaged green, and the failure was a
+ * dlopen on the device with no build-time sign of it.
+ *
+ * Reachable in ordinary use rather than in theory: `package-assets.sh` copies
+ * `server/vscode-reh` over `assets/vscode-reh` wholesale, so re-running it after
+ * the addon build reinstates every upstream binary. The CI release path is
+ * ordered so this cannot happen; a local build has no such protection.
+ *
+ * `gen-glibc-forwarders.py` already answers exactly this question, and is
+ * already the gate at the end of `build-glibc-shim.sh`. A second implementation
+ * would be the drift its own header warns about.
+ */
+val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
+    group = "verification"
+    description = "Checks the packaged native addons were built for Bionic, not glibc."
+
+    val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/gen-glibc-forwarders.py",
+        "--scan", "android/app/src/main/assets/vscode-reh",
+        "--scan", "android/app/src/main/assets/extensions",
+        "--verify-against", "android/app/src/main/assets/usr/lib",
+    )
+
+    // Same reasoning as verifyServerTree: the lint and unit-test jobs stub an
+    // empty assets tree so Gradle can configure, and a tree that was never
+    // downloaded has no addons to judge.
+    onlyIf { entryPoint.isFile }
+
+    isIgnoreExitValue = true
+    val addonResult = executionResult
+    doLast {
+        if (addonResult.get().exitValue != 0) {
+            throw GradleException(
+                "The packaged tree carries native addons that cannot load on Android.\n" +
+                    "The ERROR lines above name them and what they need.\n" +
+                    "\n" +
+                    "Two causes, both ordinary:\n" +
+                    "  * scripts/build-native-addons.sh has not run for this tree, or\n" +
+                    "  * package-assets.sh ran after it and copied the upstream tree\n" +
+                    "    back over the overlay. It must run before, not after.\n" +
+                    "\n" +
+                    "scripts/build-all.sh runs them in the order that works. If the\n" +
+                    "missing half is the compatibility shim rather than an addon, that is\n" +
+                    "scripts/build-glibc-shim.sh, which download-termux-tools.sh removes\n" +
+                    "as a side effect of refreshing its own libraries."
+            )
+        }
+    }
+}
+
 val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     group = "verification"
     description = "Checks the server tree in assets/ is one this app can run."
@@ -740,6 +802,83 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
 // The pack is a directory in the checkout whether or not anything has filled it:
 // its manifest is tracked and its payload is downloaded, so usr/ is what says a
 // download has run.
+/**
+ * Two gates that examined the asset packs and the finished bundle only as
+ * workflow steps, so their correctness rested on position in a step list.
+ *
+ * `release.yml` orders them correctly and has no conditional steps, so a
+ * tag-driven release meets both. What meets neither is a local `./gradlew
+ * bundleRelease`, which CONTRIBUTING documents as the way to build for Play. The
+ * reasoning against relying on order is already written a few lines below, about
+ * a different pack check: ordering is not a gate.
+ *
+ * The other two release-time checks are deliberately not wired here.
+ * `check-termux-licenses.py` fetches upstream build files over the network, and
+ * a gate that needs the internet on every local build is one that gets switched
+ * off. `check-library-attribution.py` already runs unguarded on every pull
+ * request.
+ */
+val checkPackOverlap = tasks.register<Exec>("checkPackOverlap") {
+    group = "verification"
+    description = "Checks no asset pack ships a file the base module already ships."
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("python3", "scripts/check-pack-overlap.py")
+
+    // Armed by the payload, the same predicate and the same reason as the Ruby
+    // sweep below: comparing an empty pack against the base module reports no
+    // overlap for the wrong reason.
+    onlyIf { rubyPackHoldsPayload() }
+
+    isIgnoreExitValue = true
+    val overlapResult = executionResult
+    doLast {
+        if (overlapResult.get().exitValue != 0) {
+            throw GradleException(
+                "An asset pack ships a file the base module already ships. The\n" +
+                    "output above names it. Play delivers the pack over the base\n" +
+                    "install, so the duplicate wins on a Play device and loses on a\n" +
+                    "sideloaded one, and the two disagree about which build a library\n" +
+                    "came from.\n" +
+                    "\n" +
+                    "Re-run the download script for the pack it names."
+            )
+        }
+    }
+}
+
+val checkBundleSize = tasks.register<Exec>("checkBundleSize") {
+    group = "verification"
+    description = "Checks the finished bundle against the limits Play enforces."
+
+    val aab = layout.buildDirectory.file("outputs/bundle/release/app-release.aab")
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/check-bundle-size.py",
+        "android/app/build/outputs/bundle/release/app-release.aab",
+    )
+
+    // The bundle is a Gradle product, so this cannot be a dependency of the
+    // packaging step: it reads what that step produces. Wired as `finalizedBy`
+    // on bundleRelease below, and guarded here so an invocation from anywhere
+    // else does not fail for a file that was never built.
+    onlyIf { aab.get().asFile.isFile }
+
+    isIgnoreExitValue = true
+    val sizeResult = executionResult
+    doLast {
+        if (sizeResult.get().exitValue != 0) {
+            throw GradleException(
+                "The bundle is over a limit Play enforces. The output above names\n" +
+                    "which one and by how much. The base module cap is a compressed\n" +
+                    "download size, so it moves with what compresses, not only with\n" +
+                    "what is added."
+            )
+        }
+    }
+}
+
 fun rubyPackHoldsPayload(): Boolean =
     File(rootProject.projectDir, "toolchain_ruby/src/main/assets/usr").isDirectory
 
@@ -813,6 +952,15 @@ tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
         dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
-            verifyBundledShellPaths, verifyRubyPackShellPaths)
+            verifyBundledShellPaths, verifyRubyPackShellPaths, verifyNativeAddons,
+            checkPackOverlap)
         dependsOn(bundleNotices)
     }
+
+// The finished bundle is a Gradle product, so the edge is `finalizedBy` rather
+// than `dependsOn`: the file does not exist until bundleRelease has run. Writing
+// it the other way round would either check a file that is not there yet or, if
+// declared both ways, make a cycle.
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    finalizedBy(checkBundleSize)
+}

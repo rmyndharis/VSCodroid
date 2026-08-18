@@ -76,6 +76,19 @@ WEAK_OPTIONAL = {
 # different and much larger undertaking.
 UNSUPPORTED_LIBS = {"libstdc++.so.6"}
 
+# Objects that legitimately reach the "cannot help" verdict in a correct tree.
+#
+# Every other addon that needs libstdc++ is one this project rebuilds for Bionic
+# (node-pty, @parcel/watcher, @vscode/sqlite3, all linked -static-libstdc++ by
+# build-native-addons.sh) or replaces outright (@vscode/spdlog, whose .node that
+# script deletes). So in a tree that has been through the overlay, kerberos is
+# the only one left, and it is knowingly unfixable rather than merely unfixed.
+#
+# Anything else appearing here means the packaged tree still carries the upstream
+# glibc build of an addon, which loads on no Android device. Named individually
+# because a count would be satisfied by the wrong four.
+TOLERATED_BLOCKED = {"kerberos.node"}
+
 # The glibc loader appears in DT_NEEDED of objects built against it. Bionic's
 # linker is already the one running, so a stub carrying the name is enough to
 # satisfy the entry.
@@ -645,6 +658,7 @@ def main():
         return 1
 
     inputs = list(args.inputs)
+    blocked = []
     if args.scan:
         discovered, blocked = scan(args.scan)
         for path in discovered:
@@ -663,6 +677,29 @@ def main():
     if not inputs:
         return 0
     if args.verify_against:
+        # Only when checking a tree that has been through the overlay. On the
+        # generate path a blocked object is expected: this runs before
+        # build-native-addons.sh has replaced anything, and refusing there would
+        # fail every correct build.
+        unexpected = [
+            (path, libs) for path, libs in blocked
+            if path.name not in TOLERATED_BLOCKED
+        ]
+        if unexpected:
+            print(
+                f"  ERROR: {len(unexpected)} addon(s) in the packaged tree are still "
+                "the upstream glibc build, which loads on no Android device:",
+                file=sys.stderr,
+            )
+            for path, libs in unexpected:
+                print(f"    {path}: needs {', '.join(libs)}", file=sys.stderr)
+            print(
+                "  -> run scripts/build-native-addons.sh, and note that "
+                "package-assets.sh copies the pristine tree back over the overlay, "
+                "so it has to run before this and not after",
+                file=sys.stderr,
+            )
+            return 1
         return verify_shipped(inputs, args.verify_against)
     return generate(inputs, args.out)
 

@@ -246,8 +246,44 @@ python3 "$SCRIPT_DIR/patch-default-shell.py" \
 # --- Step 5: Place shared libraries in assets/usr/lib/ ---
 echo ""
 echo "Placing shared libraries in assets/usr/lib/..."
-# Clean previous libs (avoids stale versioned files from earlier runs)
-rm -f "$ASSETS_DIR/usr/lib"/*.so* 2>/dev/null || true
+# Clean previous libs (avoids stale versioned files from earlier runs).
+#
+# Only the ones this script places. `usr/lib` has two owners: the Termux
+# libraries below, and the glibc compatibility shim that build-glibc-shim.sh
+# writes there. A blanket `*.so*` swept the shim away as well, and nothing
+# rebuilt it or noticed it was gone -- the sweep at the end of this script runs
+# after the wipe, so it examines only what this script just wrote, and absence is
+# invisible to it. What that costs is every addon that names a glibc soname
+# failing at dlopen on the device.
+#
+# The list is read out of the shim's own script rather than copied, so the two
+# cannot drift. A `*.so*` that is not the shim's is still removed, which is the
+# stale-version case this sweep exists for.
+SHIM_STUBS=$(
+    awk '/^STUBS=\(/,/\)/' "$SCRIPT_DIR/build-glibc-shim.sh" \
+        | tr ' ()' '\n\n\n' \
+        | grep -E '^(lib|ld-)[A-Za-z0-9._+-]+$' \
+        | sort -u
+)
+SHIM_STUB_COUNT=$(printf '%s\n' "$SHIM_STUBS" | grep -c . || true)
+# The count is asserted rather than assumed. An extraction that silently reads
+# half the array is the failure this whole block exists to prevent, wearing the
+# shape of success: the names it missed would be swept away exactly as before.
+# Bump this deliberately when build-glibc-shim.sh gains or loses a stub.
+if [ "$SHIM_STUB_COUNT" -ne 10 ]; then
+    echo "  ERROR: read $SHIM_STUB_COUNT stub names from build-glibc-shim.sh," >&2
+    echo "         expected 10. Refusing to sweep usr/lib rather than delete" >&2
+    echo "         part of a shim this script does not own and cannot rebuild." >&2
+    exit 1
+fi
+SHIM_OUTPUTS=$(printf 'libglibc-shim.so\n%s\n' "$SHIM_STUBS")
+for lib in "$ASSETS_DIR/usr/lib"/*.so*; do
+    [ -e "$lib" ] || continue
+    if printf '%s\n' "$SHIM_OUTPUTS" | grep -qxF "$(basename "$lib")"; then
+        continue
+    fi
+    rm -f "$lib"
+done
 mkdir -p "$ASSETS_DIR/usr/lib"
 
 # Reads DT_SONAME out of an ELF shared object. Used to catch the rename trap
