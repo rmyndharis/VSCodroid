@@ -116,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The privacy policy describes Android backup, which copies `~/.vscodroid/data/Machine` to your Google account. SSH keys, tokens, projects and toolchains are excluded by an allowlist.
 - Two checks hold the bridge API documentation to the code: one reads the compiled class for method existence, the other reads source for parameter names, order, nullability and return types.
 - Two more key row pages carry F1 to F12, Home, End, PgUp and PgDn. None were reachable by touch, so a shortcut bound to one needed a hardware keyboard.
+- Rebuilding the Termux-sourced binaries no longer needs a network: `TERMUX_OFFLINE=1` checks the cached index against a stored signature, re-judged in full rather than trusted for having passed once.
 
 ### Security
 
@@ -134,6 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The loopback DNS proxy requires a per-boot token. Any installed app could previously use it as an open forwarder attributed to VSCodroid, and a rejected tunnel no longer leaves a connection pinned open.
 - The musl loader is anchored to Alpine's signing key and the signed chain followed to the payload. An Alpine index checksum covers only metadata, so the old check would have accepted a modified loader.
 - Bundled binaries are traced to a signature from the project that built them, not a checksum served by the same host. A signed index older than a month is refused to stop replay.
+- That index must also name the repository this build takes packages from. One key signs all of Termux's repositories, so a sibling repository's index verified clean.
 - A server tarball downloaded from a release is checked against the digest that release records. Only a cached copy was, so freshly fetched bytes reached the APK unexamined.
 - The bundled npm tarball and the Node headers are checked against digests recorded here, not a checksum the same host serves. That catches later substitution, not a first one.
 - Each bundled extension is checked against a digest recorded here, not one the registry serves beside the VSIX. A digest that moves under a fixed version fails the build.

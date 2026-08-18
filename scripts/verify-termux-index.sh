@@ -27,9 +27,20 @@ set -euo pipefail
 # Why the third-party mirror can stay. TERMUX_MIRROR defaults to a mirror
 # because packages.termux.dev is frequently down, and that was a real tradeoff
 # while trust came from the host. It stops being one here: the signature is
-# upstream's, byte-identical on both hosts (14016 bytes on each, measured), and
-# a mirror cannot forge it. Choosing a mirror becomes an availability decision
-# with no security content.
+# upstream's whichever host serves it, and a mirror cannot forge it. Choosing a
+# mirror becomes an availability decision with no security content. It is not a
+# choice of the same bytes, though: each host publishes at its own sync point,
+# and on 2026-08-18 the two served indexes 110 minutes apart. That is what the
+# refetch at the bottom of this file is for.
+#
+# Rebuilding without a network. TERMUX_OFFLINE=1 reads the InRelease kept beside
+# the index instead of downloading one. Nothing is skipped by taking that route:
+# the cached copy is put through the same verdicts, and it is only ever written
+# after passing every one of them, so it is by construction a file an online run
+# had already accepted. It is an explicit opt-in rather than a fallback on a
+# failed curl, because a flaky network would otherwise choose it without anyone
+# asking, and the freshness limit below would stop being a bound on how old an
+# index this build will accept.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -37,6 +48,19 @@ PACKAGES_URL="${1:?usage: verify-termux-index.sh <packages_url> <local_packages_
 PACKAGES_FILE="${2:?usage: verify-termux-index.sh <packages_url> <local_packages_file>}"
 
 KEY_FILE="$ROOT_DIR/scripts/termux-repo-key.asc"
+
+# Only 0 and 1 are understood. A value this does not recognise is refused rather
+# than read as "off": the two modes differ in whether a signature is fetched or
+# recalled, and a misspelt opt-in would otherwise surface much later as an
+# ordinary download failure, pointing at the network rather than at the typo.
+OFFLINE="${TERMUX_OFFLINE:-0}"
+case "$OFFLINE" in
+    0|1) ;;
+    *)
+        echo "  ERROR: TERMUX_OFFLINE must be 0 or 1, got '$OFFLINE'" >&2
+        exit 1
+        ;;
+esac
 
 # The pin. A public key is self-verifying against its fingerprint, so what
 # matters is not where the bytes came from but that this value was reviewed.
@@ -52,6 +76,21 @@ KEY_FILE="$ROOT_DIR/scripts/termux-repo-key.asc"
 # failure. If Termux ever rotates, this fails loudly with the new fingerprint
 # printed, which is the intended way to learn about it.
 PINNED_FPR="CC72CF8BA7DBFA0182877D045A897D96E57CF20C"
+
+# The repository, pinned for the same reason the key is: one key signs all of
+# Termux's repositories, so a valid signature says only that Termux published
+# this, never which of its repositories it came from. Online that gap is covered
+# by the URL, since the signature is fetched from the caller's own BASE_URL.
+# Offline there is no fetch to bind it to, and nothing recorded next to a file
+# can bind it either. Reproduced 2026-08-18: termux-main-21's own InRelease and
+# Packages, dropped into the work directory, verified clean for a caller that
+# had asked for termux-main. Suite does not separate them (both read "stable"),
+# and neither does the entry name; Origin does. Compared in both modes, because
+# a check that runs in one is a check the next reader assumes runs in both.
+#
+# Like the key, this is stated in the signed payload, carries no expiry, and
+# fails loudly with the value it found if Termux ever renames the repository.
+PINNED_ORIGIN="termux-main stable"
 
 # InRelease has no Valid-Until (measured -- it carries Origin, Label, Suite,
 # Codename, Date, Architectures, Components, Description and nothing else), so
@@ -97,6 +136,21 @@ esac
 [ -f "$KEY_FILE" ] || { echo "  ERROR: pinned key missing: $KEY_FILE" >&2; exit 1; }
 [ -f "$PACKAGES_FILE" ] || { echo "  ERROR: no index to verify: $PACKAGES_FILE" >&2; exit 1; }
 
+# The verified InRelease is kept beside the index it covers, so the pair travels
+# as a pair: a work directory holding a Packages file holds the signed file that
+# Packages was measured against. Resolved through the directory's absolute path,
+# which is why this waits for the check above: a relative index leaves the two
+# in the same place either way, but "./InRelease" in a build log names no
+# directory, and this path is printed on the way out and in every refusal.
+#
+# What keeps a copy from another Termux repository out is the Origin check
+# below, and nothing here. Measured 2026-08-18: termux-main-21 is signed by the
+# same pinned key, names main/binary-aarch64/Packages too, and its index hashes
+# to its own line for it, so the pair is self-consistent and answered every
+# question this file asked. Its Suite reads "stable" as well, so comparing that
+# would not have separated the two either.
+CACHED_INRELEASE="$(cd "$(dirname "$PACKAGES_FILE")" && pwd)/InRelease"
+
 # Split at the LAST /dists/ so the suite and the entry name are derived from the
 # caller's URL rather than hardcoded. A hardcoded main/binary-aarch64/Packages
 # would keep verifying that entry after a script moved to another architecture,
@@ -106,6 +160,17 @@ REST="${PACKAGES_URL##*/dists/}"
 SUITE="${REST%%/*}"
 ENTRY="${REST#*/}"
 INRELEASE_URL="$BASE_URL/dists/$SUITE/InRelease"
+
+# Named once, and printed on the way out as well as in every refusal, so the
+# output always says which copy the verdict was reached against. A check in this
+# script has gone missing before while the run still printed success and exited
+# 0; an offline branch is a second route to that, and a line naming the source
+# is what makes the two runs tell themselves apart.
+if [ "$OFFLINE" = 1 ]; then
+    INRELEASE_SOURCE="$CACHED_INRELEASE (cached, TERMUX_OFFLINE=1)"
+else
+    INRELEASE_SOURCE="$INRELEASE_URL"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -125,11 +190,34 @@ check_index() {
     # an `if !`, which disables set -e for everything inside it, so a failed
     # download fell through to gpg and reported "the signature did not verify"
     # for a file that was never fetched -- measured against a 404, and it points
-    # the reader at the signing key when the problem is the URL.
-    if ! curl -sL --fail --show-error -o "$TMP/InRelease" "$INRELEASE_URL"; then
+    # the reader at the signing key when the problem is the URL. The cached
+    # branch answers for itself for the same reason: a copy that is not there is
+    # a missing file, not a bad signature.
+    if [ "$OFFLINE" = 1 ]; then
+        if [ ! -f "$CACHED_INRELEASE" ]; then
+            cat >&2 <<EOF
+
+  TERMUX_OFFLINE=1, but no verified InRelease is cached at
+
+      $CACHED_INRELEASE
+
+  One run with a network writes it, after that run has judged the signature,
+  the signing key, the repository named inside it and the age. Until then there
+  is nothing here to check the index against, and the index names the digest of
+  every binary that ends up on a user's device.
+EOF
+            exit 1
+        fi
+        # Copied rather than read in place, so every step below reads the same
+        # path whichever way the file arrived, and so a concurrent build
+        # rewriting the cache cannot change the bytes under a check that has
+        # already started.
+        cp "$CACHED_INRELEASE" "$TMP/InRelease" || exit 1
+    elif ! curl -sL --fail --show-error -o "$TMP/InRelease" "$INRELEASE_URL"; then
         echo "  ERROR: could not download $INRELEASE_URL" >&2
         echo "         The index cannot be checked without it. Try another" >&2
-        echo "         mirror with TERMUX_MIRROR." >&2
+        echo "         mirror with TERMUX_MIRROR, or rebuild from a cached and" >&2
+        echo "         already verified copy with TERMUX_OFFLINE=1." >&2
         exit 1
     fi
 
@@ -138,7 +226,7 @@ check_index() {
     # file as downloaded would also read anything appended after the signature.
     if ! gpg --batch --status-fd 3 --decrypt "$TMP/InRelease" \
             3>"$TMP/status" 2>/dev/null > "$TMP/payload"; then
-        echo "  ERROR: the InRelease signature at $INRELEASE_URL did not verify" >&2
+        echo "  ERROR: the InRelease signature at $INRELEASE_SOURCE did not verify" >&2
         sed 's/^/    /' "$TMP/status" >&2
         exit 1
     fi
@@ -165,6 +253,28 @@ EOF
         exit 1
     fi
 
+    # Read from the payload, so it is a claim the signature covers. Absent
+    # Origin fails the comparison rather than skipping it, the same way a
+    # missing Date does below.
+    local origin
+    origin="$(awk -F': ' '/^Origin: /{print $2; exit}' "$TMP/payload")"
+    if [ "$origin" != "$PINNED_ORIGIN" ]; then
+        cat >&2 <<EOF
+
+  The signed InRelease is not the repository this build reads packages from.
+
+      names  $origin
+      pinned $PINNED_ORIGIN
+      from   $INRELEASE_SOURCE
+
+  The signature above is genuine; every Termux repository carries the same one.
+  Point TERMUX_MIRROR at a mirror of termux-main, or, if an offline run is
+  reading a copy some other repository left in the work directory, delete it
+  and re-run once with a network.
+EOF
+        exit 1
+    fi
+
     local index_date age_days
     index_date="$(awk -F': ' '/^Date: /{print $2; exit}' "$TMP/payload")"
     if [ -z "$index_date" ]; then
@@ -173,7 +283,7 @@ EOF
         # Date, so its absence is an anomaly rather than permission to skip the
         # only freshness signal there is.
         echo "  ERROR: the signed InRelease carries no Date, so its age cannot be" >&2
-        echo "         judged: $INRELEASE_URL" >&2
+        echo "         judged: $INRELEASE_SOURCE" >&2
         exit 1
     fi
 
@@ -187,7 +297,7 @@ t = email.utils.parsedate_to_datetime(sys.argv[1]).timestamp()
 print(int((time.time() - t) // 86400))
 ' "$index_date" 2>/dev/null)"; then
         echo "  ERROR: could not read the InRelease date '$index_date' from" >&2
-        echo "         $INRELEASE_URL" >&2
+        echo "         $INRELEASE_SOURCE" >&2
         exit 1
     fi
     if [ "$age_days" -gt "$MAX_INDEX_AGE_DAYS" ]; then
@@ -195,15 +305,28 @@ print(int((time.time() - t) // 86400))
 
   The Termux index is signed but stale -- $age_days days old, limit $MAX_INDEX_AGE_DAYS.
 
-      $INRELEASE_URL
+      $INRELEASE_SOURCE
       dated $index_date
 
   A valid signature does not stop a host replaying an old index, which would
   hold every build to whatever was current then. Try another mirror with
   TERMUX_MIRROR, or raise TERMUX_INDEX_MAX_AGE_DAYS if upstream really has
-  paused.
+  paused. A cached copy is bounded by exactly the same limit, and only a run
+  with a network can replace it.
 EOF
         exit 1
+    fi
+
+    # Kept here and nowhere else. Everything above has returned a verdict on the
+    # signature, on the signing key, on the repository named inside it and on the
+    # age, and everything below is about the Packages file rather than about this
+    # one, so a file at this path is by construction one that passed every one of
+    # them. That is what lets the offline run re-check a stored copy instead of
+    # trusting it.
+    if [ "$OFFLINE" != 1 ] && ! cp "$TMP/InRelease" "$CACHED_INRELEASE"; then
+        echo "  WARNING: could not keep the verified InRelease at" >&2
+        echo "           $CACHED_INRELEASE; TERMUX_OFFLINE=1 will find nothing" >&2
+        echo "           to read there." >&2
     fi
 
     # Read only inside the SHA256 block. Every path in this file appears four
@@ -218,7 +341,7 @@ EOF
 
     if [ -z "$EXPECTED" ]; then
         echo "  ERROR: signed InRelease carries no SHA256 for $ENTRY" >&2
-        echo "         $INRELEASE_URL" >&2
+        echo "         $INRELEASE_SOURCE" >&2
         exit 1
     fi
 
@@ -235,6 +358,29 @@ EOF
 # and checks again, against a freshly fetched InRelease too, in case upstream
 # published between the two. Only the second failure is a failure.
 if ! check_index; then
+    # The refetch below is exactly wrong offline, and not only because the
+    # download would fail: it replaces the Packages bytes while the signature
+    # they are measured against stays the stored one, so the second call would
+    # compare a fresh index against an older signed digest and report a
+    # mismatch that says nothing about either file. The pair is only ever
+    # refreshed together, which needs a network.
+    if [ "$OFFLINE" = 1 ]; then
+        cat >&2 <<EOF
+
+  The cached package index does not match the InRelease cached beside it.
+
+      file     $PACKAGES_FILE
+      entry    $ENTRY
+      got      $ACTUAL
+      expected $EXPECTED
+
+  Both were verified at some point, but not against each other: the index has
+  been replaced since, or it was fetched from a mirror at a different sync
+  point. Re-run once with a network, which refreshes the two together.
+EOF
+        exit 1
+    fi
+
     echo "  index   : does not match the current signature - refetching"
     curl -sL --fail --show-error -o "$PACKAGES_FILE" "$PACKAGES_URL"
     if ! check_index; then
@@ -257,3 +403,4 @@ EOF
 fi
 
 echo "  index   : signed by $PINNED_FPR, $ENTRY matches"
+echo "  source  : $INRELEASE_SOURCE"

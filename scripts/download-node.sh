@@ -58,13 +58,29 @@ cd "$WORK_DIR"
 # script tests for the file, not for its contents.
 rm -f "$JNILIBS_DIR/.libnode-version"
 
-if [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
+# Anything but 0 takes this branch, and verify-termux-index.sh below is the one
+# place that decides which values are meant: testing for 1 here would send a
+# misspelt opt-in down the download path instead, where with no network it fails
+# as a connection error and the typo is never mentioned.
+if [ "${TERMUX_OFFLINE:-0}" != "0" ]; then
+    # Offline, the hourly refresh would replace a usable cached index with a
+    # download that cannot happen, and the check below would never be reached.
+    if [ ! -f Packages ]; then
+        echo "  ERROR: TERMUX_OFFLINE is set and there is no cached index at" >&2
+        echo "         $WORK_DIR/Packages. One run with a network creates it." >&2
+        exit 1
+    fi
+elif [ ! -f Packages ] || [ -n "$(find Packages -mmin +60 2>/dev/null)" ]; then
     curl -sL --fail --show-error -o Packages "$PACKAGES_URL"
 fi
 
 # Checked on every run, not only after a download. A cached index is exactly as
 # unchecked as a fresh one, and every digest read below comes out of this file.
-bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" Packages
+#
+# Named in full rather than as the bare Packages this directory is already cd'd
+# into: the check reports which file it read and where the InRelease beside it
+# came from, and "./InRelease" in a build log names no directory at all.
+bash "$SCRIPT_DIR/verify-termux-index.sh" "$PACKAGES_URL" "$WORK_DIR/Packages"
 
 # One pass, all three fields from the same stanza: the live index carries
 # duplicate Package stanzas for some packages, and independent scans could

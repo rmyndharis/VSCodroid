@@ -68,17 +68,38 @@ termux_require_work_dir() {
 # The verification runs on every call, not only after a download: a cached index
 # is exactly as unchecked as a fresh one, and every digest the callers trust is
 # read out of this file.
+#
+# TERMUX_OFFLINE=1 keeps whatever index is here and checks it against the
+# InRelease cached beside it. It does not weaken the check; see the header of
+# verify-termux-index.sh for what an offline run still has to satisfy.
 termux_fetch_index() {
     termux_require_work_dir || return 1
     mkdir -p "$WORK_DIR"
     local index="$WORK_DIR/Packages"
 
-    echo "Downloading Packages index..."
-    if [ ! -f "$index" ] || [ -n "$(find "$index" -mmin +60 2>/dev/null)" ]; then
-        curl -L --fail --show-error -o "$index" "$PACKAGES_URL"
-        echo "  Downloaded: $(du -sh "$index" | cut -f1)"
+    # Anything but 0 takes this branch, and verify-termux-index.sh below is the
+    # one place that decides which values are meant: testing for 1 here would
+    # send a misspelt opt-in down the download path instead, where with no
+    # network it fails as a connection error and the typo is never mentioned.
+    if [ "${TERMUX_OFFLINE:-0}" != "0" ]; then
+        # The hourly refresh below is the other half of an offline rebuild: a
+        # cached index an hour old would otherwise be replaced by a download
+        # that cannot happen, so verify-termux-index.sh would never be reached
+        # to check the copy that is already here.
+        if [ ! -f "$index" ]; then
+            echo "  ERROR: TERMUX_OFFLINE is set and there is no cached index at" >&2
+            echo "         $index. One run with a network creates it." >&2
+            return 1
+        fi
+        echo "Using the cached Packages index (TERMUX_OFFLINE set, nothing downloaded)"
     else
-        echo "  Using cached Packages index (less than 1 hour old)"
+        echo "Downloading Packages index..."
+        if [ ! -f "$index" ] || [ -n "$(find "$index" -mmin +60 2>/dev/null)" ]; then
+            curl -L --fail --show-error -o "$index" "$PACKAGES_URL"
+            echo "  Downloaded: $(du -sh "$index" | cut -f1)"
+        else
+            echo "  Using cached Packages index (less than 1 hour old)"
+        fi
     fi
 
     bash "$TERMUX_SCRIPTS_DIR/verify-termux-index.sh" "$PACKAGES_URL" "$index"
