@@ -1698,9 +1698,13 @@ class HeapCeilingTest {
     }
 
     @Test
-    fun `a device the manufacturer flagged as low-RAM gets the floor`() {
-        // Whatever totalMem says: the flag is the OEM stating the device is
-        // constrained in ways the number does not show.
+    fun `the low-RAM flag takes the floor whatever the total says`() {
+        // The flag as an argument, not as a device. Nothing here reads
+        // ActivityManager.isLowRamDevice, so this says nothing about whether the
+        // OEM's flag ever reaches the derivation: passing a constant false at the
+        // call site leaves it green while every low-RAM phone gets the ceiling its
+        // total earns. `a low-RAM device gets the floor on the command line` is
+        // what covers that wire.
         assertEquals(HEAP_CEILING_MIN_MB, heapCeilingMb(8L * 1024, isLowRam = true))
     }
 
