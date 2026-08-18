@@ -75,14 +75,20 @@ class LongPressPopup(
         // Position centered above anchor
         val location = IntArray(2)
         anchor.getLocationOnScreen(location)
-        val x = location[0] + (anchor.width - popupWidth) / 2
-        val y = location[1] - popupHeight - dpToPx(4)
+        val at = LongPressPlacement.above(
+            anchorLeft = location[0],
+            anchorTop = location[1],
+            anchorWidth = anchor.width,
+            popupWidth = popupWidth,
+            popupHeight = popupHeight,
+            gapPx = dpToPx(4),
+        )
 
         popup = PopupWindow(container, popupWidth, popupHeight, true).apply {
             setBackgroundDrawable(ColorDrawable(context.getColor(R.color.colorPopupBg)))
             elevation = dpToPx(4).toFloat()
             isOutsideTouchable = true
-            showAtLocation(anchor, Gravity.NO_GRAVITY, x, y)
+            showAtLocation(anchor, Gravity.NO_GRAVITY, at.x, at.y)
         }
     }
 

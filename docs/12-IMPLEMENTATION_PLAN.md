@@ -2089,7 +2089,7 @@ android/app/src/main/res/layout/
 
 1. **Day 1-2** — First-run Toolchain Picker (integrated in `SplashActivity`):
    - `showToolchainPicker()` displays grid of available toolchains after first-run setup
-   - `ToolchainPickerAdapter(ToolchainCardMode.PICKER)` — tap toggles checkmark, shows size per toolchain
+   - `ToolchainPickerAdapter(ToolchainCardMode.PICKER)`: tap toggles checkmark, shows size per toolchain
    - "What do you code in?" title with Continue + Skip buttons
    - `shouldShowPicker()` / `markPickerShown()` via SharedPreferences
 
@@ -2100,7 +2100,7 @@ android/app/src/main/res/layout/
    - Failed packs skip to next; all done → launch `MainActivity`
 
 3. **Day 4** — Settings > Toolchains (`ToolchainActivity`):
-   - `ToolchainPickerAdapter(ToolchainCardMode.MANAGER)` — shows installed/available/downloading state
+   - `ToolchainPickerAdapter(ToolchainCardMode.MANAGER)`: shows installed/available/downloading state
    - Action buttons: Install, Remove (with confirmation dialog), Cancel, Retry
    - Opened from `AndroidBridge.openToolchainSettings()`
    - Refreshes installed state on `onStart()`
