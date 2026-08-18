@@ -233,31 +233,54 @@ function activate(context) {
                 // Total first, then the parts largest-first: on a device that is out of
                 // space the question is which one to act on, and an alphabetical or
                 // declaration-ordered list makes that a reading exercise.
+                // Which rows the clear action can actually reach. Sent by the
+                // Kotlin side, which is the only place that knows what
+                // clearCaches deletes; a copy here would go stale the first time
+                // that method changed.
+                const clearable = new Set(
+                    Array.isArray(b.clearable) ? b.clearable : []
+                );
+
                 const parts = Object.keys(b)
-                    .filter((k) => k !== 'total')
-                    .map((k) => ({ key: k, bytes: Number(b[k]) || 0 }))
+                    .filter((k) => k !== 'total' && k !== 'clearable')
+                    .map((k) => ({
+                        key: k,
+                        bytes: Number(b[k]) || 0,
+                        clearable: clearable.has(k)
+                    }))
                     .sort((x, y) => y.bytes - x.bytes);
 
-                /** @type {vscode.QuickPickItem[]} */
+                /** @type {(vscode.QuickPickItem & { key?: string })[]} */
                 const items = [
                     {
                         label: `$(database) Total: ${formatBytes(Number(b.total) || 0)}`,
                         description: 'app storage in use'
                     },
                     ...parts.map((p) => ({
+                        key: p.key,
                         label: `$(circle-filled) ${STORAGE_LABELS[p.key] || p.key}`,
-                        description: formatBytes(p.bytes)
+                        description: p.clearable
+                            ? `${formatBytes(p.bytes)} — can be cleared`
+                            : formatBytes(p.bytes)
                     }))
                 ];
 
                 const picked = await vscode.window.showQuickPick(items, {
-                    placeHolder: 'Storage in use — select to free up cached data'
+                    placeHolder: 'Storage in use — select a row that can be cleared'
                 });
-                // Any selection means "now do something about it"; there is nothing to
-                // drill into, and offering a dead-end list on a full device is the
-                // problem this command exists to solve.
-                if (picked) {
+                if (!picked) return;
+                // Only the rows the action can reach. Running it for the others
+                // freed nothing and then reported success or "nothing to clear",
+                // neither of which was about the row picked, so a user out of
+                // space was told their largest directory had already been dealt
+                // with.
+                if (picked.key && clearable.has(picked.key)) {
                     vscode.commands.executeCommand('vscodroid.clearCaches');
+                } else if (picked.key) {
+                    vscode.window.showInformationMessage(
+                        `${STORAGE_LABELS[picked.key] || picked.key} is not cached data ` +
+                            'and cannot be cleared from here.'
+                    );
                 }
             } catch (/** @type {*} */ err) {
                 vscode.window.showErrorMessage(

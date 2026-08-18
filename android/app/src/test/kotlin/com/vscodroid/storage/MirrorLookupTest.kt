@@ -105,6 +105,35 @@ class MirrorLookupTest {
         )
     }
 
+    /**
+     * The recent list is trimmed and the grants are not, which left every folder
+     * past the tenth holding a permission for ever. The reclaim pass judges a
+     * mirror by whether a permission is still persisted, so those mirrors could
+     * never be reclaimed by anything the app does, and nothing in the UI removes
+     * a folder either.
+     */
+    @Test
+    fun `what falls off the recent list is reported, not silently dropped`() {
+        val many = (1..12).map { folder("mirror%06d".format(it)) }
+
+        val (kept, dropped) = SafStorageManager.splitRecent(many, 10)
+
+        assertEquals(10, kept.size)
+        assertEquals(2, dropped.size, "the tail has to be returned so its grants can be released")
+        assertEquals(many.take(10), kept)
+        assertEquals(many.drop(10), dropped)
+    }
+
+    @Test
+    fun `a list within the limit drops nothing`() {
+        val few = listOf(abc, other)
+
+        val (kept, dropped) = SafStorageManager.splitRecent(few, 10)
+
+        assertEquals(few, kept)
+        assertTrue(dropped.isEmpty(), "a grant was released for a folder still on the list")
+    }
+
     @Test
     fun `nothing persisted means nothing to adopt`() {
         assertNull(SafStorageManager.folderForOpenedPath(emptyList(), abc.mirrorPath))

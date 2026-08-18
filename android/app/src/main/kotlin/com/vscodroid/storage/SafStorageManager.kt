@@ -388,8 +388,31 @@ class SafStorageManager(private val context: Context) {
         )
 
         // Keep at most MAX_RECENT entries
-        val trimmed = folders.take(MAX_RECENT)
+        val (trimmed, dropped) = splitRecent(folders, MAX_RECENT)
         saveRecentFolders(trimmed)
+
+        // The grant goes with the list entry, and until it did there was no way
+        // out at all: the reclaim pass judges a mirror by whether a permission is
+        // still persisted, so a folder that fell off this list kept its grant,
+        // looked live for ever, and its mirror could never be reclaimed by
+        // anything the app does. Nothing in the UI removes a folder either.
+        //
+        // Safe to do here only because the reclaim now refuses to delete a mirror
+        // holding a write that never reached the device. Releasing the grant
+        // without that gate would have turned falling off a list into a silent
+        // deletion of the user's only copy.
+        for (gone in dropped) {
+            try {
+                context.contentResolver.releasePersistableUriPermission(
+                    gone.uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+                Logger.i(tag, "Released the grant for a folder that left the recent list")
+            } catch (e: SecurityException) {
+                Logger.d(tag, "Grant already gone for ${gone.displayName}")
+            }
+        }
     }
 
     private fun removeFromRecentFolders(uri: Uri) {
@@ -484,6 +507,21 @@ class SafStorageManager(private val context: Context) {
          * mirror names are a hash prefix, so one being a prefix of another is
          * ordinary, and a bare `startsWith` would match the wrong folder.
          */
+        /**
+         * Splits the recent list into what is kept and what falls off the end.
+         *
+         * Returned as a pair rather than trimmed in place because the tail is not
+         * waste: each entry there still holds a persisted permission, and that
+         * grant is what the reclaim pass reads to decide a mirror is still in
+         * use. Dropping the entry without releasing the grant leaves the mirror
+         * permanently unreclaimable.
+         */
+        internal fun splitRecent(
+            folders: List<SafFolderInfo>,
+            max: Int,
+        ): Pair<List<SafFolderInfo>, List<SafFolderInfo>> =
+            folders.take(max) to folders.drop(max)
+
         internal fun folderForOpenedPath(
             folders: List<SafFolderInfo>,
             opened: String,

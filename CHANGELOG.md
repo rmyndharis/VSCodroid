@@ -144,6 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Setup and storage**
 
+- Show Storage Usage says which rows can be cleared and clears only those. Every row ran the cache clear, which freed nothing and then reported success.
+- Device folders you have not opened for a while stop holding disk for ever. Their local copies were unreachable by any action in the app.
 - Edits reach the device folder when reopened from Open Recent or Get Started. Only the folder picker started syncing, so those saves stayed on the app's side.
 - A device file over 50 MB is no longer replaced by a smaller one you create with the same name. The sync skips such files and then wrote over them.
 - A file the sync could not copy is reported rather than passed over in silence, and it is no longer overwritten later by anything created at that path.

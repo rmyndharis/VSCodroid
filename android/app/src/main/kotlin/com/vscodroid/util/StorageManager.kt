@@ -1,6 +1,7 @@
 package com.vscodroid.util
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
@@ -39,6 +40,11 @@ object StorageManager {
             put("saf_mirrors", dirSize(File(filesDir, "saf-mirrors")))
             put("cache", dirSize(cacheDir))
             put("total", dirSize(filesDir) + dirSize(cacheDir))
+            // Which of the keys above the clear action can reach. Sent rather
+            // than duplicated on the JavaScript side: the two live in different
+            // files with different release cadences, and a second copy is how
+            // the recent list and the permission set drifted apart.
+            put("clearable", JSONArray(CLEARABLE_KEYS.toList()))
         }
     }
 
@@ -65,6 +71,18 @@ object StorageManager {
      * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs.
      * Returns the number of bytes freed.
      */
+    /**
+     * The breakdown keys [clearCaches] can actually free.
+     *
+     * Declared here because this is the only place that knows. The storage
+     * screen offered every row to the same action, so choosing the device-folder
+     * mirrors, the server tree, the extensions or the installed tools ran a
+     * cache clear that cannot touch any of them and then reported success or
+     * "nothing to clear", neither of which was about the row picked. Five of the
+     * seven rows were unactionable and the screen said nothing.
+     */
+    internal val CLEARABLE_KEYS = setOf("logs", "cache")
+
     fun clearCaches(context: Context): Long {
         var freed = 0L
 
