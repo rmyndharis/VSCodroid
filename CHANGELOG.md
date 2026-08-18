@@ -144,6 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Setup and storage**
 
+- A device file over 50 MB is no longer replaced by a smaller one you create with the same name. The sync skips such files and then wrote over them.
+- A file the sync could not copy is reported rather than passed over in silence, and it is no longer overwritten later by anything created at that path.
 - A device folder whose access has lapsed keeps its mirror when that mirror holds an edit which never reached the device. Launch used to delete it unasked.
 - Reopening such a folder no longer writes a stale mirror back over the device copy. The record meant to prevent that outlived the mirror and caused it instead.
 - The Try again button on the server-stopped page works after the editor has loaded. It answered only before the first successful start.

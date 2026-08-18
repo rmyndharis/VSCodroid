@@ -66,6 +66,22 @@ class SafSyncEngine(private val context: Context) {
     private val docIdCache = ConcurrentHashMap<String, String>()
 
     /**
+     * Mirror paths the device holds a document for that this sync never read.
+     *
+     * A document skipped for size, or one whose copy failed, leaves no trace in
+     * the mirror, so "absent from the mirror" means both "not on the device" and
+     * "on the device with content this app has never seen". Every write-back path
+     * resolves that ambiguity the destructive way, by design: `createOneInSaf`
+     * exists to write into an existing document rather than fork it, so a local
+     * file appearing at that name opens the device's document with truncation and
+     * a 60 MB archive becomes whatever was just typed.
+     *
+     * Absolute paths, like the upload journal's entries and for the same reason:
+     * one engine serves every folder in turn.
+     */
+    private val unfetched = ConcurrentHashMap.newKeySet<String>()
+
+    /**
      * The tree [docIdCache]'s entries were resolved against. The cache is cleared
      * and refilled per folder, and a write-back drain can outlive its folder, so
      * anything resolving at processing time has to know whether the cache still
@@ -108,6 +124,10 @@ class SafSyncEngine(private val context: Context) {
 
         // Clear cache for fresh sync
         docIdCache.clear()
+        // Scoped rather than cleared: this engine serves one folder at a time, and
+        // a switch that fails partway must not drop the protection the previous
+        // folder's mirror is still relying on.
+        unfetched.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         cacheTree = safUri
 
         // Phase 1: Enumerate all documents in the tree
@@ -119,6 +139,7 @@ class SafSyncEngine(private val context: Context) {
         val totalFiles = documents.count { !it.isDirectory }
         var filesDone = 0
         var skippedLarge = 0
+        var failedCopies = 0
         var keptLocal = 0
         /*
          * What the mirror holds, for the files this sync can vouch for. Filled at the two
@@ -185,6 +206,7 @@ class SafSyncEngine(private val context: Context) {
                 // costs a stale copy that lingers, which is the direction to fail in.
                 if (doc.size > MAX_FILE_SIZE) {
                     skippedLarge++
+                    unfetched.add(localPath.absolutePath)
                     Logger.d(tag, "Skipped large file: ${doc.relativePath} (${doc.size / 1_048_576}MB)")
                     filesDone++
                     onProgress(filesDone, totalFiles)
@@ -203,6 +225,7 @@ class SafSyncEngine(private val context: Context) {
                     if (localPath.lastModified() == doc.lastModified) {
                         recordIdentity(recorded, doc.relativePath, localPath)
                     }
+                    unfetched.remove(localPath.absolutePath)
                     Logger.d(tag, "Kept local copy: ${doc.relativePath}")
                     filesDone++
                     onProgress(filesDone, totalFiles)
@@ -211,6 +234,13 @@ class SafSyncEngine(private val context: Context) {
                 localPath.parentFile?.mkdirs()
                 if (copyDocumentToLocal(doc.uri, localPath, doc.lastModified)) {
                     recordIdentity(recorded, doc.relativePath, localPath)
+                    unfetched.remove(localPath.absolutePath)
+                } else {
+                    // The mirror has no copy and the device does. Counted as well
+                    // as recorded: a failed copy had no counter at all, so the
+                    // summary reported a clean sync for a folder it did not read.
+                    failedCopies++
+                    unfetched.add(localPath.absolutePath)
                 }
                 filesDone++
                 onProgress(filesDone, totalFiles)
@@ -224,8 +254,8 @@ class SafSyncEngine(private val context: Context) {
         Logger.i(
             tag,
             "Initial sync complete: $filesDone files ($skippedLarge too large, " +
-                "$keptLocal kept, ${recorded.size} vouched for, $removed removed) " +
-                "in ${elapsed}ms"
+                "$failedCopies could not be copied, $keptLocal kept, " +
+                "${recorded.size} vouched for, $removed removed) in ${elapsed}ms"
         )
     }
 
@@ -1204,6 +1234,26 @@ class SafSyncEngine(private val context: Context) {
         }
 
         if (!shouldWriteBack(relativePath, isDirectory)) return
+
+        // Placed here rather than in the four write-back branches: this covers
+        // CREATE, MODIFY, DELETE and both halves of a move in one statement, and
+        // stops the job being queued at all.
+        //
+        // The provider is asked rather than trusted from the set alone, because
+        // the set is a memory of what this sync could not read and the document
+        // may have been deleted on the device since. When it has, the local file
+        // is an ordinary new file and uploads normally. The binder walk costs
+        // something only for paths in the set, which is normally empty.
+        if (localFile.absolutePath in unfetched &&
+            providerHoldsDocument(safTreeUri, relativePath)
+        ) {
+            Logger.w(
+                tag,
+                "Not writing $relativePath back: the device holds a document there " +
+                    "that this sync never read, and writing would replace it",
+            )
+            return
+        }
 
         val now = System.currentTimeMillis()
 
