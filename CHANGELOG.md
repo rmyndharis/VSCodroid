@@ -273,6 +273,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The web walkthrough greets users with VSCodroid branding again, and the hamburger menu returned to touch-friendly sizing.
 - **Every folder opened in Restricted Mode**, and the setting meant to turn that off has never worked on this platform. The server's own switch is now used.
 - **None of the app's own settings ever took effect**; they were written to a file the editor does not read.
+- Python discovery no longer runs through a native locator that is missing from the extension build available here, which found no interpreters and warned on every Python command.
 - The Tailwind CSS language server is visible to the process monitor again, so it can be reclaimed and appears under its own name.
 - The HTML, CSS, JSON and Markdown language servers can now be reclaimed under memory pressure. All four launch without a file extension, so no name had ever matched them.
 - Language server processes are identified correctly. The guard reported them fine throughout because it compared a different form of the name, and the same matching could shut down your own script whose path contained `eslint`.

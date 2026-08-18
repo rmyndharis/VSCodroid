@@ -42,9 +42,11 @@ class SettingsPathsTest {
         preamble: String = "",
         claudeWrapper: String? = wrapper,
         verifySignature: Boolean = true,
+        pythonLocator: String? = "js",
+        envExtension: String? = "false",
     ) = """
         {
-        $preamble    "editor.fontSize": 14,${claudeWrapper?.let { "\n    \"claudeCode.claudeProcessWrapper\": \"$it\"," } ?: ""}${if (verifySignature) "\n        \"extensions.verifySignature\": false," else ""}
+        $preamble    "editor.fontSize": 14,${claudeWrapper?.let { "\n    \"claudeCode.claudeProcessWrapper\": \"$it\"," } ?: ""}${if (verifySignature) "\n        \"extensions.verifySignature\": false," else ""}${pythonLocator?.let { "\n        \"python.locator\": \"$it\"," } ?: ""}${envExtension?.let { "\n        \"python.useEnvironmentsExtension\": $it," } ?: ""}
             "terminal.integrated.profiles.linux": {
                 "bash": {
                     "path": "$bashPath",
@@ -177,6 +179,8 @@ class SettingsPathsTest {
             {
                 "claudeCode.claudeProcessWrapper": "$wrapper",
                 "extensions.verifySignature": false,
+                "python.locator": "js",
+                "python.useEnvironmentsExtension": false,
                 "terminal.integrated.profiles.linux": {
                     "bash": {
                         "icon": "terminal-bash"
@@ -222,6 +226,8 @@ class SettingsPathsTest {
             {
                 "claudeCode.claudeProcessWrapper": "$wrapper",
                 "extensions.verifySignature": false,
+                "python.locator": "js",
+                "python.useEnvironmentsExtension": false,
                 "terminal.integrated.profiles.linux": {
                     "bash": {
                         "path": "$oldDir/libbash.so",
@@ -300,7 +306,8 @@ class SettingsPathsTest {
         @Test
         fun `returns null when git path is absent rather than inventing one`() {
             val noGit = """{ "claudeCode.claudeProcessWrapper": "$wrapper", """ +
-                """"extensions.verifySignature": false, "editor.fontSize": 14 }"""
+                """"extensions.verifySignature": false, "python.locator": "js", """ +
+                """"python.useEnvironmentsExtension": false, "editor.fontSize": 14 }"""
 
             assertNull(refreshManagedPaths(noGit, shell, git, wrapper))
         }
@@ -312,6 +319,8 @@ class SettingsPathsTest {
                 {
                     "claudeCode.claudeProcessWrapper": "$wrapper",
                     "extensions.verifySignature": false,
+                    "python.locator": "js",
+                    "python.useEnvironmentsExtension": false,
                     "terminal.integrated.profiles.linux": {
                         "zsh": { "path": "$oldDir/libzsh.so" }
                     }
@@ -453,6 +462,113 @@ class SettingsPathsTest {
 
             assertNull(refreshManagedPaths(once, shell, git, wrapper),
                 "a second pass rewrote a settled document")
+        }
+    }
+
+    /**
+     * Python discovery must stay off the native locator.
+     *
+     * `pet` is a Rust binary the Python extension spawns from its own tree, and
+     * Open VSX publishes only the `universal` VSIX, which is packaged without a
+     * target and never compiles it. The bundled 2026.4.0 tree carries no
+     * `python-env-tools` directory and no ELF file at all, so `python.locator`
+     * on `native` spawns a path that cannot exist: "Python Locator failed to
+     * start", then no interpreters (issue #241).
+     *
+     * Held rather than only inserted, unlike `extensions.verifySignature`. That
+     * one has a working configuration in either state; this one does not, and
+     * the device the failure was reported from had the value already moved.
+     */
+    @Nested
+    inner class PythonDiscovery {
+
+        @Test
+        fun `pins the locator for installs that predate the key`() {
+            // Every install made before this shipped, which is the population
+            // the notification was reported from. createDefaultSettings() only
+            // writes a settings.json that is absent, so nothing else reaches them.
+            val before = settings(shell, git, args = "[]", pythonLocator = null)
+            val result = requireNotNull(refreshManagedPaths(before, shell, git, wrapper)) {
+                "a missing python.locator must be added"
+            }
+
+            assertTrue(
+                result.contains(""""python.locator": "js""""),
+                "locator not pinned:\n$result",
+            )
+        }
+
+        @Test
+        fun `moves the locator back off native`() {
+            // The reported state, whatever put it there. Insert-when-absent
+            // would leave this device exactly as it is.
+            val before = settings(shell, git, args = "[]", pythonLocator = "native")
+            val result = requireNotNull(refreshManagedPaths(before, shell, git, wrapper)) {
+                "a native locator must be moved back to js"
+            }
+
+            assertTrue(
+                result.contains(""""python.locator": "js""""),
+                "locator left on the native path:\n$result",
+            )
+            // The key, not the bare word. A real nativeLibraryDir is in this
+            // document, and so is anything else a future managed value spells
+            // with it, so a document-wide search fails on unrelated text while
+            // reporting that the locator survived.
+            assertTrue(
+                !result.contains(""""python.locator": "native""""),
+                "the native value survived:\n$result",
+            )
+        }
+
+        @Test
+        fun `pins the environments extension away for installs that predate the key`() {
+            val before = settings(shell, git, args = "[]", envExtension = null)
+            val result = requireNotNull(refreshManagedPaths(before, shell, git, wrapper)) {
+                "a missing python.useEnvironmentsExtension must be added"
+            }
+
+            assertTrue(
+                result.contains(""""python.useEnvironmentsExtension": false"""),
+                "setting not inserted:\n$result",
+            )
+        }
+
+        @Test
+        fun `turns the environments extension back off`() {
+            // The extension tests this key BEFORE the locator, so a true value
+            // hands discovery to ms-python.vscode-python-envs and never reaches
+            // the locator pin. Its own Open VSX build looks for the same binary.
+            val before = settings(shell, git, args = "[]", envExtension = "true")
+            val result = requireNotNull(refreshManagedPaths(before, shell, git, wrapper)) {
+                "delegation to an extension without pet must be turned off"
+            }
+
+            assertTrue(
+                result.contains(""""python.useEnvironmentsExtension": false"""),
+                "delegation left on:\n$result",
+            )
+        }
+
+        @Test
+        fun `does not add a second key beside a value it cannot rewrite`() {
+            // The trap anchoring always brings: a shape the pattern does not
+            // match is not the same as a key that is absent. Writing the key
+            // twice would leave the last one winning at random.
+            val before = settings(shell, git, args = "[]")
+                .replace(""""python.locator": "js"""", """"python.locator": null""")
+            val result = refreshManagedPaths(before, shell, git, wrapper) ?: before
+
+            val occurrences = Regex(""""python\.locator"""").findAll(result).count()
+            assertEquals(1, occurrences, "the key appears $occurrences times:\n$result")
+        }
+
+        @Test
+        fun `leaves a document that already carries both pins alone`() {
+            assertNull(
+                refreshManagedPaths(settings(shell, git, args = "[]"), shell, git, wrapper),
+                "a settled document was rewritten on every launch",
+            )
         }
     }
 }

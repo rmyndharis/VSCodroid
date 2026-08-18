@@ -1550,6 +1550,13 @@ claude() {
             // that `exists()` accepts forever. The workbench reads a short file
             // as the settings rather than as an error, so the user would come
             // up with an arbitrary subset of the defaults and no way to tell.
+            //
+            // The two Python discovery keys are pinned here as well as in
+            // [refreshManagedPaths], and the duplication is load-bearing:
+            // SplashActivity runs that refresh BEFORE runSetup(), so on a clean
+            // install it returns at its own `!exists()` guard and a first
+            // session would otherwise run unpinned. See PYTHON_LOCATOR for why
+            // neither value is a preference.
             val defaults = """
                 {
                     "workbench.startupEditor": "none",
@@ -1577,6 +1584,8 @@ claude() {
                     "security.workspace.trust.enabled": false,
                     "python.languageServer": "Jedi",
                     "python.defaultInterpreterPath": "${context.filesDir.absolutePath}/usr/bin/python3",
+                    "python.locator": "js",
+                    "python.useEnvironmentsExtension": false,
                     "claudeCode.claudeProcessWrapper": "${Environment.getMuslLoaderPath(context)}",
                     "launch": {
                         "version": "0.2.0",
@@ -2434,6 +2443,72 @@ private val CLAUDE_WRAPPER_KEY = Regex(""""claudeCode\.claudeProcessWrapper"\s*:
 private val VERIFY_SIGNATURE = Regex(""""extensions\.verifySignature"\s*:""")
 
 /**
+ * The two settings that route Python environment discovery through `pet`, the
+ * Python extension's native locator.
+ *
+ * Pinned rather than defaulted, and not as a preference: `pet` is a Rust binary
+ * the extension spawns from `<extension>/python-env-tools/bin/pet`, and it is
+ * not in the artefact this app can obtain. Open VSX serves `ms-python.python`
+ * only as a `universal` VSIX, packaged without a target, and that recipe never
+ * compiles the locator. Measured on the bundled 2026.4.0 tree, which is also
+ * the newest the registry serves: no `python-env-tools` directory, and no ELF
+ * file of any kind. Nothing chosen at download time can change that.
+ *
+ * With `python.locator` on `native` the extension therefore spawns a path that
+ * does not exist, warns "Python Locator failed to start" with a Do Not Show
+ * Again button, and lists no interpreters (issue #241). Silencing that button
+ * is what must not be mistaken for a fix.
+ *
+ * `python.useEnvironmentsExtension` is the second key because the extension
+ * tests it FIRST, in `initialize`, and a true value hands discovery to
+ * `ms-python.vscode-python-envs` before the locator gate is ever read. That
+ * extension is installable from Open VSX (it is in this one's extension pack)
+ * and walks into the same wall: its 1.36.0 universal VSIX names
+ * `python-env-tools/bin/pet` in its bundle, ships no such file, and falls back
+ * to looking for it inside the Python extension. Pinning only the locator would
+ * leave that branch reaching the same missing binary.
+ *
+ * Both default to the safe value already, so what this covers is a document
+ * where something else has moved them: both carry the `onExP` tag, so the value
+ * in force is not only the user's to set. A hand edit back is undone at the
+ * next launch, and that is the intent rather than a side effect, since there is
+ * nothing on the device for either path to spawn.
+ *
+ * Shipping a per-platform VSIX would not lift this either. The extension tree
+ * lives under `filesDir`, which SELinux refuses to `execve`, the same wall that
+ * makes the Claude Code CLI run through musl's loader.
+ */
+private val PYTHON_LOCATOR = SettingPin("python.locator", """"[^"]*"""", "\"js\"")
+private val PYTHON_ENV_EXTENSION =
+    SettingPin("python.useEnvironmentsExtension", """(?:true|false)""", "false")
+
+/**
+ * A setting this app holds at [value] whatever the document says.
+ *
+ * [valuePattern] is the value shape that can be rewritten in place. A key
+ * carrying anything else is left exactly as it stands rather than gaining a
+ * second copy of itself further up, which is the distinction
+ * [CLAUDE_WRAPPER_KEY] draws for the same reason.
+ *
+ * Held rather than merely inserted when absent, which is where this parts
+ * company with [VERIFY_SIGNATURE]. Signature verification back on is a working
+ * configuration and so a decision worth keeping; a locator pointed at a binary
+ * that is not in the artefact has no working configuration to keep.
+ */
+private class SettingPin(val key: String, valuePattern: String, val value: String) {
+    private val quotedKey = "\"" + key.replace(".", "\\.") + "\""
+    private val managed = Regex("""($quotedKey\s*:\s*)$valuePattern""")
+    private val present = Regex("""$quotedKey\s*:""")
+
+    fun applyTo(content: String): String = when {
+        managed.containsMatchIn(content) ->
+            managed.replace(content) { "${it.groupValues[1]}$value" }
+        present.containsMatchIn(content) -> content
+        else -> insertSetting(content, key, value)
+    }
+}
+
+/**
  * The first property in the document, with the indentation it sits at.
  *
  * Anchored to the opening brace so it cannot match a property nested inside some
@@ -2934,6 +3009,12 @@ internal fun refreshManagedPaths(
     if (!VERIFY_SIGNATURE.containsMatchIn(updated)) {
         updated = insertSetting(updated, "extensions.verifySignature", "false")
     }
+
+    // Reaches installs that already have a settings.json, which is every device
+    // the failure was reported from: createDefaultSettings() writes only when
+    // the file is absent, so on its own it would fix nobody who already has one.
+    updated = PYTHON_LOCATOR.applyTo(updated)
+    updated = PYTHON_ENV_EXTENSION.applyTo(updated)
 
     return updated.takeIf { it != content }
 }
