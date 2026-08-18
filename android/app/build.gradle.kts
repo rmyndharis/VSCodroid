@@ -317,20 +317,21 @@ tasks.withType<Test> {
     //   grep -rn 'File("src/main/AndroidManifest.xml")' android/app/src/test/kotlin
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
         .withPropertyName("appManifest")
-    // Seven suites read files no Kotlin compiles against, because the things they
+    // Eight suites read files no Kotlin compiles against, because the things they
     // check cross a language boundary that has no compiler: the bootstrap's
     // adoption note (assets/server.js), the shutdown the worker hosts get
-    // (patches/), the manifests of the bundled extensions, and the documents that
-    // restate a requirement the code owns. Gradle knew about none of them, so it
-    // answered UP-TO-DATE for a run that had to notice one of them change, and
-    // served the previous run's results. Measured on this module: a signature
-    // edited in docs/05-API_SPEC.md left the task UP-TO-DATE and the build
-    // successful, and with the file declared the same edit re-runs the suite and
-    // turns BridgeApiSpecParityTest red. Renaming a command title to a name of
-    // the same length does the same for CommandReferenceTest, and that length is
-    // the point: the only thing that already noticed an assets edit was the byte
-    // total in BuildConfig, which a size-neutral one leaves exactly where it was.
-    // A clean CI checkout was never affected; an incremental run always was.
+    // (patches/), the manifests of the bundled extensions, the verbatim licence
+    // texts, and the documents that restate a requirement the code owns. Gradle
+    // knew about none of them, so it answered UP-TO-DATE for a run that had to
+    // notice one of them change, and served the previous run's results. Measured
+    // on this module: a signature edited in docs/05-API_SPEC.md left the task
+    // UP-TO-DATE and the build successful, and with the file declared the same
+    // edit re-runs the suite and turns BridgeApiSpecParityTest red. Renaming a
+    // command title to a name of the same length does the same for
+    // CommandReferenceTest, and that length is the point: the only thing that
+    // already noticed an assets edit was the byte total in BuildConfig, which a
+    // size-neutral one leaves exactly where it was. A clean CI checkout was
+    // never affected; an incremental run always was.
     //
     // The set is the whole of what those File(...) reads reach, so check the
     // suites before narrowing any of it:
@@ -339,7 +340,9 @@ tasks.withType<Test> {
     //   assets/extensions     BundledExtensionHostTest, CommandReferenceTest,
     //                         WalkthroughCompletionEventTest
     //   patches/              WorkerHostShutdownPatchTest
-    //   README.md, docs/*.md  WebViewVersionTest, BridgeApiSpecParityTest
+    //   licenses/, NOTICE.md  NoticesTest
+    //   README.md, docs/*.md  WebViewVersionTest, BridgeApiSpecParityTest,
+    //                         NoticesTest
     //
     // Sources under src/main/kotlin are read by other suites the same way and are
     // deliberately not listed: they are compiled into the classpath this task
@@ -354,11 +357,22 @@ tasks.withType<Test> {
     inputs.files(fileTree(rootProject.projectDir.parentFile.resolve("patches")))
         .withPropertyName("serverPatches")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The licence texts NoticesTest pins byte for byte. That pin exists for the
+    // edit nobody means to make: a reflow, a re-wrap, an editor stripping the
+    // form feeds out of COPYING.LGPLv2.1. Undeclared, the run that has to notice
+    // such an edit is the one that answers UP-TO-DATE over the previous run's
+    // results. Measured: appending a line to licenses/COPYING.GPLv2 left the task
+    // up to date and the build successful in 679ms; declared, the same edit
+    // re-runs the suite and turns it red.
+    inputs.files(fileTree(rootProject.projectDir.parentFile.resolve("licenses")))
+        .withPropertyName("licenseTexts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // Top-level markdown only. docs/ also carries a site, screenshots and a logo
     // directory, and no test reads any of them; hashing them on every run would
     // buy nothing and 2.6 MB of it is images.
     inputs.files(
         rootProject.projectDir.parentFile.resolve("README.md"),
+        rootProject.projectDir.parentFile.resolve("NOTICE.md"),
         fileTree(rootProject.projectDir.parentFile.resolve("docs")) { include("*.md") },
     )
         .withPropertyName("statedRequirements")
@@ -668,29 +682,41 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
 // carried that offer and shipped nowhere; every device ran the binaries with no
 // notice of any kind on it.
 //
+// Naming a licence is not supplying it, and the three licences/ files are the
+// half that was missing. GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1
+// section 1 each require a copy of the licence itself to accompany the binary;
+// the documents above carried a gnu.org URL instead, which discharges nothing,
+// least of all on the offline device this app is built to be usable on. They are
+// the FSF texts as shipped in Termux's liblzma package, which is one of the
+// packages this APK redistributes, and they are verbatim: NoticesTest pins each
+// one's sha256, because a licence text that has been edited is not the licence.
+//
 // Copied from the repository root rather than committed under src/main/assets,
 // because a second copy is a copy that goes stale, and a stale licence notice is
 // worse than an absent one: it is a claim about terms that is no longer true.
-// The two files are ~44 KiB of markdown, which deflates to roughly 15 KiB in the
-// APK, about 0.01% of the base module. They grow as the tree does, since every
-// binary in it has to be named in both, so treat those as the order of magnitude
-// rather than as figures to check against.
+// The markdown is ~48 KiB and the licence texts ~78 KiB, which together deflate
+// to roughly 50 KiB in the APK, well under 0.1% of the base module. The markdown
+// grows as the tree does, since every binary in it has to be named in both, so
+// treat that as the order of magnitude rather than as a figure to check against.
 //
 // They are read out of the APK by MainActivity's licences dialog and never
 // extracted, which is why they are a separate assets source directory: it keeps
 // them out of the src/main/assets sum that sizes first-run extraction.
 val bundleNotices = tasks.register<Copy>("bundleNotices") {
     group = "build"
-    description = "Copies the attribution documents into the APK's assets."
+    description = "Copies the attribution and licence documents into the APK's assets."
 
     val repoRoot = rootProject.projectDir.parentFile
     from(File(repoRoot, "NOTICE.md"))
     from(File(repoRoot, "docs/LEGAL_NOTICES.md"))
+    from(File(repoRoot, "licenses/COPYING.GPLv2"))
+    from(File(repoRoot, "licenses/COPYING.GPLv3"))
+    from(File(repoRoot, "licenses/COPYING.LGPLv2.1"))
     into(layout.buildDirectory.dir("generated/notices"))
 
     // The names the app opens. Kept beside the copy so a rename here fails the
     // build rather than emptying the dialog on a device: com.vscodroid.util
-    // .Notices.BUNDLED lists the same two, and NoticesTest compares the lists.
+    // .Notices lists the same five, and NoticesTest compares the lists.
 }
 
 // A dependency of the merge, not of the package or the assemble: the point is

@@ -1883,10 +1883,62 @@ class MainActivity : AppCompatActivity() {
      * a device with no network, which is the state this app is built to be
      * usable in.
      *
+     * The offer is one of the two things that have to travel with those
+     * binaries; the licence texts are the other, and they are one button away in
+     * [showLicenseTextsDialog] rather than inside this body.
+     *
      * [Notices.read] never throws and never returns empty: a document it could
      * not open is replaced in place by a line naming it.
      */
     private fun showLicensesDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.licenses_title))
+            .setView(scrollableNotice(Notices.read { assets.open(it) }))
+            .setPositiveButton("OK", null)
+            .setNegativeButton(getString(R.string.licenses_full_texts)) { _, _ ->
+                showLicenseTextsDialog()
+            }
+            .setNeutralButton("Source Code") { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
+            }
+            .show()
+    }
+
+    /**
+     * The verbatim GPL and LGPL texts, picked from a list.
+     *
+     * Behind a chooser rather than appended to the notices above, because the
+     * three of them are 78 KiB and the notices are what someone opening that
+     * screen came for. Concatenated, the attribution and the written offer would
+     * be the first few percent of a scroll view that is otherwise licence
+     * boilerplate, which is a worse screen for every reader of it. Two taps to
+     * reach a text still puts the text on the device, and that is what the
+     * licences require.
+     *
+     * [Notices.readOne] never throws: a text that will not open is replaced by a
+     * line naming it, on screen, where it cannot be mistaken for the licence.
+     */
+    private fun showLicenseTextsDialog() {
+        val names = Notices.LICENSE_TEXTS.keys.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.licenses_full_texts))
+            .setItems(names) { _, which ->
+                val name = names[which]
+                AlertDialog.Builder(this)
+                    .setTitle(name)
+                    .setView(
+                        scrollableNotice(
+                            Notices.readOne(Notices.LICENSE_TEXTS.getValue(name)) { assets.open(it) }
+                        )
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+            .show()
+    }
+
+    /** A long document in a scroller, laid out the same way wherever it is shown. */
+    private fun scrollableNotice(document: String): ScrollView {
         val body = TextView(this).apply {
             // Before setText: autoLinkMask is applied when the text is set, and
             // linkifying is the point. The offer names repositories to fetch
@@ -1896,17 +1948,9 @@ class MainActivity : AppCompatActivity() {
             textSize = 11f
             val pad = (16 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
-            text = Notices.read { assets.open(it) }
+            text = document
         }
-
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.licenses_title))
-            .setView(ScrollView(this).apply { addView(body) })
-            .setPositiveButton("OK", null)
-            .setNeutralButton("Source Code") { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
-            }
-            .show()
+        return ScrollView(this).apply { addView(body) }
     }
 
     private fun recreateWebView() {

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 
 /**
  * The attribution documents have to reach the device, and the pieces that make
@@ -18,7 +19,9 @@ import java.io.IOException
  * them. Rename `docs/LEGAL_NOTICES.md`, or drop a `from(...)` line, and the
  * build stays green, the APK still installs, and the licences dialog quietly
  * comes up half empty on a device. There is no compiler relationship between the
- * three, which is what this test supplies.
+ * three, which is what this test supplies. Nor is there one behind the buttons
+ * that open those dialogs, so the calls are held here as well: a document nothing
+ * on screen reaches is packaged and undelivered.
  *
  * It supplies it only because the build script is declared an input to the test
  * task. These tests read `build.gradle.kts` through the file system, which Gradle
@@ -28,13 +31,17 @@ import java.io.IOException
  * deleting it makes them silent rather than wrong.
  *
  * The stake is not cosmetic. The GPL requires its written offer of source to
- * accompany the binary, and this screen is the only place it does.
+ * accompany the binary, and this screen is the only place it does. It requires a
+ * copy of the licence itself as well, which is what `licenses/COPYING.*` are, so
+ * those are checked here too and are checked for more: a document that has been
+ * truncated or reflowed is no longer the licence it is offered as.
  */
 class NoticesTest {
 
     // Unit tests run with app/ as the working directory.
     private val repoRoot = File("../..")
     private val buildScript = File("build.gradle.kts")
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
     /** The `from(File(repoRoot, "..."))` arguments of the bundleNotices task. */
     private fun copiedPaths(): List<String> {
@@ -50,10 +57,11 @@ class NoticesTest {
     fun `every bundled name is a document the build actually copies`() {
         val copied = copiedPaths()
         assertEquals(
-            Notices.BUNDLED.sorted(),
+            (Notices.BUNDLED + Notices.LICENSE_TEXTS.values).sorted(),
             copied.map { File(it).name }.sorted(),
-            "Notices.BUNDLED and bundleNotices disagree about which documents ship. " +
-                "The app opens assets by basename; the task decides which basenames exist."
+            "Notices.BUNDLED / Notices.LICENSE_TEXTS and bundleNotices disagree about " +
+                "which documents ship. The app opens assets by basename; the task " +
+                "decides which basenames exist."
         )
         for (path in copied) {
             val source = File(repoRoot, path)
@@ -108,6 +116,154 @@ class NoticesTest {
     }
 
     @Test
+    fun `every step of the route to these documents is still taken`() {
+        // Packaging a document is not offering it. About opens the notices, the
+        // notices open the licence texts, and each step is a private method with
+        // one caller: drop the button that calls it and the APK still carries all
+        // five documents, every assertion here still passes, and nothing on a
+        // device can reach any of them. Nothing else notices either. Both methods
+        // stay compiled, their own KDoc keeps naming them, and a string resource
+        // left unreferenced is a lint warning, which does not fail a build whose
+        // abortOnError covers errors.
+        //
+        // Reading the source is what is available: the activity binds a service
+        // and builds a WebView on the way to these dialogs, so there is no seam
+        // to reach them through. It cannot see a caller that is itself
+        // unreachable, or a button whose label stops saying what it opens.
+        check(mainActivity.isFile) {
+            "MainActivity.kt not found at ${mainActivity.absolutePath}, so this " +
+                "test would pass by looking at nothing"
+        }
+        val code = mainActivity.readLines().filterNot {
+            val trimmed = it.trimStart()
+            trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")
+        }
+        for (dialog in listOf("showLicensesDialog", "showLicenseTextsDialog")) {
+            assertTrue(
+                code.any { it.contains("$dialog()") && !it.contains("fun $dialog(") },
+                "Nothing calls $dialog(), so what it shows is packaged and out of " +
+                    "reach: the same state as when these documents lived only in " +
+                    "the repository, at more cost."
+            )
+        }
+    }
+
+    /**
+     * What each licence text has to still be: the name the chooser offers it
+     * under, the version line it opens with, the line it ends on, and the sha256
+     * of every byte.
+     *
+     * The hash is the whole check on the contents; the version and last lines are
+     * there so a failure says which file and which defect rather than "two hex
+     * strings differ". A truncation loses the last line, a file swapped for
+     * another loses the version line, and either way the app would be handing out
+     * something that is not the licence it claims to be.
+     *
+     * The name is a check on something else, and it needs one: these are keyed by
+     * file, so swapping which name opens which file leaves every hash here
+     * satisfied and still puts the wrong licence in front of the reader.
+     *
+     * These are the FSF texts as shipped in Termux's liblzma package, which this
+     * APK redistributes. Re-derive with:
+     *   shasum -a 256 licenses/COPYING.*
+     */
+    private data class Verbatim(
+        val title: String,
+        val version: String,
+        val lastLine: String,
+        val sha256: String
+    )
+
+    private val licenseTexts = mapOf(
+        "COPYING.GPLv2" to Verbatim(
+            "GNU General Public License v2.0",
+            "Version 2, June 1991",
+            "Public License instead of this License.",
+            "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
+        ),
+        "COPYING.GPLv3" to Verbatim(
+            "GNU General Public License v3.0",
+            "Version 3, 29 June 2007",
+            "<https://www.gnu.org/licenses/why-not-lgpl.html>.",
+            "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        ),
+        "COPYING.LGPLv2.1" to Verbatim(
+            "GNU Lesser General Public License v2.1",
+            "Version 2.1, February 1999",
+            "That's all there is to it!",
+            "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        )
+    )
+
+    @Test
+    fun `every licence text the app offers opens under the name it is offered as`() {
+        // Two defects, one assertion. A fourth text could be added to the chooser
+        // and ship unchecked, which is the state this whole file exists to end.
+        // And the chooser is a list of names: whoever taps one is told which
+        // licence they are about to be handed, so a name pointing at the other
+        // file hands over the wrong licence while every pin below still passes,
+        // since those are keyed by the file. GPL-2.0 and GPL-3.0 differ on
+        // patents, on tivoization and on how a violation is cured, so which of
+        // the two a recipient is given is the whole of the question.
+        assertEquals(
+            licenseTexts.entries.associate { (asset, pinned) -> pinned.title to asset },
+            Notices.LICENSE_TEXTS.toMap(),
+            "Notices.LICENSE_TEXTS offers a text with no verbatim check here, " +
+                "pins one the app no longer offers, or opens a text under a name " +
+                "that belongs to another licence."
+        )
+
+        // And the name has to be the version the text opens with, or both halves
+        // of a pin could be swapped together and stay green. The FSF writes
+        // "Version 2" where a name in SPDX shape writes v2.0.
+        for (pinned in licenseTexts.values) {
+            val numbered = pinned.title.substringAfterLast(" v").removeSuffix(".0")
+            assertTrue(
+                pinned.version.startsWith("Version $numbered,"),
+                "'${pinned.title}' is pinned to a text opening '${pinned.version}'"
+            )
+        }
+    }
+
+    @Test
+    fun `each licence text is the whole licence, byte for byte`() {
+        // The obligation the source offer does not discharge. GPL-2.0 section 1,
+        // GPL-3.0 section 4 and LGPL-2.1 section 1 each require a copy of the
+        // licence to reach whoever receives the binary, and an edited or
+        // half-copied licence is not a copy of it.
+        val copied = copiedPaths().associateBy { File(it).name }
+        for ((asset, expected) in licenseTexts) {
+            val path = copied[asset]
+            assertNotNull(path, "bundleNotices copies no $asset, so the APK carries no such text")
+            val file = File(repoRoot, path!!)
+            assertTrue(file.isFile, "$path does not exist")
+
+            val bytes = file.readBytes()
+            val text = String(bytes, Charsets.UTF_8)
+            assertTrue(
+                text.lineSequence().take(3).any { it.contains(expected.version) },
+                "$path does not open with '${expected.version}'. It is not the licence " +
+                    "its name claims."
+            )
+            assertEquals(
+                expected.lastLine,
+                text.trimEnd().lines().last().trim(),
+                "$path does not end where the licence ends. A truncated licence text " +
+                    "satisfies nothing."
+            )
+
+            val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            assertEquals(
+                expected.sha256,
+                digest.joinToString("") { "%02x".format(it) },
+                "$path is no longer byte-for-byte the licence text. Reflowing, " +
+                    "re-wrapping or 'tidying' one is a modification, and a modified " +
+                    "licence is not the licence."
+            )
+        }
+    }
+
+    @Test
     fun `read returns every document, in order`() {
         val text = Notices.read { name -> ByteArrayInputStream("body of $name".toByteArray()) }
         var cursor = -1
@@ -116,6 +272,24 @@ class NoticesTest {
             assertTrue(at > cursor, "$name is missing from the joined text, or out of order")
             cursor = at
         }
+    }
+
+    @Test
+    fun `a licence text that cannot be read is named, not shown empty`() {
+        // The chooser opens one text at a time and has no other reader, so an
+        // empty view is the failure mode: it reads as a build that ships no
+        // licence rather than one whose asset would not open.
+        val asset = Notices.LICENSE_TEXTS.values.first()
+        assertEquals(
+            Notices.missingMarker(asset),
+            Notices.readOne(asset) { throw IOException("not packaged") },
+            "An unreadable licence text came back as something other than a marker"
+        )
+        assertEquals(
+            "the licence",
+            Notices.readOne(asset) { ByteArrayInputStream("the licence".toByteArray()) },
+            "A readable licence text did not come back whole"
+        )
     }
 
     @Test

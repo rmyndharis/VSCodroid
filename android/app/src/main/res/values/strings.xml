@@ -57,6 +57,10 @@
     <string name="about_version_format">Version %s</string>
     <string name="about_licenses">Licenses</string>
     <string name="licenses_title">Open Source Licenses</string>
+    <!-- Opens the verbatim GPL and LGPL texts. Separate from the notices above
+         because the copyleft binaries in this app require the licence itself to
+         be handed over, not only named. -->
+    <string name="licenses_full_texts">License Texts</string>
 
     <!-- Toolchain picker (first-run) -->
     <string name="picker_title">What do you code in?</string>
