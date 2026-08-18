@@ -363,7 +363,7 @@ sequenceDiagram
   participant K as Kotlin Native Shell
   participant N as Node.js Process
   K->>N: ProcessBuilder.start() (launch)
-  K->>N: HTTP GET /healthz (polling)
+  K->>N: HTTP GET /version (polling, 200 only)
   K->>N: Process.destroy() (graceful shutdown)
   N-->>K: Process.exitValue() (death detection)
 ```

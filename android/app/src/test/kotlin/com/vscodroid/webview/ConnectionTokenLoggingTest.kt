@@ -213,6 +213,7 @@ class ConnectionTokenLoggingTest {
             connectionToken = { token },
             onCrash = {},
             onPageLoaded = {},
+                    onRetryServer = {},
         )
         val view = mockk<WebView>(relaxed = true)
         val url = "http://127.0.0.1:41234/?folder=%2Fhome%2Fprojects&tkn=$token"
@@ -279,6 +280,7 @@ class ConnectionTokenLoggingTest {
             connectionToken = { token },
             onCrash = {},
             onPageLoaded = { seen = it },
+            onRetryServer = {},
         )
         val url = "http://127.0.0.1:41234/?folder=%2Fhome%2Fprojects&tkn=$token"
 

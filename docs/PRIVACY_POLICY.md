@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: August 15, 2026**
+**Last Updated: August 18, 2026**
 
 ## Summary
 

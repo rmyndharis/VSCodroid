@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import com.vscodroid.service.StartupNotice
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -65,8 +66,35 @@ class ServerReadinessDecisionTest {
         // a slow one that arrives later comes through onServerReady instead.
         assertEquals(
             BindDecision.ShowNotice("Server failed to start"),
-            bindDecision(notice = "Server failed to start", port = 13337, ready = true),
+            bindDecision(
+                notice = StartupNotice("Server failed to start", terminal = false),
+                port = 13337,
+                ready = true,
+            ),
             "a notice must not be swallowed by a port that happens to look fine",
+        )
+    }
+
+    /**
+     * The half the notice did not used to carry, and the reason it now does.
+     *
+     * A slow start and a server that has stopped trying reached this function as
+     * the same `String?`, so both produced a toast over the loading page. For the
+     * first that is honest: the server may still come up, and `onServerReady`
+     * will say so. For the second the toast expires in three and a half seconds
+     * and leaves "Starting server..." on screen for a server that is never
+     * coming, with no control on the page to change it.
+     */
+    @Test
+    fun `a server that gave up gets the page, not only a toast`() {
+        assertEquals(
+            BindDecision.ShowGaveUp("Server stopped"),
+            bindDecision(
+                notice = StartupNotice("Server stopped", terminal = true),
+                port = 13337,
+                ready = true,
+            ),
+            "a terminal notice must be distinguishable from a slow start",
         )
     }
 

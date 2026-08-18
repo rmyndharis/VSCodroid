@@ -44,6 +44,20 @@ import kotlinx.coroutines.withContext
  * and [setupProcessCallbacks] hands its report to the scope rather than acting on
  * the watchdog thread.
  */
+/**
+ * What a client that binds after a start attempt has to be told, and whether
+ * that attempt was the last one.
+ *
+ * The two travel together because they are one fact. Recording only the message
+ * left every reader guessing: a slow start and a server that has given up
+ * produced the same `String?`, so an activity binding late showed a toast for
+ * both and went on displaying "Starting server..." over a server that was never
+ * coming, which is the exact lie the give-up page exists to replace. A parallel
+ * boolean would have been the same fact in two fields, kept in step by hand at
+ * the four sites that write it.
+ */
+data class StartupNotice(val message: String, val terminal: Boolean)
+
 class NodeService : Service() {
 
     private val tag = "NodeService"
@@ -99,7 +113,7 @@ class NodeService : Service() {
      */
     private var failureRaised = false
 
-    private var startupNotice: String? = null
+    private var startupNotice: StartupNotice? = null
 
     /** Invoked when the server is healthy and accepting connections. */
     var onServerReady: ((port: Int) -> Unit)? = null
@@ -246,7 +260,7 @@ class NodeService : Service() {
      * Cleared whenever a start begins and whenever one succeeds, so a reader
      * that finds something here is looking at the current attempt.
      */
-    fun lastStartupNotice(): String? = startupNotice
+    fun lastStartupNotice(): StartupNotice? = startupNotice
 
     /**
      * Posts the foreground notification again.
@@ -725,14 +739,14 @@ class NodeService : Service() {
         // answered null for the rest of the episode: a client binding into that
         // window sat on the placeholder with nothing said, which is the harm the
         // throttle was added to prevent, moved rather than removed.
-        startupNotice = message
+        startupNotice = StartupNotice(message, terminal = false)
         if (failureRaised) return
         failureRaised = true
         onServerError?.invoke(message)
     }
 
-    private fun reportStartupNotice(message: String) {
-        startupNotice = message
+    private fun reportStartupNotice(message: String, terminal: Boolean = false) {
+        startupNotice = StartupNotice(message, terminal)
         onServerError?.invoke(message)
     }
 
@@ -833,7 +847,7 @@ class NodeService : Service() {
         // Recorded as well as raised: this is the terminal state, so an activity
         // that binds after it has to be told too. The notification says the same
         // thing, but the notification is not on screen while the editor is.
-        reportStartupNotice(getString(R.string.notification_text_stopped))
+        reportStartupNotice(getString(R.string.notification_text_stopped), terminal = true)
         onServerGaveUp?.invoke()
     }
 

@@ -579,7 +579,11 @@ class NoticeGateKeyTest {
         }
         val lines = codeLines()
 
-        val record = lines.filter { (_, l) -> l.contains("startupNotice = message") }
+        // Matches the two writers and not the two `startupNotice = null` resets,
+        // which is the same pair the literal `startupNotice = message` used to
+        // select before the field started carrying whether the attempt was the
+        // last one.
+        val record = lines.filter { (_, l) -> l.contains("startupNotice = StartupNotice(") }
         val throttle = lines.filter { (_, l) -> l.contains("if (failureRaised) return") }
         assertEquals(1, throttle.size, "expected one throttle:\n" + report(throttle))
         assertTrue(

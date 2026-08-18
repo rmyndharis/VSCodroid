@@ -338,7 +338,7 @@ flowchart TD
   B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Register AndroidBridge<br/>Start/bind NodeService<br/>Wait server ready -> loadUrl(http://localhost:PORT/)"]
   C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll /healthz until 200 OK<br/>Notify MainActivity: server ready"]
   D --> E["MainActivity (running)<br/>Handle ExtraKeyRow visibility<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]
-  E --> F["MainActivity.onDestroy()<br/>If finishing: stop NodeService<br/>If config change: preserve WebView state"]
+  E --> F["MainActivity.onDestroy()<br/>Stop the SAF file watcher, unbind the service<br/>Destroy the WebView. The service is not stopped here<br/>Rotation does not reach this: configChanges keeps the activity"]
 ```
 
 ### 2.3 Environment Variables
@@ -377,12 +377,17 @@ server.js responsibilities:
 2. Set up VS Code product.json overrides
 3. Launch vscode-reh server entry point
 4. Configure Extension Host as worker_thread
-5. Set up tmux integration for terminal service
+5. Spawn a shell per terminal through node-pty, on a real PTY
 6. Listen on localhost:PORT
 7. Serve vscode-web static files
 8. Handle WebSocket connections for RPC
-9. Expose /healthz endpoint for Kotlin polling
 ```
+
+Readiness is `GET /version`, and only a `200` counts. There is no `/healthz` on
+the server this app runs: the only thing that has ever served one is the
+fallback stub in `assets/server.js`, which runs *instead of* VS Code when the
+server tree is missing. `/` is not usable as a probe either, because it answers
+`403` once the server requires a connection token.
 
 ### 3.2 Server Launch Command
 

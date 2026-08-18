@@ -109,6 +109,9 @@ class ExternalUrlHandoffTest {
         const val LAUNCHED_AT = 1_700_111L
     }
 
+    /** Set by the client's retry callback, so a case can ask whether it fired. */
+    private var retried = false
+
     private fun request(
         scheme: String, host: String, port: Int, address: String = "",
         fromMainFrame: Boolean = true
@@ -179,7 +182,63 @@ class ExternalUrlHandoffTest {
             connectionToken = { null },
             onCrash = {},
             onPageLoaded = {},
+                    onRetryServer = { retried = true },
         )
+    }
+
+    /**
+     * The one URL reaching this method that is a control on our own page rather
+     * than an address to hand away.
+     *
+     * The server-gave-up page's button is a navigation, and the page can be
+     * shown under either of the two clients a WebView wears. Only the bootstrap
+     * one used to answer it, so on every session that had reached the editor the
+     * button fell through to the branch below and was handed to a system that
+     * has no component for `vscodroid://retry-server`. The exception is caught
+     * and logged, so the only way off that page did nothing and said nothing.
+     */
+    @Test
+    fun `the retry navigation is answered here, not handed to another app`() {
+        retried = false
+
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "retry-server", -1, RETRY_URL)
+        )
+
+        assertTrue(handled, "the navigation was allowed to proceed")
+        assertTrue(retried, "the only way off the server-gave-up page did nothing")
+        verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /**
+     * The control that keeps the case above from being a widening.
+     *
+     * This client sees subframe navigations, and the frames are not all ours:
+     * the bundled simple browser holds an arbitrary remote site, and previews
+     * are built from workspace content. Without the main-frame gate any of them
+     * could blank a live editor and restart the server from a hidden iframe.
+     */
+    @Test
+    fun `a subframe cannot restart the server`() {
+        retried = false
+
+        client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "retry-server", -1, RETRY_URL, fromMainFrame = false)
+        )
+
+        assertFalse(retried, "a page in an iframe restarted the server")
+    }
+
+    /** A near miss is not the control either: the whole string has to match. */
+    @Test
+    fun `a retry URL carrying anything extra is not answered here`() {
+        retried = false
+
+        client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "retry-server", -1, "$RETRY_URL?reload=1")
+        )
+
+        assertFalse(retried, "a URL that only looks like the retry control was accepted")
     }
 
     /** The control: an internal URL must NOT be handed to an activity. */

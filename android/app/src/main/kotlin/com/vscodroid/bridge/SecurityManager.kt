@@ -28,8 +28,11 @@ class SecurityManager {
      * premise.
      *
      * Contract is unchanged: same signature, same answers, same rejection log.
-     * Twenty-eight `@JavascriptInterface` methods validate through here and
-     * `BridgeTokenUniformityTest` pins that they all do.
+     * Every `@JavascriptInterface` method validates through here, and
+     * `BridgeTokenUniformityTest` pins that they all do. It enumerates the
+     * surface by reflection rather than against a written number, which is why
+     * no number is written here: a count beside an enumerating guard protects
+     * nothing and goes stale on the next method added.
      */
     fun validateToken(token: String): Boolean {
         val valid = MessageDigest.isEqual(

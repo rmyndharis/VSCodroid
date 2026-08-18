@@ -128,7 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A server already on the port must now report the build it is before the app reuses it. Answering at all used to be enough, so a stranger holding the port could be handed the session token.
 - Startup readiness is judged by the one endpoint answered before the token check. The previous check treated any non-error reply as healthy, including "forbidden".
 - The session token is compared in constant time. Nothing was reachable through the old comparison; the point is that the property belongs in the comparison rather than in the token length.
-- Every one of the twenty-eight editor-to-Android calls now requires the session token. Six took none, and a test enumerates them so a new one cannot skip it.
+- Every editor-to-Android call now requires the session token. Six took none, and a test enumerates them so a new one cannot skip it.
 - Signing in to an extension only completes if this app started the sign-in, and only in the minutes after it sent you to a browser. An unsolicited callback could previously be answered on your behalf.
 - Callbacks are matched to the sign-in request they name, not to any recent browser launch, so opening a link no longer widens the window an unsolicited one is accepted in.
 - Content rendered inside the editor can only read files from directories the app publishes to it, rather than anywhere in app storage. Opening the home directory as a workspace now costs preview images rather than exposing the SSH key.
@@ -144,6 +144,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Setup and storage**
 
+- The Try again button on the server-stopped page works after the editor has loaded. It answered only before the first successful start.
+- Reopening the app after the server stopped shows what happened. It kept the starting screen up indefinitely behind a toast that expired in three seconds.
+- The session token is no longer written into the error page, which cannot use it and which then absorbed sign-in callbacks meant for the editor.
+- Closing the editor releases it. The background service held the closed window and its view tree until another one opened.
 - Upgrading re-extracts even when the version name is unchanged. Setup compared the name alone, and two builds have carried 1.1.0, so the first would have kept the old server tree.
 - The storage check counts a withdrawn toolchain's space. It read sizes through the registry, which no longer lists Go, so a device holding it could run out of disk mid-setup.
 - First run asks for as much free space as unpacking needs, measured from what the app carries. The old figure was 500 MB against a tree now over 800 MB, so devices in between failed partway with "Setup failed".

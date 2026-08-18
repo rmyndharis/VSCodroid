@@ -52,6 +52,7 @@ import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.service.NodeService
+import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
@@ -62,6 +63,7 @@ import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.RETRY_URL
 import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.sensitiveLocations
@@ -516,6 +518,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         safManager.stopFileWatcher()
+        // Before unbinding, and this order is the point. The service is started
+        // as well as bound, so it outlives this activity by design; the four
+        // callbacks below are lambdas that close over `this`, so leaving them in
+        // place hands a foreground service a strong reference to a destroyed
+        // Activity, its WebView and its view tree. Unbinding does not clear
+        // them: nothing overwrites them until some future activity binds and
+        // installs its own, which may be never.
+        nodeService?.let {
+            it.onServerReady = null
+            it.onServerError = null
+            it.onServerGaveUp = null
+            it.onServerStopped = null
+        }
         if (serviceBindingInitiated) {
             try {
                 unbindService(serviceConnection)
@@ -1138,6 +1153,15 @@ class MainActivity : AppCompatActivity() {
                 Logger.w(tag, "Server start notice predating this binding: ${decision.message}")
                 Toast.makeText(this, decision.message, Toast.LENGTH_LONG).show()
             }
+            is BindDecision.ShowGaveUp -> {
+                // The page, not only the toast. The toast is gone in three and a
+                // half seconds and what it leaves behind is the loading page,
+                // still saying the server is starting. The page below says what
+                // happened and carries the only control that can change it.
+                Logger.w(tag, "Server had already given up when this binding arrived")
+                Toast.makeText(this, decision.message, Toast.LENGTH_LONG).show()
+                showServerGaveUp()
+            }
             is BindDecision.Load -> {
                 Logger.i(tag, "Server already serving on port ${decision.port}, loading immediately")
                 serverPort = decision.port
@@ -1161,6 +1185,10 @@ class MainActivity : AppCompatActivity() {
      * already installed.
      */
     private fun showServerGaveUp() {
+        // The page about to be shown is not the workbench, so nothing arriving
+        // afterwards should be told it is. recreateWebView clears this for the
+        // same reason when it throws the loaded page away.
+        workbenchLoaded = false
         val message = getString(R.string.error_server_gave_up)
         val retry = getString(R.string.error_server_retry)
         webView?.loadDataWithBaseURL(
@@ -1302,8 +1330,18 @@ class MainActivity : AppCompatActivity() {
             onCrash = { recreateWebView() },
             onPageLoaded = { url ->
                 folderFromUrl(url)?.let { openWorkspaceFolder = it }
-                injectBridgeToken()
+                // Only for a page the server served. onPageFinished fires for
+                // every main-frame load under this client, and one of them is the
+                // server-gave-up page, which is a local `about:blank` document
+                // rather than the workbench: injecting there writes the session
+                // token into a page that has no bridge to use it, and sets the
+                // flag that tells an arriving OAuth callback it has a workbench
+                // to land in. It then lands in a page that cannot consume it.
+                if (isWorkbenchUrl(url, port)) {
+                    injectBridgeToken()
+                }
             },
+            onRetryServer = { retryServerStart() },
         )
         wv.webChromeClient = VSCodroidWebChromeClient { allowMultiple ->
             // "*/*" rather than the input's accept types: the Upload command's
@@ -2133,13 +2171,6 @@ class MainActivity : AppCompatActivity() {
                <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
                <p>Starting server...</p></div></body></html>"""
 
-        /**
-         * The navigation the error page's button makes.
-         *
-         * A scheme nothing else answers, so it cannot collide with a workbench
-         * URL, and the bootstrap client is the only place it is recognised.
-         */
-        private const val RETRY_URL = "vscodroid://retry-server"
     }
 }
 
@@ -2300,6 +2331,17 @@ internal sealed interface BindDecision {
     /** The server said something about its start that predates this binding. */
     data class ShowNotice(val message: String) : BindDecision
 
+    /**
+     * The server has given up, and said so before this activity bound.
+     *
+     * Separate from [ShowNotice] because the two need different treatment and
+     * the difference is the whole point: a slow start may still come up, so a
+     * toast over the loading page is honest. A server that has stopped trying
+     * never will, and leaving the loading page up says "Starting server..." for
+     * as long as the user waits, with no way off it.
+     */
+    data class ShowGaveUp(val message: String) : BindDecision
+
     /** Serving, on a port worth navigating to. */
     data class Load(val port: Int) : BindDecision
 
@@ -2318,8 +2360,45 @@ internal sealed interface BindDecision {
  * points the WebView at nothing, and `onReceivedError` only logs, so the
  * connection-refused page it produces is never cleared.
  */
-internal fun bindDecision(notice: String?, port: Int, ready: Boolean): BindDecision = when {
-    notice != null -> BindDecision.ShowNotice(notice)
+/**
+ * Whether [url] is a page the local server served, as opposed to one this app
+ * drew itself.
+ *
+ * `onPageFinished` reports that a main-frame load finished, which is not the
+ * same question and differs exactly where it costs something: the loading page
+ * and the server-gave-up page are `loadData` documents with no origin, and
+ * treating either as the workbench injects the session token into a page that
+ * cannot use it and marks the app ready to receive an OAuth callback it cannot
+ * consume.
+ *
+ * The test is host and port together, the same pair
+ * [VSCodroidWebViewClient.isLocalhost] uses, because the port is what ties a
+ * page to this server rather than to any loopback listener: binding one needs
+ * no permission on Android, so the host alone says nothing about who answered.
+ *
+ * Parsed with `java.net.URI` rather than `Uri.parse`, so the decision can be
+ * exercised by a plain JVM test. `Uri.parse` is a framework method that answers
+ * null off-device, which would make every case here pass for the wrong reason.
+ * The two agree on what matters: both give a null host for the `loadData`
+ * documents this exists to exclude, and `URI` throws on the malformed ones,
+ * which is caught below and read the same way.
+ */
+internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
+    if (url == null || port <= 0) return false
+    // Named so they collide with nothing else in this file. `TokenTaint`, which
+    // guards this file against logging the connection token, follows taint by
+    // identifier name across the whole file: binding the parsed URL to `uri` or
+    // its host to `host` would mark two unrelated locals as token-bearing and
+    // report four honest log statements as leaks. The conservatism is the point,
+    // so the alias is what has to go.
+    val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+    val hostName = parsed.host ?: return false
+    return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port
+}
+
+internal fun bindDecision(notice: StartupNotice?, port: Int, ready: Boolean): BindDecision = when {
+    notice != null && notice.terminal -> BindDecision.ShowGaveUp(notice.message)
+    notice != null -> BindDecision.ShowNotice(notice.message)
     port > 0 && ready -> BindDecision.Load(port)
     else -> BindDecision.Wait
 }

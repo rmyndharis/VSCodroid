@@ -250,6 +250,17 @@ private val TOKEN_PARAMETER = Regex("""tkn=[^&\s"']*""", RegexOption.IGNORE_CASE
 internal fun redactToken(text: String?): String =
     text?.replace(TOKEN_PARAMETER, "tkn=<redacted>") ?: "null"
 
+/**
+ * The navigation the server-gave-up page's button makes.
+ *
+ * Lives here rather than in the activity because two different WebViewClients
+ * are installed over one WebView's life and the page can be shown under either.
+ * The bootstrap client answers this before the workbench has ever loaded; this
+ * client answers it afterwards. A private copy in each was what left the button
+ * dead in the second case, so there is one literal and both read it.
+ */
+internal const val RETRY_URL = "vscodroid://retry-server"
+
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
     private val resourceRoots: List<String>,
@@ -257,13 +268,27 @@ class VSCodroidWebViewClient(
     private val openFolder: () -> String?,
     private val connectionToken: () -> String?,
     private val onCrash: () -> Unit,
-    private val onPageLoaded: (String?) -> Unit
+    private val onPageLoaded: (String?) -> Unit,
+    private val onRetryServer: () -> Unit,
 ) : WebViewClient() {
 
     private val tag = "WebViewClient"
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         val url = request.url
+        // The one URL here that is a control on our own page rather than an
+        // address to hand away. Both conditions are load-bearing. The main-frame
+        // gate is the same one AuthTabWindow.arm already takes below, and for the
+        // same reason: this client sees subframe navigations from pages built out
+        // of workspace content and from the bundled simple browser, so without it
+        // any remote page could blank the editor and restart the server from a
+        // hidden iframe. The comparison is the whole string, so a query appended
+        // to the scheme and host does not qualify.
+        if (request.isForMainFrame && url.toString() == RETRY_URL) {
+            Logger.i(tag, "Retrying the server from the error page")
+            onRetryServer()
+            return true
+        }
         if (isLocalhost(url) || isCdnRedirect(url)) {
             return false
         }
