@@ -102,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Explorer's **Upload...** now opens the device file picker. It was on every folder's menu and hung silently, the only route to import a single file from device storage.
 - The Explorer's **Download** now asks where to save each file and writes it there. It did nothing at all, and a failure says so instead of leaving a partial file.
 - **Open Source Licenses**, on the About dialog: the notices now ship inside the app and read offline, so the GPL written offer of source reaches every device holding those binaries.
+- **License Texts**, one tap from that screen: GPL-2.0, GPL-3.0 and LGPL-2.1 now ship verbatim in the app. A gnu.org link is not the copy those licenses require.
 - VSCodroid warns when the installed Android System WebView is older than Chrome 105, the version it is tested against. It warns and continues rather than refusing to start, and a version it cannot read is not treated as an old one.
 - **Serve on Network**: lists the ports your dev servers are listening on, shows the address other devices can reach them at, and copies it. Loopback-only servers are called out.
 - You can preview your own dev server at the device's network address from inside the editor, not only at `localhost`.

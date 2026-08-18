@@ -69,7 +69,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **Project**: https://git-scm.com
 - **License**: GNU General Public License v2.0 (GPL-2.0-only)
 - **Copyright**: Copyright (c) Junio C Hamano and the Git contributors
-- **Full license**: https://github.com/git/git/blob/master/COPYING
+- **Full license**: `licenses/COPYING.GPLv2`, which ships in the app at **About > Licenses > License Texts**; also https://github.com/git/git/blob/master/COPYING
 - **Source availability**: The source code for the Git binary included in VSCodroid is available from the Termux packages repository at https://github.com/termux/termux-packages
 
 ### Bash
@@ -78,7 +78,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **Version**: not pinned here — from the Termux package index at build time (`scripts/download-termux-tools.sh`)
 - **License**: GNU General Public License v3.0 (GPL-3.0-or-later)
 - **Copyright**: Copyright (c) Free Software Foundation, Inc.
-- **Full license**: https://www.gnu.org/licenses/gpl-3.0.html
+- **Full license**: `licenses/COPYING.GPLv3`, which ships in the app at **About > Licenses > License Texts**; also https://www.gnu.org/licenses/gpl-3.0.html
 - **Source availability**: The source code for the Bash binary included in VSCodroid is available from the Termux packages repository at https://github.com/termux/termux-packages
 
 ### OpenSSH
@@ -102,7 +102,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **Version**: not pinned here — from the Termux package index at build time (`scripts/download-termux-tools.sh`)
 - **License**: GNU General Public License v3.0 (GPL-3.0-or-later)
 - **Copyright**: Copyright (c) Free Software Foundation, Inc.
-- **Full license**: https://www.gnu.org/licenses/gpl-3.0.html
+- **Full license**: `licenses/COPYING.GPLv3`, which ships in the app at **About > Licenses > License Texts**; also https://www.gnu.org/licenses/gpl-3.0.html
 - **Source availability**: The source code for the Make binary included in VSCodroid is available from the Termux packages repository at https://github.com/termux/termux-packages
 
 ### ripgrep
@@ -291,6 +291,7 @@ licence that asks for the notice to travel with the copy.
 
 - **Project**: https://tiswww.case.edu/php/chet/readline/rltop.html
 - **License**: GNU General Public License v3.0 (GPL-3.0-or-later)
+- **Full license**: `licenses/COPYING.GPLv3`, which ships in the app at **About > Licenses > License Texts**
 - **Used by**: bash
 
 ### ncurses
@@ -530,6 +531,26 @@ You may also request a copy of the source code by contacting us (see contact inf
 
 ---
 
+## GPL and LGPL License Texts
+
+The offer above is one obligation; a copy of the licence itself is the other. GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1 section 1 each require the licence to reach whoever receives the binary, and a link to gnu.org is not a copy of it, least of all on a device with no network. So the texts ship:
+
+| Licence | Text | Components it covers |
+|---|---|---|
+| GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK) |
+| GPL-3.0 | `licenses/COPYING.GPLv3` | Bash, GNU Make, readline, gdbm, libiconv, xz / liblzma |
+| LGPL-2.1 | `licenses/COPYING.LGPLv2.1` | libiconv, xz / liblzma |
+
+These are the Free Software Foundation's texts as shipped in Termux's `liblzma` package, which is one of the packages this app redistributes, and they are verbatim. `NoticesTest` pins the sha256 of each one: a licence text that has been reflowed, re-wrapped or truncated is no longer the licence, so none of them may be edited.
+
+They reach the device through the same `bundleNotices` task as this document, and are read straight out of the APK at **About > Licenses > License Texts**. They sit behind that chooser rather than inside the notices body because 78 KB of licence in front of the attribution and the source offer would bury the part a reader opened that screen for.
+
+Java is the one component above that arrives in an on-demand pack rather than in the base app, and the text covering it ships in the base app, which every device installing that pack already holds. Its licence is GPL-2.0 with the Classpath Exception, an additional permission that grants rights rather than requiring a copy of anything to travel; the exception is stated at https://openjdk.org/legal/gplv2+ce.html.
+
+GMP, in the Ruby toolchain pack, is LGPL-3.0 and is the one copyleft component with no text here; its licence is named and its source offered above.
+
+---
+
 ## Toolchain Libraries
 
 Shipped inside an on-demand toolchain pack rather than the base app, so they reach
@@ -578,7 +599,7 @@ The following toolchains are available as optional downloads and have their own 
 - **Project**: https://openjdk.org
 - **License**: GNU General Public License v2.0 with Classpath Exception (GPL-2.0 WITH Classpath-exception-2.0)
 - **Copyright**: Copyright (c) Oracle and/or its affiliates
-- **Full license**: https://openjdk.org/legal/gplv2+ce.html
+- **Full license**: `licenses/COPYING.GPLv2`, which ships in the app at **About > Licenses > License Texts**; the Classpath Exception that modifies it is stated at https://openjdk.org/legal/gplv2+ce.html
 
 ---
 

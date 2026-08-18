@@ -69,6 +69,12 @@ anything here can run it.
 Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
 glibc's soname but are built from this repository's own source.
 
+The copyleft rows below need more than a name. GPL-2.0, GPL-3.0 and LGPL-2.1 each
+require a copy of the licence to reach whoever receives the binary, so the three
+texts are in `licenses/` and ship in the app at **About > Licenses > License
+Texts**, verbatim; `docs/LEGAL_NOTICES.md` records which text covers which
+component.
+
 | Component | License | Linked by |
 |---|---|---|
 | Bash | GPL-3.0 | bundled tool in its own right |
