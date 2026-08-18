@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.FirstRunSetup
+import com.vscodroid.setup.ToolchainFailure
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
@@ -324,14 +325,16 @@ class SplashActivity : AppCompatActivity() {
         // Set up toolchain manager
         val manager = ToolchainManager(this)
         toolchainManager = manager
+        val alreadySaid = mutableSetOf<ToolchainFailure>()
         manager.onStateChange = { packName, status, percent, why ->
             runOnUiThread {
                 handleDownloadState(packName, status, percent)
                 // The row has space for one word and the reason is a sentence, so
                 // it is said here rather than squeezed in there. Without it the
                 // queue moves on and the only record of WHY is in logcat.
-                if (why != null) {
-                    Toast.makeText(this, getString(why.message), Toast.LENGTH_LONG).show()
+                val reason = reasonToAnnounce(why, alreadySaid)
+                if (reason != null) {
+                    Toast.makeText(this, getString(reason.message), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -626,3 +629,25 @@ internal fun isTerminalPackStatus(status: Int): Boolean = when (status) {
  */
 internal fun isCurrentDownload(packName: String, queue: List<String>, index: Int): Boolean =
     packName == queue.getOrNull(index)
+
+/**
+ * The reason worth putting on screen, or null when it has been said already.
+ *
+ * Toasts stack rather than replace: each one holds the screen for about three
+ * and a half seconds, and the queue starts the next download the moment one
+ * fails, so failures that share a cause arrive back to back. Three packs picked
+ * at first run and one full disk meant three identical messages in a row, most
+ * of them over the editor, because the splash screen is gone by then.
+ *
+ * Per reason and not per pack: a second pack failing for the same cause tells
+ * the user nothing they cannot already act on, while a different cause does and
+ * still gets through. [alreadySaid] belongs to one run of the queue, so a later
+ * attempt says it again.
+ *
+ * File scope so it can be tested without an Activity; this project's unit tests
+ * have no Robolectric.
+ */
+internal fun reasonToAnnounce(
+    why: ToolchainFailure?,
+    alreadySaid: MutableSet<ToolchainFailure>,
+): ToolchainFailure? = if (why != null && alreadySaid.add(why)) why else null

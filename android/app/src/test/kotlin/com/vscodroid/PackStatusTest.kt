@@ -155,19 +155,19 @@ class DownloadStateWiringTest {
 
     private val source = File("src/main/kotlin/com/vscodroid/SplashActivity.kt")
 
-    private fun handleDownloadStateBody(): String {
+    private fun bodyOf(declaration: String): String {
         check(source.isFile) {
             "SplashActivity.kt not found at ${source.absolutePath} — this test would " +
                 "otherwise pass by looking at nothing"
         }
         val text = source.readText()
-        val declaration = text.indexOf("private fun handleDownloadState(")
-        check(declaration >= 0) {
-            "handleDownloadState is gone from SplashActivity.kt; this guard names it, so " +
-                "renaming it means deciding again where the two calls are pinned"
+        val start = text.indexOf(declaration)
+        check(start >= 0) {
+            "$declaration is gone from SplashActivity.kt; this guard names it, so " +
+                "renaming it means deciding again where its calls are pinned"
         }
 
-        val open = text.indexOf('{', declaration)
+        val open = text.indexOf('{', start)
         var depth = 0
         var i = open
         while (i < text.length) {
@@ -176,7 +176,7 @@ class DownloadStateWiringTest {
             if (depth == 0) break
             i++
         }
-        check(depth == 0) { "no closing brace found for handleDownloadState" }
+        check(depth == 0) { "no closing brace found for $declaration" }
         return text.substring(open, i + 1)
     }
 
@@ -196,7 +196,7 @@ class DownloadStateWiringTest {
 
     @Test
     fun `handleDownloadState still consults both predicates`() {
-        val raw = handleDownloadStateBody()
+        val raw = bodyOf("private fun handleDownloadState(")
 
         // The brace matcher is the weak part, so it is bounded rather than trusted:
         // an extraction that ran to the end of the file would contain both names for
@@ -220,6 +220,29 @@ class DownloadStateWiringTest {
             body.contains("isTerminalPackStatus("),
             "handleDownloadState no longer asks whether the status is terminal, so the " +
                 "queue stops advancing and first-run setup stalls on the progress screen",
+        )
+    }
+
+    /**
+     * The same gap one method over: [AnnouncedReasonTest] pins what may be said
+     * twice, and nothing there notices if the Toast stops asking.
+     */
+    @Test
+    fun `startDownloads still filters a reason it has already given`() {
+        // 1,961 characters when this was written, against handleDownloadState's
+        // 3,758 in a file of 29,742. Bounded for the same reason as above: an
+        // extraction that ran past its own method would find the name somewhere
+        // else and report a deleted filter as a live one.
+        val raw = bodyOf("private fun startDownloads(")
+        check(raw.length in 500..8000) {
+            "extracted ${raw.length} characters of startDownloads, which means the " +
+                "extraction is wrong rather than the code"
+        }
+
+        assertTrue(
+            code(raw).contains("reasonToAnnounce("),
+            "the failure Toast is no longer filtered, so packs failing for one cause " +
+                "queue one long Toast each, most of them over the editor",
         )
     }
 }

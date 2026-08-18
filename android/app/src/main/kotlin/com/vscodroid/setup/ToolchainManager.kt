@@ -9,6 +9,7 @@ import android.system.Os
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackState
 import com.google.android.play.core.assetpacks.AssetPackStateUpdateListener
+import com.google.android.play.core.assetpacks.model.AssetPackErrorCode
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Logger
 import org.json.JSONArray
@@ -77,9 +78,9 @@ class ToolchainManager(private val context: Context) {
     /**
      * A failure, and why.
      *
-     * There is no overload without a reason, which is the point: every one of
-     * the twelve failure sites had to name one, and a thirteenth cannot be added
-     * without doing the same.
+     * There is no overload without a reason, which is the point: every failure
+     * site has to name one, and a new one cannot be added without doing the
+     * same. Counting them here would only rot; the compiler does the counting.
      */
     private fun fail(packName: String, why: ToolchainFailure) {
         onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why)
@@ -492,7 +493,13 @@ class ToolchainManager(private val context: Context) {
         // Don't fire onStateChange for COMPLETED here — the real COMPLETED fires
         // after copyFromAssetPack() finishes extraction (line in copyFromAssetPack).
         // Firing it twice would cause downloadNext() to be called twice, skipping packs.
-        if (status != AssetPackStatus.COMPLETED) {
+        //
+        // FAILED is held back for a different reason: report() has no way to say
+        // why, and this is the only place that knows. It is emitted below through
+        // fail() instead, still exactly once and still carrying FAILED, which is
+        // what keeps isTerminalPackStatus moving the first-run queue past it. A
+        // pack that stops emitting FAILED strands every pack queued behind it.
+        if (status != AssetPackStatus.COMPLETED && status != AssetPackStatus.FAILED) {
             report(packName, status, percent)
         }
 
@@ -518,7 +525,9 @@ class ToolchainManager(private val context: Context) {
                 }
             }
             AssetPackStatus.FAILED -> {
-                Logger.e(tag, "Pack $packName download failed: errorCode=${state.errorCode()}")
+                val code = state.errorCode()
+                Logger.e(tag, "Pack $packName download failed: errorCode=$code")
+                fail(packName, toolchainFailureFor(code))
             }
             AssetPackStatus.REQUIRES_USER_CONFIRMATION -> {
                 // Downloads exceeding 200MB or Play-determined thresholds need user
@@ -1677,8 +1686,60 @@ enum class ToolchainFailure(@StringRes val message: Int) {
     NOT_PUBLISHED(R.string.toolchain_failed_not_published),
     DIGEST(R.string.toolchain_failed_digest),
     CORRUPT(R.string.toolchain_failed_corrupt),
+    // Reached from both delivery paths, so its message names what Play will not
+    // do rather than which build is running: a sideloaded install with no ZIP for
+    // this pack, and a Play install Play does not recognise as one of its own.
+    // Naming the build type is wrong for the second, which shouldUseHttpFallback
+    // has already classified as a Play install.
     PLAY_REQUIRED(R.string.toolchain_failed_play),
     INTERNAL(R.string.toolchain_failed_internal),
+}
+
+/**
+ * Play's error code for a failed asset pack, in the terms [ToolchainFailure] speaks.
+ *
+ * The Play delivery path reported FAILED with no reason at all. The code went to
+ * logcat and stopped there, so a Play Store user was left with the bare word that
+ * the HTTP path had already stopped showing, for a full disk and a dropped
+ * connection alike. Nothing new is said here; the existing vocabulary is simply
+ * reached from the other delivery path.
+ *
+ * Grouped by what the user can do, like the enum itself, and taken from what each
+ * code is documented to mean rather than from what its name resembles:
+ *
+ *  - `NETWORK_ERROR` is "unable to obtain the asset pack details", so
+ *    [ToolchainFailure.NETWORK]: a better connection is the answer.
+ *  - `INSUFFICIENT_STORAGE` is a download refused for space, so
+ *    [ToolchainFailure.STORAGE]: freeing space is the answer.
+ *  - `PACK_UNAVAILABLE` is "the asset pack wasn't included in the App Bundle that
+ *    was published", which is this app's own release not carrying it, so
+ *    [ToolchainFailure.NOT_PUBLISHED]: waiting for an update is the only answer.
+ *  - `APP_NOT_OWNED` and `UNRECOGNIZED_INSTALLATION` both say Play does not
+ *    recognise this copy of the app as one it delivered, and Play serves asset
+ *    packs only to copies it does, so [ToolchainFailure.PLAY_REQUIRED].
+ *
+ * Everything else is [ToolchainFailure.INTERNAL] on purpose, including codes with
+ * an inviting name. `APP_UNAVAILABLE` is "the requesting app is unavailable",
+ * which is about the app or the user's access to it and not about the pack, so
+ * sending it to `NOT_PUBLISHED` would tell someone this toolchain is missing from
+ * a release that carries it. `ACCESS_DENIED`, `API_NOT_AVAILABLE`,
+ * `INVALID_REQUEST`, `DOWNLOAD_NOT_FOUND` and `CONFIRMATION_NOT_REQUIRED` name
+ * conditions no message in the enum can act on, and the last three are this
+ * app's own mistakes rather than the user's.
+ *
+ * Two documented codes cannot be named here at all: `PLAY_STORE_NOT_FOUND` (-11)
+ * and `NETWORK_UNRESTRICTED` (-12) appear in the library's own IntDef listing but
+ * are not declared by asset-delivery 2.2.2, so they arrive as numbers this build
+ * has no constant for and fall through with the rest. Every code that lands in
+ * INTERNAL is still in the log line beside this call, raw.
+ */
+internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (errorCode) {
+    AssetPackErrorCode.NETWORK_ERROR -> ToolchainFailure.NETWORK
+    AssetPackErrorCode.INSUFFICIENT_STORAGE -> ToolchainFailure.STORAGE
+    AssetPackErrorCode.PACK_UNAVAILABLE -> ToolchainFailure.NOT_PUBLISHED
+    AssetPackErrorCode.APP_NOT_OWNED,
+    AssetPackErrorCode.UNRECOGNIZED_INSTALLATION -> ToolchainFailure.PLAY_REQUIRED
+    else -> ToolchainFailure.INTERNAL
 }
 
 /** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */

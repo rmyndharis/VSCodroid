@@ -81,7 +81,7 @@
     <string name="toolchain_failed_not_published">This toolchain is not in the current release. Try again after the next app update.</string>
     <string name="toolchain_failed_digest">The download did not match what the release published. Try again.</string>
     <string name="toolchain_failed_corrupt">The download was incomplete. Try again.</string>
-    <string name="toolchain_failed_play">This toolchain installs only on Play Store builds.</string>
+    <string name="toolchain_failed_play">Play delivers this toolchain only to apps it installed. Install from the Play Store and try again.</string>
     <string name="toolchain_failed_internal">Install failed. The app log has the details.</string>
     <string name="progress_cancel">Cancel</string>
     <string name="progress_retry">Retry</string>
