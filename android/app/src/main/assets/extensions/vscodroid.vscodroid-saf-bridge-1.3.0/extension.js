@@ -260,13 +260,13 @@ function activate(context) {
                         key: p.key,
                         label: `$(circle-filled) ${STORAGE_LABELS[p.key] || p.key}`,
                         description: p.clearable
-                            ? `${formatBytes(p.bytes)} — can be cleared`
+                            ? `${formatBytes(p.bytes)} (can be cleared)`
                             : formatBytes(p.bytes)
                     }))
                 ];
 
                 const picked = await vscode.window.showQuickPick(items, {
-                    placeHolder: 'Storage in use — select a row that can be cleared'
+                    placeHolder: 'Storage in use; select a row that can be cleared'
                 });
                 if (!picked) return;
                 // Only the rows the action can reach. Running it for the others
