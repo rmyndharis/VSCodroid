@@ -76,6 +76,87 @@ class SafMirrorReclamationTest {
     }
 
     /** Builds the mirror directory and the sync record the engine keeps beside it. */
+    /**
+     * The journal is keyed on the mirror's real path, and the pass renames the
+     * mirror before deleting it.
+     *
+     * Clearing under the renamed path matched nothing, so records naming files
+     * inside a deleted mirror survived for ever. They are not inert: a re-grant
+     * of the same folder produces the same digest and so the same path, and the
+     * next sync reads the device's own document as this app's interrupted upload,
+     * keeping the stale mirror and writing it back over the device copy. That is
+     * the damage the record exists to prevent, caused by the record.
+     *
+     * Driven through the set-aside branch, which is where the clearing is
+     * actually reachable. On the ordinary branch a mirror with any record under
+     * it is now kept rather than deleted, so nothing reaches the clear; a
+     * `discarded-` entry is an earlier pass's leftover whose records still name
+     * the original path.
+     */
+    @Test
+    fun `records naming a set-aside mirror are cleared under its real path`() {
+        val hash = "abc123def456"
+        val original = File(mirrorsDir, hash)
+        val setAside = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + hash)
+        setAside.mkdirs()
+        File(setAside, "notes.md").writeText("left over")
+        val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+        val stale = File(original, "notes.md").absolutePath
+        val unrelated = File(filesDir, "elsewhere/keep.txt").absolutePath
+        journal.writeText(stale + "\n" + unrelated + "\n")
+        every { resolver.persistedUriPermissions } returns emptyList()
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(setAside.exists(), "the set-aside leftover should have gone")
+        assertFalse(
+            journal.readLines().contains(stale),
+            "the record outlived the mirror it distrusts, so a re-grant of that " +
+                "folder will overwrite the device copy from a stale mirror",
+        )
+        assertTrue(
+            journal.readLines().contains(unrelated),
+            "an unrelated record was dropped by the same clear",
+        )
+    }
+
+    /**
+     * The mirror is a copy and the device folder is the original, which is what
+     * makes reclaiming safe. It stops being a copy when a write-back gave up, or
+     * was refused with a SecurityException, which is exactly what a permission
+     * withdrawn mid-session produces, and is also what puts the mirror in front
+     * of this pass. The two arrive together.
+     */
+    @Test
+    fun `a mirror holding a write that never reached the device is kept`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+        journal.writeText(File(staleDir, "src/main.kt").absolutePath + "\n")
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertTrue(
+            staleDir.isDirectory,
+            "the only copy of an unsynced edit was deleted on a launch-time thread",
+        )
+        assertEquals(0, removed, "nothing should have been reclaimed in this pass")
+    }
+
+    /** The control: without a record, the same mirror is reclaimed as before. */
+    @Test
+    fun `the same mirror with nothing stranded is still reclaimed`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(staleDir.exists(), "unreachable disk was kept for no reason")
+        assertTrue(removed > 0)
+    }
+
     private fun mirrorFor(uri: Uri): Pair<File, File> {
         val dir = manager.getMirrorDir(uri).apply { mkdirs() }
         File(dir, "src").mkdirs()

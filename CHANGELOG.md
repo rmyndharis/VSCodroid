@@ -144,6 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Setup and storage**
 
+- A device folder whose access has lapsed keeps its mirror when that mirror holds an edit which never reached the device. Launch used to delete it unasked.
+- Reopening such a folder no longer writes a stale mirror back over the device copy. The record meant to prevent that outlived the mirror and caused it instead.
 - The Try again button on the server-stopped page works after the editor has loaded. It answered only before the first successful start.
 - Reopening the app after the server stopped shows what happened. It kept the starting screen up indefinitely behind a toast that expired in three seconds.
 - The session token is no longer written into the error page, which cannot use it and which then absorbed sign-in callbacks meant for the editor.

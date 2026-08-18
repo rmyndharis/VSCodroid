@@ -196,6 +196,10 @@ class SafStorageManager(private val context: Context) {
 
         val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
         var removed = 0
+        // Read once for the pass rather than per candidate: it is one file read,
+        // and a write-back cannot start for a mirror whose permission is already
+        // gone, which is the only kind of entry examined here.
+        val stranded = syncEngine.uploadsInFlight()
 
         root.listFiles()?.forEach { entry ->
             val name = entry.name
@@ -216,6 +220,42 @@ class SafStorageManager(private val context: Context) {
             val reclaimable = alreadySetAside ||
                 (MIRROR_ENTRY.matches(name) && name.substringBefore('.') !in liveMirrorNames())
             if (!reclaimable) return@forEach
+            // A mirror is normally a copy and the device folder is the original,
+            // which is what makes reclaiming it safe. That stops being true when
+            // this app's own records say a write never reached the device: a
+            // write-back that gave up after two failures, or one refused with a
+            // SecurityException, which is precisely what a permission withdrawn
+            // mid-session produces and therefore what puts the mirror in front of
+            // this pass in the first place. Deleting then is not reclaiming a
+            // copy, it is deleting the only copy, on a launch-time thread with no
+            // screen to ask from.
+            //
+            // The set-aside branch is exempt: those are this app's own leftovers
+            // from an earlier pass that already made this decision.
+            // On the mirror's own name, the same `substringBefore` the
+            // reclaimable test above uses. An entry here is either the mirror
+            // directory or the `<hash>.synced` record beside it, and they stand
+            // or fall together: keeping the directory while dropping its record
+            // leaves the next sync with no snapshot of what it had already
+            // fetched.
+            if (!alreadySetAside &&
+                !mayReclaim(name.substringBefore('.'), stranded, root.absolutePath)
+            ) {
+                Logger.w(
+                    tag,
+                    "Keeping $name: it holds writes that never reached the device folder",
+                )
+                return@forEach
+            }
+
+            // The journal keys its entries on the mirror's real path, which is
+            // the name before this pass renames it. `removePrefix` is a no-op on
+            // the branch that has not been renamed yet, so one expression serves
+            // both. Passing the `discarded-` path instead matched no entry at
+            // all, so the records outlived the mirror they distrust, and a later
+            // re-grant of the same folder read the device's own document as this
+            // app's interrupted upload and wrote the stale mirror back over it.
+            val originalPath = File(root, name.removePrefix(DISCARD_PREFIX))
 
             val discarded: File
             if (alreadySetAside) {
@@ -233,7 +273,7 @@ class SafStorageManager(private val context: Context) {
                 // The mirror's distrust of its own device copies goes with it; see
                 // [SafSyncEngine.clearUploadsUnder] for what an entry that outlives
                 // its mirror costs a later re-grant.
-                syncEngine.clearUploadsUnder(discarded)
+                syncEngine.clearUploadsUnder(originalPath)
             }
         }
         if (removed > 0) {
@@ -398,6 +438,28 @@ class SafStorageManager(private val context: Context) {
          * of the two drifting apart is a reclamation pass that stops recognising its own
          * mirrors — or starts recognising files it did not write.
          */
+        /**
+         * Whether a mirror with no live permission may be deleted, given the writes
+         * this app records as never having reached the device.
+         *
+         * Keyed on the mirror directory rather than on individual files: one
+         * stranded write is enough to make the whole tree the only copy of
+         * something, and the pass deletes trees, not files.
+         *
+         * The journal holds absolute paths, so the comparison is built from the
+         * mirrors root and the entry name with a separator between them. Without
+         * the separator a mirror named `abc123` would be protected by a stranded
+         * write under `abc123def`.
+         */
+        internal fun mayReclaim(
+            mirrorName: String,
+            strandedPaths: Set<String>,
+            mirrorsRoot: String,
+        ): Boolean {
+            val prefix = mirrorsRoot + File.separator + mirrorName + File.separator
+            return strandedPaths.none { it.startsWith(prefix) }
+        }
+
         internal val MIRROR_ENTRY =
             Regex("^[0-9a-f]{12}(${Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX)})?$")
 

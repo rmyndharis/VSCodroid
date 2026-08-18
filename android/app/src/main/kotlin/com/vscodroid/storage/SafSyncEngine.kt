@@ -787,7 +787,7 @@ class SafSyncEngine(private val context: Context) {
         }
     }
 
-    private fun uploadsInFlight(): Set<String> = synchronized(uploadJournalLock) {
+    internal fun uploadsInFlight(): Set<String> = synchronized(uploadJournalLock) {
         try {
             val journal = uploadJournal()
             if (journal.isFile) journal.readLines().filter { it.isNotBlank() }.toSet()
