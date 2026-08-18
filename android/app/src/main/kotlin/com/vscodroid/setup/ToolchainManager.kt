@@ -147,7 +147,6 @@ class ToolchainManager(private val context: Context) {
     private val httpDownloads = ConcurrentHashMap<String, HttpDownload>()
 
     companion object {
-        private const val SPACE_BUFFER = 50_000_000L  // 50 MB free space buffer
         private const val HTTP_TIMEOUT_MS = 30_000     // 30s connect + read timeout
         private const val MAX_RETRIES = 2
         private const val DOWNLOAD_BUFFER_SIZE = 8192
@@ -705,7 +704,16 @@ class ToolchainManager(private val context: Context) {
         report(packName, AssetPackStatus.PENDING, 0)
 
         ioExecutor.execute {
-            val tempDir = File(context.cacheDir, "toolchain-download")
+            // Per download, not per class. The finally below deletes this
+            // directory whole, and it used to be one constant path shared by
+            // every ToolchainManager in the process: five call sites each build
+            // their own, ioExecutor is an instance field so it serialises
+            // nothing across them, and rotating ToolchainActivity or cancelling
+            // the first-run queue leaves an earlier download still running. Two
+            // downloads then wrote one zip path and each finally deleted the
+            // other's tree, which surfaces as a digest mismatch, the alarm for
+            // tampering, fired by a race with ourselves.
+            val tempDir = toolchainTempDir(context.cacheDir, packName)
             val zipFile = File(tempDir, "$packName.zip")
             val extractDir = File(tempDir, packName)
 
@@ -713,7 +721,7 @@ class ToolchainManager(private val context: Context) {
                 // Pre-flight disk space check
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
-                val requiredBytes = estimatedSize + SPACE_BUFFER
+                val requiredBytes = toolchainInstallBytes(estimatedSize)
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
@@ -775,6 +783,11 @@ class ToolchainManager(private val context: Context) {
                 extractDir.deleteRecursively()
                 extractDir.mkdirs()
                 extractZip(zipFile, extractDir)
+                // Before the copy, which is the other half of the peak. The
+                // digest was checked above and nothing reads the archive again,
+                // so holding it through installFromDirectory buys nothing and
+                // costs a device its whole download size in headroom.
+                zipFile.delete()
 
                 // Install from extracted directory (same path as Play Asset Delivery)
                 installFromDirectory(packName, extractDir)
@@ -1156,18 +1169,8 @@ class ToolchainManager(private val context: Context) {
 
     // -- Shared file operations --
 
-    private fun copyDirectoryRecursively(src: File, dest: File) {
-        if (src.isDirectory) {
-            dest.mkdirs()
-            val children = src.listFiles() ?: return
-            for (child in children) {
-                copyDirectoryRecursively(child, File(dest, child.name))
-            }
-        } else {
-            dest.parentFile?.mkdirs()
-            src.copyTo(dest, overwrite = true)
-        }
-    }
+    private fun copyDirectoryRecursively(src: File, dest: File) =
+        copyDirectoryTree(src, dest)
 
     // -- Environment file generation --
 
@@ -1612,6 +1615,85 @@ class ToolchainManager(private val context: Context) {
  * shell functions that route them through their interpreter, because nothing
  * under `filesDir` can be executed directly whatever its mode.
  */
+/**
+ * A staging directory belonging to one download rather than to the class.
+ *
+ * The path used to be a constant, and the `finally` that cleans up deletes the
+ * directory whole. Five call sites each construct their own `ToolchainManager`
+ * and `ioExecutor` is an instance field, so it serialises nothing between them:
+ * rotating the toolchain screen, or cancelling the first-run queue and reaching
+ * the picker again, leaves an earlier download still running against the same
+ * path. Each one's cleanup then deleted the other's archive and tree, which
+ * surfaces as a digest mismatch, the alarm that exists for tampering, raised by
+ * a race with ourselves.
+ *
+ * A process killed mid-download leaves one directory behind, which Android
+ * reclaims under storage pressure. The shared path leaked the same way and was
+ * merely overwritten by the next attempt rather than reclaimed.
+ */
+internal fun toolchainTempDir(cacheDir: File, packName: String): File =
+    File(cacheDir, "toolchain-download/$packName-${System.nanoTime()}")
+
+/** Free space asked for beyond what the install itself needs. */
+internal const val SPACE_BUFFER = 50_000_000L
+
+/**
+ * What an HTTP toolchain install actually needs free, given its unpacked size.
+ *
+ * Twice the tree, because the install holds two copies at its peak: the one
+ * unpacked into the cache and the one being written into `filesDir/usr`. The
+ * reservation used to charge for one, which is the product rather than the
+ * process, and nothing frees a stage before the next allocates. For Java 17 that
+ * asked 196 MB for something that needs about 342, so every device between the
+ * two figures downloaded 55 MB and then failed partway through the copy, with
+ * the disk error reported as a network problem and the half-copied files left in
+ * `usr/` under no manifest, so each retry started from less space than the last.
+ *
+ * The downloaded archive is deliberately not a third term: it is deleted after
+ * extraction, before the copy begins. Charging for it here as well would refuse
+ * devices for room they never need at once.
+ */
+internal fun toolchainInstallBytes(unpackedBytes: Long): Long =
+    unpackedBytes * 2 + SPACE_BUFFER
+
+/**
+ * Copies a tree, refusing rather than shrugging when a directory cannot be read.
+ *
+ * `listFiles` answers null both for a directory that is empty of readable
+ * entries and for one it could not enumerate at all, and this used to adopt the
+ * benign reading with a bare `return`. The caller then wrote the install record
+ * and reported the toolchain COMPLETED: a subtree that was never copied, symlinks
+ * pointing at files that are not there, a green card, and a command that does not
+ * run. The file already states the principle elsewhere, that damage is not
+ * absence; this is the one place it was not applied.
+ *
+ * At file scope with the lister injected so the refusing branch can be driven
+ * from a JVM test, which is the only way to reach it: producing a real
+ * unreadable directory needs a filesystem fault or a concurrent deletion.
+ *
+ * @param list how children are enumerated, defaulting to the real filesystem
+ * @throws IOException if a directory exists but cannot be listed
+ */
+internal fun copyDirectoryTree(
+    src: File,
+    dest: File,
+    list: (File) -> Array<File>? = File::listFiles,
+) {
+    if (src.isDirectory) {
+        dest.mkdirs()
+        val children = list(src)
+            ?: throw IOException(
+                "Cannot list ${src.absolutePath}; the toolchain tree is incomplete"
+            )
+        for (child in children) {
+            copyDirectoryTree(child, File(dest, child.name), list)
+        }
+    } else {
+        dest.parentFile?.mkdirs()
+        src.copyTo(dest, overwrite = true)
+    }
+}
+
 internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymlink): Int {
     var fixed = 0
     root.walkTopDown()
