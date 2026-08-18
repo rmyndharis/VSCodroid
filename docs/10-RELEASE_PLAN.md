@@ -161,17 +161,21 @@ Examples:
 
 ### 3.2 Version Code (Android)
 
-```kotlin
-// Monotonically increasing integer for Play Store
-// Format: XYYZZPP
-// X  = major (1 digit)
-// YY = minor (2 digits)
-// ZZ = patch (2 digits)
-// PP = build (2 digits, for hotfixes)
+A plain counter, incremented by one for every build uploaded to Play, and
+unrelated to the versionName. 1.0.0 shipped as 10; 1.1.0 ships as 12, because 11
+was uploaded and burned.
 
-// Example: 1.2.3 build 1 = 1020301
-versionCode = major * 1_000_000 + minor * 10_000 + patch * 100 + build
+```kotlin
+versionCode = 12
+versionName = "1.1.0"
 ```
+
+This document described an encoded scheme, `major * 1_000_000 + minor * 10_000 +
+patch * 100 + build`, which no release has used. Following it would take the next
+build from 12 to 1,010,000, and Play never accepts a lower versionCode than one
+already uploaded, so the million in between would be gone permanently. The two
+numbers are deliberately independent: `versionName` is a label for people and may
+repeat, `versionCode` is an identity Play enforces and may not.
 
 ---
 
@@ -265,7 +269,7 @@ list says so outright, because a listing is read before the guide is.
 
 | Policy | Compliance |
 |--------|-----------|
-| Binary execution | On a Play install, every binary is delivered by Play. Core tools (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) ship as `.so` in the base APK's `jniLibs`. The optional toolchains — **Go, Ruby and Java 17; those three and no others** — are never in the APK and arrive as on-demand asset packs, selected by the user and fetched by Play. Note that the app has a second delivery path outside Play's scope: an install whose installing package is not `com.android.vending` (sideload, debug build, `adb install`) downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases. Pre-compiled development tools for developer use. |
+| Binary execution | On a Play install, every binary is delivered by Play. Core tools (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) ship as `.so` in the base APK's `jniLibs`. The optional toolchains (**Ruby and Java 17, those two and no others**) are never in the APK and arrive as on-demand asset packs, selected by the user and fetched by Play. Note that the app has a second delivery path outside Play's scope: an install whose installing package is not `com.android.vending` (sideload, debug build, `adb install`) downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases. Pre-compiled development tools for developer use. |
 | Foreground Service (specialUse) | Local development server powering the code editor. Must run persistently to serve the IDE UI and handle file operations. |
 | Permissions | The manifest declares four, and nothing else: INTERNET (extension marketplace, toolchain downloads), FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE (dev server), POST_NOTIFICATIONS (service notification). **No WAKE_LOCK and no MANAGE_EXTERNAL_STORAGE** — this row claimed both as "optional" and neither was ever declared; MANAGE_EXTERNAL_STORAGE would pull in a Play declaration process the app has no need of. External folders are reached through SAF, which is a user grant per folder and not a permission. No camera/mic/location/contacts. Check against `AndroidManifest.xml` before submitting, not against this row. |
 | Privacy | No telemetry collected. No personal data transmitted. All data stays on device. Privacy policy available at [URL]. |

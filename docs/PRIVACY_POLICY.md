@@ -1,13 +1,15 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: August 18, 2026**
+**Last Updated: August 19, 2026**
 
 ## Summary
 
 VSCodroid is a fully offline code editor for Android. **We** do not collect, transmit, or store any personal data — there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
 
-Two exceptions to "nothing leaves the device", both under your control and neither involving us: Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below), and anything you ask the app to fetch — an extension, a toolchain, an `npm install` — is a request you initiated (see **Network Access**).
+Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated (see **Network Access**).
+
+The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It does nothing until you sign in, and it can be disabled or uninstalled.
 
 ---
 
@@ -36,6 +38,16 @@ If an extension asks you to sign in — to GitHub, for example — the app hands
 What comes back is a single opaque value that the editor itself issued and is waiting for. The app passes it to the editor page without reading, parsing or storing it, and without sending it anywhere. It is accepted only while a sign-in is plausibly in flight — the app records when it last opened a browser, and a callback arriving outside a ten-minute window from that moment is discarded rather than delivered, so another app on your device cannot inject one at will.
 
 Any tokens the editor keeps afterwards are stored locally in the app's private storage on your device.
+
+### GitHub Copilot Chat (Bundled, User-Initiated)
+
+VSCodroid bundles **GitHub Copilot Chat**, published by GitHub, and the editor is configured to use it as its chat provider. The extension loads when the editor starts, and it is not something this app disables.
+
+It has no account to work against until you sign in to GitHub, which happens through the browser flow described above, and its features are unavailable until you do.
+
+Once you are signed in and you use it, **what you send goes to GitHub**. That means the message you type and the material the extension decides to attach as context, which normally includes code from the file you are working in and can include other parts of the project. That exchange is between you and GitHub under GitHub's terms and privacy statement (https://docs.github.com/site-policy). VSCodroid does not proxy it, read it, or keep a copy, and it is the only feature in this app that sends anything you write to a service we did not have to name elsewhere in this policy.
+
+If you would rather it were not there, disable or uninstall **GitHub Copilot Chat** from the Extensions view; the editor works without it.
 
 ### Git Operations (User-Initiated)
 
@@ -83,7 +95,7 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 - We do **not** serve advertisements
 - We do **not** collect device identifiers, IP addresses, or location data
 - We do **not** use cookies for tracking purposes
-- We do **not** share any data with third parties
+- We do **not** share any data with third parties. One thing this app ships does, and it is named rather than tucked under this line: GitHub Copilot Chat sends what you ask it, and the code it attaches as context, to GitHub, once you have signed in and used it. See the section above
 - We do **not** send Microsoft telemetry. To be exact about how, because the earlier wording here said the telemetry code "has been removed from the VS Code source" and that is not what was done: the code is still in the editor build, and it is switched off and given nowhere to report to. `telemetryOptIn` is false in the product configuration applied at build time, both `telemetryOptIn` and `enableTelemetry` are set false again at every start, and the built `product.json` carries no telemetry endpoint for it to reach. Disabled and unaddressed, rather than deleted
 
 ## Data Stored on Your Device
@@ -102,8 +114,9 @@ All of this data is removed when you uninstall the app or clear the app's data t
 
 ## Third-Party Services
 
-VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The only third-party services integrated at the system level are:
+VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The third-party services it integrates are:
 
+- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. Unused until you sign in to GitHub; from then on what you ask it and the code it attaches go to GitHub, under GitHub's terms and privacy statement. It can be disabled or uninstalled from the Extensions view.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
 - **GitHub Releases**: Used solely for downloading those same toolchain packs on installs that did not come from the Play Store. Governed by GitHub's privacy policy.
 
