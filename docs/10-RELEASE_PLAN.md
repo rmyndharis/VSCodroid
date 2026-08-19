@@ -294,7 +294,30 @@ it turns on one bundled feature.
 | Is sharing optional? | **Yes, users can choose.** The feature is inert until the user signs in to GitHub, and the extension can be disabled or uninstalled from the Extensions view. |
 | Purpose | **App functionality.** No analytics, no advertising, no personalisation, no fraud prevention. |
 | Encrypted in transit? | **Yes**, over HTTPS. |
-| Can users request deletion? | Through GitHub, under GitHub's terms. This project stores none of it and so can delete none of it. |
+| Which methods of account creation does your app support? | **My app does not allow users to create an account.** There is no account system here at all, and the OAuth path only relays a callback for an extension signing in to a service the user already belongs to. |
+| Can users login to your app with accounts created outside of the app? | **No.** Nothing here authenticates anyone. There is no login gate, no session, and only three activities: splash, editor, toolchain picker. The editor opens with everything available. |
+| Can users request deletion? | **No.** The console wants a yes or a no, and this project runs no server and stores nothing, so it can delete nothing. Deletion of what Copilot sent is GitHub's, under GitHub's terms. |
+
+Ticking no account creation opens a follow-up asking whether users can log
+in with accounts made elsewhere, and the answer is no for the same reason.
+Signing in to GitHub is an extension authenticating to a third party; the
+token that comes back is written by `callback.html` into the WebView's
+localStorage, where it belongs to the editor. The app holds no account and
+no session, and the test that settles it is that someone can use every part
+of this app without ever signing in to anything.
+
+The deletion question is marked optional and offers a third choice about
+automatic deletion within ninety days. That choice describes data you hold
+and age out. This project holds none, so the answer stays a plain no.
+
+The account-creation question is the one worth pausing on, because the wrong
+answer is the tempting one. The form says it covers accounts made "by
+redirecting users to a webpage where they can create an account", and GitHub's
+sign-in page does carry a sign-up link, so ticking OAuth looks conservative.
+It is not. Ticking it asserts that this app supports account creation, which
+engages Play's account deletion policy and obliges the listing to publish a
+route for deleting accounts that this project never creates, never holds and
+cannot delete. The question asks about the app's own accounts; it has none.
 
 Everything else the app touches stays on the device or goes only where the user
 sent it: Git remotes they configured, package registries they invoked, SSH hosts
