@@ -85,23 +85,6 @@ class SafStorageManager(private val context: Context) {
         }
     }
 
-    /**
-     * Releases a persisted URI permission and removes the folder from recent list.
-     * Also cleans up the corresponding local mirror directory.
-     */
-    fun revokePermission(uri: Uri) {
-        try {
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            context.contentResolver.releasePersistableUriPermission(uri, flags)
-        } catch (e: SecurityException) {
-            Logger.d(tag, "Permission already revoked for: $uri")
-        }
-        removeFromRecentFolders(uri)
-        cleanupMirror(uri)
-        Logger.i(tag, "Revoked permission and cleaned up: $uri")
-    }
-
     // -- Recent Folders --
 
     /**
@@ -113,7 +96,7 @@ class SafStorageManager(private val context: Context) {
      * the workbench calls whenever it wants the recent list — and made a permission that
      * read as absent for a moment enough to take the mirror of the folder currently open
      * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
-     * and in [revokePermission] now.
+     * alone now.
      */
     /**
      * The device folder whose mirror the workbench has opened, if it opened one.

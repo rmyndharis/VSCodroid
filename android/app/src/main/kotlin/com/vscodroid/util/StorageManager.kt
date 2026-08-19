@@ -49,25 +49,6 @@ object StorageManager {
     }
 
     /**
-     * Returns a human-readable storage summary string.
-     */
-    fun getStorageSummary(context: Context): String {
-        val breakdown = getStorageBreakdown(context)
-        val sb = StringBuilder()
-        sb.appendLine("Storage Usage:")
-        sb.appendLine("  VS Code Server: ${formatSize(breakdown.getLong("vscode_server"))}")
-        sb.appendLine("  Extensions:     ${formatSize(breakdown.getLong("extensions"))}")
-        sb.appendLine("  User Data:      ${formatSize(breakdown.getLong("user_data"))}")
-        sb.appendLine("  Logs:           ${formatSize(breakdown.getLong("logs"))}")
-        sb.appendLine("  Tools:          ${formatSize(breakdown.getLong("tools"))}")
-        sb.appendLine("  SAF Mirrors:    ${formatSize(breakdown.getLong("saf_mirrors"))}")
-        sb.appendLine("  Cache:          ${formatSize(breakdown.getLong("cache"))}")
-        sb.appendLine("  ─────────────────────")
-        sb.appendLine("  Total:          ${formatSize(breakdown.getLong("total"))}")
-        return sb.toString()
-    }
-
-    /**
      * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs.
      * Returns the number of bytes freed.
      */
@@ -105,18 +86,6 @@ object StorageManager {
         vscodeLogs.mkdirs() // recreate
 
         Logger.i(TAG, "Caches cleared: ${formatSize(freed)} freed")
-        return freed
-    }
-
-    /**
-     * Clears SAF mirror directories (synced copies of external folders).
-     * Users should close any SAF folder first.
-     */
-    fun clearSafMirrors(context: Context): Long {
-        val mirrorsDir = File(context.filesDir, "saf-mirrors")
-        val freed = deleteRecursive(mirrorsDir)
-        mirrorsDir.mkdirs()
-        Logger.i(TAG, "SAF mirrors cleared: ${formatSize(freed)} freed")
         return freed
     }
 

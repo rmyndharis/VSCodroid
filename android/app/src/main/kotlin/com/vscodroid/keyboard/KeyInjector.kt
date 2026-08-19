@@ -57,24 +57,6 @@ class KeyInjector(private val webView: WebView) {
         Logger.d(tag, "Injected key=$key ctrl=$ctrlKey alt=$altKey shift=$shiftKey")
     }
 
-    fun injectText(text: String) {
-        val escaped = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-        val js = """
-            (function() {
-                var target = document.activeElement || document.body;
-                var event = new InputEvent('beforeinput', {
-                    data: '${escaped}',
-                    inputType: 'insertText',
-                    bubbles: true,
-                    cancelable: true,
-                    composed: true
-                });
-                target.dispatchEvent(event);
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(js, null)
-    }
-
     /**
      * Installs a JS `beforeinput` listener that intercepts soft keyboard text input
      * when ExtraKeyRow modifiers (Ctrl/Alt) are active. Instead of inserting text,

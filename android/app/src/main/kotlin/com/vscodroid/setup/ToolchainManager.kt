@@ -257,33 +257,6 @@ class ToolchainManager(private val context: Context) {
         return result.filter { it.isNotEmpty() }
     }
 
-    fun isInstalled(name: String): Boolean =
-        getInstalledToolchains().contains(name)
-
-    fun getToolchainEnv(name: String): Map<String, String> {
-        val state = readState()
-        for (i in 0 until state.length()) {
-            val obj = state.optJSONObject(i) ?: continue
-            if (obj.optString("name") == name) {
-                val env = obj.optJSONObject("env") ?: return emptyMap()
-                return env.keys().asSequence().associateWith { env.getString(it) }
-            }
-        }
-        return emptyMap()
-    }
-
-    fun getToolchainPathDirs(name: String): List<String> {
-        val state = readState()
-        for (i in 0 until state.length()) {
-            val obj = state.optJSONObject(i) ?: continue
-            if (obj.optString("name") == name) {
-                val arr = obj.optJSONArray("pathDirs") ?: return emptyList()
-                return (0 until arr.length()).map { arr.getString(it) }
-            }
-        }
-        return emptyList()
-    }
-
     // -- Install --
 
     fun install(packName: String) {

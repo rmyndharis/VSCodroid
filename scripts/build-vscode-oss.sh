@@ -56,7 +56,7 @@ VSCODE_VERSION="${VSCODE_VERSION:?pass it in from the repo VSCODE_VERSION file}"
 # the link from the source to it, which ran through that name.
 #
 # What the pin asserts is stronger than "this is where the tag pointed". All
-# twelve patches in patches/ were applied to this commit, in order, and applied
+# the patches in patches/ were applied to this commit, in order, and applied
 # cleanly. So the bar for changing this file is not that the new tag resolved --
 # it is that the patches still apply to what it resolved to.
 VSCODE_COMMIT="${VSCODE_COMMIT:?pass it in from the repo VSCODE_COMMIT file}"

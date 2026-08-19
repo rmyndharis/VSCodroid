@@ -103,12 +103,14 @@ class SplashActivityTest {
             serverJs.exists(),
         )
         val before = serverJs.lastModified()
+        val versionBefore = getSetupPrefs().getString("setup_version", null)
 
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
         Thread.sleep(3000)  // give it time to transition
 
         val version = getSetupPrefs().getString("setup_version", null)
         assertNotNull("setup_version should still be set after skip", version)
+        assertEquals("setup_version changed across a launch that skipped setup", versionBefore, version)
         assertEquals(
             "server.js was rewritten, so extraction ran instead of being skipped",
             before,
@@ -117,19 +119,4 @@ class SplashActivityTest {
         scenario.close()
     }
 
-    @Test
-    fun subsequentLaunch_preservesVersion() {
-        ServerReadyHelper.markSetupComplete(context)
-        val versionBefore = getSetupPrefs().getString("setup_version", null)
-
-        val scenario = ActivityScenario.launch(SplashActivity::class.java)
-        Thread.sleep(3000)
-
-        val versionAfter = getSetupPrefs().getString("setup_version", null)
-        assertTrue(
-            "setup_version should be preserved: before=$versionBefore, after=$versionAfter",
-            versionAfter != null && versionAfter == versionBefore
-        )
-        scenario.close()
-    }
 }

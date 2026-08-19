@@ -20,7 +20,6 @@ const HOST = args.host || '127.0.0.1';
 const PORT = parseInt(args.port) || 13337;
 const LOG_LEVEL = args.log || 'info';
 
-const HOME_DIR = process.env.HOME || '/data/data/com.vscodroid/files/home';
 const SERVER_DIR = path.dirname(__filename);
 const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
 

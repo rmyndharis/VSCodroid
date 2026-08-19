@@ -249,8 +249,11 @@ extracted size suggests is what leaves setup failing partway.
 These move with every VS Code bump. Re-measure rather than trusting them:
 
 ```bash
-# what the app will extract, and therefore what the storage gate demands
-find android/app/src/main/assets -type f -exec stat -f %z {} + | awk '{s+=$1} END {printf "%.0f MB assets, gate demands %.0f MB\n", s/1048576, s/1048576+64}'
+# what the app will extract, and therefore what the storage gate demands.
+# python3 rather than stat: `stat -f` is the BSD spelling and `stat -c` the GNU one,
+# and the version that shipped here failed on Linux by printing a plausible 0 MB.
+# This also sums the way the gate itself does, in app/build.gradle.kts.
+python3 -c "import os; t=sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk('android/app/src/main/assets') for f in fs); print(f'{t/1048576:.0f} MB assets, gate demands {t/1048576+64:.0f} MB')"
 ```
 
 ## 🤝 Contributing

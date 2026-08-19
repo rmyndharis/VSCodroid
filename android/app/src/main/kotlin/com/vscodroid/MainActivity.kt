@@ -1641,10 +1641,13 @@ class MainActivity : AppCompatActivity() {
                 window.open = function(url) {
                     if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
                         var t = (window.__vscodroid || {}).authToken;
-                        // Only claim the click if the bridge actually opened it. This
-                        // is a development tool: a link the user clicked opens, and
-                        // that includes a LAN dev server, a private registry or a
-                        // staging host the bridge's allow-list does not cover.
+                        // Only claim the click if the bridge actually opened it.
+                        // `openExternalUrl` answers false when the launch itself fails,
+                        // not when it disapproves of the destination: SecurityManager
+                        // has no URL allow-list and says so at the point one used to
+                        // stand. Reading this as a destination filter is the mistake to
+                        // avoid, because it invites re-deriving the fall-through around
+                        // a constraint that is gone.
                         // Swallowing the false here meant the click did nothing and
                         // said nothing; falling through lets the WebView navigation
                         // path open it, which is where opening anything already lives.

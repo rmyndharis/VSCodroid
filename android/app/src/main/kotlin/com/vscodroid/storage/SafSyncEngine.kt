@@ -28,12 +28,13 @@ import kotlin.concurrent.thread
  * the mirror and never reach the device.
  *
  * ## Conflict Resolution
- * Local changes win when both sides changed: the mirror is replaced only when the
- * source is newer, carries no timestamp, or matches in time while differing in size.
+ * Local changes win when both sides changed: the mirror is replaced when it is absent,
+ * when the source is newer, or when the two match in time and differ in size. A source
+ * carrying no timestamp is decided by the synced record instead, because there is no
+ * clock to compare; see [shouldOverwriteMirror] for what that costs.
  * External changes are picked up the next time the folder is opened, which is
- * the only refresh that exists — there is no "Refresh from device" action, and
- * nothing calls [com.vscodroid.util.StorageManager.clearSafMirrors] either, so a
- * mirror cannot be cleared from inside the app. Reopening also removes mirror files
+ * the only refresh that exists: there is no "Refresh from device" action, and nothing
+ * clears a mirror from inside the app either. Reopening also removes mirror files
  * for documents deleted on the device, under the conditions [reconcileDeletions]
  * spells out.
  */
