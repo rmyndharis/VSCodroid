@@ -1,7 +1,10 @@
 package com.vscodroid.setup
 
+import com.vscodroid.BuildConfig
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -366,6 +369,54 @@ class LatestReleasePinningTest {
         assertNull(appReleaseTag(""))
         assertNull(appReleaseTag("1.1.0/../../etc"))
         assertNull(appReleaseTag("1.1 .0"))
+    }
+
+    @Test
+    fun `this build's own version name yields a tag the pinner accepts`() {
+        // The cases around this one pass literals, which checks the function and
+        // not the build. This one reads the value the app will actually hand it.
+        //
+        // Worth stating what it protects, because the failure is silent, and worth
+        // separating two failures the same sentence used to conflate. A versionName
+        // carrying a character `TAG_CHARS` refuses makes `appReleaseTag` answer
+        // null. A `versionNameSuffix` it does not strip does not: `TAG_CHARS`
+        // accepts `-`, so the function returns a tag WITH the suffix, no release
+        // carries that tag, and the probe 404s. Both end the same way, with
+        // `pinLatest` falling back to `latest` forever and a payload quietly
+        // coming from the wrong release, and neither reports anything.
+        //
+        // The second assertion looks for the word `debug` rather than banning `-`
+        // outright, because this project has shipped prerelease tags (`v0.1.0-alpha`,
+        // `v0.2.2-m6`) and a legitimate one must not turn the suite red. It is a
+        // guard against one word and says so: a build type marked some other way
+        // would pass it. `endsWith("-debug")` was tried first and is worse than
+        // useless, since `removeSuffix` strips exactly that string, so the only
+        // suffixes that survive to be asserted on are the ones it does not match.
+        //
+        // The release variant has no unit test task to run this under: AGP builds
+        // test components for `testBuildType` only, which is debug. So this runs
+        // against the debug value, "1.1.0-debug", and the suffix stripping is the
+        // half it can prove. The release value differs from it only by that suffix.
+        val tag = appReleaseTag(BuildConfig.VERSION_NAME)
+
+        assertNotNull(
+            tag,
+            "BuildConfig.VERSION_NAME is \"${BuildConfig.VERSION_NAME}\" and appReleaseTag " +
+                "refuses it, so every install would silently resolve through `latest`. " +
+                "TAG_CHARS rejects it, which means the version format itself changed: " +
+                "a suffix alone does not land here, it lands in the case below.",
+        )
+        assertTrue(
+            !tag!!.contains("debug"),
+            "the tag is \"$tag\", which still carries a debug marker. No release is " +
+                "tagged with one, so the probe would 404 and pinning would fall back to " +
+                "`latest` permanently.",
+        )
+        assertNotNull(
+            pinnedAssetUrl(zip, tag),
+            "appReleaseTag produced \"$tag\" and pinnedAssetUrl refuses it. The two " +
+                "disagree about the shape of a tag, so pinning is dead.",
+        )
     }
 
     @Test
