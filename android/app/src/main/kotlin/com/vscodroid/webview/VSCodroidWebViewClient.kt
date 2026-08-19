@@ -625,13 +625,21 @@ class VSCodroidWebViewClient(
                 )
             }
 
-            if (scheme == "http" || scheme == "https") {
-                // Remote resource — proxy through to actual URL
-                val query = uri.query
-                val queryPart = if (!query.isNullOrEmpty()) "?$query" else ""
-                val actualUrl = "$scheme://$authority$path$queryPart"
-                return proxyToLocalhost(actualUrl, "GET", "resource:$authority$path")
-            }
+            // An `http`/`https` arm sat here and forwarded to `$scheme://$authority$path`,
+            // whatever host the page named. It went out correctly without the connection
+            // token, so it did not leak a credential, but it did lend this app's network
+            // identity to any page the editor renders: a way to reach a LAN address or a
+            // loopback service the page could not reach itself.
+            //
+            // Removed rather than restricted, for the same reason as the branch below and
+            // on the same evidence. Nothing produces the form: `pre()` in the shipped
+            // workbench returns an http or https URI unchanged rather than encoding it
+            // into the resource host, and no bundled extension contains one. Both were
+            // grepped, each against a control proving the search was live.
+            //
+            // Remote content in a webview still loads normally. It does so through the
+            // WebView's own navigation, which is where reaching anything already lives;
+            // this arm was a second route into the same place with no restriction on it.
 
             // A catch-all for every other scheme with an authority used to sit here,
             // proxying to `http://127.0.0.1:$port$path` with the connection token

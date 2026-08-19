@@ -149,6 +149,41 @@ class ConnectionTokenLoggingTest {
     }
 
     /**
+     * An `https` resource host is refused rather than forwarded.
+     *
+     * An arm here used to proxy `https+host.vscode-resource.vscode-cdn.net/path` out to
+     * `https://host/path`, whatever host the page named. It went without the connection
+     * token, so no credential left, but it lent this app's network identity to any page
+     * the editor renders, including reaching a LAN or loopback address the page could
+     * not reach itself.
+     *
+     * Nothing produced the form: the shipped workbench returns http and https URIs
+     * unchanged rather than encoding them into the resource host, and no bundled
+     * extension contains one. This case is what notices the arm coming back.
+     */
+    @Test
+    fun `an https resource host is refused rather than forwarded`() {
+        val deadPort = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            cdnRequest("https+example.test.vscode-resource.vscode-cdn.net", "/probe.txt"),
+            deadPort, token, emptyList(), emptyList(), { null },
+        )
+
+        assertTrue(
+            logged.none { it.contains("resource:example.test") },
+            "the forwarding arm is back: a page named a host and the app went to it. " +
+                "Logged:\n" + logged.joinToString("\n") { "  $it" },
+        )
+        assertTrue(
+            logged.any { it.contains("Unknown resource scheme") },
+            "the refusal should say which scheme it refused. Logged:\n" +
+                logged.joinToString("\n") { "  $it" },
+        )
+        assertNothingLeaked()
+    }
+
+    /**
      * An unknown scheme is refused, and no tokened URL is built for it.
      *
      * This case used to assert the opposite: that the request DID reach a branch
