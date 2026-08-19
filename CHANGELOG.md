@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Content rendered in the editor can no longer read workspace files across origins. Served files are readable by anyone, and a page in the built-in browser could fetch one.
+- A webview can no longer name an arbitrary file and have the app read it with the editor's own credential. The route that did was reachable but unused.
+
 ### Fixed
 
 - A device folder's local copy is no longer deleted when it falls off the recent list. Anything written there that never reached the device, a cloned repository included, was the only copy.

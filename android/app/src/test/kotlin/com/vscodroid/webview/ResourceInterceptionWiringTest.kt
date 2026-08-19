@@ -81,15 +81,100 @@ class ResourceInterceptionWiringTest {
     @AfterEach
     fun tearDown() = unmockkAll()
 
-    /** A resource request for [path], shaped the way the workbench sends one. */
-    private fun requestFor(path: String): WebResourceRequest {
+    /**
+     * A resource request for [path], shaped the way the workbench sends one.
+     *
+     * [origin] is stubbed explicitly, including when it is null, because the fixture is
+     * `relaxed`: an unstubbed `requestHeaders` answers with an empty map, which the
+     * origin gate reads as "no Origin" and serves. Every case here would therefore pass
+     * whatever the gate did, which is what the cases below exist to avoid.
+     */
+    private fun requestFor(path: String, origin: String? = null): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.host } returns "file+.vscode-resource.vscode-cdn.net"
         every { uri.path } returns path
         every { uri.query } returns null
         val request = mockk<WebResourceRequest>(relaxed = true)
         every { request.url } returns uri
+        every { request.requestHeaders } returns
+            if (origin == null) emptyMap() else mapOf("Origin" to origin)
         return request
+    }
+
+    /**
+     * A page that is not the workbench cannot read a workspace file.
+     *
+     * The served file carries `Access-Control-Allow-Origin: *`, so before the gate the
+     * answer to "who may read this" was anybody who could reach the interceptor -- and
+     * a remote page in the bundled Simple Browser can, with no network involved.
+     *
+     * Proved by making the file unreadable rather than by the log alone, the same way
+     * `a refused resource is never opened` does: if the refusal did not happen, the open
+     * would, and the fixture would throw.
+     */
+    @Test
+    fun `a foreign origin is refused before the file is opened`() {
+        val unreadable = File(workspace, "secret.txt").apply {
+            writeText("x")
+            check(setReadable(false, false)) { "could not make the fixture unreadable" }
+        }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(unreadable.absolutePath, origin = "https://evil.example"),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            warnings.any { it.contains("foreign origin") && it.contains("https://evil.example") },
+            "the refusal should name the origin it refused. Logged:\n" +
+                warnings.joinToString("\n") { "  $it" },
+        )
+    }
+
+    /**
+     * The workbench's own origin still serves, or the gate has closed the app to itself.
+     *
+     * This case and the one below it assert the ABSENCE of a refusal, so neither goes red
+     * if the gate is deleted. That is deliberate and worth saying plainly: only
+     * `a foreign origin is refused before the file is opened` detects the gate going
+     * missing, measured by disabling it. These two guard the other direction, which is the
+     * one that breaks the editor rather than the one that leaks a file.
+     */
+    @Test
+    fun `the workbench origin is served`() {
+        val file = File(workspace, "ok.txt").apply { writeText("hello") }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(file.absolutePath, origin = "http://127.0.0.1:$PORT"),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            warnings.none { it.contains("foreign origin") },
+            "the workbench was refused its own file. Logged:\n" +
+                warnings.joinToString("\n") { "  $it" },
+        )
+    }
+
+    /**
+     * And a webview document's origin, which is where extension content lives:
+     * `webviewContentExternalBaseUrlTemplate` in the shipped bundle resolves to
+     * `https://{{uuid}}.vscode-cdn.net/...`.
+     */
+    @Test
+    fun `a webview origin is served`() {
+        val file = File(workspace, "asset.css").apply { writeText("body{}") }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(file.absolutePath, origin = "https://0f7c2b1a-uuid.vscode-cdn.net"),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            warnings.none { it.contains("foreign origin") },
+            "an extension webview was refused its own resource. Logged:\n" +
+                warnings.joinToString("\n") { "  $it" },
+        )
     }
 
     private fun intercept(path: String, openFolder: String?) = assertNotNull(

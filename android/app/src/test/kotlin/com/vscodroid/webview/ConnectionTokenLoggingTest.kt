@@ -149,34 +149,42 @@ class ConnectionTokenLoggingTest {
     }
 
     /**
-     * The resource branch that proxies through our own server, which is the other
-     * caller of `withToken`.
+     * An unknown scheme is refused, and no tokened URL is built for it.
      *
-     * The scheme has to be one the interceptor does not handle itself. This case
-     * was written with `vscode-remote+authority`, which takes the
-     * `file || vscode-remote` branch instead: with no published roots the request
-     * resolves to `Refused` and returns before `withToken` or the proxy is ever
-     * reached. It passed, on the refusal's own log line — and
-     * [assertNothingLeaked]'s "something was logged" control could not tell,
-     * because something *was*.
+     * This case used to assert the opposite: that the request DID reach a branch
+     * appending the connection token, proven by the `remote-resource:` tag only
+     * that branch logs. That branch is gone. It proxied to
+     * `http://127.0.0.1:$port$path` with the token attached, where both the path
+     * and the query were the page's to choose, so a webview could name the
+     * server's `/vscode-remote-resource` route and read any absolute path with
+     * this app's credential.
      *
-     * So the control here names the branch rather than counting lines. Only the
-     * proxy path builds a `remote-resource:` tag, so finding it in the log is
-     * proof the tokened URL was actually constructed.
+     * The tag is therefore the control in reverse now: finding it would mean the
+     * branch is back. Keeping the case rather than deleting it is the point, since
+     * a deleted test cannot notice a restoration.
      */
     @Test
-    fun `the resource proxy does not log the token`() {
+    fun `an unknown resource scheme is refused without building a tokened URL`() {
         val deadPort = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
 
+        // The return value is deliberately not inspected. Refusing and serving both
+        // produce a WebResourceResponse, and its getters throw "not mocked" under the
+        // stub android.jar -- the same limitation that made `resourceOutcome` a value
+        // rather than a branch. The log is what distinguishes the two here.
         VSCodroidWebViewClient.interceptCdnRequest(
             cdnRequest("custom+authority.vscode-resource.vscode-cdn.net", "/some/asset.css"),
             deadPort, token, emptyList(), emptyList(), { null },
         )
 
         assertTrue(
-            logged.any { it.contains("remote-resource:") },
-            "the request never reached the branch that appends the token, so this case " +
-                "proves nothing. Logged instead:\n" + logged.joinToString("\n") { "  $it" },
+            logged.none { it.contains("remote-resource:") },
+            "the tokened proxy branch is back. Logged:\n" +
+                logged.joinToString("\n") { "  $it" },
+        )
+        assertTrue(
+            logged.any { it.contains("Unknown resource scheme") },
+            "the refusal should say which scheme it refused. Logged:\n" +
+                logged.joinToString("\n") { "  $it" },
         )
         assertNothingLeaked()
     }
