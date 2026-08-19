@@ -28,6 +28,7 @@ Kept current against the shipping app rather than frozen at plan time.
 
 | Document | Description | Audience |
 |----------|-------------|----------|
+| [Load-bearing invariants](./INVARIANTS.md) | Constraints that break silently when violated, and the record of documents that have already misled readers | Developers |
 | [User Guide](./USER_GUIDE.md) | Using the app: editor, terminal, extensions, SSH, toolchains | Users |
 | [Device Test Checklist](./DEVICE_TEST_CHECKLIST.md) | Manual on-device pass, run after the automated tests | QA |
 | [Legal Notices](./LEGAL_NOTICES.md) | Licenses and attribution for everything redistributed | Everyone |
@@ -80,7 +81,7 @@ appear in them, and they mean different things:
 Neither note is a guarantee about the sentence next to it. The code is still the only source of
 truth.
 
-The **maintained references** are the unnumbered documents: the User Guide and Privacy Policy that
+The **maintained references** are the unnumbered documents: the invariants table, the User Guide and Privacy Policy that
 ship to users, the Legal Notices recording what is redistributed, and the device test checklist run
 by hand on a real device.
 
