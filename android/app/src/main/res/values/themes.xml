@@ -9,6 +9,22 @@
 
         <!-- Window background: VS Code dark editor -->
         <item name="android:windowBackground">@color/colorBackground</item>
+
+        <!-- Transparent bars, so an edge-to-edge window shows the app behind them.
+             Attributes rather than Window.setStatusBarColor/setNavigationBarColor,
+             which is the whole point: Play flags those two calls in the bundle, and
+             the attribute form is not bytecode. API 35+ ignores both and paints the
+             bars from the window background regardless, so this decides API 33 and
+             34 only. Without it those two draw the Material3 default, which is blue
+             against this app's dark editor: measured on an API 33 emulator. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <!-- Declarative, and it replaces what androidx's enableEdgeToEdge() set
+             from code. API 35+ forces `always` whatever is asked for, so this
+             only decides API 33 and 34; naming the value the platform settles
+             on keeps the two the same. See util/ViewInsets.drawBehindSystemBars. -->
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
     </style>
 
 </resources>

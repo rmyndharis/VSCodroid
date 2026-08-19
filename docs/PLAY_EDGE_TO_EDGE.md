@@ -1,50 +1,115 @@
-# Play Console: "deprecated APIs for edge-to-edge" — read this before investigating
+# Play Console: "deprecated APIs for edge-to-edge"
 
-**The warning is expected, library-sourced, and cannot be cleared today. Do not
-burn a day re-deriving this.** Verified 2026-08-14.
+**Cleared on 2026-08-19. The three flagged APIs are no longer in the bundle.**
 
-Play flags `Window.setStatusBarColor`, `Window.setNavigationBarColor` and
-`LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES` in the app bundle. De-obfuscated
-against this repo's own R8 map (`android/app/build/outputs/mapping/release/mapping.txt`):
+This document said the opposite until that date, and said it firmly: "expected,
+library-sourced, and cannot be cleared today. Do not burn a day re-deriving
+this." The reasoning was wrong in one specific place, and the rest of this file
+exists so the same wrong turn is not taken again.
 
-| Play location | Real symbol |
+## What Play flags, and where it came from
+
+Play named three things: `Window.setStatusBarColor`, `Window.setNavigationBarColor`
+and `LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES`. All three were inside one call,
+`androidx.activity.enableEdgeToEdge()`, which `MainActivity`, `SplashActivity`
+and `ToolchainActivity` each made before `super.onCreate()`.
+
+Measured from the release dex with `dexdump`, de-obfuscated through the build's
+own `mapping.txt`:
+
+| API | Held by |
 |---|---|
-| `a.o.a` | `androidx.activity.EdgeToEdgeApi26.setUp()` |
-| `a.q.a` | `androidx.activity.EdgeToEdgeApi29.setUp()` |
-| `a.n.b` | `androidx.activity.EdgeToEdge` (`enableEdgeToEdge()` internals) |
-| `com.google.android.material.datepicker.n.y` | `MaterialDatePicker.onStart()` |
+| `setStatusBarColor` | `EdgeToEdgeApi26`, `EdgeToEdgeApi29`, `EdgeToEdgeApi35` |
+| `setNavigationBarColor` | `EdgeToEdgeApi26`, `EdgeToEdgeApi29`, `EdgeToEdgeApi35` |
+| `layoutInDisplayCutoutMode` | `EdgeToEdgeApi28`, `EdgeToEdgeApi30` |
+| `setStatusBarContrastEnforced` | `EdgeToEdgeApi29` |
+| `setNavigationBarContrastEnforced` | `EdgeToEdgeApi29`, `EdgeToEdgeApi35` |
 
-(The obfuscated names change every release. A Play location like `a.o.a` is
-class `a.o` plus member `a`, so grep for the CLASS — strip the last segment:
-`grep -nE '^[^ ].* -> a\.o:' .../mapping.txt` — then read the indented member
-lines under that class header for the method. Grepping the full `a.o.a`
-matches nothing: member mappings never appear at column 0.)
+## Why the old conclusion was wrong
 
-Facts, with sources:
+It described the flagged code as "the pre-API-35 compat half" of
+`enableEdgeToEdge()`, and concluded that since Google tells apps to call that
+function, the references are unavoidable.
 
-- The flagged code is the pre-API-35 compat half of `enableEdgeToEdge()` itself —
-  the API Google's other recommendation tells apps to call. On devices below 35
-  it must call the deprecated setters to draw scrims; on 35+ a different path
-  runs. Play's scan is static and flags the bytecode's existence.
-- No androidx.activity release avoids the references — they exist at
-  androidx-main tip-of-tree (`EdgeToEdge.kt`, `@Suppress("DEPRECATION")` on every
-  impl including the API-35 one). Material 1.14.0's `EdgeToEdgeUtils` is
-  identical to alpha09 on this point. Sources: androidx-main `EdgeToEdge.kt`;
-  material tags `1.14.0-alpha09`/`1.14.0`; material issue #4626.
-- `MaterialDatePicker` is not used by app code; R8 keeps it via an
-  AAPT-generated keep rule from Material's own layouts (see
-  `build/outputs/mapping/release/configuration.txt`).
-- `SHORT_EDGES` never executes: minSdk 33 selects the API-30+ path (`ALWAYS`).
-- The warning is a non-blocking recommendation. Evidence (no formal Google
-  statement exists): Flutter team, flutter/flutter#169810 — "know that it will
-  not impact your users"; dotnet/android#10304 (app with the warning published);
-  Google's own SDKs trigger it. Expect it to reappear on every upload until
-  AndroidX changes; that is not a regression.
-- The AAB embeds the R8 map (`BUNDLE-METADATA/.../proguard.map`), so Play
-  already has the mapping — this scan simply reports obfuscated names anyway.
+**`EdgeToEdgeApi35` is in the table above.** The references were never confined
+to the compat half, so the two obvious escapes both fail: raising `minSdk`
+would not reach them, and neither would an `-assumevalues` rule telling R8 that
+`SDK_INT >= 33`. Only dropping the call removes the classes.
 
-What WAS actionable was the sibling recommendation ("Edge-to-edge may not
-display for all users"): three real insets defects were found and fixed —
-display cutout in landscape, the Toolchains/first-run screens, and status-bar
-icon contrast in device light mode. See the CHANGELOG entries that landed with
-this document for what each one was.
+The second half of the premise had also expired. `enableEdgeToEdge()` is the
+right call when an app needs edge-to-edge on API levels that do not enforce it.
+This app's `targetSdk` is 36, and API 35+ enforces edge-to-edge with **no
+opt-out**, so on every device at or above 35 the function was setting colours
+through setters the platform had already turned into no-ops.
+
+## What replaced it
+
+`util/ViewInsets.drawBehindSystemBars()`, plus three attributes in
+`values/themes.xml`. Each piece maps to something the old call did:
+
+| `enableEdgeToEdge()` did | Now |
+|---|---|
+| opt into edge-to-edge below API 35 | `WindowCompat.setDecorFitsSystemWindows(window, false)` |
+| pin light system bar icons | `WindowInsetsControllerCompat.isAppearanceLight*Bars = false` |
+| set both bars transparent | `android:statusBarColor` / `android:navigationBarColor` in the theme |
+| set the cutout mode | `android:windowLayoutInDisplayCutoutMode` in the theme |
+
+The bar colours and the cutout mode move to attributes rather than disappearing,
+and that is the point: Play's scan reads bytecode, and an attribute is not a
+method call. It is also honest about scope, because API 35+ ignores all three
+attributes and paints the bars from the window background anyway. They decide
+API 33 and 34 and nothing else.
+
+`setDecorFitsSystemWindows` stays in the bundle and that is fine. It is not one
+of the three Play named, and Play Core's asset pack code puts it there
+regardless of what this app calls.
+
+## The regression that testing caught
+
+Dropping the transparent scrims is invisible on API 35+ and very visible below
+it. On an API 33 emulator the status bar came back **blue**, the Material3
+default, against the app's dark editor. The theme attributes above are what fix
+it. Anyone changing this area should test on API 33 as well as a current image;
+an API 37 emulator cannot see this class of defect at all, because every API
+involved is already a no-op there.
+
+## Measurements
+
+Release APK, `dexdump` over `classes.dex`, before and after:
+
+| Reference | Before | After |
+|---|---|---|
+| `Window.setStatusBarColor` | 3 | 0 |
+| `Window.setNavigationBarColor` | 3 | 0 |
+| `Window.setStatusBarContrastEnforced` | 1 | 0 |
+| `Window.setNavigationBarContrastEnforced` | 2 | 0 |
+| `layoutInDisplayCutoutMode` written from code | 2 | 0 |
+| `androidx.activity.EdgeToEdge*` classes | 8 | 0 |
+| `Window.setDecorFitsSystemWindows` | 2 | 2 |
+
+`MaterialDatePicker.onStart()` was a fourth source and is already gone, removed
+by the optimized resource shrinking that arrived with AGP 9: with Material's
+date-picker layouts shrunk away, the AAPT-generated keep rule that held the
+class no longer applied.
+
+## Reading an obfuscated Play location
+
+Still useful, and unchanged. A location like `a.o.a` is class `a.o` plus member
+`a`. Grep for the **class**, stripping the last segment:
+
+```
+grep -nE '^[^ ].* -> a\.o:' android/app/build/outputs/mapping/release/mapping.txt
+```
+
+then read the indented member lines under that class header. Grepping the full
+`a.o.a` matches nothing, because member mappings never appear at column 0. The
+obfuscated names change every release, so re-derive them per upload.
+
+## The sibling recommendation
+
+"Edge-to-edge may not display for all users" is a different item and was always
+actionable. Three real insets defects were found and fixed under it: the display
+cutout in landscape, the Toolchains and first-run screens, and status-bar icon
+contrast in device light mode. The app's insets handling lives in
+`util/ViewInsets.padForSystemBars`, with its own listeners in `MainActivity` and
+`ExtraKeyRow` where the IME inset has to be folded in as well.

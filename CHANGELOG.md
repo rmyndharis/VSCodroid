@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
 - Kotlin now comes from the Android Gradle plugin rather than a separate plugin, so the compiler is 2.2.10 and the version catalog no longer names one.
 - 97 unused Material and AndroidX resources no longer ship: the date and time pickers, the navigation drawer, fragment transitions and the legacy notification templates.
+- The three deprecated edge-to-edge APIs Play reports are gone from the app. Edge-to-edge, light bar icons and the display cutout are now set directly rather than through a library call that carried them.
 
 ## [1.1.0] - 2026-08-19
 

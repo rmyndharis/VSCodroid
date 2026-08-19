@@ -2,15 +2,12 @@ package com.vscodroid
 
 import android.annotation.SuppressLint
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.activity.SystemBarStyle
-import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.pm.ShortcutInfoCompat
@@ -27,6 +24,7 @@ import com.vscodroid.setup.ToolchainCardMode
 import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
+import com.vscodroid.util.drawBehindSystemBars
 import com.vscodroid.util.Logger
 import com.vscodroid.util.padForSystemBars
 import kotlinx.coroutines.Dispatchers
@@ -53,11 +51,8 @@ class SplashActivity : AppCompatActivity() {
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // dark(): the app is always dark; auto would follow the system theme (see MainActivity).
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
+        // Before super.onCreate(), as the call it replaces required.
+        drawBehindSystemBars()
         super.onCreate(savedInstanceState)
 
         val setup = FirstRunSetup(this)

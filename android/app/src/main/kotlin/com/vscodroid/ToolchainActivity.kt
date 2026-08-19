@@ -1,9 +1,6 @@
 package com.vscodroid
 
-import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.SystemBarStyle
-import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
@@ -11,6 +8,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.ToolchainManager
+import com.vscodroid.util.drawBehindSystemBars
 import com.vscodroid.util.padForSystemBars
 import com.vscodroid.setup.ToolchainAction
 import com.vscodroid.setup.ToolchainCardMode
@@ -39,11 +37,8 @@ class ToolchainActivity : AppCompatActivity() {
     private lateinit var adapter: ToolchainPickerAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // dark(): the app is always dark; auto would follow the system theme (see MainActivity).
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
+        // Before super.onCreate(), as the call it replaces required.
+        drawBehindSystemBars()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_toolchain)
         findViewById<android.view.View>(R.id.toolchainRoot).padForSystemBars()

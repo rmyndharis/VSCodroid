@@ -12,7 +12,6 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.net.Uri
@@ -31,8 +30,7 @@ import android.widget.Toast
 import java.io.File
 import java.io.OutputStream
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.SystemBarStyle
-import androidx.activity.enableEdgeToEdge
+import com.vscodroid.util.drawBehindSystemBars
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
 import com.vscodroid.util.WebViewVersion
@@ -374,15 +372,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // enableEdgeToEdge() must be called BEFORE super.onCreate().
-        // SystemBarStyle.dark, not the default auto: auto follows the SYSTEM
-        // theme, but this app is always dark (#1E1E1E, no values-night), so in
-        // device light mode the default drew dark icons on a dark background.
-        // dark() pins light icons regardless of device theme.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
+        // Before super.onCreate(), as the call it replaces required.
+        drawBehindSystemBars()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
