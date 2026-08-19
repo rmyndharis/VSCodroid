@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A device folder's local copy is no longer deleted when it falls off the recent list. Anything written there that never reached the device, a cloned repository included, was the only copy.
+
 ### Changed
 
 - The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.

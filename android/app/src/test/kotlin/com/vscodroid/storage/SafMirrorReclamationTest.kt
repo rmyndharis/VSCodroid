@@ -157,13 +157,89 @@ class SafMirrorReclamationTest {
         assertTrue(removed > 0)
     }
 
+    /**
+     * A mirror the reclaim pass is entitled to delete: every file in it is one the
+     * record vouches for, in the format [SafSyncEngine.recordIdentity] writes.
+     *
+     * The identity is read back off the disk rather than predicted, for the reason
+     * that function gives: a filesystem that truncates the timestamp would otherwise
+     * put the fixture out of step with what the walk sees, and the test would pass or
+     * fail on the host's filesystem rather than on the code.
+     */
     private fun mirrorFor(uri: Uri): Pair<File, File> {
         val dir = manager.getMirrorDir(uri).apply { mkdirs() }
         File(dir, "src").mkdirs()
-        File(dir, "src/main.kt").writeText("fun main() {}")
-        val record = File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
-            .apply { writeText("src/main.kt") }
+        val file = File(dir, "src/main.kt").apply { writeText("fun main() {}") }
+        val record = File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).apply {
+            writeText(
+                SafSyncEngine.RECORD_HEADER + "\n" +
+                    "src/main.kt\t${file.lastModified()}\t${file.length()}"
+            )
+        }
         return dir to record
+    }
+
+    /**
+     * A file the record cannot vouch for is the user's only copy, and the pass has to
+     * keep the mirror around it.
+     *
+     * `.git` is the case that matters and the reason the journal alone was not enough:
+     * it is in [SafSyncEngine.SKIP_DIRECTORIES], so no write-back is ever queued for
+     * anything inside it, so it can never appear in the upload journal however long the
+     * user works. A repository cloned in the terminal lives only here.
+     */
+    @Test
+    fun `a mirror holding a file no sync vouched for is kept`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        File(staleDir, ".git").mkdirs()
+        File(staleDir, ".git/HEAD").writeText("ref: refs/heads/main\n")
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertTrue(
+            staleDir.isDirectory,
+            "a repository cloned in the terminal was deleted with its unpushed commits",
+        )
+        assertEquals(0, removed, "nothing should have been reclaimed in this pass")
+    }
+
+    /**
+     * The same shape one step subtler: the file IS recorded, but is no longer the bytes
+     * recorded for it. That is an edit the device never received, and it is the rule
+     * [SafSyncEngine.reconcileDeletions] already applies to a single file, applied here
+     * to the whole mirror.
+     */
+    @Test
+    fun `a mirror whose recorded file no longer matches is kept`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        File(staleDir, "src/main.kt").writeText("fun main() { edited() }")
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertTrue(staleDir.isDirectory, "an edit the device never received was deleted")
+        assertEquals(0, removed, "nothing should have been reclaimed in this pass")
+    }
+
+    /**
+     * And the negative control for both: a mirror with no record at all cannot be
+     * vouched for either, so it is kept. Without this the gate could be satisfied by
+     * an empty `vouched` set matching an empty walk.
+     */
+    @Test
+    fun `a mirror with no record at all is kept`() {
+        val bare = manager.getMirrorDir(revokedUri).apply { mkdirs() }
+        File(bare, "notes.md").writeText("local only")
+        mirrorFor(liveUri)
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertTrue(bare.isDirectory, "a mirror nothing vouches for was deleted anyway")
+        assertEquals(0, removed)
     }
 
     @Test

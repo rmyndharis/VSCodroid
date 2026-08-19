@@ -250,12 +250,29 @@ class SafStorageManager(private val context: Context) {
             // or fall together: keeping the directory while dropping its record
             // leaves the next sync with no snapshot of what it had already
             // fetched.
+            val hash = name.substringBefore('.')
             if (!alreadySetAside &&
-                !mayReclaim(name.substringBefore('.'), stranded, root.absolutePath)
+                !mayReclaim(hash, stranded, root.absolutePath)
             ) {
                 Logger.w(
                     tag,
-                    "Keeping $name: it holds writes that never reached the device folder",
+                    "Keeping $name: it holds a write that never reached the device folder",
+                )
+                return@forEach
+            }
+
+            // The journal above answers "did a write-back fail", which is only one way a
+            // mirror can hold the user's only copy. It cannot see a file that was never
+            // queued for write-back at all, and there are several routes into that state:
+            // anything under SKIP_DIRECTORIES, so a `.git` from a terminal clone; a file
+            // below a directory past the watch cap; anything written while no watcher
+            // ran; and a mirror copy the initial sync kept for being newer than the
+            // device document. Asking the record instead inverts the test: prove the
+            // mirror is disposable rather than look for evidence that it is not.
+            if (!alreadySetAside && !syncEngine.holdsOnlyVouchedCopies(File(root, hash))) {
+                Logger.w(
+                    tag,
+                    "Keeping $name: it holds files no sync ever vouched for",
                 )
                 return@forEach
             }
@@ -397,10 +414,20 @@ class SafStorageManager(private val context: Context) {
         // looked live for ever, and its mirror could never be reclaimed by
         // anything the app does. Nothing in the UI removes a folder either.
         //
-        // Safe to do here only because the reclaim now refuses to delete a mirror
-        // holding a write that never reached the device. Releasing the grant
-        // without that gate would have turned falling off a list into a silent
-        // deletion of the user's only copy.
+        // Safe to do here only because of what the reclaim pass refuses to delete,
+        // and that clause has been wrong once already. It used to read "a mirror
+        // holding a write that never reached the device", meaning the upload
+        // journal, which records write-backs that were ATTEMPTED and failed. A
+        // file never queued for write-back at all leaves no journal entry, and
+        // several routes end there: anything under SKIP_DIRECTORIES, so a `.git`
+        // from a terminal clone; a file below a directory past the watch cap;
+        // anything written while no watcher ran; and a copy the initial sync kept
+        // for being newer than the device document. Every one of those is the
+        // user's only copy, and eviction at the eleventh folder deleted it.
+        //
+        // The gate now asks the record instead, which has to prove a mirror is
+        // disposable rather than look for evidence that it is not. See
+        // SafSyncEngine.holdsOnlyVouchedCopies.
         for (gone in dropped) {
             try {
                 context.contentResolver.releasePersistableUriPermission(

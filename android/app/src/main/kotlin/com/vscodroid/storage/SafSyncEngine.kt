@@ -417,6 +417,58 @@ class SafSyncEngine(private val context: Context) {
      * Each is `path`, `modification time` and `length` separated by tabs. Parsing is the
      * caller's, because a line it cannot read has to be dropped rather than repaired.
      */
+    /**
+     * Whether every file under [mirrorDir] is one this app can prove it copied from the
+     * device folder, unchanged since.
+     *
+     * The question the reclaim pass has to answer before deleting a mirror, and it is
+     * narrower than the one it used to ask. That pass reads [uploadsInFlight], which
+     * records write-backs that were ATTEMPTED and failed. A file that was never queued
+     * for write-back at all has no journal entry, and there are several ways to be in
+     * that state: anything under [SKIP_DIRECTORIES], so a `.git` from a terminal clone;
+     * a file below a directory past [MAX_WATCHED_DIRECTORIES]; anything written while no
+     * watcher was running; a mirror copy [initialSync] kept for being newer than the
+     * device document, which it never uploads; entries past the upload cap; and jobs the
+     * queue dropped on [stopWatching]. Each of those is the user's only copy, and the
+     * journal cannot see any of them.
+     *
+     * So the test is inverted: rather than look for evidence a file is precious, require
+     * evidence that it is disposable. The record beside the mirror is that evidence and
+     * already exists. [recordIdentity] writes one line per file the device enumeration
+     * produced, and this compares against it in the same format, so a file absent from
+     * the record, or present but no longer the bytes recorded for it, means the mirror is
+     * not purely a copy.
+     *
+     * Fails closed, in three directions, all deliberate. A missing record, a record whose
+     * first line is not [RECORD_HEADER], and an unreadable directory each return false
+     * and keep the mirror. That is the same direction [reconcileDeletions] takes when it
+     * cannot vouch for a path, and the cost of being wrong here is disk rather than the
+     * user's only copy.
+     *
+     * Symlinks are not followed: `walkTopDown` reports the link itself, and [isLink]
+     * sends it down the not-a-plain-file branch, so a link out of the mirror can neither
+     * be vouched for nor be walked through.
+     */
+    internal fun holdsOnlyVouchedCopies(mirrorDir: File): Boolean {
+        val lines = readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
+        if (lines.firstOrNull() != RECORD_HEADER) return false
+        val vouched = lines.drop(1).toHashSet()
+        // A directory the walk could not read leaves the mirror only partly examined,
+        // which is indistinguishable from an empty one to `all`. Recorded rather than
+        // returned from the handler: `onFail` is not inline, so it cannot return here.
+        var unreadable = false
+        return try {
+            mirrorDir.walkTopDown().onFail { _, _ -> unreadable = true }.all { file ->
+                if (isLink(file)) false
+                else if (!file.isFile) true
+                else "${file.toRelativeString(mirrorDir)}\t${file.lastModified()}\t${file.length()}" in vouched
+            } && !unreadable
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not walk ${mirrorDir.name}; treating it as unvouched: ${e.message}")
+            false
+        }
+    }
+
     private fun readSyncedRecord(record: File): List<String> =
         if (!record.isFile) {
             emptyList()
