@@ -278,10 +278,15 @@ class SafStorageManager(private val context: Context) {
             // ran; and a mirror copy the initial sync kept for being newer than the
             // device document. Asking the record instead inverts the test: prove the
             // mirror is disposable rather than look for evidence that it is not.
-            val holdsOnlyCopies = vouched.getOrPut(hash) {
-                syncEngine.holdsOnlyVouchedCopies(File(root, hash))
-            }
-            if (!alreadySetAside && !holdsOnlyCopies) {
+            // `&&` first, so the walk never runs for an entry the next line exempts.
+            // A `discarded-` entry is an earlier pass's leftover whose verdict is already
+            // made, and asking anyway walked the whole tree that is about to be deleted,
+            // on every launch until the delete finally succeeded.
+            if (!alreadySetAside &&
+                !vouched.getOrPut(hash) {
+                    syncEngine.holdsOnlyVouchedCopies(File(root, hash))
+                }
+            ) {
                 Logger.w(
                     tag,
                     "Keeping $name: it holds files no sync ever vouched for",
