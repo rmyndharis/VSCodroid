@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extension signature verification is off by default. The editor build has no signature-checking component, so every marketplace install stopped on a warning that could never clear.
 - The Accounts and Manage icons are back at the bottom of the activity bar. A build-time stylesheet had hidden them, leaving touch users no route to Settings or sign-in.
 - Holding Ctrl, Alt or Shift on the key row now matches tapping it. Behaviour change: holding a modifier that is already on switches it off.
-- When a previous editor server survives, the app serves that one instead of starting a second it cannot use. It still cannot stop a server it did not start, and now says so.
+- When a previous editor server survives, the app serves that one instead of starting a second it cannot use.
 - Any address the editor asks to open now opens. Previously a LAN dev server was dropped or opened depending on which internal route the editor used, with nothing said either way.
 - The Get Started screen no longer states bundled tool versions, which had been wrong for two releases, and no longer says Java and Ruby are coming; both install today.
 - The Get Started terminal step shows command and output in the step text. The illustration carrying them is hidden on any phone under 950 CSS pixels wide.
@@ -347,7 +347,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Five checks that could not fail now can, each confirmed by breaking what it guards and watching it go red.
 - The on-device suite no longer passes git's HTTPS helper when the helper is absent, or when the check could not run at all.
 - Two on-device checks no longer report a working install as broken, and the toolchain shortcut check now proves the shortcut opens its screen, not merely that it exists.
-- The rule deciding which addresses may open in your browser is actually exercised by tests. Its `http://` branch had never run, because the URL parser it used is unavailable off-device and the failure was swallowed.
 - Building from source reports a missing Android NDK immediately instead of twenty minutes in. Set `REQUIRE_NDK=0` to skip.
 - Following the contributing guide's build steps produces the same app CI builds. Three steps were missing, and a check now fails the build when the documented steps and CI diverge.
 - Build and release workflows no longer fail when the runner's package index is out of date.
