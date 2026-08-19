@@ -520,7 +520,9 @@ class VSCodroidWebViewClient(
                 // filesystem, and every workbench asset takes one of them.
                 return interceptResourceRequest(
                     uri, host, resourceAuthority, port, token,
-                    resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder())
+                    resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder()),
+                    request.requestHeaders?.entries
+                        ?.firstOrNull { it.key.equals("Origin", ignoreCase = true) }?.value,
                 )
             }
 
@@ -550,7 +552,7 @@ class VSCodroidWebViewClient(
          */
         private fun interceptResourceRequest(
             uri: Uri, host: String, resourceAuthority: String, port: Int, token: String?,
-            resourceRoots: List<String>
+            resourceRoots: List<String>, origin: String?
         ): WebResourceResponse? {
             val prefix = host.removeSuffix(".$resourceAuthority")
             val parts = prefix.split("+", limit = 2)
@@ -559,6 +561,32 @@ class VSCodroidWebViewClient(
             val path = uri.path ?: return notFound("No path")
 
             if (scheme == "file" || scheme == "vscode-remote") {
+                // Files served here carry `Access-Control-Allow-Origin: *`, which is what
+                // makes them readable by whatever asked. The published roots decide WHICH
+                // files; this decides WHO may read one, and until it existed the answer
+                // was anybody. A remote page in the bundled Simple Browser could fetch a
+                // workspace file and read the body, with no network involved.
+                //
+                // Measured on an API 37 emulator rather than assumed, because the whole
+                // gate rests on the header being there: of 42 intercepted requests, 29
+                // carried `Origin` and it was always `http://127.0.0.1:<port>`, the
+                // workbench's own. The `.vscode-cdn.net` arm is read from the shipped
+                // bundle instead, where `webviewContentExternalBaseUrlTemplate` resolves
+                // webview documents to `https://{{uuid}}.vscode-cdn.net/...`.
+                //
+                // A missing header is served, deliberately. The other 13 were no-cors
+                // subresource loads -- `<img>`, `<link>`, `<script src>` -- which send no
+                // `Origin` and cannot read the body anyway, so demanding one would break
+                // every extension webview to close nothing.
+                //
+                // ⚠️ Residual, stated rather than implied: an HTML file our own branch
+                // serves gets an origin ending `.vscode-cdn.net` and passes. Closing that
+                // wants `Sec-Fetch-Dest` gating, which is unverified here and risks
+                // extensions that frame their own local HTML.
+                if (origin != null && !isOurOrigin(origin, port)) {
+                    Logger.w(TAG, "Resource refused, foreign origin: $origin")
+                    return notFound("Access denied")
+                }
                 // Local file resource — serve directly from filesystem.
                 // Both "file" and "vscode-remote" schemes use local paths in VSCodroid
                 // since the server runs on the same device.
@@ -605,14 +633,25 @@ class VSCodroidWebViewClient(
                 return proxyToLocalhost(actualUrl, "GET", "resource:$authority$path")
             }
 
-            // For other schemes with authority, proxy through localhost server
-            if (authority.isNotEmpty()) {
-                val query = uri.query
-                val queryPart = if (!query.isNullOrEmpty()) "?$query" else ""
-                val localUrl = withToken("http://127.0.0.1:$port$path$queryPart", token)
-                return proxyToLocalhost(localUrl, "GET", "remote-resource:$path")
-            }
-
+            // A catch-all for every other scheme with an authority used to sit here,
+            // proxying to `http://127.0.0.1:$port$path` with the connection token
+            // appended. It is gone rather than tightened, and restoring it needs a
+            // reason better than the one it had.
+            //
+            // Both halves of `path` and the query were the page's to choose, and the
+            // token turned that into an authenticated request. The server routes
+            // `/vscode-remote-resource` after its token gate and then reads
+            // `query.path` as an absolute path, so this branch answered
+            // `…/vscode-remote-resource?path=<anything>` with the file: the SSH key
+            // and the token file included, which is what `sensitiveLocations` exists
+            // to keep out of the branch above. The response is same-origin to a
+            // document the caller can frame, and the server sends no
+            // X-Frame-Options, so reading it back needed no further trick.
+            //
+            // Nothing asked for it. The workbench encodes only `file` and
+            // `vscode-remote` into the resource host, and no bundled extension
+            // produces the form. The `Unknown resource scheme` line below is the
+            // signal if something did: it names the scheme.
             Logger.w(TAG, "Unknown resource scheme: $scheme (host=$host)")
             return notFound("Unknown scheme: $scheme")
         }
@@ -630,8 +669,9 @@ class VSCodroidWebViewClient(
                 val contentType = conn.contentType ?: guessMimeType(url)
                 val encoding = conn.contentEncoding
 
-                // `url` has been through withToken() by both callers that reach
-                // here against our own server.
+                // `url` has been through withToken() when it names our own server.
+                // One caller does now, the CDN rewrite; the unknown-scheme fallback
+                // that was the second is gone.
                 Logger.d(TAG, "CDN redirect: $logTag -> ${redactToken(url)} ($responseCode)")
 
                 val responseStream = if (responseCode < 400) {
@@ -686,6 +726,12 @@ class VSCodroidWebViewClient(
             }
         }
 
+        /** Whether [origin] is the workbench itself or one of its webview documents. */
+        private fun isOurOrigin(origin: String, port: Int): Boolean =
+            origin == "http://127.0.0.1:$port" ||
+                origin == "http://localhost:$port" ||
+                (origin.startsWith("https://") && origin.endsWith(".vscode-cdn.net"))
+
         private fun notFound(detail: String): WebResourceResponse {
             return WebResourceResponse(
                 "text/plain", "utf-8", 404, "Not Found",
@@ -726,6 +772,11 @@ class VSCodroidWebViewClient(
          * that function: one of its callers proxies http/https resources to
          * whatever host an extension's webview references, and putting the token
          * there would hand our credential to that host.
+         *
+         * The reason that separation is load-bearing rather than tidy: a third
+         * caller once did append the token to a page-controlled path, which is
+         * the defect removed from interceptResourceRequest. Keeping the token an
+         * explicit step is what makes such a call visible in a diff.
          */
         private fun withToken(url: String, token: String?): String {
             if (token.isNullOrEmpty()) return url
