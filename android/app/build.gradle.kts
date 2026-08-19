@@ -159,6 +159,15 @@ android {
             "BUNDLED_USR_BYTES",
             "${fileTree("src/main/assets/usr").files.sumOf { it.length() }}L"
         )
+        // The server tree on its own, so extraction can report real progress across it
+        // rather than sitting at one number for the minutes it takes. It is by far the
+        // largest single step, and computed the same way as its siblings so it cannot
+        // drift from what is actually packaged.
+        buildConfigField(
+            "long",
+            "BUNDLED_SERVER_BYTES",
+            "${fileTree("src/main/assets/vscode-reh").files.sumOf { it.length() }}L"
+        )
         buildConfigField(
             "long",
             "BUNDLED_EXTENSION_BYTES",

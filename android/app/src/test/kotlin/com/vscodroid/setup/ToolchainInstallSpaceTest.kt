@@ -36,6 +36,32 @@ class ToolchainInstallSpaceTest {
         assertEquals(2 * 34_000_000L + SPACE_BUFFER, toolchainInstallBytes(34_000_000L))
     }
 
+    /**
+     * The Play path holds one copy, not two, and the difference is where the first sits.
+     *
+     * Play writes the pack outside `filesDir` before this app hears about it, so the
+     * only allocation the install makes is the copy into `usr/`, and `removePack` frees
+     * Play's copy afterwards. Charging for both would refuse devices for room they never
+     * need at once, which is the mirror of the mistake the HTTP figure was corrected for.
+     */
+    @Test
+    fun `the Play reservation charges for the copy it makes and not for Play's own`() {
+        assertEquals(146_000_000L + SPACE_BUFFER, packInstallBytes(146_000_000L))
+        assertEquals(SPACE_BUFFER, packInstallBytes(0L))
+    }
+
+    /** And it is genuinely the smaller of the two, or the two paths have been swapped. */
+    @Test
+    fun `the Play reservation is smaller than the HTTP one for every shipped toolchain`() {
+        for (info in ToolchainRegistry.available) {
+            assertTrue(
+                packInstallBytes(info.estimatedSize) < toolchainInstallBytes(info.estimatedSize),
+                "${info.packName}: the Play path should ask for less than the HTTP path, " +
+                    "since Play has already written the tree it copies from",
+            )
+        }
+    }
+
     /** Ruby cleared the old gate only by accident; state the margin rather than rely on it. */
     @Test
     fun `every shipped toolchain is charged for both copies`() {

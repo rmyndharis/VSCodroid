@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- First-run setup now shows progress while it extracts the editor, instead of holding at 5% for minutes and looking like it has hung.
+- Installing a toolchain from Play now checks for space first. Without room it failed partway and left a half-installed toolchain behind.
 - The storage figures in the README can be re-measured on Linux. The command printed a plausible 0 MB there, because it used the macOS spelling of `stat`.
 - Creating a folder no longer overwrites a device document the app could not read, such as one too large to copy. Only the single-file path checked this before.
 

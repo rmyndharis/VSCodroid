@@ -223,8 +223,33 @@ class FirstRunSetup(
 
             // The reh-web download carries the web client inside this same tree,
             // so this one extraction is both the server and the workbench.
-            reportProgress("Extracting server files...", 5)
-            if (!extractAssetDir("vscode-reh", "server/vscode-reh")) incomplete += "vscode-reh"
+            reportProgress("Extracting server files...", SERVER_PROGRESS_START)
+            // The one step long enough for a still bar to read as a hang: the server
+            // tree is the bulk of the assets and takes minutes on a mid-range phone.
+            // A force-quit at that point produces exactly the partial tree the retry
+            // below exists to clean up, so the bar moving is not decoration.
+            //
+            // Driven by bytes against the figure the build computed from the very tree
+            // being packaged, so it cannot drift, and reported only when the whole
+            // percent changes: 55 updates rather than one per file across 16,891 of
+            // them. Capped, because a tree fetched after the APK was built would
+            // otherwise run the bar past the step.
+            var serverBytes = 0L
+            var serverPercent = SERVER_PROGRESS_START
+            val extracted = extractAssetDir("vscode-reh", "server/vscode-reh") { bytes ->
+                serverBytes += bytes
+                if (BuildConfig.BUNDLED_SERVER_BYTES > 0) {
+                    val span = SERVER_PROGRESS_END - SERVER_PROGRESS_START
+                    val next = SERVER_PROGRESS_START +
+                        (serverBytes * span / BuildConfig.BUNDLED_SERVER_BYTES).toInt()
+                            .coerceAtMost(span)
+                    if (next > serverPercent) {
+                        serverPercent = next
+                        reportProgress("Extracting server files...", next)
+                    }
+                }
+            }
+            if (!extracted) incomplete += "vscode-reh"
 
             reportProgress("Extracting server bootstrap...", 60)
             for (script in listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js")) {
@@ -379,29 +404,42 @@ class FirstRunSetup(
      * Nothing on device verifies those trees are complete;
      * `verify-server-tree.py` checks the build, not the install.
      */
-    private fun extractAssetDir(assetPath: String, destPath: String): Boolean {
+    /**
+     * @param onBytes told how many bytes each extracted file wrote, so a caller can
+     *   report progress across a step that would otherwise show none. Null for the
+     *   short steps, where the cost of reporting outweighs what it shows.
+     */
+    private fun extractAssetDir(
+        assetPath: String,
+        destPath: String,
+        onBytes: ((Long) -> Unit)? = null,
+    ): Boolean {
         val destDir = File(context.filesDir, destPath)
         return try {
             val assets = context.assets.list(assetPath) ?: return true
             if (assets.isEmpty()) {
-                return extractAssetFile(assetPath, destPath)
+                return extractAssetFile(assetPath, destPath, onBytes)
             }
             destDir.mkdirs()
             // Every child is attempted even after one fails, so the log names
             // all of them rather than only the first.
             var ok = true
             for (asset in assets) {
-                if (!extractAssetDir("$assetPath/$asset", "$destPath/$asset")) ok = false
+                if (!extractAssetDir("$assetPath/$asset", "$destPath/$asset", onBytes)) ok = false
             }
             ok
         } catch (e: IOException) {
             Logger.d(tag, "Treating $assetPath as file (not directory)")
-            extractAssetFile(assetPath, destPath)
+            extractAssetFile(assetPath, destPath, onBytes)
         }
     }
 
     /** @return false only when the asset existed and its copy failed. */
-    private fun extractAssetFile(assetPath: String, destPath: String): Boolean {
+    private fun extractAssetFile(
+        assetPath: String,
+        destPath: String,
+        onBytes: ((Long) -> Unit)? = null,
+    ): Boolean {
         val destFile = File(context.filesDir, destPath)
         destFile.parentFile?.mkdirs()
 
@@ -419,6 +457,11 @@ class FirstRunSetup(
             }
 
         val written = input.use { stream -> writeAtomically(destFile) { output -> stream.copyTo(output) } }
+        // Reported from the destination rather than from copyTo's return, because the
+        // write goes through a temporary file and a rename: a failed copy leaves the
+        // destination as it was, and counting bytes that never landed would run the bar
+        // past the end of a step that had not finished.
+        if (written) onBytes?.invoke(destFile.length())
         if (!written) {
             Logger.w(tag, "Failed to write $destPath; it keeps whatever it held before")
         }
@@ -2132,6 +2175,10 @@ claude() {
     }
 
     companion object {
+        /** The band the server extraction reports across; the next step opens at 60. */
+        private const val SERVER_PROGRESS_START = 5
+        private const val SERVER_PROGRESS_END = 60
+
         private const val KEY_VERSION = "setup_version"
         private const val KEY_VERSION_CODE = "setup_version_code"
 

@@ -483,6 +483,27 @@ class ToolchainManager(private val context: Context) {
                         val location = assetPackManager.getPackLocation(packName)
                         val assetsPath = location?.assetsPath()
                         if (assetsPath != null) {
+                            // The same pre-flight downloadViaHttp does, for the same
+                            // reason and with a smaller figure. installFromDirectory
+                            // copies the whole tree into usr/, and without this the
+                            // copy fails partway on a full device: an IOException
+                            // reported as INTERNAL, and half a toolchain left in usr/
+                            // under no manifest, which is what made every retry start
+                            // from less space than the last.
+                            val required = packInstallBytes(
+                                ToolchainRegistry.find(packName)?.estimatedSize ?: 0L
+                            )
+                            val available = StatFs(context.filesDir.absolutePath).availableBytes
+                            if (available < required) {
+                                Logger.e(
+                                    tag,
+                                    "Not enough disk space for $packName: " +
+                                        "${available / 1_000_000} MB available, " +
+                                        "${required / 1_000_000} MB required",
+                                )
+                                fail(packName, ToolchainFailure.STORAGE)
+                                return@execute
+                            }
                             installFromDirectory(packName, File(assetsPath))
                             assetPackManager.removePack(packName)
                             Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
@@ -1631,6 +1652,19 @@ internal const val SPACE_BUFFER = 50_000_000L
  */
 internal fun toolchainInstallBytes(unpackedBytes: Long): Long =
     unpackedBytes * 2 + SPACE_BUFFER
+
+/**
+ * What a Play Asset Delivery install needs free, given its unpacked size.
+ *
+ * One tree rather than two, and the difference is where the first copy already
+ * sits. Play writes the pack outside `filesDir` before this app is told about
+ * it, so the only allocation the install makes is the copy into `usr/`, and
+ * `removePack` frees Play's copy afterwards. Charging for both would refuse
+ * devices for room they never need at once, which is the mistake the HTTP
+ * figure above was corrected for in the other direction.
+ */
+internal fun packInstallBytes(unpackedBytes: Long): Long =
+    unpackedBytes + SPACE_BUFFER
 
 /**
  * Copies a tree, refusing rather than shrugging when a directory cannot be read.
