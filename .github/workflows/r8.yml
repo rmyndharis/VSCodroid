@@ -106,7 +106,7 @@ jobs:
 
       # The shrinker needs compiled classes and processed resources, not the
       # 874 MB asset tree. Measured with --dry-run, which computes the graph
-      # without touching disk: 32 tasks, no mergeReleaseAssets, and therefore
+      # without touching disk: 34 tasks, no mergeReleaseAssets, and therefore
       # never checkPatchFingerprints, which is wired to merge*Assets alone
       # (app/build.gradle.kts, tasks.matching around checkPatchFingerprints).
       #
@@ -135,7 +135,7 @@ jobs:
       # for the first time at tag time. lintVital is the third; it is a separate
       # entry point and needs neither the keystore nor the assets either.
       #
-      # 34 and 28 tasks respectively, neither containing mergeReleaseAssets,
+      # 34 and 22 tasks respectively, neither containing mergeReleaseAssets,
       # checkPatchFingerprints or validateSigningRelease.
       - name: Run the release-only gates
         working-directory: android

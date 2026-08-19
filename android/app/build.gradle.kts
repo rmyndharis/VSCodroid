@@ -2,7 +2,6 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 }
 
 // Load signing config from signing.properties (local) or env vars (CI)
@@ -319,6 +318,10 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.junit.jupiter.api)
     testRuntimeOnly(libs.junit.jupiter.engine)
+    // Gradle 9 no longer puts the JUnit Platform launcher on the test runtime
+    // classpath by itself. Without it every JVM test fails before any test
+    // class is loaded, with "Could not start Gradle Test Executor".
+    testRuntimeOnly(libs.junit.platform.launcher)
     testImplementation(libs.mockk)
     // org.json is on the test classpath, so a JVM test CAN parse JSON. Parse the
     // manifest and assert on the parsed object. Do not pattern-match its text and do
