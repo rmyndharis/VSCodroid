@@ -186,7 +186,6 @@ flowchart LR
 ```
 Files to create:
 ├── .gitignore
-├── CLAUDE.md                      ← already exists
 ├── MILESTONES.md                  ← already exists
 ├── README.md                      ← already exists
 ├── LICENSE                        ← already exists
