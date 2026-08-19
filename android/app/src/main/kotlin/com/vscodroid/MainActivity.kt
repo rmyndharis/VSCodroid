@@ -29,6 +29,7 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.io.OutputStream
+import java.lang.ref.WeakReference
 import androidx.activity.OnBackPressedCallback
 import com.vscodroid.util.drawBehindSystemBars
 import com.vscodroid.util.CrashReporter
@@ -1373,11 +1374,36 @@ class MainActivity : AppCompatActivity() {
         val roots = resourceRoots
         val sensitive = sensitivePaths
 
-        // Register ServiceWorkerClient BEFORE loading VS Code — service worker
-        // script fetches bypass WebViewClient.shouldInterceptRequest entirely.
+        // Register ServiceWorkerClient BEFORE loading VS Code, because service
+        // worker script fetches bypass WebViewClient.shouldInterceptRequest
+        // entirely.
+        //
+        // Weakly, and that is not a micro-optimisation. The client is stored on
+        // ServiceWorkerController and is replaced only when some future Activity
+        // registers its own, so whatever these lambdas close over stays reachable
+        // until then, at worst for the life of the process. Reading
+        // `openWorkspaceFolder` and `nodeService` directly captured `this`, which
+        // is how a destroyed Activity and its view tree survived a task swipe.
+        //
+        // A teardown is available and was not chosen. `setServiceWorkerClient`
+        // takes a @Nullable client at minSdk 33, measured against the platform
+        // stub, so clearing it in onDestroy is a real option. What it costs is an
+        // answer to when an outgoing Activity runs relative to an incoming one,
+        // because clearing at the wrong moment wipes the live client and
+        // `bridgeInitialized` then holds off a re-registration until a renderer
+        // crash reaches recreateWebView(). This Activity is `singleTask` and
+        // nothing calls `recreate()`, so that window may well be unreachable
+        // here; it is unmeasured either way. Holding weakly needs no answer.
+        //
+        // Anything added here reads through `self`, and the rule is stricter than
+        // it looks: a supplier that only calls a method, or reads a member
+        // inherited from Context, captures the Activity just as completely as one
+        // that names a field. ServiceWorkerRetentionTest refuses any shape other
+        // than `self.get()?....` for that reason.
+        val self = WeakReference(this)
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            port, roots, sensitive, { openWorkspaceFolder }
-        ) { nodeService?.getConnectionToken() }
+            port, roots, sensitive, { self.get()?.openWorkspaceFolder }
+        ) { self.get()?.nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
             allowedPort = port,
