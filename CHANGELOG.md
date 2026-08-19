@@ -58,7 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The same check now covers the Ruby and Java toolchain downloads, the Python bundling step, and the glibc compatibility layer, each of which previously shipped unexamined.
 - The Python bundling step fails when the interpreter's runtime library is absent, installs it under the name the launcher links against, and removes standard libraries from earlier versions.
 - The bundled SQLite engine is checked against the JavaScript shipped beside it. A mismatch shows up on device as chat failing to pick a model.
-- Node.js headers are checked against the digest nodejs.org publishes, the last download taken on trust.
 - All toolchain downloads use one package mirror. Three still pointed at a host the others had left while sharing a cached index, so a build could resolve from one and fetch from another.
 - The musl loader now comes from a supported Alpine branch, and an index older than 30 days fails the build. The previous branch stopped receiving fixes in April; its signature still verified.
 - The loopback bind on the editor server's command line is pinned by a test. A wildcard bind would have put the editor on the phone's network without failing anything.
@@ -72,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed twenty-six tracked files that nothing built, ran or opened, including the cross-compilation scripts replaced when binaries began coming from Termux.
 - Six releases that shipped without a changelog entry now have one, reconstructed from commit history and marked as such. Two footer links named a tag that never existed.
 
-- README, the user guide and the requirements specification now carry storage figures that match the gate: 810 MB of assets, 875 MB required before extraction, about 1.15 GB with all toolchains. The README promised 500 MB while setup refuses under 875 MB.
+- README, the user guide and the requirements specification now carry storage figures that match the gate: 810 MB of assets, 875 MB required before extraction, about 990 MB with both toolchains. The README promised 500 MB while setup refuses under 875 MB.
 - The milestone checklist says a ticked box records what was true when it was ticked. It is the only planning document still tracking open work, so it carries a note rather than a historical marker.
 - The milestone log and implementation plan no longer record a process-liveness check as the fix for the white screen on reopen. A contributor could reintroduce it as precedent.
 - The milestone checklist no longer plans on-device CI as a hosted device lab. Nothing in the workflows starts the app, and arm64 runners cannot boot an emulator.
@@ -113,7 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub Copilot Chat works on device**: platform packages aliased under the name Android resolves, the SDK entry ships again, and `@vscode/sqlite3` is rebuilt for Bionic.
 - **Claude Code extension support**: the marketplace serves its musl build, the CLI starts through the bundled musl loader, and a loopback DNS proxy gives musl binaries name resolution.
 - A glibc compatibility shim so prebuilt glibc-only addons load against Bionic, supplying the `__isoc99_` scanf family, the ctype tables and `copy_file_range`, and translating differently-numbered constants.
-- Toolchain downloads, the server tarball, npm, extensions and every bundled tool are verified against the strongest digest their source publishes; a missing digest fails the build.
+- Toolchain downloads, the server tarball, npm, extensions and every bundled tool are verified against a digest pinned in this repository rather than one the serving host supplies alongside the file; a missing digest fails the build.
 - Every release carries a manifest of what it was built from: editor version and commit, plus the version and checksum of each bundled tool.
 - The privacy policy describes Android backup, which copies `~/.vscodroid/data/Machine` to your Google account. SSH keys, tokens, projects and toolchains are excluded by an allowlist.
 - Two checks hold the bridge API documentation to the code: one reads the compiled class for method existence, the other reads source for parameter names, order, nullability and return types.

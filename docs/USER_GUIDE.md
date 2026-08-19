@@ -700,7 +700,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 810 MB to internal storage. With all three toolchains installed, expect around 1.15 GB. Setup needs about 875 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 810 MB to internal storage. With both toolchains installed, expect around 990 MB. Setup needs about 875 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

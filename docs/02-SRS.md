@@ -203,7 +203,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
 | NFR-RES-03 | Phantom process count | ≤ 5 in typical use | P0 |
 | NFR-RES-04 | AAB base download size | < 200 MB (core); toolchains 20-100 MB each (on-demand) | P1 |
-| NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~1.15 GB with all toolchains | P1 |
+| NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~990 MB with both toolchains | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
 | NFR-RES-07 | V8 heap limit | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
