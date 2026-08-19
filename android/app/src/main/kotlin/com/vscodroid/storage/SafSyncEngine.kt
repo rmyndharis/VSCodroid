@@ -408,8 +408,20 @@ class SafSyncEngine(private val context: Context) {
         // counts: readLines ends a line on it as readily as on `\n`, and both are legal
         // in a filename.
         if (path.any { it == '\t' || it == '\n' || it == '\r' }) return
-        into.add("$path\t${file.lastModified()}\t${file.length()}")
+        into.add(identityLine(path, file))
     }
+
+    /**
+     * One file's line in the synced record: relative path, mtime, size, tab separated.
+     *
+     * Shared rather than spelled out at each site, because two of them have to agree
+     * byte for byte or the disagreement shows up as behaviour: [recordIdentity] writes
+     * the line and [holdsOnlyVouchedCopies] looks the same line up. A fixture that
+     * composes it by hand is a third reader of the same bytes, which is why the tests
+     * call this too.
+     */
+    internal fun identityLine(path: String, file: File): String =
+        "$path\t${file.lastModified()}\t${file.length()}"
 
     /**
      * The lines of the last complete sync's record, or none when there is no usable one.
@@ -461,7 +473,7 @@ class SafSyncEngine(private val context: Context) {
             mirrorDir.walkTopDown().onFail { _, _ -> unreadable = true }.all { file ->
                 if (isLink(file)) false
                 else if (!file.isFile) true
-                else "${file.toRelativeString(mirrorDir)}\t${file.lastModified()}\t${file.length()}" in vouched
+                else identityLine(file.toRelativeString(mirrorDir), file) in vouched
             } && !unreadable
         } catch (e: Exception) {
             Logger.w(tag, "Could not walk ${mirrorDir.name}; treating it as unvouched: ${e.message}")

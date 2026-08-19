@@ -39,6 +39,7 @@ class SafMirrorReclamationTest {
 
     private lateinit var manager: SafStorageManager
     private lateinit var resolver: ContentResolver
+    private lateinit var context: Context
     private lateinit var mirrorsDir: File
 
     private val revokedUri = mockk<Uri>()
@@ -59,7 +60,7 @@ class SafMirrorReclamationTest {
         every { liveUri.toString() } returns "content://tree/primary%3ACurrentProject"
 
         resolver = mockk(relaxed = true)
-        val context = mockk<Context>(relaxed = true)
+        context = mockk<Context>(relaxed = true)
         every { context.filesDir } returns filesDir
         every { context.contentResolver } returns resolver
 
@@ -173,8 +174,16 @@ class SafMirrorReclamationTest {
         val record = File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).apply {
             writeText(
                 SafSyncEngine.RECORD_HEADER + "\n" +
-                    "src/main.kt\t${file.lastModified()}\t${file.length()}"
+                    SafSyncEngine(context).identityLine("src/main.kt", file)
             )
+        }
+        // The fixture's own precondition, asserted rather than assumed. Composing the
+        // record by hand made this a second reader of the same bytes, and the two
+        // disagreed on a Linux runner while agreeing on macOS -- which surfaced as four
+        // unrelated-looking behaviour failures rather than as "the fixture is wrong".
+        check(SafSyncEngine(context).holdsOnlyVouchedCopies(dir)) {
+            "the fixture wrote a record the engine does not accept, so every case built " +
+                "on it would fail for the wrong reason"
         }
         return dir to record
     }
