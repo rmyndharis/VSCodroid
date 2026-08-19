@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Creating a folder no longer overwrites a device document the app could not read, such as one too large to copy. Only the single-file path checked this before.
+
 ### Security
 
 - Content rendered in the editor can no longer read workspace files across origins. Served files are readable by anyone, and a page in the built-in browser could fetch one.

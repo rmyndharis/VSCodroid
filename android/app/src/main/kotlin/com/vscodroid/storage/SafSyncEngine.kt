@@ -970,7 +970,28 @@ class SafSyncEngine(private val context: Context) {
             } ?: return null
 
             if (localFile.isFile) {
-                writeLocalToSaf(localFile, docUri)
+                // The same question [handleMirrorEvent] asks before queueing a job, asked
+                // again here because this path does not come through it. A directory
+                // create, or a move whose other half never arrived, walks the tree
+                // through [createChildrenInSaf] and reaches every child directly.
+                //
+                // `existingDocId != null` IS the provider answer for this child, already
+                // paid for above, so unlike the event path this costs no extra binder
+                // call. A file this sync could not read, whose document still exists on
+                // the device, would otherwise be written back as whatever placeholder the
+                // mirror holds -- truncating a document nothing here has ever seen.
+                if (writeWouldReplaceUnreadDocument(
+                        localFile.absolutePath, existingDocId != null, unfetched,
+                    )
+                ) {
+                    Logger.w(
+                        tag,
+                        "Not writing ${localFile.name} back: the device holds a document " +
+                            "there that this sync never read, and writing would replace it",
+                    )
+                } else {
+                    writeLocalToSaf(localFile, docUri)
+                }
             }
             // Cache the document ID for future write-back lookups, but only when the
             // parent is one this cache knows. A miss is not "the parent is the root" --
@@ -1308,8 +1329,17 @@ class SafSyncEngine(private val context: Context) {
         // may have been deleted on the device since. When it has, the local file
         // is an ordinary new file and uploads normally. The binder walk costs
         // something only for paths in the set, which is normally empty.
+        //
+        // The set is therefore tested twice, here and inside the predicate, and the
+        // outer one is not a duplicate: it is what keeps [providerHoldsDocument] off
+        // the common path. [createOneInSaf] needs no such guard, because there the
+        // provider's answer is already in hand.
         if (localFile.absolutePath in unfetched &&
-            providerHoldsDocument(safTreeUri, relativePath)
+            writeWouldReplaceUnreadDocument(
+                localFile.absolutePath,
+                providerHoldsDocument(safTreeUri, relativePath),
+                unfetched,
+            )
         ) {
             Logger.w(
                 tag,
@@ -1676,6 +1706,28 @@ class SafSyncEngine(private val context: Context) {
          * The comparison is only sound because [copyDocumentToLocal] stamps the mirror
          * with the source's own timestamp, so both sides come from the same clock.
          */
+        /**
+         * Whether writing [localPath] back would replace a device document this sync
+         * never read.
+         *
+         * Extracted because two paths ask it and only one of them can be reached from a
+         * JVM test. [handleMirrorEvent] asks before queueing a job; [createOneInSaf] asks
+         * again while walking into a directory, which no event-driven test can drive here
+         * at all, since delivering a directory event constructs a `FileObserver` and that
+         * runs a static initializer reaching native code (see [SafWatchCoverageTest]).
+         * Naming the rule once is what lets it be asserted at all, and what stops the two
+         * call sites drifting apart, which is how the second one came to be missing it.
+         *
+         * [deviceHoldsDocument] is the provider's answer, not a guess: the set alone is a
+         * memory of what this sync could not read, and the document may have been deleted
+         * on the device since, in which case the local file is an ordinary new file.
+         */
+        internal fun writeWouldReplaceUnreadDocument(
+            localPath: String,
+            deviceHoldsDocument: Boolean,
+            unfetched: Set<String>,
+        ): Boolean = deviceHoldsDocument && localPath in unfetched
+
         internal fun shouldOverwriteMirror(
             mirrorExists: Boolean,
             mirrorModified: Long,

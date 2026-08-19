@@ -137,4 +137,34 @@ class SafWriteBackFilterTest {
             )
         }
     }
+
+    /**
+     * The rule both write-back paths apply, asserted directly.
+     *
+     * It is a predicate rather than an inline condition because only one of its two call
+     * sites can be reached from a JVM test: delivering the directory event that drives
+     * the other constructs a `FileObserver`, whose static initializer reaches native code
+     * (see SafWatchCoverageTest). The recursive path went without this check for exactly
+     * that reason, so naming the rule is what makes the second site visible.
+     */
+    @Test
+    fun `a write is refused only when the device still holds a document the sync never read`() {
+        val unread = "/data/mirror/archive/big.zip"
+        val read = "/data/mirror/notes.md"
+        val unfetched = setOf(unread)
+
+        assertTrue(
+            SafSyncEngine.writeWouldReplaceUnreadDocument(unread, true, unfetched),
+            "a document the sync never read, still on the device, must not be written over",
+        )
+        assertFalse(
+            SafSyncEngine.writeWouldReplaceUnreadDocument(unread, false, unfetched),
+            "the set is a memory, not a permanent refusal: with the device document gone " +
+                "the local file is an ordinary new file",
+        )
+        assertFalse(
+            SafSyncEngine.writeWouldReplaceUnreadDocument(read, true, unfetched),
+            "a document the sync did read is the mirror's own copy and belongs on the device",
+        )
+    }
 }
