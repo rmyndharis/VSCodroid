@@ -1831,6 +1831,12 @@ class SafSyncEngine(private val context: Context) {
             // loses updates; the other lost work. Note the divergence usually resolves
             // itself in content if not in bookkeeping: the watcher writes the local edit
             // out on the next save, after which both sides hold the same bytes.
+            //
+            // Tracked as #286. A real fix has to tell a device change from a local one
+            // without a clock, which means comparing content rather than metadata: a
+            // per-file digest beside the mtime and size [identityLine] already writes.
+            // That puts a hash over every mirrored file into each sync, so it wants
+            // measuring before it is taken.
             sourceModified == 0L -> mirrorIsOurCopy
             sourceModified > mirrorModified -> true
             // A newer local copy wins, whatever its size. Checking size before this

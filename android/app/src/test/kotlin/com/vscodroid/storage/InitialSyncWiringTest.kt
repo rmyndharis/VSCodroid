@@ -192,6 +192,9 @@ class InitialSyncWiringTest {
      *
      * Kept because the alternative is what shipped: with nothing to compare, the old
      * answer assumed the device always won and destroyed the local edit on every reopen.
+     *
+     * This test locks the limitation rather than the fix. When #286 lands it should go
+     * red, and the case that replaces it asserts the device change arriving.
      */
     @Test
     fun `a diverged file on a timestamp-less provider stops receiving device changes`() {
