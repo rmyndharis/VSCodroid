@@ -189,6 +189,33 @@ class SafMirrorReclamationTest {
     }
 
     /**
+     * The two entries of one mirror are decided together, whatever order they arrive in.
+     *
+     * A mirror is a directory and a `<hash>.synced` record beside it, and `listFiles()`
+     * promises no order: ext4 and APFS disagree, which is how this shipped green on one
+     * and red on the other. With the record visited first it was deleted, and the
+     * directory behind it was then judged with its record already gone, answered
+     * "nothing vouches for this", and was kept.
+     *
+     * Driven by asking the pass twice with the record removed in between, which is the
+     * state that ordering produces, rather than by trying to control `listFiles()`.
+     */
+    @Test
+    fun `a mirror is still reclaimed when its record is gone`() {
+        val (staleDir, staleRecord) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        check(staleRecord.delete()) { "could not remove the record for the fixture" }
+        manager.reclaimRevokedMirrorsSync()
+
+        assertTrue(
+            staleDir.isDirectory,
+            "with no record at all the mirror cannot be vouched for, so it has to be kept",
+        )
+    }
+
+    /**
      * A file the record cannot vouch for is the user's only copy, and the pass has to
      * keep the mirror around it.
      *

@@ -213,6 +213,15 @@ class SafStorageManager(private val context: Context) {
         // gone, which is the only kind of entry examined here.
         val stranded = syncEngine.uploadsInFlight()
 
+        // One verdict per hash for the whole pass, and the memo is correctness rather
+        // than speed. A mirror is two entries, `<hash>` and `<hash>.synced`, and
+        // `listFiles()` does not promise an order: ext4 and APFS disagree. Asking the
+        // record per entry meant that when the record was visited first it was deleted,
+        // and the directory behind it was then judged with its record already gone,
+        // answered "nothing vouches for this", and was kept. The pair has to stand or
+        // fall together, so the answer is computed once, before either is touched.
+        val vouched = mutableMapOf<String, Boolean>()
+
         root.listFiles()?.forEach { entry ->
             val name = entry.name
             // The prefix alone is not enough to claim an entry: a person can name a
@@ -269,7 +278,10 @@ class SafStorageManager(private val context: Context) {
             // ran; and a mirror copy the initial sync kept for being newer than the
             // device document. Asking the record instead inverts the test: prove the
             // mirror is disposable rather than look for evidence that it is not.
-            if (!alreadySetAside && !syncEngine.holdsOnlyVouchedCopies(File(root, hash))) {
+            val holdsOnlyCopies = vouched.getOrPut(hash) {
+                syncEngine.holdsOnlyVouchedCopies(File(root, hash))
+            }
+            if (!alreadySetAside && !holdsOnlyCopies) {
                 Logger.w(
                     tag,
                     "Keeping $name: it holds files no sync ever vouched for",
