@@ -175,6 +175,37 @@ class InitialSyncWiringTest {
         assertEquals(listOf("notes.txt"), openedDocuments)
     }
 
+    /**
+     * The cost of the clause above, pinned so it is a decision rather than a surprise.
+     *
+     * Once a file on a timestamp-less provider diverges from the record it can never be
+     * vouched for again: it is not copied, so nothing records it, and the equal-timestamp
+     * branch cannot record it because a real file's mtime is never 0. Device-side changes
+     * to that file stop arriving, and a size change does not rescue it, because the
+     * clause returns before the size comparison.
+     *
+     * Kept because the alternative is what shipped: with nothing to compare, the old
+     * answer assumed the device always won and destroyed the local edit on every reopen.
+     */
+    @Test
+    fun `a diverged file on a timestamp-less provider stops receiving device changes`() {
+        val local = mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "a different length on the device", modified = 0)
+
+        sync()
+        sync()
+
+        assertEquals(
+            "edited in the editor!", local.readText(),
+            "the local edit survives, which is the point",
+        )
+        assertEquals(
+            emptyList<String>(), openedDocuments,
+            "and the device copy is never read again, even though its length differs: " +
+                "this is the permanent cost of having no clock to compare",
+        )
+    }
+
     @Test
     fun `an edit made on the device reaches the mirror`() {
         val local = mirrorHolding("notes.txt", "stale copy", 1_700_000_000_000)

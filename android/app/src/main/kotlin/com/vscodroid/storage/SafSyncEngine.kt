@@ -168,9 +168,14 @@ class SafSyncEngine(private val context: Context) {
         // only thing that can tell this app's own copy from an edit made since. Read
         // once here rather than per document; [reconcileDeletions] reads the same file
         // again in phase 3, after phase 2 may have changed what is on disk.
-        val previouslyRecorded = readSyncedRecord(
-            File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
-        ).let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else emptySet() }
+        // `by lazy` rather than eagerly: only the no-timestamp branch reads it, and a
+        // provider that reports times never asks. Building it eagerly meant one string
+        // per mirrored file held for the length of a sync that would not look at any of
+        // them, which on a large folder is real memory for nothing.
+        val previouslyRecorded: Set<String> by lazy {
+            readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
+                .let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else emptySet() }
+        }
 
         // Phase 2: Create directories and copy files
         for (doc in documents) {
@@ -238,6 +243,17 @@ class SafSyncEngine(private val context: Context) {
                         recordIdentity(recorded, doc.relativePath, localPath)
                     }
                     unfetched.remove(localPath.absolutePath)
+                    if (doc.lastModified == 0L) {
+                        // At Logger.i, not d: this file stops receiving device-side
+                        // changes from here on, and a user asking why their folder does
+                        // not update needs this line to exist in a bug report.
+                        Logger.i(
+                            tag,
+                            "Kept ${doc.relativePath} and stopped tracking the device " +
+                                "copy: the provider reports no modification time and " +
+                                "this file no longer matches what the last sync wrote",
+                        )
+                    }
                     Logger.d(tag, "Kept local copy: ${doc.relativePath}")
                     filesDone++
                     onProgress(filesDone, totalFiles)
@@ -1707,6 +1723,22 @@ class SafSyncEngine(private val context: Context) {
             // own copy may be replaced, anything else is the only copy. A mirror with no
             // record behind it is not ours to overwrite either, which is the direction
             // reconcileDeletions already fails in.
+            //
+            // ⚠️ What this costs, stated because it is permanent and the old behaviour
+            // did not have it. Once a file here answers false it can never answer true
+            // again: it is not copied, so `copyDocumentToLocal` never records it, and
+            // the equal-timestamp branch cannot record it either because a real file's
+            // mtime is never 0. Device-side changes to that file stop arriving, and no
+            // size comparison rescues it, because this clause returns before the size
+            // clause below is reached.
+            //
+            // Kept anyway, because the alternative is worse and is what shipped: with no
+            // timestamp there is nothing to tell a device edit from a local one, and the
+            // old answer assumed the device always won, so every reopen destroyed the
+            // local edit. This one assumes the local edit wins once the two diverge. It
+            // loses updates; the other lost work. Note the divergence usually resolves
+            // itself in content if not in bookkeeping: the watcher writes the local edit
+            // out on the next save, after which both sides hold the same bytes.
             sourceModified == 0L -> mirrorIsOurCopy
             sourceModified > mirrorModified -> true
             // A newer local copy wins, whatever its size. Checking size before this
