@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.os.StatFs
 import androidx.annotation.StringRes
+import com.vscodroid.BuildConfig
 import com.vscodroid.R
 import android.system.Os
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
@@ -953,8 +954,31 @@ class ToolchainManager(private val context: Context) {
         }
 
     /**
-     * [zipUrl] with `latest` resolved to the release it names right now, or
-     * [zipUrl] unchanged when it cannot be resolved.
+     * [zipUrl] pointed at a concrete release, or [zipUrl] unchanged when none
+     * can be resolved.
+     *
+     * The release this build belongs to is preferred, and `latest` is the
+     * fallback rather than the first choice. `latest` names whichever release
+     * is newest at the moment of the request, which is not necessarily one this
+     * app was built alongside, and the gap is not theoretical. Measured
+     * 2026-08-19, with `latest` naming v1.1.0:
+     *
+     * ```
+     * releases/latest/download/toolchain_go.zip  -> 404
+     * releases/download/v1.0.0/toolchain_go.zip  -> 200
+     * ```
+     *
+     * An installed v1.0.0 offers Go in its picker, because its own registry
+     * lists it, and v1.1.0 does not publish that ZIP because the entry was
+     * retired. Through `latest` that install can no longer fetch a payload its
+     * own release still carries. The reverse costs the same: a release deleted
+     * after publication moves `latest` backwards, onto a release built before
+     * whatever the installed app now requires.
+     *
+     * Note what this cannot do, because the shape recurs. It ships in an app
+     * version, so it repairs the population that installs that version onward
+     * and nothing already on a device. v1.0.0 keeps resolving through `latest`
+     * forever.
      *
      * The manifest and the payload are two requests minutes apart, and both used
      * to go through `latest` independently, so a release published between them
@@ -991,6 +1015,11 @@ class ToolchainManager(private val context: Context) {
         // 30 s connect and a 30 s read timeout that nothing else here would
         // interrupt.
         if (download.cancelled) return zipUrl
+        ownReleaseAssetUrl(zipUrl)?.let {
+            Logger.i(tag, "Pinned this install to ${it.substringBeforeLast('/')}")
+            return it
+        }
+        if (download.cancelled) return zipUrl
         val latestUrl = latestReleaseUrlFor(zipUrl) ?: return zipUrl
         val pinned = try {
             val conn = URL(latestUrl).openConnection() as HttpURLConnection
@@ -1020,6 +1049,60 @@ class ToolchainManager(private val context: Context) {
         }
         Logger.i(tag, "Pinned this install to ${pinned.substringBeforeLast('/')}")
         return pinned
+    }
+
+    /**
+     * [zipUrl] served from this build's own release, or null.
+     *
+     * Null covers three different things on purpose, because the caller does
+     * the same thing with all of them: this build's version does not name a
+     * tag, no release carries that tag, or the release carries it but not this
+     * asset. Each leaves `latest` as the answer, which is what shipped before
+     * this existed.
+     *
+     * One HEAD against the asset itself rather than against the release page,
+     * because the asset is the question. Measured 2026-08-19, redirects not
+     * followed: a published asset answers 302 and both a missing asset and a
+     * missing tag answer 404, so one request separates every case that matters.
+     * Asking the release page instead would answer 200 for a release whose
+     * toolchain step failed, pin to it, and turn a fallback into a refused
+     * install two requests later.
+     */
+    private fun ownReleaseAssetUrl(zipUrl: String): String? {
+        val ownTag = appReleaseTag(BuildConfig.VERSION_NAME) ?: return null
+        val url = pinnedAssetUrl(zipUrl, ownTag) ?: return null
+        if (assetIsPublished(url)) return url
+        Logger.i(
+            tag,
+            "Release $ownTag does not publish ${zipUrl.substringAfterLast('/')}; " +
+                "falling back to the latest release",
+        )
+        return null
+    }
+
+    /**
+     * Whether the server will serve [url], asked with a HEAD and no body.
+     *
+     * Redirects are not followed, so the 302 that a published asset answers is
+     * the success and there is no transfer behind it. Any failure to ask counts
+     * as no: the caller's fallback is the behaviour that shipped before this,
+     * and a network that cannot answer this cannot serve the payload either.
+     */
+    private fun assetIsPublished(url: String): Boolean = try {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = HTTP_TIMEOUT_MS
+            conn.readTimeout = HTTP_TIMEOUT_MS
+            conn.instanceFollowRedirects = false
+            conn.requestMethod = "HEAD"
+            conn.setRequestProperty("User-Agent", "VSCodroid")
+            conn.responseCode in 200..399
+        } finally {
+            conn.disconnect()
+        }
+    } catch (e: IOException) {
+        Logger.w(tag, "Could not ask whether $url is published: ${e.message}")
+        false
     }
 
     /**
@@ -1980,6 +2063,23 @@ internal fun releaseTagFromLocation(location: String): String? {
         .substringBefore('#')
         .trim('/')
     return if (tag.isNotEmpty() && TAG_CHARS.matches(tag)) tag else null
+}
+
+/**
+ * The release tag a build of [versionName] belongs to, or null.
+ *
+ * `1.1.0` gives `v1.1.0`, matching the tags `release.yml` publishes.
+ *
+ * `-debug` is stripped because it is a `versionNameSuffix` on the debug build
+ * type and not part of any tag; a debug build belongs to the same release its
+ * source does. Nothing else is stripped. A suffix this does not know about
+ * yields a tag no release carries, the probe answers 404, and the caller falls
+ * back to `latest` -- so an unknown suffix costs the old behaviour rather than
+ * a wrong guess at which release the build came from.
+ */
+internal fun appReleaseTag(versionName: String): String? {
+    val version = versionName.removeSuffix("-debug")
+    return if (version.isNotEmpty() && TAG_CHARS.matches(version)) "v$version" else null
 }
 
 /**

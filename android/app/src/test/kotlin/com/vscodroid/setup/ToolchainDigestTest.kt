@@ -318,7 +318,7 @@ class LatestReleasePinningTest {
     @Test
     fun `every registered toolchain can be pinned to one release`() {
         // The registry-wide version of the test above: one resolution has to
-        // serve all three, or a single install could pin while another does not.
+        // serve every entry, or a single install could pin while another does not.
         val pinned = ToolchainRegistry.available
             .mapNotNull { it.downloadUrl }
             .map { pinnedAssetUrl(it, "v1.1.0") }
@@ -328,6 +328,63 @@ class LatestReleasePinningTest {
             1,
             pinned.filterNotNull().map { manifestUrlFor(it) }.toSet().size,
             "pinned toolchains disagree about the manifest",
+        )
+    }
+
+    // -- appReleaseTag ----------------------------------------------------
+
+    @Test
+    fun `an install reaches the release its own version names`() {
+        // The case this exists for, measured 2026-08-19 while `latest` named
+        // v1.1.0: an installed v1.0.0 still offers Go, v1.1.0 does not publish
+        // that ZIP because the entry was retired, and the two URLs below differ
+        // by 404 against 200. The literal is the one that answers 200.
+        val go = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_go.zip"
+
+        val pinned = pinnedAssetUrl(go, appReleaseTag("1.0.0")!!)
+
+        assertEquals(
+            "https://github.com/rmyndharis/VSCodroid/releases/download/v1.0.0/toolchain_go.zip",
+            pinned,
+        )
+    }
+
+    @Test
+    fun `a debug build belongs to the release its source does`() {
+        // `versionNameSuffix` is a build-type detail; no release is ever tagged
+        // with it. Left in, every debug build would probe a tag that does not
+        // exist and quietly fall back to `latest`, which is the behaviour this
+        // replaces.
+        assertEquals("v1.1.0", appReleaseTag("1.1.0-debug"))
+    }
+
+    @Test
+    fun `a version that cannot name a tag resolves to nothing`() {
+        // Null is the fallback signal, so it has to be reachable. A version
+        // carrying a slash would otherwise be pasted into a URL naming
+        // something else entirely.
+        assertNull(appReleaseTag(""))
+        assertNull(appReleaseTag("1.1.0/../../etc"))
+        assertNull(appReleaseTag("1.1 .0"))
+    }
+
+    @Test
+    fun `the tag this build names is one the pinner accepts`() {
+        // The two halves are written apart and only ever meet at runtime. If
+        // they disagreed about the shape of a tag, `pinnedAssetUrl` would
+        // refuse every tag this produces, pinning would revert to `latest`
+        // permanently, and nothing would report it: the fallback is silent by
+        // design because it is also the correct answer for a dev build.
+        val tag = appReleaseTag("1.1.0")!!
+
+        val pinned = ToolchainRegistry.available
+            .mapNotNull { it.downloadUrl }
+            .map { pinnedAssetUrl(it, tag) }
+
+        assertEquals(
+            emptyList<String?>(),
+            pinned.filter { it == null },
+            "the pinner refused a tag this build would hand it",
         )
     }
 }
