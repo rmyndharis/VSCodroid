@@ -132,6 +132,49 @@ class InitialSyncWiringTest {
         assertEquals(emptyList<String>(), openedDocuments, "the engine read the document it should have left alone")
     }
 
+    /**
+     * A provider that reports no modification time, which is legal: COLUMN_LAST_MODIFIED
+     * is optional and MTP, some USB-OTG and some network providers omit it.
+     *
+     * With no clock to compare, the engine used to copy unconditionally, so every reopen
+     * of such a folder replaced whatever the editor had written since. The record decides
+     * instead, and these two are the wire: they prove initialSync hands
+     * shouldOverwriteMirror the answer, not just that the predicate would use it.
+     */
+    @Test
+    fun `with no reported time a mirror the record cannot vouch for is kept`() {
+        val local = mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+
+        sync()
+
+        assertEquals(
+            "edited in the editor!", local.readText(),
+            "with no timestamp to compare, an edit the record does not know about is the " +
+                "only copy and must not be replaced",
+        )
+        assertEquals(emptyList<String>(), openedDocuments)
+    }
+
+    /** The other side, and the reason "always keep" is not the answer either. */
+    @Test
+    fun `with no reported time a mirror the record vouches for is refreshed`() {
+        val local = mirrorHolding("notes.txt", "what the last sync wrote", 1_700_000_060_000)
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).writeText(
+            SafSyncEngine.RECORD_HEADER + "\n" +
+                SafSyncEngine(context).identityLine("notes.txt", local)
+        )
+        deviceFolderHolding("notes.txt", "changed on the phone", modified = 0)
+
+        sync()
+
+        assertEquals(
+            "changed on the phone", local.readText(),
+            "the mirror is this app's own copy, so the folder must not freeze",
+        )
+        assertEquals(listOf("notes.txt"), openedDocuments)
+    }
+
     @Test
     fun `an edit made on the device reaches the mirror`() {
         val local = mirrorHolding("notes.txt", "stale copy", 1_700_000_000_000)

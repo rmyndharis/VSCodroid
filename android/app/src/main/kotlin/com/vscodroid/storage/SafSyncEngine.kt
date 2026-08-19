@@ -162,6 +162,16 @@ class SafSyncEngine(private val context: Context) {
         // before it asks the clock anything.
         val unfinishedUploads = uploadsInFlight().toMutableSet()
 
+        // Loaded for the same reason and read the same way: what the last sync wrote,
+        // as (path, mtime, size) lines. Phase 2 needs it only for providers that omit
+        // COLUMN_LAST_MODIFIED, where there is no clock to compare and the record is the
+        // only thing that can tell this app's own copy from an edit made since. Read
+        // once here rather than per document; [reconcileDeletions] reads the same file
+        // again in phase 3, after phase 2 may have changed what is on disk.
+        val previouslyRecorded = readSyncedRecord(
+            File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
+        ).let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else emptySet() }
+
         // Phase 2: Create directories and copy files
         for (doc in documents) {
             val localPath = File(mirrorDir, doc.relativePath)
@@ -214,7 +224,9 @@ class SafSyncEngine(private val context: Context) {
                 }
                 if (!shouldOverwriteMirror(
                         localPath.exists(), localPath.lastModified(), localPath.length(),
-                        doc.lastModified, doc.size
+                        doc.lastModified, doc.size,
+                        mirrorIsOurCopy = identityLine(doc.relativePath, localPath)
+                            in previouslyRecorded,
                     )
                 ) {
                     keptLocal++
@@ -1661,17 +1673,17 @@ class SafSyncEngine(private val context: Context) {
          *   "newer, keep it" — freezing the truncation in place forever and letting
          *   the write-back push it onto the device. Different sizes mean the mirror is
          *   not a copy of the source, whatever the clocks say.
-         * - An unknown source timestamp (0) must still copy. COLUMN_LAST_MODIFIED is
-         *   optional, and treating unknown as "keep" would freeze such folders
-         *   permanently: nothing in the app can clear a mirror, so there would be no
-         *   way out short of clearing app data. Copying is what the old code did, and
-         *   it is the behaviour that heals itself.
+         * - An unknown source timestamp (0) is decided by [mirrorIsOurCopy], not by the
+         *   clock, because there is no clock to ask. COLUMN_LAST_MODIFIED is optional and
+         *   arrives as 0 from MTP, some USB-OTG and some network providers.
          *
-         *   ⚠️ Know what it costs before relying on the protections built on top of this.
-         *   On such a provider this branch fires every time, so every reopen replaces a
-         *   local edit that has not been written back — and [reconcileDeletions]'s record
-         *   cannot help, because the file it would have vouched for is already gone. The
-         *   folder heals; the edit does not.
+         *   Both obvious answers are wrong. "Always copy" freezes nothing but replaces a
+         *   local edit on every reopen, which is what this used to do. "Always keep"
+         *   protects the edit and freezes the folder for ever, since nothing in the app
+         *   can clear a mirror. The record settles it without guessing: if the mirror is
+         *   still exactly what the last sync wrote there, it is this app's own copy and
+         *   the device is entitled to replace it, so the folder still heals. If it is
+         *   not, it holds something written since, and that is the only copy.
          *
          * The comparison is only sound because [copyDocumentToLocal] stamps the mirror
          * with the source's own timestamp, so both sides come from the same clock.
@@ -1681,13 +1693,21 @@ class SafSyncEngine(private val context: Context) {
             mirrorModified: Long,
             mirrorSize: Long,
             sourceModified: Long,
-            sourceSize: Long
+            sourceSize: Long,
+            /**
+             * Whether the mirror file is byte-identical to the line the last sync
+             * recorded for it. No default: there is one production caller and it has the
+             * record in hand, and a default here would let a future caller answer the
+             * question by not thinking about it.
+             */
+            mirrorIsOurCopy: Boolean,
         ): Boolean = when {
             !mirrorExists -> true
-            // The provider did not report a time. Unknown must not freeze the folder:
-            // nothing in the app can clear a mirror, so copying is the behaviour that
-            // heals itself.
-            sourceModified == 0L -> true
+            // The provider did not report a time, so the record answers instead: our
+            // own copy may be replaced, anything else is the only copy. A mirror with no
+            // record behind it is not ours to overwrite either, which is the direction
+            // reconcileDeletions already fails in.
+            sourceModified == 0L -> mirrorIsOurCopy
             sourceModified > mirrorModified -> true
             // A newer local copy wins, whatever its size. Checking size before this
             // was the defect: almost every edit changes a file's length, so almost

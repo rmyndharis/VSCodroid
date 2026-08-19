@@ -155,7 +155,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = false, mirrorModified = 0, mirrorSize = 0,
-                    sourceModified = 1_700_000_000_000, sourceSize = 4096
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = false
                 ),
                 "First sync must copy: there is nothing to lose"
             )
@@ -166,7 +166,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_060_000, sourceSize = 4096
+                    sourceModified = 1_700_000_060_000, sourceSize = 4096, mirrorIsOurCopy = false
                 ),
                 "An edit made outside the app should reach the mirror"
             )
@@ -179,7 +179,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_000_000, sourceSize = 4096
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = false
                 ),
                 "A newer local edit must survive reopening the folder"
             )
@@ -190,7 +190,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_000_000, sourceSize = 4096
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = false
                 ),
                 "Same timestamp and same size means the copy is current"
             )
@@ -209,7 +209,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 700_000,
-                    sourceModified = 1_700_000_000_000, sourceSize = 2_000_000
+                    sourceModified = 1_700_000_000_000, sourceSize = 2_000_000, mirrorIsOurCopy = false
                 ),
                 "A newer local edit must survive regardless of how its length changed"
             )
@@ -222,26 +222,41 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_000_000, sourceSize = 8192
+                    sourceModified = 1_700_000_000_000, sourceSize = 8192, mirrorIsOurCopy = false
                 ),
                 "Equal timestamps with different lengths means the device copy changed"
             )
         }
 
+        /**
+         * COLUMN_LAST_MODIFIED is optional; MTP, some USB-OTG and network providers leave
+         * it null, which arrives as 0. With no clock to compare, the record decides.
+         *
+         * These two are one rule seen from both sides, and each is the other's control.
+         * Copying unconditionally, which is what this did before, replaced a local edit
+         * on every reopen. Keeping unconditionally would freeze the folder for ever,
+         * since nothing in the app can clear a mirror.
+         */
         @Test
-        fun `copies when the provider reports no timestamp`() {
-            // COLUMN_LAST_MODIFIED is optional; MTP, some USB-OTG and network
-            // providers leave it null, which arrives as 0. Treating unknown as
-            // "keep" would freeze those folders permanently, and nothing in the
-            // app can clear a mirror: clearSafMirrors and revokePermission have
-            // no callers. Copying is what the previous behaviour did, and it is
-            // the one that heals itself.
+        fun `an unknown timestamp refreshes a mirror the last sync wrote`() {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 0, sourceSize = 4096
+                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = true
                 ),
-                "An unknown source timestamp must not freeze the mirror"
+                "the mirror is this app's own copy, so the folder must not freeze"
+            )
+        }
+
+        @Test
+        fun `an unknown timestamp keeps a mirror that has changed since`() {
+            assertFalse(
+                SafSyncEngine.shouldOverwriteMirror(
+                    mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
+                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = false
+                ),
+                "the mirror no longer matches what was recorded for it, so it holds an " +
+                    "edit that was never written back and is the only copy"
             )
         }
 
@@ -250,7 +265,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = false, mirrorModified = 0, mirrorSize = 0,
-                    sourceModified = 0, sourceSize = 4096
+                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = false
                 ),
                 "A missing mirror file must still be fetched even without timestamps"
             )
@@ -280,9 +295,10 @@ class SafSyncEngineTest {
                     mirrorModified = 1_700_000_000_000L,
                     mirrorSize = 1024,
                     sourceModified = doc.lastModified,
-                    sourceSize = doc.size
+                    sourceSize = doc.size, mirrorIsOurCopy = true
                 ),
-                "a document with no reported time must be copied, not treated as older"
+                "a document with no reported time must reach the unknown-time branch " +
+                    "rather than falling through to the clock comparison"
             )
         }
     }
