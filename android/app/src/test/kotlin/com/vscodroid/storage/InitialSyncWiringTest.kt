@@ -12,6 +12,7 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -182,26 +183,74 @@ class InitialSyncWiringTest {
     }
 
     /**
-     * The cost of the clause above, pinned so it is a decision rather than a surprise.
+     * The frozen case, now resolved by data the sync already has.
      *
-     * Once a file on a timestamp-less provider diverges from the record it can never be
-     * vouched for again: it is not copied, so nothing records it, and the equal-timestamp
-     * branch cannot record it because a real file's mtime is never 0. Device-side changes
-     * to that file stop arriving, and a size change does not rescue it, because the
-     * clause returns before the size comparison.
+     * With no clock there is nothing to say whether a difference came from the device
+     * or from the editor, and the old answer was to keep the mirror and stop looking.
+     * That was safe and permanent: the file never became vouched again, so device
+     * changes stopped arriving for the life of the mirror.
      *
-     * Kept because the alternative is what shipped: with nothing to compare, the old
-     * answer assumed the device always won and destroyed the local edit on every reopen.
+     * What separates the two cases is the size the record already carries. The cursor
+     * carries the device document's length for free, so when the two agree the device
+     * copy has not moved since the last sync and the divergence is local only. The
+     * mirror is written back, recorded, and the next sync treats it as its own again.
      *
-     * This test locks the limitation rather than the fix. When #286 lands it should go
-     * red, and the case that replaces it asserts the device change arriving.
+     * The two syncs are the point: the first leaves the file diverged, the second is
+     * where the old behaviour would have given up.
      */
     @Test
-    fun `a diverged file on a timestamp-less provider stops receiving device changes`() {
-        val local = mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
-        deviceFolderHolding("notes.txt", "a different length on the device", modified = 0)
-
+    fun `a local edit on a timestamp-less provider is written back and tracked again`() {
+        // The fake cursor is single use: `moveToNext` answers true once. So the device
+        // folder is re-armed before every sync, or the next one enumerates nothing and
+        // the assertions below would pass over an empty folder rather than a real one.
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
         sync()
+        val local = File(mirror, "notes.txt")
+        assertTrue(local.isFile, "setup failed: the first sync did not create the mirror")
+        val rec = File(mirror.path + ".synced")
+        assertTrue(rec.readText().contains("notes.txt"), "setup failed: nothing was recorded")
+
+        // The editor edits it, keeping the same length, so the device copy is still the
+        // length the record says this app wrote.
+        local.writeText("from the EDITOR")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+        sync()
+
+        assertEquals(
+            listOf("notes.txt"), writtenDocuments,
+            "the local edit should have been written back: the device copy is still the " +
+                "length the record says this app wrote, so nothing of the user's is lost",
+        )
+
+        // And now it is tracked again: a device-side change reaches the mirror.
+        deviceFolderHolding("notes.txt", "changed on the device", modified = 0)
+        sync()
+
+        assertEquals(
+            "changed on the device", local.readText(),
+            "the file is still frozen: being written back should have re-recorded it, " +
+                "so this sync sees its own copy and takes the device change",
+        )
+    }
+
+    /**
+     * And the genuine conflict is still refused, which is what keeps the fix honest.
+     *
+     * When the device document's length no longer matches what the record says was
+     * written, both sides moved. Nothing here can say which is newer, so the mirror is
+     * kept and the device copy is left alone rather than overwritten.
+     */
+    @Test
+    fun `a timestamp-less file both sides changed is kept, and neither side is pushed`() {
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+        sync()
+        val local = File(mirror, "notes.txt")
+        assertTrue(local.isFile, "setup failed: the first sync did not create the mirror")
+
+        local.writeText("edited in the editor!")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "a different length on the device", modified = 0)
         sync()
 
         assertEquals(
@@ -209,9 +258,44 @@ class InitialSyncWiringTest {
             "the local edit survives, which is the point",
         )
         assertEquals(
-            emptyList<String>(), openedDocuments,
-            "and the device copy is never read again, even though its length differs: " +
-                "this is the permanent cost of having no clock to compare",
+            emptyList<String>(), writtenDocuments,
+            "and the device copy is not overwritten either: both sides changed, so " +
+                "pushing the mirror over it would destroy the device's version",
+        )
+    }
+
+    /**
+     * A write-back that fails must not leave the mirror vouched for.
+     *
+     * The record means "the device holds these bytes". Writing that line when the
+     * write-back did not land would claim the device has an edit it never received, and
+     * `holdsOnlyVouchedCopies` reads the record with exactly that meaning to decide a
+     * mirror is disposable. The reclaim pass would then be free to delete the only copy
+     * of the user's edit.
+     *
+     * So the record is gated on the write succeeding, and this is what proves the gate
+     * is load-bearing rather than decorative.
+     */
+    @Test
+    fun `a failed write-back on a timestamp-less provider vouches for nothing`() {
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+        sync()
+        val local = File(mirror, "notes.txt")
+        assertTrue(local.isFile, "setup failed: the first sync did not create the mirror")
+        local.writeText("from the EDITOR")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+        // The device refuses the write. Everything else about this sync is the case
+        // above, which does record.
+        every { resolver.openOutputStream(any(), "wt") } returns null
+        sync()
+
+        val after = File(mirror.path + ".synced").readText()
+        assertTrue(
+            "notes.txt\t${local.lastModified()}\t${local.length()}" !in after,
+            "the record now names the edit's own identity, so it claims the device holds " +
+                "bytes it never received and the reclaim pass is free to delete the only " +
+                "copy. The record holds:\n$after",
         )
     }
 

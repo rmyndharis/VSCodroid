@@ -243,6 +243,35 @@ class SafSyncEngine(private val context: Context) {
                     // back and cannot.
                     if (localPath.lastModified() == doc.lastModified) {
                         recordIdentity(recorded, doc.relativePath, localPath)
+                    } else if (doc.lastModified == 0L &&
+                        recordedSizeFor(doc.relativePath, previouslyRecorded) == doc.size
+                    ) {
+                        // No clock, the mirror has diverged from the record, and the
+                        // device document is still the length the record says we wrote.
+                        // So the divergence is ours alone: the device copy has not moved
+                        // since, and pushing the mirror over it loses nothing.
+                        //
+                        // This is what unfreezes the file. Recording the new identity is
+                        // truthful only because the write-back happened first: after it,
+                        // the device holds these bytes, which is exactly what the record
+                        // claims and what `holdsOnlyVouchedCopies` reads it to mean. The
+                        // next sync then sees its own copy again and device changes reach
+                        // this path once more.
+                        //
+                        // Ordered write-then-record, never the reverse. A record written
+                        // before a write-back that then fails would vouch for bytes the
+                        // device does not have, and the reclaim pass would delete the
+                        // user's only copy on that word.
+                        uploadsDone++
+                        Logger.i(
+                            tag,
+                            "Writing the mirror of ${doc.relativePath} back: the provider " +
+                                "reports no time and the device copy is still the length " +
+                                "this app last wrote",
+                        )
+                        if (writeLocalToSaf(localPath, doc.uri)) {
+                            recordIdentity(recorded, doc.relativePath, localPath)
+                        }
                     } else if (doc.lastModified > 0L &&
                         localPath.lastModified() > doc.lastModified
                     ) {
@@ -269,9 +298,11 @@ class SafSyncEngine(private val context: Context) {
                         // not update needs this line to exist in a bug report.
                         Logger.i(
                             tag,
-                            "Kept ${doc.relativePath} and stopped tracking the device " +
-                                "copy: the provider reports no modification time and " +
-                                "this file no longer matches what the last sync wrote",
+                            "Kept ${doc.relativePath}: the provider reports no " +
+                                "modification time, and both sides have changed since " +
+                                "the last sync, so there is nothing that can say which " +
+                                "is newer. The mirror is kept and the device copy is " +
+                                "left alone.",
                         )
                     }
                     Logger.d(tag, "Kept local copy: ${doc.relativePath}")
@@ -842,7 +873,7 @@ class SafSyncEngine(private val context: Context) {
      * device copy. Permission loss is not retried: nothing about a revoked grant
      * gets better within a second.
      */
-    private fun writeLocalToSaf(localFile: File, safDocUri: Uri) {
+    private fun writeLocalToSaf(localFile: File, safDocUri: Uri): Boolean {
         markUploadInFlight(localFile.absolutePath)
         var attempts = 0
         while (true) {
@@ -856,13 +887,13 @@ class SafSyncEngine(private val context: Context) {
                     } ?: false
                 if (copied) {
                     clearUploadInFlight(localFile.absolutePath)
-                    return
+                    return true
                 }
                 attempts++
             } catch (e: SecurityException) {
                 Logger.e(tag, "Permission revoked while writing back: ${localFile.name}")
                 onWriteBackFailed(localFile)
-                return
+                return false
             } catch (e: Exception) {
                 attempts++
             }
@@ -873,7 +904,7 @@ class SafSyncEngine(private val context: Context) {
                         "is recorded as not to be trusted"
                 )
                 onWriteBackFailed(localFile)
-                return
+                return false
             }
         }
     }
@@ -1797,6 +1828,21 @@ class SafSyncEngine(private val context: Context) {
             unfetched: Set<String>,
         ): Boolean = deviceHoldsDocument && localPath in unfetched
 
+        /**
+         * The size the last sync recorded for [path], or null when it recorded none.
+         *
+         * The record's lines are `path`, `modification time` and `length`, tab
+         * separated, so this is a field read rather than new bookkeeping. A line
+         * that does not parse is dropped rather than repaired, the same as everywhere
+         * else that reads this file: a record we cannot read has to mean "no record",
+         * because the alternative is acting on a number we invented.
+         */
+        internal fun recordedSizeFor(path: String, record: Set<String>): Long? {
+            val prefix = "$path\t"
+            val line = record.firstOrNull { it.startsWith(prefix) } ?: return null
+            return line.substringAfterLast('\t').toLongOrNull()
+        }
+
         internal fun shouldOverwriteMirror(
             mirrorExists: Boolean,
             mirrorModified: Long,
@@ -1817,13 +1863,13 @@ class SafSyncEngine(private val context: Context) {
             // record behind it is not ours to overwrite either, which is the direction
             // reconcileDeletions already fails in.
             //
-            // ⚠️ What this costs, stated because it is permanent and the old behaviour
-            // did not have it. Once a file here answers false it can never answer true
-            // again: it is not copied, so `copyDocumentToLocal` never records it, and
-            // the equal-timestamp branch cannot record it either because a real file's
-            // mtime is never 0. Device-side changes to that file stop arriving, and no
-            // size comparison rescues it, because this clause returns before the size
-            // clause below is reached.
+            // ⚠️ What this costs, and it is narrower than it was. A file answering
+            // false here is kept, and the caller then asks a question this clause
+            // cannot: whether the device document is still the length the record says
+            // was written. If it is, the divergence is local only, the mirror is
+            // written back and re-recorded, and the next sync answers true again. If it
+            // is not, both sides moved and nothing here can say which is newer, so the
+            // mirror is kept and the device copy left alone until a human resolves it.
             //
             // Kept anyway, because the alternative is worse and is what shipped: with no
             // timestamp there is nothing to tell a device edit from a local one, and the
@@ -1833,11 +1879,11 @@ class SafSyncEngine(private val context: Context) {
             // itself in content if not in bookkeeping: the watcher writes the local edit
             // out on the next save, after which both sides hold the same bytes.
             //
-            // Tracked as #286. A real fix has to tell a device change from a local one
-            // without a clock, which means comparing content rather than metadata: a
-            // per-file digest beside the mtime and size [identityLine] already writes.
-            // That puts a hash over every mirrored file into each sync, so it wants
-            // measuring before it is taken.
+            // The recorded size is what makes that possible, and it is free: the
+            // cursor already carries the device document's length and the record
+            // already carries the length last written. Comparing content instead would
+            // have meant reading every device document over the provider on every sync,
+            // which is the copy this whole path exists to avoid.
             sourceModified == 0L -> mirrorIsOurCopy
             sourceModified > mirrorModified -> true
             // A newer local copy wins, whatever its size. Checking size before this
