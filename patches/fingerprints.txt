@@ -62,7 +62,14 @@
 0004 extHost worker|out/server-main.js|worker_thread Extension Host
 0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
-0007 persist secrets|-|flips a single boolean, and its only distinctive text is a comment that minification strips
+# 0007 is the one row where a fingerprint exists and still cannot be used.
+# Measured 2026-08-19 against the packaged tree: the patched form appears in
+# workbench.web.main.internal.js and workbench.js, and the unpatched
+# isEncryptionAvailable(){return Promise.resolve(!1)} appears nowhere. That is a
+# sharper control than most rows here have. What refuses it is introduced_by,
+# correctly: the method name is a context line, and Promise.resolve(!0) on its own
+# matches 48 places in the tree.
+0007 persist secrets|-|the bundles do carry isEncryptionAvailable(){return Promise.resolve(!0)}, but its distinctive half is a context line and its added half is minified from true, so introduced_by cannot accept it
 0008 activitybar height|out/vs/code/browser/workbench/workbench.js|.activitybar .composite-bar
 0009 alpine target|out/server-main.js|Android: requesting the alpine target platform
 0010 moduleignore keep|-|edits build/.moduleignore, so its proof is the file surviving into the tree; verify-server-tree.py requires that path
