@@ -291,7 +291,7 @@ it turns on one bundled feature.
 | Data type | **App activity → Other user-generated content**, and **Files and docs**, both only through Copilot Chat: the message the user types and the code the extension attaches as context. |
 | Collected or shared? | **Shared.** It goes to GitHub, a third party. Nothing reaches any server operated by this project, which has none. |
 | Is it processed ephemerally? | Do not claim ephemeral processing. GitHub's retention is GitHub's to state, not ours. |
-| Is sharing optional? | **Yes, users can choose.** The feature is inert until the user signs in to GitHub, and the extension can be disabled or uninstalled from the Extensions view. |
+| Is sharing optional? | **The form does not ask.** Optionality belongs to the collection branch, and the console refuses an answer to it for data that is only shared. Still worth knowing: Copilot is inert until the user signs in, and the extension can be uninstalled. |
 | Purpose | **App functionality.** No analytics, no advertising, no personalisation, no fraud prevention. |
 | Encrypted in transit? | **Yes**, over HTTPS. |
 | Which methods of account creation does your app support? | **My app does not allow users to create an account.** There is no account system here at all, and the OAuth path only relays a callback for an extension signing in to a service the user already belongs to. |
@@ -318,6 +318,20 @@ It is not. Ticking it asserts that this app supports account creation, which
 engages Play's account deletion policy and obliges the listing to publish a
 route for deleting accounts that this project never creates, never holds and
 cannot delete. The question asks about the app's own accounts; it has none.
+
+Marking a data type as shared rather than collected closes the whole
+collection branch of the form, and the console enforces that on import.
+Three questions live in that branch and must stay unanswered: whether the
+data is processed ephemerally, whether users can choose, and the collection
+purposes. Answering any of them fails with `You cannot answer` naming the
+question. The sharing purposes are a separate set and are the ones to fill.
+
+The form can be filled by CSV instead of by clicking. Export from the Data
+safety page, set the response value column, and import the result. For this
+app that is six cells: the two data types, and for each of them shared
+rather than collected plus a sharing purpose of app functionality. Check the
+other thirty-six data types are still blank before importing, because a
+stray value there declares sharing the app does not do.
 
 Everything else the app touches stays on the device or goes only where the user
 sent it: Git remotes they configured, package registries they invoked, SSH hosts
