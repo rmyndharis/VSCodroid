@@ -588,7 +588,32 @@ class AndroidBridge(
      * anywhere the user could see.
      */
     private val toolchainManager: ToolchainManager by lazy {
-        ToolchainManager(context).apply {
+        // The APPLICATION context, deliberately, while everything else in this
+        // class keeps the Activity it was built with.
+        //
+        // `install()` hands a listener to Play Core, which keeps it in a registry
+        // that lives in that library and outlives every Activity here. The
+        // listener holds this manager, so a manager built with the Activity keeps
+        // the Activity, its Context and its view tree reachable for as long as
+        // the registration stands. `AndroidBridge.onToolchainState` removes the
+        // registration only on COMPLETED, FAILED or CANCELED, and
+        // REQUIRES_USER_CONFIRMATION waiting on a dialog the user walked away
+        // from reaches none of them.
+        //
+        // Releasing the registration at teardown instead would be worse than the
+        // leak. `installFromDirectory` is reachable only from
+        // `handleStateUpdate`'s COMPLETED branch, so the listener is what
+        // finishes an install; nothing reconciles pack state at launch, and
+        // Play Core does not promise to re-emit a state to a listener that
+        // registers afterwards. Dropping it mid-download would leave the pack
+        // downloaded and never installed, with no error anywhere.
+        //
+        // So the reference goes, not the registration. `ToolchainManager` reads
+        // only `filesDir`, `cacheDir`, `assets`, `packageManager` and
+        // `packageName` from this, all identical on the application context, and
+        // `showConfirmationDialog` takes the Activity as a parameter from
+        // [confirmLargeDownload] rather than from the manager's own field.
+        ToolchainManager(context.applicationContext).apply {
             onStateChange = { packName, status, _, _ -> onToolchainState(packName, status) }
         }
     }
