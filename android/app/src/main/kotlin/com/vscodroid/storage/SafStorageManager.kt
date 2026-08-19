@@ -249,8 +249,12 @@ class SafStorageManager(private val context: Context) {
             val reclaimable = alreadySetAside ||
                 (MIRROR_ENTRY.matches(name) && name.substringBefore('.') !in liveMirrorNames())
             if (!reclaimable) return@forEach
-            // A mirror is normally a copy and the device folder is the original,
-            // which is what makes reclaiming it safe. That stops being true when
+            // A mirror is reclaimable when the device folder holds everything in it,
+            // which is what makes deleting it lose nothing. Usually that is because the
+            // mirror is a copy; it is equally true of a file the editor wrote once the
+            // watcher has carried it across, which `holdsOnlyVouchedCopies` recognises
+            // by comparing bytes rather than by asking who authored them. That stops
+            // being true when
             // this app's own records say a write never reached the device: a
             // write-back that gave up after two failures, or one refused with a
             // SecurityException, which is precisely what a permission withdrawn

@@ -12,6 +12,7 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -182,26 +183,63 @@ class InitialSyncWiringTest {
     }
 
     /**
-     * The cost of the clause above, pinned so it is a decision rather than a surprise.
+     * The frozen file comes back, and the signal needs no clock.
      *
-     * Once a file on a timestamp-less provider diverges from the record it can never be
-     * vouched for again: it is not copied, so nothing records it, and the equal-timestamp
-     * branch cannot record it because a real file's mtime is never 0. Device-side changes
-     * to that file stop arriving, and a size change does not rescue it, because the
-     * clause returns before the size comparison.
+     * The old behaviour kept a diverged file and never looked at it again: it could
+     * not become vouched, so device changes stopped arriving and the mirror could not
+     * be reclaimed. Those two come back here. An edit the watcher never delivered still
+     * has no second route to the device, and cannot: it is not on the device, so the
+     * comparison below cannot fire for it.
      *
-     * Kept because the alternative is what shipped: with nothing to compare, the old
-     * answer assumed the device always won and destroyed the local edit on every reopen.
-     *
-     * This test locks the limitation rather than the fix. When #286 lands it should go
-     * red, and the case that replaces it asserts the device change arriving.
+     * What resolves it is the ordinary end of a local edit. The watcher carries the
+     * edit to the device, so the two agree in content while the record still describes
+     * what was there before. Comparing them is the one question answerable without a
+     * clock, and answering it records what is already true on both sides.
      */
     @Test
-    fun `a diverged file on a timestamp-less provider stops receiving device changes`() {
-        val local = mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
-        deviceFolderHolding("notes.txt", "a different length on the device", modified = 0)
-
+    fun `a timestamp-less file the watcher already delivered is tracked again`() {
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
         sync()
+        val local = File(mirror, "notes.txt")
+        assertTrue(local.isFile, "setup failed: the first sync did not create the mirror")
+
+        // The editor edits it and the watcher carries it to the device, so both sides
+        // now hold the edit while the record still holds what came before. The length
+        // changes too, which is the ordinary case and the one a size test cannot reach.
+        local.writeText("a much longer edit made in the editor")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "a much longer edit made in the editor", modified = 0)
+        sync()
+
+        assertEquals(
+            emptyList<String>(), writtenDocuments,
+            "nothing should have been written to the device: both sides already agree",
+        )
+
+        // Tracked again: the next device-side change reaches the mirror.
+        deviceFolderHolding("notes.txt", "changed on the device", modified = 0)
+        sync()
+
+        assertEquals(
+            "changed on the device", local.readText(),
+            "still frozen: agreeing with the device should have re-recorded the file, " +
+                "so this sync sees its own copy and takes the device change",
+        )
+    }
+
+    /**
+     * And a file the two sides genuinely disagree about is still left alone, on both
+     * sides. That is what keeps the fix from being a licence to overwrite.
+     */
+    @Test
+    fun `a timestamp-less file the two sides disagree about is left alone`() {
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        local.writeText("edited in the editor!")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "a different edit on the device", modified = 0)
         sync()
 
         assertEquals(
@@ -209,9 +247,45 @@ class InitialSyncWiringTest {
             "the local edit survives, which is the point",
         )
         assertEquals(
-            emptyList<String>(), openedDocuments,
-            "and the device copy is never read again, even though its length differs: " +
-                "this is the permanent cost of having no clock to compare",
+            emptyList<String>(), writtenDocuments,
+            "and the device copy is not overwritten: with no clock, pushing either way " +
+                "would destroy the other side's work",
+        )
+
+        // And it stays untracked, so a later sync does not quietly take the device copy.
+        deviceFolderHolding("notes.txt", "a different edit on the device", modified = 0)
+        sync()
+        assertEquals(
+            "edited in the editor!", local.readText(),
+            "the disagreement was recorded away and the device copy taken anyway",
+        )
+    }
+
+    /**
+     * Equal lengths with different bytes must not count as agreement.
+     *
+     * The length check exists only to skip the read for files that cannot match. If it
+     * were mistaken for the answer, a device edit that preserved length would be
+     * recorded as agreement and the file would then be overwritten from the device on
+     * the next sync, losing the local edit.
+     */
+    @Test
+    fun `equal lengths with different bytes are not agreement`() {
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        local.writeText("from the EDITOR")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the DEVICE", modified = 0)
+        sync()
+        deviceFolderHolding("notes.txt", "from the DEVICE", modified = 0)
+        sync()
+
+        assertEquals(
+            "from the EDITOR", local.readText(),
+            "the two differ only in content, and treating equal lengths as agreement " +
+                "would have recorded the file and let the next sync take the device copy",
         )
     }
 

@@ -237,11 +237,43 @@ class SafSyncEngine(private val context: Context) {
                     )
                 ) {
                     keptLocal++
+                    var deviceAgrees = false
                     // Inside this branch the mirror is not older, so equal means the
                     // mirror is already this document and can be vouched for, while
                     // strictly newer means it holds an edit that has not been written
                     // back and cannot.
                     if (localPath.lastModified() == doc.lastModified) {
+                        recordIdentity(recorded, doc.relativePath, localPath)
+                    } else if (doc.lastModified == 0L &&
+                        deviceMatchesMirror(doc.uri, localPath, doc.size)
+                    ) {
+                        // No clock, the mirror no longer matches the record, and yet the
+                        // device document holds exactly these bytes. That is the ordinary
+                        // end of a local edit: the watcher carried it to the device
+                        // already, so the two agree in content while the record still
+                        // describes what was there before.
+                        //
+                        // Nothing here writes anything. It records what is already true
+                        // on both sides, which is what the record means and what
+                        // `holdsOnlyVouchedCopies` reads it to mean.
+                        //
+                        // This recovers two of the three costs of never being vouched:
+                        // device changes reach the file again, and the mirror becomes
+                        // reclaimable. It does not recover the third. An edit the watcher
+                        // never delivered is not on the device, so this cannot fire for
+                        // it, and with no clock there is nothing to say whether the
+                        // device copy is older or newer, so it is not pushed either.
+                        //
+                        // Deliberately not paired with a write in the other direction. If
+                        // the two do not agree there is no clock to say which is newer,
+                        // and pushing either way would destroy the other side's work.
+                        deviceAgrees = true
+                        Logger.i(
+                            tag,
+                            "Tracking ${doc.relativePath} again: the provider reports no " +
+                                "modification time, and the device copy already holds " +
+                                "what the mirror holds",
+                        )
                         recordIdentity(recorded, doc.relativePath, localPath)
                     } else if (doc.lastModified > 0L &&
                         localPath.lastModified() > doc.lastModified
@@ -263,15 +295,19 @@ class SafSyncEngine(private val context: Context) {
                         writeLocalToSaf(localPath, doc.uri)
                     }
                     unfetched.remove(localPath.absolutePath)
-                    if (doc.lastModified == 0L) {
+                    // The flag the branch above set, not a fresh stat plus a scan of the
+                    // recorded list. Re-deriving it would also read "the two differ" out of
+                    // a recordIdentity that simply declined the path.
+                    if (doc.lastModified == 0L && !deviceAgrees) {
                         // At Logger.i, not d: this file stops receiving device-side
                         // changes from here on, and a user asking why their folder does
                         // not update needs this line to exist in a bug report.
                         Logger.i(
                             tag,
-                            "Kept ${doc.relativePath} and stopped tracking the device " +
-                                "copy: the provider reports no modification time and " +
-                                "this file no longer matches what the last sync wrote",
+                            "Kept ${doc.relativePath}: the provider reports no " +
+                                "modification time, and the device copy differs from the " +
+                                "mirror, so nothing here can say which is newer. Both " +
+                                "sides are left as they are.",
                         )
                     }
                     Logger.d(tag, "Kept local copy: ${doc.relativePath}")
@@ -354,8 +390,9 @@ class SafSyncEngine(private val context: Context) {
      *
      * **Where all of this stops being true.** Every line of it assumes the provider
      * reports `COLUMN_LAST_MODIFIED`. When it does not, [shouldOverwriteMirror]'s
-     * unknown-time branch returns true on *every* comparison, so an edit that has not been
-     * written back is overwritten on the next reopen — before deletion is considered at
+     * unknown-time branch answers from the record instead, so a diverged file is kept
+     * rather than overwritten, and is tracked again once a sync finds the two sides
+     * holding the same bytes, before deletion is considered at
      * all. Nothing recorded here can protect what the copy already replaced, and no
      * identity check reaches a file that is gone. The account above of four defects
      * turning out to be one gap holds for providers that report a time, and only those.
@@ -447,8 +484,13 @@ class SafSyncEngine(private val context: Context) {
      * destination and renames, deliberately leaving the destination untouched when it
      * fails — so after a failed copy this reads whatever was already there, which can be
      * an edit of the user's that no sync ever wrote. Recording that identity is what
-     * would make the user's only copy match, and match is what licenses the delete. Call
-     * this only where the write is known to have landed.
+     * would make the user's only copy match, and match is what licenses the delete.
+     *
+     * So the precondition is about the DEVICE, not about who authored the bytes: call
+     * this only where the device is known to hold what is on disk here. A landed copy
+     * establishes that. So does a comparison that read both sides and found them equal,
+     * which is how a file the editor wrote and the watcher delivered gets recorded
+     * without any copy having happened.
      */
     private fun recordIdentity(into: MutableList<String>, path: String, file: File) {
         if (!file.isFile) return
@@ -495,10 +537,15 @@ class SafSyncEngine(private val context: Context) {
      *
      * So the test is inverted: rather than look for evidence a file is precious, require
      * evidence that it is disposable. The record beside the mirror is that evidence and
-     * already exists. [recordIdentity] writes one line per file the device enumeration
-     * produced, and this compares against it in the same format, so a file absent from
-     * the record, or present but no longer the bytes recorded for it, means the mirror is
-     * not purely a copy.
+     * already exists. [recordIdentity] writes one line per file the device is known to
+     * hold, and this compares against it in the same format, so a file absent from the
+     * record, or present but no longer the bytes recorded for it, means the mirror holds
+     * something the device does not.
+     *
+     * "The device holds it" rather than "this app copied it", and the difference is not
+     * pedantry. A file the editor wrote and the watcher delivered is recorded too, once a
+     * sync has read both sides and found them equal. It was never copied here, and it is
+     * still disposable, because deleting the mirror does not destroy it.
      *
      * Fails closed, in three directions, all deliberate. A missing record, a record whose
      * first line is not [RECORD_HEADER], and an unreadable directory each return false
@@ -842,6 +889,54 @@ class SafSyncEngine(private val context: Context) {
      * device copy. Permission loss is not retried: nothing about a revoked grant
      * gets better within a second.
      */
+    /**
+     * Whether the device document and the mirror hold the same bytes.
+     *
+     * The one question that can be answered without a clock, and the only one this
+     * path needs. When the watcher has already carried an edit to the device, the two
+     * agree in content while the record still describes what was there before, and
+     * that mismatch is what froze the file: nothing else ever brings the bookkeeping
+     * back into step.
+     *
+     * Reads the device document, so lengths are compared first: unequal lengths cannot
+     * hold equal bytes, and skipping the read there is what keeps this off the common
+     * path.
+     *
+     * ⚠️ That length is the provider's claim, not a measurement, and `COLUMN_SIZE` is
+     * optional in the same way `COLUMN_LAST_MODIFIED` is. A provider omitting both
+     * reports every length as 0, and this then answers false for every non-empty file,
+     * so the fix does not apply there. It cannot answer a wrong yes, because the bytes
+     * are compared afterwards, so the ceiling is "does not help", never a loss.
+     *
+     * A read that fails answers false. That is the safe direction: false leaves the
+     * mirror kept and unrecorded, which is what happens today, while a true this could
+     * not justify would vouch for bytes nobody compared.
+     */
+    private fun deviceMatchesMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
+        if (deviceSize != localFile.length()) return false
+        return try {
+            context.contentResolver.openInputStream(safDocUri)?.use { device ->
+                localFile.inputStream().use { mirror ->
+                    val a = ByteArray(COPY_BUFFER_SIZE)
+                    val b = ByteArray(COPY_BUFFER_SIZE)
+                    while (true) {
+                        val read = device.readNBytes(a, 0, a.size)
+                        val same = mirror.readNBytes(b, 0, b.size)
+                        if (read != same) return@use false
+                        if (read == 0) return@use true
+                        // Only the bytes this chunk filled. Comparing the whole buffer
+                        // would drag in the previous, longer chunk's tail.
+                        if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+                    }
+                    @Suppress("UNREACHABLE_CODE") false
+                }
+            } ?: false
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not compare ${localFile.name} with its device copy: ${e.message}")
+            false
+        }
+    }
+
     private fun writeLocalToSaf(localFile: File, safDocUri: Uri) {
         markUploadInFlight(localFile.absolutePath)
         var attempts = 0
@@ -1817,13 +1912,16 @@ class SafSyncEngine(private val context: Context) {
             // record behind it is not ours to overwrite either, which is the direction
             // reconcileDeletions already fails in.
             //
-            // ⚠️ What this costs, stated because it is permanent and the old behaviour
-            // did not have it. Once a file here answers false it can never answer true
-            // again: it is not copied, so `copyDocumentToLocal` never records it, and
-            // the equal-timestamp branch cannot record it either because a real file's
-            // mtime is never 0. Device-side changes to that file stop arriving, and no
-            // size comparison rescues it, because this clause returns before the size
-            // clause below is reached.
+            // ⚠️ What this costs, and what gets it back. A file answering false here is
+            // kept and is not vouched, and while it stays that way device changes stop
+            // arriving and the mirror cannot be reclaimed. It does not stay that way by
+            // itself: the caller compares the two sides' bytes, and when they agree,
+            // which is where an edit the watcher carried to the device ends up, it
+            // records the file and this clause answers true again on the next sync.
+            //
+            // What no branch recovers is an edit the watcher never delivered. With no
+            // clock there is nothing to say whether the device copy is older or newer,
+            // so neither side is pushed over the other.
             //
             // Kept anyway, because the alternative is worse and is what shipped: with no
             // timestamp there is nothing to tell a device edit from a local one, and the
@@ -1833,11 +1931,11 @@ class SafSyncEngine(private val context: Context) {
             // itself in content if not in bookkeeping: the watcher writes the local edit
             // out on the next save, after which both sides hold the same bytes.
             //
-            // Tracked as #286. A real fix has to tell a device change from a local one
-            // without a clock, which means comparing content rather than metadata: a
-            // per-file digest beside the mtime and size [identityLine] already writes.
-            // That puts a hash over every mirrored file into each sync, so it wants
-            // measuring before it is taken.
+            // Content is what tells a device change from a local one without a clock,
+            // and the caller reads both sides to ask. It is affordable because the
+            // question is only asked for files this clause kept, which on a healthy
+            // folder is none: every other file is answered true here and copied, which
+            // reads the device document anyway.
             sourceModified == 0L -> mirrorIsOurCopy
             sourceModified > mirrorModified -> true
             // A newer local copy wins, whatever its size. Checking size before this
