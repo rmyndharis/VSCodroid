@@ -153,6 +153,7 @@ class SafSyncEngine(private val context: Context) {
          * out, so an unforeseen one defaults to "never a candidate".
          */
         val recorded = mutableListOf<String>()
+        var uploadsDone = 0
 
         Logger.i(tag, "Enumerated ${documents.size} items ($totalFiles files)")
 
@@ -235,12 +236,30 @@ class SafSyncEngine(private val context: Context) {
                     )
                 ) {
                     keptLocal++
-                    // Inside this branch the provider reported a time (an unknown one
-                    // copies) and the mirror is not older, so equal means the mirror is
-                    // already this document and can be vouched for, while strictly newer
-                    // means it holds an edit that has not been written back and cannot.
+                    // Inside this branch the mirror is not older, so equal means the
+                    // mirror is already this document and can be vouched for, while
+                    // strictly newer means it holds an edit that has not been written
+                    // back and cannot.
                     if (localPath.lastModified() == doc.lastModified) {
                         recordIdentity(recorded, doc.relativePath, localPath)
+                    } else if (doc.lastModified > 0L &&
+                        localPath.lastModified() > doc.lastModified
+                    ) {
+                        // Strictly newer with a time to compare against: an edit the
+                        // watcher never carried out. That happens whenever the watcher
+                        // was not running -- the app was killed, the directory sat past
+                        // the watch cap, or the write-back gave up -- and until now
+                        // nothing ever retried it. The prose around this feature calls
+                        // reopening the folder the way back; this is what makes that
+                        // true.
+                        //
+                        // Only when the provider reported a time. An unknown one arrives
+                        // as 0, and every real mirror timestamp is greater than 0, so
+                        // without this guard every file in such a folder would look
+                        // newer and be pushed over the device document on every reopen.
+                        uploadsDone++
+                        Logger.i(tag, "Writing back a newer mirror copy: ${doc.relativePath}")
+                        writeLocalToSaf(localPath, doc.uri)
                     }
                     unfetched.remove(localPath.absolutePath)
                     if (doc.lastModified == 0L) {
@@ -283,7 +302,8 @@ class SafSyncEngine(private val context: Context) {
             tag,
             "Initial sync complete: $filesDone files ($skippedLarge too large, " +
                 "$failedCopies could not be copied, $keptLocal kept, " +
-                "${recorded.size} vouched for, $removed removed) in ${elapsed}ms"
+                "$uploadsDone written back, ${recorded.size} vouched for, " +
+                "$removed removed) in ${elapsed}ms"
         )
     }
 
@@ -840,6 +860,7 @@ class SafSyncEngine(private val context: Context) {
                 attempts++
             } catch (e: SecurityException) {
                 Logger.e(tag, "Permission revoked while writing back: ${localFile.name}")
+                onWriteBackFailed(localFile)
                 return
             } catch (e: Exception) {
                 attempts++
@@ -850,10 +871,29 @@ class SafSyncEngine(private val context: Context) {
                     "Write-back of ${localFile.name} did not finish; its device copy " +
                         "is recorded as not to be trusted"
                 )
+                onWriteBackFailed(localFile)
                 return
             }
         }
     }
+
+    /**
+     * Told when a write-back has given up on [File]. Does nothing until something wires
+     * it up, and [MainActivity] is what does.
+     *
+     * The default is a no-op rather than a Toast, and that is not squeamishness about
+     * layers. A default that touched `Looper.getMainLooper()` threw "not mocked" in every
+     * existing JVM test that drives a failing write-back, which is a fair warning: this
+     * class has no screen and should not reach for one. The layer that owns a screen
+     * decides how to say it.
+     *
+     * Both exits leave the file's journal entry in place, so the data is already safe:
+     * the reclaim pass reads that journal and refuses to delete the mirror. What was
+     * missing is the user knowing, and the two are not the same fact. A save that never
+     * reached the device folder looks exactly like one that did, and the difference only
+     * shows when the app is uninstalled and the work is gone.
+     */
+    internal var onWriteBackFailed: (File) -> Unit = {}
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
 

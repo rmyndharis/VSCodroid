@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - On a device provider that reports no modification time, reopening a folder no longer replaces edits made in the editor. It refreshes only files still identical to what the last sync wrote.
+- Reopening a device folder now writes back an edit the watcher never carried out, instead of leaving it in the app forever.
+- A save that cannot reach the device folder now says so, once per burst, instead of failing silently and looking like a save that worked.
 - A device folder's local copy is no longer deleted when it falls off the recent list. Anything written there that never reached the device, a cloned repository included, was the only copy.
 
 ### Changed

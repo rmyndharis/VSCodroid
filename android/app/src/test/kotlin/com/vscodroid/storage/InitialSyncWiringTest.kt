@@ -61,6 +61,7 @@ class InitialSyncWiringTest {
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context
     private var openedDocuments = mutableListOf<String>()
+    private var writtenDocuments = mutableListOf<String>()
 
     /** One file in the device folder, described to the engine through a fake cursor. */
     private fun deviceFolderHolding(name: String, contents: String, modified: Long) {
@@ -88,6 +89,10 @@ class InitialSyncWiringTest {
             openedDocuments.add(name)
             ByteArrayInputStream(contents.toByteArray())
         }
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            writtenDocuments.add(name)
+            java.io.ByteArrayOutputStream()
+        }
     }
 
     private fun mirrorHolding(name: String, contents: String, modified: Long): File =
@@ -103,6 +108,7 @@ class InitialSyncWiringTest {
     @BeforeEach
     fun setUp() {
         openedDocuments = mutableListOf()
+        writtenDocuments = mutableListOf()
 
         mockkStatic(android.util.Log::class)
         every { android.util.Log.i(any(), any()) } returns 0
@@ -203,6 +209,73 @@ class InitialSyncWiringTest {
             emptyList<String>(), openedDocuments,
             "and the device copy is never read again, even though its length differs: " +
                 "this is the permanent cost of having no clock to compare",
+        )
+    }
+
+    /**
+     * And not when the provider reports no time. That arrives as 0, and every real
+     * mirror timestamp is greater than 0, so without the guard every file in such a
+     * folder looks newer and is pushed over the device document on every reopen.
+     */
+    @Test
+    fun `a mirror is not written back when the provider reports no time`() {
+        mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the device", modified = 0)
+
+        sync()
+
+        assertEquals(emptyList<String>(), writtenDocuments)
+    }
+
+    /**
+     * Reopening the folder is the way back for an edit the watcher never carried out.
+     *
+     * The mirror being strictly newer means exactly that: the app was killed, the
+     * directory sat past the watch cap, or the write-back gave up. Before this the
+     * branch counted the file as "kept" and moved on, so the edit stayed in the mirror
+     * for ever and the prose calling reopening a recovery path was not true.
+     */
+    @Test
+    fun `a mirror newer than the device document is written back on reopen`() {
+        mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+
+        sync()
+
+        assertEquals(
+            listOf("notes.txt"), writtenDocuments,
+            "the newer mirror copy was never offered to the device",
+        )
+    }
+
+    /**
+     * A write-back that gives up says so.
+     *
+     * Both exits already leave the file's journal entry in place, so the data is safe:
+     * the reclaim pass reads that journal and refuses to delete the mirror. What was
+     * missing is the user knowing, and those are not the same fact. A save that never
+     * reached the device folder looks exactly like one that did, and the difference only
+     * shows when the app is uninstalled and the work is gone.
+     *
+     * Driven through the seam rather than the Toast: Toast needs a looper no unit test
+     * here has, and what is being asserted is that the exit announces at all.
+     */
+    @Test
+    fun `a write-back that gives up announces the file`() {
+        mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        every { resolver.openOutputStream(any(), "wt") } throws SecurityException("revoked")
+
+        val announced = mutableListOf<String>()
+        runBlocking {
+            SafSyncEngine(context)
+                .apply { onWriteBackFailed = { announced.add(it.name) } }
+                .initialSync(mockk<Uri>(relaxed = true), mirror) { _, _ -> }
+        }
+
+        assertEquals(
+            listOf("notes.txt"), announced,
+            "the write-back gave up and told nobody",
         )
     }
 

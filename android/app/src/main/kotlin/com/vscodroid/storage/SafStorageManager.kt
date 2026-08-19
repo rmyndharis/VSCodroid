@@ -30,6 +30,31 @@ class SafStorageManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val syncEngine = SafSyncEngine(context)
 
+    /**
+     * Told when a write-back has given up on a file, once per burst.
+     *
+     * Forwarded from the engine rather than set on it directly, so the caller does not
+     * have to know the engine exists. [MainActivity] is the one caller, because saying
+     * anything needs a screen.
+     *
+     * Throttled here rather than at the call site: a provider that has started refusing
+     * refuses everything, and the editor saves on a timer, so the unthrottled version is
+     * a wall of the same notice. Globally rather than per file, for the same reason. The
+     * user's problem is the folder.
+     */
+    fun onWriteBackFailed(announce: (File) -> Unit) {
+        syncEngine.onWriteBackFailed = { file ->
+            val now = System.currentTimeMillis()
+            if (shouldAnnounce(now, lastFailureAnnouncedAt)) {
+                lastFailureAnnouncedAt = now
+                announce(file)
+            }
+        }
+    }
+
+    @Volatile
+    private var lastFailureAnnouncedAt = 0L
+
     // -- Permission Management --
 
     /**
@@ -582,6 +607,20 @@ class SafStorageManager(private val context: Context) {
          * whatever it named is already unreachable.
          */
         internal const val DISCARD_PREFIX = "discarded-"
+
+        /** How long one write-back failure notice suppresses the next. */
+        internal const val FAILURE_NOTICE_INTERVAL_MS = 10_000L
+
+        /**
+         * Whether a failure at [now] is far enough from [lastAnnouncedAt] to be said.
+         *
+         * A function rather than an inline comparison so the rule can be asserted: the
+         * wiring around it reaches a Toast, which no JVM test here can see. The first
+         * failure of a session announces, because a zero last-announced time is further
+         * back than any interval.
+         */
+        internal fun shouldAnnounce(now: Long, lastAnnouncedAt: Long): Boolean =
+            now - lastAnnouncedAt >= FAILURE_NOTICE_INTERVAL_MS
     }
 }
 

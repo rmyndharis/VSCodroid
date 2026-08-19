@@ -378,6 +378,18 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         safManager = SafStorageManager(this)
+        // A save that never reached the device folder looks exactly like one that did.
+        // The engine has no screen, so the notice is wired here; it is throttled inside
+        // the manager, because a provider that starts refusing refuses everything.
+        safManager.onWriteBackFailed { file ->
+            runOnUiThread {
+                Toast.makeText(
+                    this@MainActivity,
+                    getString(R.string.saf_write_back_failed, file.name),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
 
         setupWebView()
         setupExtraKeyRow()

@@ -112,4 +112,8 @@
     <string name="shortcut_toolchains_short">Toolchains</string>
     <string name="shortcut_toolchains_long">Manage toolchains</string>
     <string name="toolchain_size_download_and_installed">%1$s download, %2$s installed</string>
+    <!-- Shown when a save could not be written out to the device folder. Names the
+         consequence rather than the error: the user's next decision is whether to
+         copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_write_back_failed">%1$s did not reach the device folder. The only copy is inside VSCodroid.</string>
 </resources>
