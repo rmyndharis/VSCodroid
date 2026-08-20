@@ -13,22 +13,28 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Which Context the bridge's `ToolchainManager` is built with.
+ * What the bridge's `ToolchainManager` is allowed to hold.
  *
  * `install()` hands a listener to Play Core, which keeps it in a registry that
  * lives in that library and outlives every Activity here. The listener holds the
- * manager, so a manager built with the Activity keeps the Activity, its Context
- * and its view tree reachable for as long as the registration stands.
- * `AndroidBridge.onToolchainState` removes the registration only on COMPLETED,
- * FAILED or CANCELED, and a REQUIRES_USER_CONFIRMATION waiting on a dialog the
- * user walked away from reaches none of them.
+ * manager, so anything the manager holds keeps the Activity, its Context and its
+ * view tree reachable for as long as the registration stands. The state callback
+ * removes the registration only on COMPLETED, FAILED or CANCELED, and a
+ * REQUIRES_USER_CONFIRMATION waiting on a dialog the user walked away from
+ * reaches none of them.
+ *
+ * Two tests, and the second exists because the first is not enough. Naming the
+ * constructor argument binds one link; the leak had two, and the one this file
+ * originally missed was a lambda. Read them in order.
  *
  * **The reference is the defect, not the registration**, and that distinction is
  * why this file asserts what it does. Releasing the registration at teardown
@@ -99,6 +105,108 @@ class ToolchainManagerContextTest {
 
         verify { AssetPackManagerFactory.getInstance(application) }
         verify(exactly = 0) { AssetPackManagerFactory.getInstance(activity) }
+    }
+
+    /**
+     * Nothing reachable from the manager is the Activity, by any route.
+     *
+     * The test above binds one link, the constructor argument, and that is exactly as
+     * far as it goes. It passed while the leak was intact: `onStateChange` was
+     * `{ ... -> onToolchainState(...) }`, an unqualified call to a member of
+     * `AndroidBridge`, so the lambda captured the bridge and the bridge holds the
+     * Activity. Measured in bytecode, the lambda compiled to a method whose first
+     * parameter is `AndroidBridge`.
+     *
+     * So the question is asked of the object graph rather than of one argument. This is
+     * the same lesson `ServiceWorkerRetentionTest` records in `MainActivity` and states
+     * outright: a supplier that only calls a method captures just as completely as one
+     * that names a field. A whitelist of field names would have missed this too.
+     *
+     * `WeakReference` and friends are not walked through, which is the point rather than
+     * an exemption: a weak reference is not retention, and the fix is precisely to hold
+     * the bridge through one.
+     *
+     * ⚠️ Its ceiling. This walks declared fields, so it sees what the JVM sees and not
+     * what a native or `ThreadLocal` route might hold, and it stops at [NODE_CAP]. The
+     * negative control below is what keeps a walk that quietly reached nothing from
+     * reading as a pass.
+     */
+    @Test
+    fun `no route from the manager reaches the Activity`() {
+        val b = bridge()
+        b.getInstalledToolchains("")
+
+        val manager = AndroidBridge::class.java
+            .getDeclaredMethod("getToolchainManager")
+            .apply { isAccessible = true }
+            .invoke(b)!!
+
+        // The control, and it runs first. The bridge legitimately holds the Activity
+        // for `confirmLargeDownload`, so a walk that cannot find it from there is
+        // broken, and every assertion after it would pass by seeing nothing.
+        assertTrue(
+            reaches(b, activity),
+            "the walk cannot find the Activity even from the bridge, which holds it " +
+                "directly, so it proves nothing about the manager",
+        )
+
+        assertFalse(
+            reaches(manager, activity),
+            "the Activity is reachable from the ToolchainManager. Play Core keeps the " +
+                "listener, the listener keeps the manager, so this keeps the Activity " +
+                "and its view tree alive for the life of the process. Anything the " +
+                "manager holds must reach a screen weakly or not at all.",
+        )
+    }
+
+    /** Whether [target] is reachable from [root] by strong references alone. */
+    private fun reaches(root: Any, target: Any): Boolean {
+        val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
+        val queue = ArrayDeque<Any>()
+        queue.add(root)
+        seen.add(root)
+        var visited = 0
+
+        while (queue.isNotEmpty() && visited < NODE_CAP) {
+            val node = queue.removeFirst()
+            visited++
+            if (node === target) return true
+
+            // A weak reference does not retain, so following it would report the very
+            // shape this test exists to accept.
+            if (node is java.lang.ref.Reference<*>) continue
+
+            if (node is Array<*>) {
+                node.filterNotNull().forEach { if (seen.add(it)) queue.add(it) }
+                continue
+            }
+
+            var cls: Class<*>? = node.javaClass
+            while (cls != null && cls != Any::class.java) {
+                for (f in cls.declaredFields) {
+                    if (java.lang.reflect.Modifier.isStatic(f.modifiers)) continue
+                    if (f.type.isPrimitive) continue
+                    val v = try {
+                        f.isAccessible = true
+                        f.get(node)
+                    } catch (e: Throwable) {
+                        // A field the JDK refuses to open is one this cannot speak for.
+                        // Skipped rather than failed: the control above is what says
+                        // whether enough of the graph was reachable to mean anything.
+                        null
+                    } ?: continue
+                    if (v === target) return true
+                    if (seen.add(v)) queue.add(v)
+                }
+                cls = cls.superclass
+            }
+        }
+        return false
+    }
+
+    private companion object {
+        /** Enough for this graph; a bound so a cycle cannot hang the suite. */
+        const val NODE_CAP = 20_000
     }
 
     @Test

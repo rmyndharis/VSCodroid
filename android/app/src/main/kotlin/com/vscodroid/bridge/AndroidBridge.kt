@@ -20,6 +20,7 @@ import com.vscodroid.webview.redactToken
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.lang.ref.WeakReference
 
 /**
  * How long generateSshKey waits for ssh-keygen before killing it.
@@ -595,7 +596,7 @@ class AndroidBridge(
         // that lives in that library and outlives every Activity here. The
         // listener holds this manager, so a manager built with the Activity keeps
         // the Activity, its Context and its view tree reachable for as long as
-        // the registration stands. `AndroidBridge.onToolchainState` removes the
+        // the registration stands. The state callback below removes the
         // registration only on COMPLETED, FAILED or CANCELED, and
         // REQUIRES_USER_CONFIRMATION waiting on a dialog the user walked away
         // from reaches none of them.
@@ -608,34 +609,53 @@ class AndroidBridge(
         // registers afterwards. Dropping it mid-download would leave the pack
         // downloaded and never installed, with no error anywhere.
         //
-        // So the reference goes, not the registration. `ToolchainManager` reads
+        // So the references go, not the registration. `ToolchainManager` reads
         // only `filesDir`, `cacheDir`, `assets`, `packageManager` and
         // `packageName` from this, all identical on the application context, and
         // `showConfirmationDialog` takes the Activity as a parameter from
         // [confirmLargeDownload] rather than from the manager's own field.
-        ToolchainManager(context.applicationContext).apply {
-            onStateChange = { packName, status, _, _ -> onToolchainState(packName, status) }
-        }
-    }
-
-    /**
-     * Resolves what a Play install needs from a foreground component, and
-     * balances the registration [ToolchainManager.install] makes on our behalf.
-     *
-     * The unregister is the other half of a pair that had no other half:
-     * `install()` calls `registerListener()` before every Play fetch and nothing
-     * here ever undid it, so this instance stayed subscribed to Play Core for
-     * the life of the process. Terminal states are where the pair closes --
-     * after COMPLETED, FAILED or CANCELED there is nothing further to hear, and
-     * the next `install()` subscribes again. Harmless on the HTTP path, which
-     * never registers: the unregister is guarded and does nothing.
-     */
-    private fun onToolchainState(packName: String, status: Int) {
-        when (status) {
-            AssetPackStatus.REQUIRES_USER_CONFIRMATION -> confirmLargeDownload(packName)
-            AssetPackStatus.COMPLETED,
-            AssetPackStatus.FAILED,
-            AssetPackStatus.CANCELED -> toolchainManager.unregisterListener()
+        //
+        // Plural, and that is the correction. Changing only the constructor
+        // argument left the leak intact one link along: `onStateChange` was
+        // `{ ... -> onToolchainState(...) }`, an unqualified call to a member of
+        // this class, which captures the bridge exactly as completely as naming a
+        // field would, and the bridge holds the Activity. Confirmed in bytecode:
+        // the lambda compiled to a method taking `AndroidBridge` as its first
+        // parameter. It is the same shape `ServiceWorkerRetentionTest` refuses in
+        // `MainActivity`, and it reached here because the fix was written as "use
+        // the application context" rather than "hold nothing that holds a screen".
+        //
+        // So the two things this has to do are split by what they need:
+        //  - closing the registration is the manager's own business, is reached
+        //    through the manager, and still happens with no screen left.
+        //  - the confirmation dialog needs an Activity, so it reads through a weak
+        //    reference and correctly does nothing when there is none. A dialog for
+        //    a destroyed Activity was never showable; what changes is that the
+        //    Activity is now collectable while the download runs.
+        val bridge = WeakReference(this)
+        ToolchainManager(context.applicationContext).also { manager ->
+            manager.onStateChange = { packName, status, _, _ ->
+                when (status) {
+                    // The other half of a pair that had no other half: `install()`
+                    // calls `registerListener()` before every Play fetch and nothing
+                    // undid it, so this instance stayed subscribed for the life of
+                    // the process. After COMPLETED, FAILED or CANCELED there is
+                    // nothing further to hear, and the next `install()` subscribes
+                    // again. Harmless on the HTTP path, which never registers: the
+                    // unregister is guarded and does nothing.
+                    //
+                    // Spelled out rather than delegated to `isTerminalPackStatus`,
+                    // which answers a different question. That predicate defaults an
+                    // unknown status to true so the first-run queue advances rather
+                    // than stalls; here an unknown status is one still to come, and
+                    // unregistering on it would drop the install that finishes it.
+                    AssetPackStatus.COMPLETED,
+                    AssetPackStatus.FAILED,
+                    AssetPackStatus.CANCELED -> manager.unregisterListener()
+                    AssetPackStatus.REQUIRES_USER_CONFIRMATION ->
+                        bridge.get()?.confirmLargeDownload(packName)
+                }
+            }
         }
     }
 
