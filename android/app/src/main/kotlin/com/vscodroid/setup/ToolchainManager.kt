@@ -793,6 +793,19 @@ class ToolchainManager(private val context: Context) {
             // first-run queue moves on, and the card reads "Install" again after
             // the next launch with nothing said.
             if (!writeState(state)) {
+                // ⚠️ The tree copied into `usr/` above is left where it is, and
+                // nothing removes it later. Uninstall works off this manifest, so a
+                // manifest that was never written leaves the files with no record
+                // naming them: roughly the unpacked size, 146 MB for Java 17, that
+                // only clearing app data reclaims.
+                //
+                // Not repaired here on purpose. The copy shares `usr/` with the base
+                // install and with other toolchains, so removing it means the
+                // uninstall path's own library bookkeeping rather than a
+                // deleteRecursively, and getting that wrong takes out a library the
+                // app itself loads. Pre-existing, but worth naming now that
+                // [reconcileDeliveredPacks] can reach this line at launch with no
+                // screen watching.
                 fail(packName, ToolchainFailure.STORAGE)
                 return
             }

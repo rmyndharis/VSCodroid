@@ -31,12 +31,19 @@ set -euo pipefail
 #       -v "$PWD/patches:/patches:ro" \
 #       vscodroid-codeoss-build:24.18.0 bash /scripts/build-vscode-oss.sh
 #
-# The tag's version is the Dockerfile's ARG NODE_VERSION, which is .nvmrc at the
-# VS Code tag being built, and it is written out by hand in both places with
-# nothing checking they agree. Read it from the Dockerfile when bumping rather
-# than copying this line, and note its own warning: the Node this build HOST runs
-# and the Node that ends up on the DEVICE are different numbers that merely
-# coincide at 1.133.0.
+# ⚠️ The version in that tag is the Dockerfile's ARG NODE_VERSION, written out by
+# hand in both places with NOTHING checking they agree, and nothing here reads the
+# Dockerfile either. A stale tag builds against a Node the image does not have, or
+# silently reuses an image built for an older one. Read the value out of
+# docker/codeoss-build.Dockerfile when bumping rather than copying this line.
+#
+# Left ungated deliberately, and it is the one loose end in this block: the check
+# would have to parse a Dockerfile that CI never builds, since the workflow installs
+# the same toolchain directly on an arm64 runner. Worth a gate the day a second
+# person builds locally.
+#
+# Note also the Dockerfile's own warning: the Node this build HOST runs and the Node
+# that ends up on the DEVICE are different numbers that merely coincide at 1.133.0.
 #
 # Run it on an arm64 host. Every native module in the tree is built for the build
 # host, and only two of them are overlaid afterwards by build-native-addons.sh —

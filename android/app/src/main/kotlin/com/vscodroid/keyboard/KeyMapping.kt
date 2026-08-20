@@ -73,6 +73,15 @@ object KeyMapping {
         " " to KeyDef(" ", "Space", 32),
     )
 
+    /**
+     * The mapping for [key], or null when there is none.
+     *
+     * ⚠️ No production caller, and that is by design rather than neglect, so a sweep
+     * for unused code should leave it. Production goes through [getKeyDefOrLetter],
+     * which never returns null because the key row must produce something for any
+     * character. This is the nullable half the tests use to assert what IS and is NOT
+     * in the table, which is the only way to state that a key is absent.
+     */
     fun getKeyDef(key: String): KeyDef? = mappings[key]
 
     fun getKeyDefOrLetter(key: String): KeyDef {
