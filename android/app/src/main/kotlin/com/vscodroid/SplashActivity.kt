@@ -109,6 +109,13 @@ class SplashActivity : AppCompatActivity() {
         // I/O thread, because the trees involved have thousands of files
         // and this block is on the main thread.
         repair("the toolchain repair pass") { ToolchainManager(this).repairInstalledToolchains() }
+        // A Play pack that finished downloading after its screen went away was
+        // never installed: the COMPLETED callback is the only thing that installs
+        // one, and both screens drop their listener at teardown. This is the
+        // reconcile that was missing, and launch is where it belongs, because the
+        // alternative is a listener outliving the Activity that registered it.
+        // Returns immediately; the copy runs on the toolchain I/O thread.
+        repair("the delivered toolchain reconcile") { ToolchainManager(this).reconcileDeliveredPacks() }
         // A folder whose permission the user withdrew in system settings never
         // comes back through the app, so its mirror is disk nothing can reach.
         // Here because it is the one point that is guaranteed to have no folder

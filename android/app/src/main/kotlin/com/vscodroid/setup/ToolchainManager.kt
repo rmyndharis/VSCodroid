@@ -484,30 +484,7 @@ class ToolchainManager(private val context: Context) {
                         val location = assetPackManager.getPackLocation(packName)
                         val assetsPath = location?.assetsPath()
                         if (assetsPath != null) {
-                            // The same pre-flight downloadViaHttp does, for the same
-                            // reason and with a smaller figure. installFromDirectory
-                            // copies the whole tree into usr/, and without this the
-                            // copy fails partway on a full device: an IOException
-                            // reported as INTERNAL, and half a toolchain left in usr/
-                            // under no manifest, which is what made every retry start
-                            // from less space than the last.
-                            val required = packInstallBytes(
-                                ToolchainRegistry.find(packName)?.estimatedSize ?: 0L
-                            )
-                            val available = StatFs(context.filesDir.absolutePath).availableBytes
-                            if (available < required) {
-                                Logger.e(
-                                    tag,
-                                    "Not enough disk space for $packName: " +
-                                        "${available / 1_000_000} MB available, " +
-                                        "${required / 1_000_000} MB required",
-                                )
-                                fail(packName, ToolchainFailure.STORAGE)
-                                return@execute
-                            }
-                            installFromDirectory(packName, File(assetsPath))
-                            assetPackManager.removePack(packName)
-                            Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
+                            installDeliveredPack(packName, File(assetsPath))
                         } else {
                             Logger.e(tag, "No assetsPath for completed pack $packName")
                             fail(packName, ToolchainFailure.INTERNAL)
@@ -530,6 +507,130 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Pack $packName requires user confirmation")
             }
             else -> { /* DOWNLOADING, PENDING, WAITING_FOR_WIFI, etc. — just report progress */ }
+        }
+    }
+
+    /**
+     * Copies a pack Play has delivered into `usr/`, then hands Play's copy back.
+     *
+     * One method rather than the same sequence at each site, because two now reach it:
+     * the COMPLETED callback, and [reconcileDeliveredPacks] at launch. Both have to
+     * apply the same pre-flight and neither may forget the release, and the way the
+     * second site came to exist is that the first was the only one.
+     *
+     * The pre-flight is the one [downloadViaHttp] does, with a smaller figure.
+     * `installFromDirectory` copies the whole tree, and without this the copy fails
+     * partway on a full device: an IOException reported as INTERNAL, and half a
+     * toolchain left in `usr/` under no manifest, which is what made every retry start
+     * from less space than the last.
+     */
+    private fun installDeliveredPack(packName: String, assetsDir: File) {
+        // [packUnpackedBytes], not `ToolchainRegistry.find(...)?.estimatedSize ?: 0L`.
+        // A retired pack answers null from the registry -- that pass-through is
+        // deliberate and keeps uninstalling one working -- and the elvis then made the
+        // whole reservation the 50 MB buffer. A gate that asks for 50 MB before copying
+        // 146 MB is worse than no gate: it passes exactly the devices it exists to
+        // refuse, and reports success while doing it.
+        val unpacked = packUnpackedBytes(packName)
+        if (unpacked == null) {
+            // Unknown size, so there is no honest reservation to make. Said out loud
+            // rather than gated on a guess, because a wrong figure here is
+            // indistinguishable from a check that ran.
+            Logger.w(
+                tag,
+                "No recorded size for $packName, so the space pre-flight is skipped; " +
+                    "a full device will fail during the copy instead of before it",
+            )
+        } else {
+            val required = packInstallBytes(unpacked)
+            val available = StatFs(context.filesDir.absolutePath).availableBytes
+            if (available < required) {
+                Logger.e(
+                    tag,
+                    "Not enough disk space for $packName: " +
+                        "${available / 1_000_000} MB available, " +
+                        "${required / 1_000_000} MB required",
+                )
+                // Before the return, and that ordering is the fix. This branch fires
+                // only when the device is out of room, and it used to be the one path
+                // that skipped the release, so the delivered pack stayed on the device
+                // that had just reported having no space for it. Play's copy is of no
+                // use now: the install did not happen and a retry fetches again.
+                releasePack(packName)
+                fail(packName, ToolchainFailure.STORAGE)
+                return
+            }
+        }
+        installFromDirectory(packName, assetsDir)
+        releasePack(packName)
+    }
+
+    /**
+     * Finishes any Play delivery that completed while nothing was listening for it.
+     *
+     * `installFromDirectory` is reachable only from the COMPLETED callback, and that
+     * callback only arrives while a listener is registered. Both screens that install
+     * toolchains drop their registration at teardown -- `ToolchainActivity.onStop` and
+     * `SplashActivity.onDestroy` -- so backgrounding the app mid-download left the pack
+     * downloaded, paid for, and never installed. Nothing retried it: the picker reads
+     * `toolchains.json`, sees the toolchain absent, and offers the same download again.
+     *
+     * Holding the registration open instead is the wrong repair, and the reason is
+     * the retention this class was just corrected for: a listener that outlives its
+     * screen is what kept an Activity alive in Play Core's registry. Reconciling at
+     * launch needs no listener at all. Play is asked what it has already delivered,
+     * which is a question with an answer whether or not anyone was listening when it
+     * became true.
+     *
+     * Play installs only. On the HTTP path there is no pack to ask about, and
+     * `getPackLocation` on an install Play does not recognise is a question with no
+     * meaning rather than a cheap no.
+     */
+    fun reconcileDeliveredPacks() {
+        if (shouldUseHttpFallback()) return
+        ioExecutor.execute {
+            try {
+                // Read once, ahead of the loop: `installFromDirectory` rewrites the
+                // state, and re-reading per pack would let one install hide the next.
+                val installed = getInstalledToolchains()
+                ToolchainRegistry.available.forEach { info ->
+                    if (info.packName.removePrefix("toolchain_") in installed) return@forEach
+                    val assetsPath = try {
+                        assetPackManager.getPackLocation(info.packName)?.assetsPath()
+                    } catch (e: Exception) {
+                        Logger.w(tag, "Could not ask Play about ${info.packName}: ${e.message}")
+                        null
+                    } ?: return@forEach
+                    Logger.i(
+                        tag,
+                        "Finishing a delivery nothing was listening for: ${info.packName}",
+                    )
+                    installDeliveredPack(info.packName, File(assetsPath))
+                }
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not reconcile delivered packs: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Hands Play's copy of [packName] back, whether or not the install used it.
+     *
+     * Called on both exits from the COMPLETED branch, which is the point. Play writes
+     * the pack outside `filesDir` and keeps it until asked; leaving it there after a
+     * refusal charged the user for a delivery nothing consumed, on the one path that
+     * fires only when the device is already out of room.
+     *
+     * Guarded, because this now runs on a failure path. `removePack` is a Play Core
+     * call and the HTTP delivery path never registered one; an exception here must not
+     * replace the failure the caller is on its way to report.
+     */
+    private fun releasePack(packName: String) {
+        try {
+            assetPackManager.removePack(packName)
+            Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not remove asset pack $packName: ${e.message}")
         }
     }
 
@@ -1130,7 +1231,19 @@ class ToolchainManager(private val context: Context) {
             fetchManifest(manifestUrlFor(zipUrl))
         }
         return digestFromManifest(manifest, zipName)
-            ?: throw IOException(
+            // [MissingFromRelease], not the plain IOException it extends. The two are
+            // caught in that order and mean different things to the user, and this
+            // case was landing in the wrong one: the manifest was fetched, so nothing
+            // about the network is at fault, yet `catch (e: IOException)` reported
+            // "Download failed. Check your connection and try again." A better
+            // connection cannot produce a manifest entry that is not there.
+            //
+            // The release is incomplete, which is exactly what NOT_PUBLISHED already
+            // says: "not in the current release, try again after the next app update."
+            // `digestFromManifest` also answers null for two conflicting entries, and
+            // that is the same answer for the same reason -- nothing here can say
+            // which one vouches for the payload.
+            ?: throw MissingFromRelease(
                 "The release's digest manifest does not name $zipName; refusing to install a " +
                     "payload nothing vouches for"
             )
@@ -1737,6 +1850,27 @@ internal fun toolchainInstallBytes(unpackedBytes: Long): Long =
     unpackedBytes * 2 + SPACE_BUFFER
 
 /**
+ * The unpacked size recorded for [packName], or null when none is.
+ *
+ * Null rather than zero, and the distinction is the whole reason this exists.
+ * `ToolchainRegistry.find` answers null for a retired pack, by design: that
+ * pass-through is what keeps uninstalling one working after its row is dropped.
+ * A caller that spells the lookup as `find(...)?.estimatedSize ?: 0L` therefore
+ * turns "I do not know" into "it needs nothing", and a space gate built on that
+ * reserves the bare buffer for a tree of any size. Zero is a real answer here
+ * only for a pack that genuinely occupies nothing, which none do.
+ *
+ * [RETIRED_TOOLCHAINS] is consulted second for the same reason `toolchainBytesFor`
+ * consults it: the packs most likely to be on a device right now are the ones
+ * installed before a withdrawal, and the registry is exactly where they are not.
+ * The prefix is stripped here rather than through `toolchainShortName`, which
+ * resolves through the registry and returns a retired name unchanged.
+ */
+internal fun packUnpackedBytes(packName: String): Long? =
+    ToolchainRegistry.find(packName)?.estimatedSize
+        ?: RETIRED_TOOLCHAINS[packName.removePrefix("toolchain_")]
+
+/**
  * What a Play Asset Delivery install needs free, given its unpacked size.
  *
  * One tree rather than two, and the difference is where the first copy already
@@ -1900,7 +2034,10 @@ internal fun isCompleteTransfer(declaredBytes: Long, receivedBytes: Long): Boole
  * release does not contain, and telling someone to check their connection when
  * that is the problem sends them to look in the wrong place.
  */
-enum class ToolchainFailure(@StringRes val message: Int) {
+// `@param:` rather than a bare `@StringRes`, which Kotlin warns will start
+// applying to the backing field as well. Naming the target pins today's meaning
+// instead of letting a compiler upgrade choose a different one.
+enum class ToolchainFailure(@param:StringRes val message: Int) {
     NETWORK(R.string.toolchain_failed_network),
     STORAGE(R.string.toolchain_failed_storage),
     NOT_PUBLISHED(R.string.toolchain_failed_not_published),

@@ -82,6 +82,7 @@ class LaunchRepairWiringTest {
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
         "repairInstalledToolchains",
+        "reconcileDeliveredPacks",
         "reclaimRevokedMirrors",
     )
 
