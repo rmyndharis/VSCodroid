@@ -372,6 +372,53 @@ def toolchain_libs():
     return sorted(set(libs)), read, unrecorded
 
 
+def unlisted_toolchain_libs():
+    """Loose libraries in a built pack that its manifest does not name.
+
+    `toolchain_libs()` above reads the manifest, which is the list the app
+    installs from, and that is the right source for WHAT to attribute. It is the
+    wrong source for whether the list is complete: a download script that starts
+    copying one more `.so` into the pack and does not add the matching `libs`
+    entry ships a library this run never sees, so no component is demanded, no
+    notice is required, and nothing goes red.
+
+    Only the TOP LEVEL of the pack's `usr/lib` is swept, which is exactly what
+    `libs` means: the loose libraries the installer copies into the shared
+    `usr/lib` beside the base app's, and the ones an uninstall deletes from it.
+    A toolchain's own tree below that (`usr/lib/jvm/...`, `usr/lib/ruby/...`) is
+    attributed as the toolchain itself in NOTICE.md's On-Demand Toolchains
+    table; widening this to reach it would demand a per-file entry for every
+    object in a JDK.
+
+    Symlinks are skipped. A soname alias points at a file that is already
+    listed, so reporting it would report one library twice under a second name.
+
+    Empty on a tree whose packs were never downloaded: there is no `usr/lib` to
+    read. A pack that IS on disk with no manifest at all is a different failure
+    with a clearer message, which is why `unrecorded` is answered first in
+    `main()` and this never sees that pack.
+    """
+    out = []
+    for module in sorted(TOOLCHAINS.glob("toolchain_*")):
+        assets = module / "src/main/assets"
+        lib_dir = assets / "usr/lib"
+        if not lib_dir.is_dir():
+            continue
+        listed = set()
+        for manifest in sorted(assets.glob("*.json")):
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"FAIL cannot read {manifest}: {exc}")
+            listed.update(data.get("libs", []))
+        for path in sorted(lib_dir.iterdir()):
+            if path.is_symlink() or not path.is_file() or ".so" not in path.name:
+                continue
+            if path.name not in listed:
+                out.append(f"{module.name}: usr/lib/{path.name}")
+    return out
+
+
 def shipped():
     """The redistributed binaries at the top level of the two flat directories,
     by file name.
@@ -642,6 +689,23 @@ def main():
             print(f"  {module}", file=sys.stderr)
         print("  -> its download script writes the manifest beside usr/; without it"
               " nothing knows what the pack ships", file=sys.stderr)
+        return 1
+
+    # After `unrecorded`, deliberately. A pack with a `usr/` payload and no
+    # manifest would come through here as every one of its libraries being
+    # unlisted, which is true and useless: the fix is to write the manifest, not
+    # to add forty entries to it.
+    unlisted = unlisted_toolchain_libs()
+    if unlisted:
+        print(f"FAIL {len(unlisted)} loose toolchain librar(ies) are in a pack that "
+              "its manifest does not list:", file=sys.stderr)
+        for entry in unlisted:
+            print(f"  {entry}", file=sys.stderr)
+        print("  -> the manifest is what this run reads to know what a pack ships,"
+              " so a file missing from `libs` is redistributed with nobody"
+              " attributing it. Add it to the `libs` array the download script"
+              " writes, and give it a row in TOOLCHAIN_LIBRARIES and in both"
+              " attribution documents", file=sys.stderr)
         return 1
 
     for name, entry in for_check:

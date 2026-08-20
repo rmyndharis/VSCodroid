@@ -118,7 +118,7 @@ component.
 | SQLite | Public Domain | Node.js, Python |
 | tmux | ISC | bundled tool in its own right |
 | xz / liblzma | LGPL-2.1, GPL-2.0, GPL-3.0 | Python |
-| zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2 |
+| zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2, and the on-demand Java and Ruby toolchains |
 | Zstandard | GPL-2.0 | Python |
 
 ## Toolchain Libraries
