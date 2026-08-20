@@ -41,8 +41,17 @@ import kotlin.concurrent.thread
 class SafSyncEngine(private val context: Context) {
 
     private val tag = "SafSyncEngine"
-    private val writeBackQueue = ConcurrentLinkedQueue<SyncJob>()
-    private var writeBackThread: Thread? = null
+    /**
+     * The write-back of the folder being watched: its queue of jobs and its thread.
+     *
+     * Replaced, never mutated, by [startWatching] and [stopWatching]. A drain that
+     * outlives its stop keeps the object it was started with, so the folder opened next
+     * hands its jobs to a different queue and no two threads ever poll one.
+     */
+    @Volatile
+    internal var session = WatchSession()
+        private set
+
     @Volatile private var isWatching = false
 
     /**
@@ -652,13 +661,21 @@ class SafSyncEngine(private val context: Context) {
     fun startWatching(mirrorDir: File, safUri: Uri) {
         stopWatching()
 
+        // Published before any observer exists, because an observer fires into whatever
+        // session is current and this is the one its jobs belong to.
+        val opening = WatchSession()
+        session = opening
         isWatching = true
         watchTree(mirrorDir, mirrorDir, safUri)
 
-        // Background thread to process write-back queue
-        writeBackThread = thread(name = "saf-writeback", isDaemon = true) {
-            runWriteBackLoop { isWatching }
+        // Background thread to process this session's write-back queue. Handed over
+        // before it starts, so a stop arriving at once cannot find a null worker for a
+        // thread that is already running.
+        val worker = thread(start = false, name = "saf-writeback", isDaemon = true) {
+            runWriteBackLoop(opening) { opening.running }
         }
+        opening.worker = worker
+        worker.start()
 
         val watched = synchronized(watchersLock) { watchers.size }
         Logger.i(tag, "File watcher started for ${mirrorDir.absolutePath} ($watched directories)")
@@ -668,16 +685,24 @@ class SafSyncEngine(private val context: Context) {
      * Processes queued write-backs until [isRunning] goes false or the thread is
      * interrupted, then sends out whatever is still queued.
      *
-     * Takes its termination condition as a parameter so a test can drive the loop
-     * without a live watcher; the caller passes the watcher's own flag.
+     * Drives whichever session is current, which is what a test without a live watcher
+     * needs: no JVM test can call [startWatching], because registering a watch builds a
+     * [FileObserver] and its static initializer reaches native code.
      */
-    internal fun runWriteBackLoop(isRunning: () -> Boolean) {
+    internal fun runWriteBackLoop(isRunning: () -> Boolean) = runWriteBackLoop(session, isRunning)
+
+    /**
+     * The same loop bound to one folder's [session], which is the form the watcher's own
+     * thread runs: a drain that outlives [stopWatching] goes on polling the queue it was
+     * started with, and the folder opened next has a different one.
+     */
+    internal fun runWriteBackLoop(session: WatchSession, isRunning: () -> Boolean) {
         var interrupted = false
         try {
             while (isRunning()) {
-                val job = writeBackQueue.poll()
+                val job = session.queue.poll()
                 if (job != null) {
-                    processWriteBack(job)
+                    processWriteBack(session, job)
                 } else {
                     Thread.sleep(WRITEBACK_POLL_MS)
                 }
@@ -696,10 +721,10 @@ class SafSyncEngine(private val context: Context) {
         // carrying the flag, losing exactly what this drain exists to save.
         if (Thread.interrupted()) interrupted = true
 
-        var remaining = writeBackQueue.poll()
+        var remaining = session.queue.poll()
         while (remaining != null) {
-            processWriteBack(remaining)
-            remaining = writeBackQueue.poll()
+            processWriteBack(session, remaining)
+            remaining = session.queue.poll()
         }
         if (interrupted) Thread.currentThread().interrupt()
     }
@@ -713,10 +738,16 @@ class SafSyncEngine(private val context: Context) {
             watchers.values.forEach { it.stopWatching() }
             watchers.clear()
         }
+        // The folder being closed keeps the queue its jobs are in, and the folder opened
+        // next gets an empty one, whether or not the drain below finishes in time.
+        val closing = session
+        session = WatchSession()
+        closing.running = false
+
         // Wake the thread out of its sleep, then wait for it to drain remaining writes.
         // An idle queue drains in microseconds, so this costs only what there is to lose.
-        val worker = writeBackThread
-        writeBackThread = null
+        val worker = closing.worker
+        closing.worker = null
         worker?.interrupt()
         try { worker?.join(DRAIN_GRACE_MS) } catch (_: InterruptedException) {}
 
@@ -724,11 +755,14 @@ class SafSyncEngine(private val context: Context) {
             // Still draining. Emptying the queue from here would throw away exactly the
             // writes the drain exists to save, and would do it in the case where there
             // are the most of them — a burst of saves, or one slow provider. The thread
-            // owns the queue until it finishes; jobs carry the URIs they belong to, so a
-            // later lifecycle sharing the queue cannot misdirect them.
+            // owns this session's queue until it finishes, and nothing else can reach
+            // it: the queue went with the session, so the folder opened next offers its
+            // jobs somewhere this drain never polls. Addressing was never the question.
+            // Two threads polling one queue was: each write opens its document with
+            // "wt", which truncates at open, so the two interleave inside one document.
             Logger.w(tag, "Write-back still draining after ${DRAIN_GRACE_MS}ms; leaving it to finish")
         } else {
-            writeBackQueue.clear()
+            closing.queue.clear()
         }
         // docIdCache is deliberately not cleared here. A drain that outlived the wait
         // still needs the mappings of the folder it is finishing, and [initialSync]
@@ -1391,9 +1425,11 @@ class SafSyncEngine(private val context: Context) {
 
     // -- Internal: Write-back Processing --
 
-    private fun processWriteBack(job: SyncJob) {
-        // Small debounce: skip if more recent job for same path exists
-        if (writeBackQueue.any { it.localPath == job.localPath && it.timestamp > job.timestamp }) {
+    private fun processWriteBack(session: WatchSession, job: SyncJob) {
+        // Small debounce: skip if more recent job for same path exists. Scoped to the
+        // session the job came off, so it cannot see, or be blinded by, the jobs of a
+        // folder that is closing or one that has just opened.
+        if (session.queue.any { it.localPath == job.localPath && it.timestamp > job.timestamp }) {
             return
         }
 
@@ -1673,7 +1709,7 @@ class SafSyncEngine(private val context: Context) {
                 parentPathOf(renamedFrom) != parentPathOf(relativePath)
             ) resolveDocumentUri(safTreeUri, parentPathOf(renamedFrom)) else null
 
-        writeBackQueue.offer(
+        session.queue.offer(
             SyncJob(
                 type = if (renamedFromUri != null) SyncType.RENAME else type,
                 localPath = localFile.absolutePath,
@@ -2315,3 +2351,22 @@ internal data class VanishedDirectory(
     val relativePath: String,
     val atMillis: Long
 )
+
+/**
+ * One folder's write-back: the jobs its observers produced, and the thread sending them.
+ *
+ * Per folder rather than per engine, and that is what keeps two writers off one
+ * document. [SafSyncEngine.stopWatching] leaves a drain that outran its grace period
+ * holding this object and installs a fresh one, so the jobs of the folder opened next go
+ * somewhere the departing thread cannot reach, and the thread started for that folder
+ * polls a queue nothing else polls.
+ */
+internal class WatchSession {
+    val queue = ConcurrentLinkedQueue<SyncJob>()
+
+    /** Cleared by [SafSyncEngine.stopWatching]; the loop's own termination condition. */
+    @Volatile var running = true
+
+    /** The thread draining [queue], or null before one is started and once it is joined. */
+    @Volatile var worker: Thread? = null
+}

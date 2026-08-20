@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -61,12 +60,9 @@ class SafWriteBackLoopTest {
         unmockkAll()
     }
 
-    /** Puts [job] on the engine's queue without a live watcher to produce it. */
-    @Suppress("UNCHECKED_CAST")
+    /** Puts [job] on the current session's queue without a live watcher to produce it. */
     private fun enqueue(job: SyncJob) {
-        val field = SafSyncEngine::class.java.getDeclaredField("writeBackQueue")
-            .apply { isAccessible = true }
-        (field.get(engine) as ConcurrentLinkedQueue<SyncJob>).offer(job)
+        engine.session.queue.offer(job)
     }
 
     @Test

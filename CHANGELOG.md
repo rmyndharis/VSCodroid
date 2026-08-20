@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A save the sync refuses to write back now says so. It was silent, so an edit that never reached the device folder looked exactly like one that did.
+- Closing a device folder while a save is still going out no longer lets the next folder share its write-back queue, which could interleave two writes into one document.
 - The editor sees files changed outside it again. One source file was missing from the watcher build, so the addon could not load and nothing in a folder was watched.
 - Narrowing the platform-detection patch now fails the build. It could previously be narrowed with every check still green, leaving the marketplace asked for a binary that cannot start on Android.
 - First-run setup now shows progress while it extracts the editor, instead of holding at 5% for minutes and looking like it has hung.
