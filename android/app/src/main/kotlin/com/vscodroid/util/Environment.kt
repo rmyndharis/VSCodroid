@@ -243,6 +243,18 @@ object Environment {
     fun getServerDir(context: Context): String =
         "${context.filesDir}/server"
 
+    /**
+     * The bash binary itself, under `nativeLibraryDir`.
+     *
+     * ⚠️ Has no production caller, and that is the point rather than an oversight,
+     * so a sweep for unused code should leave it here. It is the wrong answer for
+     * the terminal profile and [getTerminalShellPath] below is the right one; the
+     * two exist side by side so the difference is visible at the place someone
+     * would reach for either. `TerminalShellPathTest` is built on that contrast.
+     *
+     * Production that genuinely wants the binary spells it out at the point of use
+     * (`FirstRunSetup.createNpmWrappers`), because it wants the `.so` knowingly.
+     */
     fun getBashPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libbash.so"
 
