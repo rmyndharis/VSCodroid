@@ -83,6 +83,21 @@ class SafSyncEngine(private val context: Context) {
     private val unfetched = ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * Mirror paths a refusal has already been announced for.
+     *
+     * The refusal fires on every inotify MODIFY, so an editor autosaving a file whose
+     * device document this sync could not read reaches it on every save. Announcing each
+     * one would be a wall of the same notice, and worse: the manager's throttle is one
+     * timer for the whole folder, so the wall would swallow an unrelated write-back
+     * failure for as long as it lasted. One notice per path carries the whole fact,
+     * which is that this file is not reaching the device folder.
+     *
+     * Absolute paths and scoped per mirror in [initialSync], next to [unfetched] and for
+     * the same reason: one engine serves every folder in turn.
+     */
+    private val refusalsAnnounced = ConcurrentHashMap.newKeySet<String>()
+
+    /**
      * The tree [docIdCache]'s entries were resolved against. The cache is cleared
      * and refilled per folder, and a write-back drain can outlive its folder, so
      * anything resolving at processing time has to know whether the cache still
@@ -129,6 +144,7 @@ class SafSyncEngine(private val context: Context) {
         // a switch that fails partway must not drop the protection the previous
         // folder's mirror is still relying on.
         unfetched.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
+        refusalsAnnounced.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         cacheTree = safUri
 
         // Phase 1: Enumerate all documents in the tree
@@ -1021,13 +1037,44 @@ class SafSyncEngine(private val context: Context) {
      * class has no screen and should not reach for one. The layer that owns a screen
      * decides how to say it.
      *
-     * Both exits leave the file's journal entry in place, so the data is already safe:
-     * the reclaim pass reads that journal and refuses to delete the mirror. What was
-     * missing is the user knowing, and the two are not the same fact. A save that never
-     * reached the device folder looks exactly like one that did, and the difference only
-     * shows when the app is uninstalled and the work is gone.
+     * Three callers reach this, and the mirror is protected on all three, by two gates
+     * rather than the one this comment used to name. The two exits inside
+     * [writeLocalToSaf] leave the file's journal entry in place, which
+     * `SafStorageManager.mayReclaim` reads. [refuseUnreadDocument] writes no journal
+     * entry at all, because it declines before the write begins; what covers it is the
+     * second gate, [holdsOnlyVouchedCopies], which refuses to reclaim a mirror holding
+     * any file the `.synced` record cannot vouch for, and a file that was never written
+     * back never is.
+     *
+     * What was missing is the user knowing, and that is a different fact from the data
+     * being safe. A save that never reached the device folder looks exactly like one
+     * that did, and the difference only shows when the app is uninstalled and the work
+     * is gone.
      */
     internal var onWriteBackFailed: (File) -> Unit = {}
+
+    /**
+     * Declines to write [localFile] out, because the device holds a document under that
+     * name this sync never read, and says so once per file.
+     *
+     * Both refusal sites come through here, and the message living in one place is what
+     * keeps them saying the same thing: [createOneInSaf] asks the same question while
+     * walking into a directory, and no JVM test can reach it, because delivering a
+     * directory event builds a `FileObserver` and its static initializer needs native
+     * code. One of them is the only thing holding the two together.
+     *
+     * The notice is [onWriteBackFailed]'s and it fits: the file did not reach the device
+     * folder, and the copy inside the app is the only one of it that exists. What the
+     * device holds under that name is a different document, which is why this refuses.
+     */
+    private fun refuseUnreadDocument(localFile: File, describedAs: String) {
+        Logger.w(
+            tag,
+            "Not writing $describedAs back: the device holds a document there " +
+                "that this sync never read, and writing would replace it",
+        )
+        if (refusalsAnnounced.add(localFile.absolutePath)) onWriteBackFailed(localFile)
+    }
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
 
@@ -1186,11 +1233,7 @@ class SafSyncEngine(private val context: Context) {
                         localFile.absolutePath, existingDocId != null, unfetched,
                     )
                 ) {
-                    Logger.w(
-                        tag,
-                        "Not writing ${localFile.name} back: the device holds a document " +
-                            "there that this sync never read, and writing would replace it",
-                    )
+                    refuseUnreadDocument(localFile, localFile.name)
                 } else {
                     writeLocalToSaf(localFile, docUri)
                 }
@@ -1543,11 +1586,7 @@ class SafSyncEngine(private val context: Context) {
                 unfetched,
             )
         ) {
-            Logger.w(
-                tag,
-                "Not writing $relativePath back: the device holds a document there " +
-                    "that this sync never read, and writing would replace it",
-            )
+            refuseUnreadDocument(localFile, relativePath)
             return
         }
 

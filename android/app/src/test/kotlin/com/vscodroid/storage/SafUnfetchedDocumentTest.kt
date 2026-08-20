@@ -17,6 +17,8 @@ import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -203,5 +205,116 @@ class SafUnfetchedDocumentTest {
         // A name the device does not hold is created and then written, so the
         // write happening at all is what separates this from the guarded cases.
         verify(atLeast = 1) { resolver.openOutputStream(any(), "wt") }
+    }
+
+    /**
+     * The four cases above pin that the device document survives. These pin the other
+     * half, which was missing: that the user is told their edit did not travel.
+     *
+     * Refusing the write is correct and it is also invisible. The mirror holds the
+     * edit, the editor reports the save, the tab goes clean, and the device folder
+     * still holds a different document. That is the shape the project's own rule
+     * forbids, a save that looks identical to one that worked, and the engine's KDoc
+     * names this group as "the user's only copy" while announcing nothing about it.
+     *
+     * Asserted on the seam rather than on a Toast: the engine has no screen, and
+     * `WriteBackNoticeWiringTest` covers the Activity end of the same channel.
+     */
+    @Test
+    fun `a refused write-back tells the user their edit stayed in the app`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+
+        deviceHolding("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "big.zip").writeText("stub")
+        deliver(FileObserver.CREATE, "big.zip")
+
+        assertEquals(
+            listOf("big.zip"),
+            announced,
+            "the write was refused and nothing said so, which is the silence this " +
+                "guard was supposed to end rather than create",
+        )
+    }
+
+    /** The same, for a document the sync tried to read and could not. */
+    @Test
+    fun `a copy that failed is announced too`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+
+        deviceHolding("notes.md", size = 64, readable = false)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "notes.md").writeText("stub")
+        deliver(FileObserver.MODIFY, "notes.md")
+
+        assertEquals(listOf("notes.md"), announced, "a failed copy refused the write silently")
+    }
+
+    /**
+     * The negative control, and the one that stops the two above from passing for the
+     * wrong reason. A write that actually lands must announce nothing: an app that
+     * warns on every successful save teaches the user to ignore the warning, which
+     * costs more than the silence did.
+     */
+    @Test
+    fun `a write-back that lands announces nothing`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+
+        deviceHolding("notes.md", size = 64)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "notes.md").writeText("edited in the editor")
+        deliver(FileObserver.MODIFY, "notes.md")
+
+        verify(atLeast = 1) { resolver.openOutputStream(any(), "wt") }
+        assertTrue(
+            announced.isEmpty(),
+            "a save that reached the device folder still warned the user: $announced",
+        )
+    }
+
+    /**
+     * Once per file, not once per save. The refusal fires on every inotify MODIFY, so an
+     * editor autosaving reaches it every few seconds, and the notice is throttled by one
+     * timer for the whole folder: a wall of the same message would also swallow an
+     * unrelated write-back failure for as long as it lasted.
+     */
+    @Test
+    fun `an editor saving the same file again is not announced again`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+
+        deviceHolding("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        File(mirror, "big.zip").writeText("stub")
+
+        repeat(3) { deliver(FileObserver.MODIFY, "big.zip") }
+
+        assertEquals(listOf("big.zip"), announced, "one notice per file, not one per save")
+    }
+
+    /**
+     * The other refusal site cannot be driven from here at all: reaching it means walking
+     * into a directory, and delivering a directory event builds a `FileObserver`, whose
+     * static initializer needs native code. What holds it to the behaviour above is that
+     * there is one refusal in the file, so this reads the source and pins that.
+     */
+    @Test
+    fun `the refusal message has one home, so both sites announce`() {
+        val engineSource =
+            File("../../android/app/src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt")
+        assertTrue(engineSource.isFile, "SafSyncEngine.kt is not where this test expects it")
+
+        assertEquals(
+            1,
+            Regex("sync never read, and writing would replace it")
+                .findAll(engineSource.readText()).count(),
+            "a second copy of the refusal means a site that refuses without saying so",
+        )
     }
 }
