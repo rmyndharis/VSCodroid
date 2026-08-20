@@ -108,6 +108,34 @@ class ExtraKeyButton @JvmOverloads constructor(
         onKeyAction?.invoke(keyValue, state)
     }
 
+    /**
+     * Delivers one press when an accessibility service activates this key.
+     *
+     * `isClickable` has been true on these buttons all along, so a screen
+     * reader has always offered "double tap to activate" on every one of them,
+     * and until this override the offer did nothing at all: the touch listener
+     * returns true, so `View.onTouchEvent` never runs and never calls
+     * `performClick`, the presses come out of a [GestureDetector] instead, and
+     * no `OnClickListener` was ever set for `performClick` to run. An offered
+     * action that silently does nothing is worse than an absent one, because
+     * the user cannot tell the key from a broken one.
+     *
+     * Nothing routes a finger through here, so this cannot double-fire: the
+     * listener consumes the event before the view's own click handling. That
+     * also means an ordinary tap and an assistive activation reach [emitPress]
+     * by different paths, which is why this calls it rather than duplicating
+     * what a press does.
+     *
+     * `super` still runs for the click sound and the TYPE_VIEW_CLICKED event a
+     * service listens for; the return is `true` because this handled the click
+     * regardless of what `super` reports with no listener attached.
+     */
+    override fun performClick(): Boolean {
+        emitPress()
+        super.performClick()
+        return true
+    }
+
     init {
         gravity = Gravity.CENTER
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The gesture trackpad now offers four accessibility actions to move the cursor. A drag was the only way to send an arrow, and a screen reader cannot drag.
+
 ### Changed
 
 - The design documents now describe the build that ships: two on-demand toolchains, terminals that spawn bash on a real PTY, and how the server is actually patched and built.
@@ -42,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A folder copied out that did not arrive whole now says how much is missing, once for the folder rather than once for every file in it.
 - A first run that fails now names the step and quotes the error, instead of only "Setup failed" and a Retry that walks into the same wall.
 - A link that no installed app can open now says so. The tap did nothing and said nothing, which reads as a broken link rather than a missing app.
+- Activating a key on the extra key row through a screen reader now types it. Every key offered activation and none of them did anything.
 - Dragging a finger inside an application menu now scrolls it instead of closing the submenu. A menu that cannot scroll still reported scrolling, and the submenu closed on it.
 - Tapping the editor now raises the keyboard, and what it types now arrives. The app never took Android input focus for its view, so keyboard input was silently discarded.
 - Brackets, quotes and other symbols on the extra key row now type into the editor. On recent WebViews they inserted nothing at all.

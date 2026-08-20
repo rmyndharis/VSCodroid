@@ -11,9 +11,12 @@ sealed class KeyItem {
         val alternates: List<AlternateKey> = emptyList()
     ) : KeyItem()
 
-    data class GesturePad(
-        val contentDescription: String = "Arrow key trackpad"
-    ) : KeyItem()
+    // No contentDescription here, deliberately. It used to carry one and
+    // nothing ever read it: KeyPageAdapter applies item.contentDescription in
+    // the Button branch only, so the description actually spoken is the one
+    // GestureTrackpad sets on itself. A field that looks like the place to
+    // change the label, and silently is not, is worse than no field.
+    data object GesturePad : KeyItem()
 }
 
 data class KeyPage(val items: List<KeyItem>)
@@ -27,7 +30,7 @@ object KeyPages {
             KeyItem.Button("Ctrl", "Ctrl", isToggle = true, contentDescription = "Control modifier"),
             KeyItem.Button("Alt", "Alt", isToggle = true, contentDescription = "Alt modifier"),
             KeyItem.Button("Shift", "Shift", isToggle = true, contentDescription = "Shift modifier"),
-            KeyItem.GesturePad(),
+            KeyItem.GesturePad,
             KeyItem.Button("{}", "{", contentDescription = "Curly braces",
                 alternates = listOf(AlternateKey("[", "["), AlternateKey("<", "<"))),
             KeyItem.Button("()", "(", contentDescription = "Parentheses",
