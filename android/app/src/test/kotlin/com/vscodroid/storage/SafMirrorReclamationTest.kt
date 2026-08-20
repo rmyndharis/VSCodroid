@@ -9,8 +9,10 @@ import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -195,23 +197,58 @@ class SafMirrorReclamationTest {
      * promises no order: ext4 and APFS disagree, which is how this shipped green on one
      * and red on the other. With the record visited first it was deleted, and the
      * directory behind it was then judged with its record already gone, answered
-     * "nothing vouches for this", and was kept.
+     * "nothing vouches for this", and was kept -- leaving a mixed state the pass can
+     * never reach again, because the evidence that would license the delete is what the
+     * delete removed.
      *
-     * Driven by asking the pass twice with the record removed in between, which is the
-     * state that ordering produces, rather than by trying to control `listFiles()`.
+     * Asserted as **one verdict per mirror**, not as an outcome, and that is deliberate.
+     * The outcome depends on the order `listFiles()` happens to return, so an
+     * outcome-only test passes on the filesystem whose order is favourable and says
+     * nothing on the other. This repository's own history is exactly that. Counting the
+     * calls is the property the memo actually provides and is the same on every
+     * filesystem: two entries, one question.
+     *
+     * The previous version of this test was named for the reclaim and asserted the
+     * keep, drove the pass once while its prose described twice, and deleted the record
+     * before the pass so the two-entries-present state it exists for never arose. It
+     * duplicated `a mirror with no record at all is kept`, which is the case it was
+     * really testing.
      */
     @Test
-    fun `a mirror is still reclaimed when its record is gone`() {
+    fun `one mirror is one verdict, however its two entries are ordered`() {
+        // The fixture is built first, on purpose. `mirrorFor` validates the record it
+        // writes by asking the engine to accept it, so arming the constructor mock
+        // before this point counts those calls too and "exactly one" then fails against
+        // a correct implementation. Measured: six engine calls land before the pass
+        // begins.
         val (staleDir, staleRecord) = mirrorFor(revokedUri)
         mirrorFor(liveUri)
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
-        check(staleRecord.delete()) { "could not remove the record for the fixture" }
-        manager.reclaimRevokedMirrorsSync()
+        // The fixture's own control: both entries have to be there, or "one call" is
+        // just the one entry that existed.
+        assertTrue(staleDir.isDirectory, "fixture did not create the mirror directory")
+        assertTrue(staleRecord.isFile, "fixture did not create the mirror's record")
 
-        assertTrue(
-            staleDir.isDirectory,
-            "with no record at all the mirror cannot be vouched for, so it has to be kept",
+        mockkConstructor(SafSyncEngine::class)
+        // callOriginal, so the pass still behaves; only the count is observed. A stub
+        // returning a constant would decide the outcome and prove nothing about it.
+        every { anyConstructed<SafSyncEngine>().holdsOnlyVouchedCopies(any()) } answers { callOriginal() }
+
+        // Built after the constructor is armed, or this manager's engine predates it.
+        val watched = SafStorageManager(context)
+
+        watched.reclaimRevokedMirrorsSync()
+
+        verify(exactly = 1) { anyConstructed<SafSyncEngine>().holdsOnlyVouchedCopies(staleDir) }
+
+        // And the consequence, which is what the count is for: the pair moved together.
+        // The state this refuses is the mixed one, so both are named.
+        assertFalse(
+            staleDir.exists() || staleRecord.exists(),
+            "the mirror and its record did not go together: dir=${staleDir.exists()} " +
+                "record=${staleRecord.exists()}. A directory left behind with its record " +
+                "deleted can never be reclaimed again.",
         )
     }
 

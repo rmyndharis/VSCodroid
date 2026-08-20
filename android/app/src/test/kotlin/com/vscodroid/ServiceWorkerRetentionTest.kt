@@ -160,6 +160,12 @@ class ServiceWorkerRetentionTest {
             "filesDir.absolutePath" to "a member inherited from Context",
             "folderSupplier" to "a supplier hoisted into a local first",
             "self.get()?.openWorkspaceFolder ?: fallbackFolder()" to "a weak read plus a capture",
+            "self.get()?.resolveFolder(openWorkspaceFolder)" to
+                "a weak read whose ARGUMENT is an unqualified member, which captures " +
+                "the Activity just as completely. The first version of readsWeakly " +
+                "allowed anything inside the parentheses and accepted this",
+            "self.get()?.resolveFolder(recreateWebView())" to
+                "the same, with a member function rather than a property",
         ).forEach { (body, why) ->
             assertTrue(!readsWeakly(body), "`$body` was accepted, but it captures: $why")
         }
@@ -209,8 +215,23 @@ class ServiceWorkerRetentionTest {
     private companion object {
         const val CALL = "setupServiceWorkerInterception("
 
-        /** Whether a lambda body is a read through `self` and nothing else. */
+        /**
+         * Whether a lambda body is a read through `self` and nothing else.
+         *
+         * A chain of member reads and NO-ARGUMENT calls. The argument list is the part
+         * worth spelling out, because the first version of this allowed one: its
+         * character class held `(`, `)` and letters, so everything between a call's
+         * parentheses was unconstrained and `self.get()?.f(recreateWebView())` matched.
+         * That body reads through the weak reference and still captures the Activity,
+         * through the unqualified call it passes as an argument, which is the exact
+         * shape the control list below refuses everywhere else.
+         *
+         * Nothing legitimate is lost. Both real suppliers are plain chains, and a
+         * supplier that genuinely needs an argument needs something from the Activity
+         * to build it, which is the case worth stopping at rather than widening for.
+         */
         fun readsWeakly(body: String): Boolean =
-            Regex("""^self\.get\(\)\?\.[A-Za-z0-9_.?()]*$""").matches(body.trim())
+            Regex("""^self\.get\(\)(\?\.|\.)[A-Za-z0-9_]+(\(\))?((\?\.|\.)[A-Za-z0-9_]+(\(\))?)*$""")
+                .matches(body.trim())
     }
 }

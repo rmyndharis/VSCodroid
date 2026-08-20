@@ -118,24 +118,56 @@ class SafWriteBackFilterTest {
 
     // ── the two filters, side by side ────────────────────────────────────
 
-    @ParameterizedTest(name = "agree on: {0}")
-    @ValueSource(
-        strings = ["node_modules", ".git", "__pycache__", ".gradle", ".idea", "venv", ".env",
-            "src", "build", ".vscode", "lib", "docs"]
-    )
-    fun `both filters reach the same verdict on a top-level entry`(name: String) {
-        // The two rules are one rule seen from either side. Stated as an equality so
-        // that changing SKIP_DIRECTORIES moves both together or fails here: a name
-        // added to the set that the write-back still allows means edits pushed to a
-        // device folder the mirror does not have, and a name removed that the
-        // write-back still blocks is the .vscode defect again under another name.
-        for (isDir in listOf(true, false)) {
-            assertEquals(
-                !SafSyncEngine.shouldSkip(name, isDir),
-                SafSyncEngine.shouldWriteBack(name, isDir),
-                "'$name' (isDir=$isDir) is filtered on one side only"
+    /**
+     * The write-back filter answers to [SafSyncEngine.SKIP_DIRECTORIES] itself.
+     *
+     * This used to assert `!shouldSkip(name, isDir) == shouldWriteBack(name, isDir)`,
+     * which cannot fail: for a single-segment, non-machine-temporary path
+     * `shouldWriteBack` **is** `!shouldSkip`, so the equality restates the
+     * implementation. A test that cannot go red is worse than no test, because its
+     * comment claimed it would catch a name added to the set that the write-back still
+     * allows, and someone reading the list of green tests would believe that.
+     *
+     * Asked of the data instead. The set is the single source of what the walk keeps
+     * out of the mirror, so reading it here is what would catch `shouldWriteBack` being
+     * reimplemented against a second, drifting list of its own, which is the shape the
+     * `.vscode` defect took: two filters, one of them written out by hand.
+     */
+    @Test
+    fun `every skipped directory is refused by the write-back filter`() {
+        val skipped = SafSyncEngine.SKIP_DIRECTORIES
+        // The set is the fixture, so an empty one would make the loop vacuous and the
+        // whole file agreeable.
+        assertTrue(skipped.size >= 5, "SKIP_DIRECTORIES has ${skipped.size} entries; too few to mean anything")
+
+        skipped.forEach { name ->
+            assertFalse(
+                SafSyncEngine.shouldWriteBack(name, isDirectory = true),
+                "'$name' is in SKIP_DIRECTORIES, so it was never mirrored in and there " +
+                    "is nothing on the device for a write-back to update",
+            )
+            assertFalse(
+                SafSyncEngine.shouldWriteBack("$name/child.txt", isDirectory = false),
+                "'$name/child.txt' lives under a skipped directory, so the walk never " +
+                    "copied it in",
             )
         }
+    }
+
+    @ParameterizedTest(name = "written back: {0}")
+    @ValueSource(strings = ["src", "build", ".vscode", "lib", "docs", "app"])
+    fun `a directory the walk mirrors in is written back`(name: String) {
+        // The other direction, and the one the `.vscode` defect was. Named literals
+        // rather than "everything not in the set", because the interesting cases are
+        // the dot-directories the walk deliberately does NOT skip.
+        assertFalse(
+            name in SafSyncEngine.SKIP_DIRECTORIES,
+            "'$name' is in SKIP_DIRECTORIES, so this case is asserting the wrong thing",
+        )
+        assertTrue(
+            SafSyncEngine.shouldWriteBack(name, isDirectory = true),
+            "'$name' is mirrored in, so an edit under it has to reach the device",
+        )
     }
 
     /**

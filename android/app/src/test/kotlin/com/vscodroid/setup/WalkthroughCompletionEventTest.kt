@@ -81,7 +81,7 @@ class WalkthroughCompletionEventTest {
                     val step = steps.getJSONObject(s)
                     val events = step.optJSONArray("completionEvents")
                     found += Step(
-                        where = "${manifest.parentFile.name} step '${step.optString("id", "?")}'",
+                        where = "${manifest.parentFile?.name} step '${step.optString("id", "?")}'",
                         commandLinks = COMMAND_LINK
                             .findAll(step.optString("description", ""))
                             .map { it.groupValues[1] }
