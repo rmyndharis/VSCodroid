@@ -777,14 +777,20 @@ class VSCodroidWebViewClient(
          * answers 403 and the asset silently fails to load.
          *
          * Deliberately not folded into proxyToLocalhost(), despite the name of
-         * that function: one of its callers proxies http/https resources to
-         * whatever host an extension's webview references, and putting the token
-         * there would hand our credential to that host.
+         * that function, and the reason is now a historical one rather than a
+         * present hazard. `proxyToLocalhost` has exactly one caller today, the
+         * CDN rewrite, which always names 127.0.0.1 and always comes through
+         * here. It used to have three: one proxied http/https resources to
+         * whatever host an extension's webview referenced, where the token would
+         * have been handed to that host, and one appended the token to a
+         * page-controlled path against our own server. Both are gone.
          *
-         * The reason that separation is load-bearing rather than tidy: a third
-         * caller once did append the token to a page-controlled path, which is
-         * the defect removed from interceptResourceRequest. Keeping the token an
-         * explicit step is what makes such a call visible in a diff.
+         * ⚠️ Do not read "one caller, always local" as licence to fold the token
+         * into `proxyToLocalhost`. The separation is what made both of those
+         * callers visible as defects, and a token applied inside the proxy is
+         * applied to whatever a future caller passes, silently. Keeping it an
+         * explicit step at the call site is the property worth having, not the
+         * current caller count.
          */
         private fun withToken(url: String, token: String?): String {
             if (token.isNullOrEmpty()) return url

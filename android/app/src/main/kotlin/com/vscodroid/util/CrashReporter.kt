@@ -193,7 +193,16 @@ object CrashReporter {
  * "no crashes".
  *
  * `Thread.getId()` has been there since API 1 and is not deprecated in the
- * android-36 stub, so this needs no suppression and no desugaring.
+ * android-36 stub, so this needs no suppression and no desugaring. Verified by
+ * dumping `java/lang/Thread.class` out of `platforms/android-36/android.jar`:
+ * `getId()` carries no deprecation attribute, and `threadId()` is absent from
+ * the android-33 jar entirely.
+ *
+ * ⚠️ The Kotlin compiler warns here anyway, "'val id: Long' is deprecated.
+ * Deprecated in Java", and that warning is about the JDK's own `Thread`, not
+ * about the platform this ships against. Do not silence it by switching to
+ * `threadId()`. That is the exact call this function exists to avoid, and the
+ * paragraph above is what it costs on 33, 34 and 35.
  */
 internal fun threadIdentity(thread: Thread): String =
     "Thread: ${thread.name} (id=${thread.id})"

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
+- Kotlin now comes from the Android Gradle plugin rather than a separate plugin, so the compiler is 2.2.10 and the version catalog no longer names one.
+- 97 unused Material and AndroidX resources no longer ship: the date and time pickers, the navigation drawer, fragment transitions and the legacy notification templates.
+- The three deprecated edge-to-edge APIs Play reports are gone. Edge-to-edge, bar icons, cutout and bar contrast are now set by theme attributes instead.
+
 ### Fixed
 
 - First-run setup now shows progress while it extracts the editor, instead of holding at 5% for minutes and looking like it has hung.
@@ -16,26 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On a device folder whose provider reports no modification time, a file you edited starts receiving device changes again once both sides hold the same content.
 - Toolchain downloads now come from the release matching the installed app, instead of whichever is newest. A newer release can retire a payload an older app still offers.
 - Closing the editor or swiping the app away no longer keeps the destroyed screen and its view tree in memory until the app is next opened.
+- A toolchain install started from Play no longer keeps that screen in memory for as long as the download runs.
+- A toolchain Play finished downloading after its screen closed is now installed on the next launch, instead of being paid for and never appearing.
+- Refusing a toolchain install for lack of space now hands Play's copy back, instead of leaving it on the device that just ran out.
+- A toolchain whose release publishes no checksum for it now says so, instead of reporting a connection problem that retrying cannot fix.
+- The navigation and status bars are transparent again on Android 13 and 14, instead of picking up a system scrim behind them.
+- On a device provider that reports no modification time, reopening a folder no longer replaces edits made in the editor. It refreshes only files identical to the last sync.
+- Reopening a device folder now writes back an edit the watcher never carried out, instead of leaving it in the app forever.
+- A save that cannot reach the device folder now says so, once per burst, instead of failing silently and looking like a save that worked.
+- A device folder's local copy is no longer deleted when it falls off the recent list. Anything written there but never sent, a cloned repository included, was the only copy.
 
 ### Security
 
 - Content rendered in the editor can no longer read workspace files across origins. Served files are readable by anyone, and a page in the built-in browser could fetch one.
 - A webview can no longer name an arbitrary file and have the app read it with the editor's own credential. The route that did was reachable but unused.
 - The editor can no longer make the app fetch an arbitrary web address on its behalf. The route reached any host, including addresses only this device can see.
-
-### Fixed
-
-- On a device provider that reports no modification time, reopening a folder no longer replaces edits made in the editor. It refreshes only files still identical to what the last sync wrote.
-- Reopening a device folder now writes back an edit the watcher never carried out, instead of leaving it in the app forever.
-- A save that cannot reach the device folder now says so, once per burst, instead of failing silently and looking like a save that worked.
-- A device folder's local copy is no longer deleted when it falls off the recent list. Anything written there that never reached the device, a cloned repository included, was the only copy.
-
-### Changed
-
-- The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
-- Kotlin now comes from the Android Gradle plugin rather than a separate plugin, so the compiler is 2.2.10 and the version catalog no longer names one.
-- 97 unused Material and AndroidX resources no longer ship: the date and time pickers, the navigation drawer, fragment transitions and the legacy notification templates.
-- The three deprecated edge-to-edge APIs Play reports are gone from the app. Edge-to-edge, light bar icons and the display cutout are now set directly rather than through a library call that carried them.
 
 ## [1.1.0] - 2026-08-19
 
