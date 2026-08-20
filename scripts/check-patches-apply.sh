@@ -72,16 +72,25 @@ if [ "$TAG" = "$PINNED" ]; then
     exit 0
 fi
 
-SRC=$(mktemp -d)
+# Every step below is guarded with `fail`, which exits 2, and that is the whole
+# point of guarding them. Left bare, `set -e` ends the script with the failing
+# command's own status, which for git and mktemp is 1, and 1 is the code this
+# file's header assigns to "a patch failed". A runner out of temp space, or with
+# no network to reach github.com, would then report the one thing it had proved
+# nothing about: that the Android adaptations no longer apply upstream. The
+# distinction is the reason the workflow can be read at a glance, and it is worth
+# nothing if only some of the ways to fail respect it.
+SRC=$(mktemp -d) || fail "could not create a work directory"
 trap 'rm -rf "$SRC"' EXIT
 
 echo
 echo "Fetching $TAG (shallow)"
-git -C "$SRC" init -q
-git -C "$SRC" remote add origin "$UPSTREAM"
+git -C "$SRC" init -q || fail "could not init a git repository in $SRC"
+git -C "$SRC" remote add origin "$UPSTREAM" || fail "could not add the upstream remote"
 git -C "$SRC" fetch -q --depth 1 origin "refs/tags/$TAG" || fail "could not fetch tag $TAG"
-git -C "$SRC" checkout -q FETCH_HEAD
-echo "  HEAD    : $(git -C "$SRC" rev-parse --short HEAD)"
+git -C "$SRC" checkout -q FETCH_HEAD || fail "could not check out $TAG"
+head=$(git -C "$SRC" rev-parse --short HEAD) || fail "could not resolve the fetched commit"
+echo "  HEAD    : $head"
 
 echo
 echo "Applying"

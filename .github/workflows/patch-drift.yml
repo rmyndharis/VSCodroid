@@ -40,8 +40,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: patch-drift-${{ github.ref }}
-  cancel-in-progress: true
+  group: patch-drift-${{ github.event_name }}-${{ github.ref }}
+  # Both triggers resolve to the default branch ref, so keying on the ref alone
+  # put the weekly run and a manual dispatch in one group with cancellation on:
+  # asking for an answer by hand cancelled the scheduled run mid-fetch, and that
+  # week recorded a cancellation instead of a verdict. The same shape and the same
+  # reasoning as r8.yml, which has the same pair of triggers.
+  #
+  # Nothing here is worth cancelling: there is no pull_request trigger, and the
+  # job is a 20-minute clone-and-apply whose result is the point.
+  cancel-in-progress: false
 
 jobs:
   apply:
@@ -59,7 +67,8 @@ jobs:
         # after the splice and so cannot be what protects this.
         env:
           INPUT_TAG: ${{ inputs.tag }}
-        #  prefix to match every other workflow here, and not only for
+        # A `bash ` prefix, to match every other workflow here, and not only for
         # consistency: check-build-steps.py recognises a shell script CI runs by
-        # that exact form, so a bare invocation is invisible to it.
+        # that exact form, so a bare `scripts/...` invocation is invisible to it
+        # and the script would count as one CI never runs.
         run: bash scripts/check-patches-apply.sh "$INPUT_TAG"

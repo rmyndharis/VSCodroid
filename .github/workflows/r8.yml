@@ -42,6 +42,13 @@ on:
       - "android/app/proguard-rules.pro"
       - "android/gradle/libs.versions.toml"
       - "android/gradle.properties"
+      # The Gradle distribution is part of the configuration, not a detail below
+      # it: AGP declares a minimum Gradle and refuses to apply on an older one,
+      # so a wrapper bump and an AGP bump are one change that can arrive as two
+      # files. Without this line a pull request moving only the wrapper skipped
+      # the one job that compiles a release build, and the pairing was checked
+      # for the first time at tag time.
+      - "android/gradle/wrapper/gradle-wrapper.properties"
       - ".github/workflows/r8.yml"
 
 concurrency:
