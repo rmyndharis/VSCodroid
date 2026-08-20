@@ -44,7 +44,7 @@ through setters the platform had already turned into no-ops.
 
 ## What replaced it
 
-`util/ViewInsets.drawBehindSystemBars()`, plus three attributes in
+`util/ViewInsets.drawBehindSystemBars()`, plus five attributes in
 `values/themes.xml`. Each piece maps to something the old call did:
 
 | `enableEdgeToEdge()` did | Now |
@@ -53,12 +53,26 @@ through setters the platform had already turned into no-ops.
 | pin light system bar icons | `WindowInsetsControllerCompat.isAppearanceLight*Bars = false` |
 | set both bars transparent | `android:statusBarColor` / `android:navigationBarColor` in the theme |
 | set the cutout mode | `android:windowLayoutInDisplayCutoutMode` in the theme |
+| stop the platform enforcing bar contrast | `android:enforceStatusBarContrast` / `android:enforceNavigationBarContrast` in the theme |
 
-The bar colours and the cutout mode move to attributes rather than disappearing,
-and that is the point: Play's scan reads bytecode, and an attribute is not a
-method call. It is also honest about scope, because API 35+ ignores all three
-attributes and paints the bars from the window background anyway. They decide
-API 33 and 34 and nothing else.
+The last row was missing when this migration first landed, and its absence was
+the one behaviour change the move actually caused. `EdgeToEdgeApi29.setUp` calls
+`setStatusBarContrastEnforced(false)` and
+`setNavigationBarContrastEnforced(nightMode == 0)`, and every call site passed
+`SystemBarStyle.dark()`, so both arrived false. The platform defaults are not
+symmetric: `PhoneWindow.generateLayout` defaults the status one to false and the
+navigation one to **true**, so omitting them put a scrim behind the navigation
+bar the theme had just made transparent.
+
+The bar colours, the cutout mode and the contrast flags move to attributes rather
+than disappearing, and that is the point: Play's scan reads bytecode, and an
+attribute is not a method call.
+
+Their scope is not uniform, and an earlier version of this section flattened it.
+API 35+ ignores the two bar COLOURS and paints from the window background, and it
+forces the cutout mode, so those three decide API 33 and 34 and nothing else. It
+does **not** ignore `enforceNavigationBarContrast`, which still decides whether a
+scrim is drawn behind a 3-button navigation bar on a current image.
 
 `setDecorFitsSystemWindows` stays in the bundle and that is fine. It is not one
 of the three Play named, and Play Core's asset pack code puts it there

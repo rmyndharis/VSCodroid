@@ -72,9 +72,10 @@ fun View.padForSystemBars(basePx: Int = 0) {
  *    `setStatusBarContrastEnforced(false)` unconditionally and
  *    `setNavigationBarContrastEnforced(nightMode == 0)`, and every call site
  *    passed `SystemBarStyle.dark()`, whose nightMode is `MODE_NIGHT_YES`, so
- *    both arrived as false. Both platform defaults are **true**, so omitting
- *    them let the system paint a scrim behind the bars the theme had just made
- *    transparent.
+ *    both arrived as false. The defaults differ, and calling them both true was
+ *    wrong: `PhoneWindow.generateLayout` defaults `enforceStatusBarContrast` to
+ *    false and `enforceNavigationBarContrast` to **true**, so the omission cost
+ *    the navigation bar a scrim and the status line restates the default.
  *
  * What is kept is the part the call sites actually needed: light icons pinned
  * regardless of the device theme. This app is always dark and has no

@@ -38,14 +38,17 @@ import java.io.File
  *
  * **The reference is the defect, not the registration**, and that distinction is
  * why this file asserts what it does. Releasing the registration at teardown
- * looks like the obvious fix and is worse than the leak: `installFromDirectory`
- * is reachable only from `handleStateUpdate`'s COMPLETED branch, nothing
- * reconciles pack state at launch (`getPackStates` appears nowhere in main), and
- * Play Core does not promise to re-emit a state to a listener that registers
- * afterwards. Unregistering mid-download would leave the pack downloaded and
- * never installed, with no error anywhere the user could see. Such a call would
- * also have had to survive `recreateWebView()`, which builds a second bridge
- * after a renderer crash and would orphan the first one's registration.
+ * looks like the obvious fix and is worse than the leak: the COMPLETED branch of
+ * `handleStateUpdate` is what finishes an install, and Play Core does not promise
+ * to re-emit a state to a listener that registers afterwards.
+ * Unregistering mid-download would therefore leave the pack downloaded and never
+ * installed, with no error anywhere the user could see. Such a call would also
+ * have had to survive `recreateWebView()`, which builds a second bridge after a
+ * renderer crash and would orphan the first one's registration.
+ *
+ * `ToolchainManager.reconcileDeliveredPacks` now repairs such a pack at the NEXT
+ * launch, so the loss is bounded rather than permanent. It does not rescue the
+ * download in flight, which is why the registration still stays.
  *
  * So the assertion is about the Context handed over, which is what decides
  * retention, and it is made at the call Play Core actually receives rather than

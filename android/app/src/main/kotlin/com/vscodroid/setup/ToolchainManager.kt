@@ -84,6 +84,14 @@ class ToolchainManager(private val context: Context) {
      * same. Counting them here would only rot; the compiler does the counting.
      */
     private fun fail(packName: String, why: ToolchainFailure) {
+        // Logged before the callback, and unconditionally, because the callback is
+        // optional and this used to be the whole method. A manager built without an
+        // `onStateChange` reported its failures into a null and left nothing at all,
+        // not even a line: `reconcileDeliveredPacks` runs on exactly such an instance
+        // at launch, so a manifest it could not read or a state file it could not
+        // write vanished without trace. Every screen that installs does set the
+        // callback, which is why this was invisible.
+        Logger.e(tag, "Toolchain $packName failed: $why")
         onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why)
     }
 
@@ -291,6 +299,15 @@ class ToolchainManager(private val context: Context) {
         // cancelling it must not reach a download that is running for another.
         httpDownloads[info.packName]?.cancelled = true
         assetPackManager.cancel(listOf(info.packName))
+        // Play's cancel is a request to the download service and does nothing to a
+        // pack it has already finished delivering, so without this a cancel could
+        // leave a complete pack sitting in `filesDir/assetpacks`. That was merely
+        // wasted disk until [reconcileDeliveredPacks] existed; now it is a delivered
+        // pack that the next launch would find and install, which is the opposite of
+        // what the user just asked for. Releasing it here is what makes "cancelled"
+        // and "not delivered" the same state, which is the only reading of Play's
+        // records that reconcile can make.
+        releasePack(info.packName)
         Logger.i(tag, "Cancelled download of ${info.packName}")
     }
 
@@ -551,12 +568,23 @@ class ToolchainManager(private val context: Context) {
                         "${available / 1_000_000} MB available, " +
                         "${required / 1_000_000} MB required",
                 )
-                // Before the return, and that ordering is the fix. This branch fires
-                // only when the device is out of room, and it used to be the one path
-                // that skipped the release, so the delivered pack stayed on the device
-                // that had just reported having no space for it. Play's copy is of no
-                // use now: the install did not happen and a retry fetches again.
-                releasePack(packName)
+                // Play's copy is deliberately KEPT here, and an earlier version of
+                // this branch released it on the reasoning that a refused install has
+                // no use for it. That reasoning was wrong twice over.
+                //
+                // Play delivers into `filesDir/assetpacks`, verified from
+                // asset-delivery 2.2.2's bytecode: `bh` builds
+                // `new File(context.getFilesDir(), "assetpacks")`. So the pack sits on
+                // the very filesystem `StatFs(filesDir)` above just measured. Deleting
+                // it frees `unpacked` bytes and the retry re-downloads and re-extracts
+                // `unpacked` bytes into the same directory, arriving back at the free
+                // space that failed the gate. The delete buys the next attempt nothing
+                // and charges it a full download, 55 MB for Java 17.
+                //
+                // Keeping it is also what makes the repair work. The user frees space,
+                // and the next launch's [reconcileDeliveredPacks] finds this same
+                // delivered pack still in place and installs it with no download at
+                // all. Releasing it here would remove the one thing that path needs.
                 fail(packName, ToolchainFailure.STORAGE)
                 return
             }
@@ -568,8 +596,9 @@ class ToolchainManager(private val context: Context) {
     /**
      * Finishes any Play delivery that completed while nothing was listening for it.
      *
-     * `installFromDirectory` is reachable only from the COMPLETED callback, and that
-     * callback only arrives while a listener is registered. Both screens that install
+     * Until this existed, `installFromDirectory` was reachable only from the
+     * COMPLETED callback, and that callback only arrives while a listener is
+     * registered. This is the second route, and the one that needs no listener. Both screens that install
      * toolchains drop their registration at teardown -- `ToolchainActivity.onStop` and
      * `SplashActivity.onDestroy` -- so backgrounding the app mid-download left the pack
      * downloaded, paid for, and never installed. Nothing retried it: the picker reads
@@ -587,11 +616,18 @@ class ToolchainManager(private val context: Context) {
      * meaning rather than a cheap no.
      */
     fun reconcileDeliveredPacks() {
-        if (shouldUseHttpFallback()) return
         ioExecutor.execute {
+            // Inside the executor, not before it. `shouldUseHttpFallback` asks the
+            // package manager who installed this app, which is a synchronous binder
+            // call, and the one caller is `SplashActivity.onCreate` on the main
+            // thread. Every other launch repair hands its work off for the same
+            // reason; this one used to do its first piece of work before it did.
+            if (shouldUseHttpFallback()) return@execute
             try {
-                // Read once, ahead of the loop: `installFromDirectory` rewrites the
-                // state, and re-reading per pack would let one install hide the next.
+                // Read once, and nothing in the loop invalidates it: each pack is
+                // visited at most once, so an install performed here can only affect
+                // an entry already passed. Re-reading per pack would be equally
+                // correct and would cost a file parse per toolchain.
                 val installed = getInstalledToolchains()
                 ToolchainRegistry.available.forEach { info ->
                     if (info.packName.removePrefix("toolchain_") in installed) return@forEach
@@ -1873,12 +1909,23 @@ internal fun packUnpackedBytes(packName: String): Long? =
 /**
  * What a Play Asset Delivery install needs free, given its unpacked size.
  *
- * One tree rather than two, and the difference is where the first copy already
- * sits. Play writes the pack outside `filesDir` before this app is told about
- * it, so the only allocation the install makes is the copy into `usr/`, and
- * `removePack` frees Play's copy afterwards. Charging for both would refuse
- * devices for room they never need at once, which is the mistake the HTTP
- * figure above was corrected for in the other direction.
+ * One tree rather than two, because by the time this is asked the first copy is
+ * already written and already counted. The figure is right; the reason given for
+ * it was not, and the wrong reason is worth naming because a later change rested
+ * on it.
+ *
+ * ⚠️ Play does NOT write the pack outside `filesDir`, which this used to claim.
+ * Verified from asset-delivery 2.2.2's bytecode: `bh` builds
+ * `new File(context.getFilesDir(), "assetpacks")`. The delivered tree therefore
+ * sits on exactly the filesystem `StatFs(context.filesDir)` measures, and it is
+ * already occupying space when the caller takes that reading. So the only NEW
+ * allocation the install makes is the copy into `usr/`, which is what this
+ * charges for; peak usage is two trees, and `removePack` frees Play's afterwards.
+ *
+ * The consequence that matters is elsewhere: deleting Play's copy when an install
+ * is refused for space does not improve the next attempt, because the retry
+ * re-extracts the same bytes into the same place. See the refusal branch in
+ * [ToolchainManager.installDeliveredPack], which keeps it for that reason.
  */
 internal fun packInstallBytes(unpackedBytes: Long): Long =
     unpackedBytes + SPACE_BUFFER

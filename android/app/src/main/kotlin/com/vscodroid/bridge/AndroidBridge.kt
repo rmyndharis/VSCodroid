@@ -222,6 +222,44 @@ object AuthTabWindow {
     fun armedReadings(): List<Long> = launches.values.toList()
 }
 
+/**
+ * The `AndroidBridge` object the workbench sees, one `@JavascriptInterface` method
+ * per call an extension may make.
+ *
+ * ⚠️ **Several methods have no PRODUCTION caller, and that is not dead code.**
+ * A sweep for unused declarations flags `minimizeApp`, `getDeviceInfo`, `getThemeMode`,
+ * `logToNative` and `cancelToolchainInstall`, because their callers are extensions
+ * nobody here wrote. Read that as "nothing in `main` calls them", not as "nothing calls
+ * them": some are exercised by tests, `logToNative` among them. Three things make
+ * removing one a breaking change rather than a cleanup, and all three were checked
+ * before this note was written:
+ *
+ *  1. Every one is published in `docs/05-API_SPEC.md`, which is what an extension
+ *     author writes against, and `check-bridge-api-spec.py` holds the bridge and that
+ *     document to each other in BOTH directions. A method deleted here fails the gate
+ *     until the spec drops it too, which is the gate correctly refusing a silent API
+ *     break.
+ *  2. `proguard-rules.pro` keeps every `@JavascriptInterface` member, so all of them
+ *     ship live and callable in the release build. "Not called here" and "not callable"
+ *     are different facts.
+ *  3. Two of them are load-bearing for code that is NOT obviously related.
+ *     `getDeviceInfo` is the only caller of the private `getVersionName()`, so removing
+ *     it strands a second declaration. `minimizeApp` is the only consumer of the
+ *     `onMinimize` constructor parameter, which every test that builds a bridge has to
+ *     pass; note that minimise-on-back does not depend on it, since `MainActivity`
+ *     calls `moveTaskToBack(true)` natively.
+ *
+ * Retiring one is therefore a deliberate API decision: drop the spec row in the same
+ * change, and expect the cascade above. It is not something a dead-code pass should do.
+ *
+ * Keeping them costs little. Every method validates the session token first, so the
+ * surface is bounded by whoever holds it, which is the workbench itself.
+ *
+ * One caveat worth knowing before an extension trusts it: `getThemeMode` reports the
+ * DEVICE's night mode, not the editor's theme. This app is always dark and ships no
+ * `values-night`, so on a device in light mode it answers "light" for an editor that
+ * is not.
+ */
 class AndroidBridge(
     private val context: Context,
     private val security: SecurityManager,
@@ -602,12 +640,16 @@ class AndroidBridge(
         // from reaches none of them.
         //
         // Releasing the registration at teardown instead would be worse than the
-        // leak. `installFromDirectory` is reachable only from
-        // `handleStateUpdate`'s COMPLETED branch, so the listener is what
-        // finishes an install; nothing reconciles pack state at launch, and
-        // Play Core does not promise to re-emit a state to a listener that
-        // registers afterwards. Dropping it mid-download would leave the pack
-        // downloaded and never installed, with no error anywhere.
+        // leak. The COMPLETED branch of `handleStateUpdate` is what finishes an
+        // install, and Play Core does not promise to re-emit a state to a listener
+        // that registers afterwards, so dropping it mid-download leaves the pack
+        // downloaded and never installed.
+        //
+        // That used to be unrecoverable, and this said so. It no longer is:
+        // `ToolchainManager.reconcileDeliveredPacks` runs at launch and installs a
+        // pack Play has already delivered, without needing any listener. The
+        // registration is still not the thing to drop, because reconcile repairs
+        // the next launch rather than this download, but the loss is now bounded.
         //
         // So the references go, not the registration. `ToolchainManager` reads
         // only `filesDir`, `cacheDir`, `assets`, `packageManager` and
@@ -654,6 +696,19 @@ class AndroidBridge(
                     AssetPackStatus.CANCELED -> manager.unregisterListener()
                     AssetPackStatus.REQUIRES_USER_CONFIRMATION ->
                         bridge.get()?.confirmLargeDownload(packName)
+                            // A literal, NOT the `tag` property. That property belongs
+                            // to AndroidBridge, so naming it here reads a member of the
+                            // very object this lambda must not hold, and the capture is
+                            // complete whether or not the read looks like one.
+                            // ToolchainManagerContextTest caught exactly that when this
+                            // line was first written with `tag`.
+                            ?: Logger.w(
+                                "AndroidBridge",
+                                "Pack $packName needs confirmation and the bridge that " +
+                                    "started it is gone, so nothing can show the dialog. " +
+                                    "The download waits until it is asked again from the " +
+                                    "toolchain screen.",
+                            )
                 }
             }
         }

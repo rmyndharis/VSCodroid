@@ -276,10 +276,14 @@ class LaunchRepairWiringTest {
     }
 
     /**
-     * The other direction, and the order with it. Without this, a fifteenth
-     * repair could be added inside the shared `try` this class exists to keep
-     * dismantled and every assertion above would still pass, because they name
-     * only the fourteen they know.
+     * The other direction, and the order with it. Without this, one more repair
+     * could be added inside the shared `try` this class exists to keep dismantled
+     * and every assertion above would still pass, because they name only the
+     * repairs they already know.
+     *
+     * Deliberately not phrased as a count. The prose here said "the fourteen" and
+     * went stale the moment a fifteenth was added, while the assertion below kept
+     * working because it compares the whole list rather than its length.
      *
      * Order is checked because the list above says "in call order" and because
      * one pair genuinely depends on it: `repairTruncatedSetupFiles` clears a
@@ -301,8 +305,8 @@ class LaunchRepairWiringTest {
     private companion object {
         /**
          * `repair("...") { <receiver>.<name>() }` and nothing else. The receiver
-         * is optional and may be a constructor call, which is how two of the
-         * fourteen are written.
+         * is optional and may be a constructor call, which is how the ones built
+         * on a fresh `ToolchainManager` or `SafStorageManager` are written.
          */
         val BARE_REPAIR_CALL =
             Regex("""^repair\("[^"]*"\)\s*\{\s*(?:[A-Za-z_]\w*(?:\([^()]*\))?\.)?([A-Za-z_]\w*)\(\)\s*}$""")

@@ -8,22 +8,25 @@ import java.io.File
 /**
  * The window attributes that replaced `androidx.activity.enableEdgeToEdge()`.
  *
- * [drawBehindSystemBars] sets two things from code and leaves the other four to
+ * [drawBehindSystemBars] sets two things from code and leaves the rest to
  * `values/themes.xml`, because Play's scan reads bytecode and an attribute is not a
  * call. That trade is what cleared the three deprecated APIs Play reported, and it
  * moves the cost here: a theme item has no compiler. Deleting one is a silent,
- * device-only regression, and one of the four was in fact missing when the migration
+ * device-only regression, and one of them was in fact missing when the migration
  * first landed.
  *
  * ⚠️ What this cannot see. It reads the XML, so it proves the attribute is written,
  * not that the platform honours it, and not that the value looks right on a screen.
- * The API 33 emulator is still the instrument for that, and
- * `docs/PLAY_EDGE_TO_EDGE.md` says so: API 35+ ignores every attribute checked here
- * and paints the bars from the window background, so a current image cannot see this
- * class of defect at all.
+ * The API 33 emulator is the instrument for that.
  *
- * Values are asserted, not just presence. `enforceNavigationBarContrast` defaulting
- * to `true` is exactly the state this exists to refuse, and an item naming `true`
+ * Not every attribute here is a pre-35 concern, and saying so loosely was wrong. API
+ * 35+ does ignore the two bar COLOURS and paints from the window background, and it
+ * forces the cutout mode. It does NOT ignore `enforceNavigationBarContrast`, which
+ * still decides whether the platform draws a scrim behind a 3-button navigation bar,
+ * so that one is worth looking at on a current image as well as on API 33.
+ *
+ * Values are asserted, not just presence. `enforceNavigationBarContrast` defaults to
+ * `true`, which is exactly the state this exists to refuse, and an item naming `true`
  * would satisfy a presence check while restoring the scrim.
  */
 class ThemeEdgeToEdgeTest {
@@ -69,8 +72,9 @@ class ThemeEdgeToEdgeTest {
             // `always`, which is what Api30 wrote and what API 35+ forces. Not
             // `shortEdges`: Api28 wrote that and minSdk 33 never reached it.
             "android:windowLayoutInDisplayCutoutMode" to "always",
-            // Both default to true. Leaving either out puts a platform scrim behind
-            // a bar the two colours above just made transparent.
+            // Only the navigation default is `true`; the status one is already
+            // `false`. Both are pinned so the pair stays visible as one decision, and
+            // so a later edit to `true` is refused rather than merely unnoticed.
             "android:enforceStatusBarContrast" to "false",
             "android:enforceNavigationBarContrast" to "false",
         ).forEach { (name, expected) ->

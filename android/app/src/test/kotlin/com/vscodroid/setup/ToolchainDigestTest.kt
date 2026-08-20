@@ -395,8 +395,10 @@ class LatestReleasePinningTest {
         //
         // The release variant has no unit test task to run this under: AGP builds
         // test components for `testBuildType` only, which is debug. So this runs
-        // against the debug value, "1.1.0-debug", and the suffix stripping is the
-        // half it can prove. The release value differs from it only by that suffix.
+        // against the debug value, which is the release versionName plus "-debug",
+        // and the suffix stripping is the half it can prove. The release value
+        // differs from it only by that suffix. Not quoted here: the literal went
+        // stale at the first version bump, while the property it describes did not.
         val tag = appReleaseTag(BuildConfig.VERSION_NAME)
 
         assertNotNull(

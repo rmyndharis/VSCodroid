@@ -176,9 +176,14 @@ class SafSyncEngine(private val context: Context) {
         // call, so the first ordinary file forced the read whether or not its provider
         // reported a time: the deferral the word promised never happened on any folder
         // with a file in it. The parameter is a function now, invoked only by the
-        // unknown-time branch, so a provider that reports times never reads the record
-        // and a large folder does not hold one string per mirrored file for a sync that
-        // will not look at any of them.
+        // unknown-time branch, so THIS read no longer happens for a provider that
+        // reports times, and a large folder does not hold one string per mirrored file
+        // through phase 2 for a sync that will not look at any of them.
+        //
+        // Note the scope carefully: it is this binding that is deferred, not the file.
+        // [reconcileDeletions] opens the same record again in phase 3 on every sync
+        // that enumerates anything, whatever the provider reports, so the saving is one
+        // parse and one live Set across phase 2, never "the record is not read".
         val previouslyRecorded: Set<String> by lazy {
             readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
                 .let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else emptySet() }
