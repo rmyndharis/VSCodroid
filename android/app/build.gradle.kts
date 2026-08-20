@@ -688,9 +688,13 @@ fun jniLibsHoldsRealBinary(): Boolean =
 // assets-cache hit restores jniLibs/arm64-v8a/ wholesale with every download step
 // skipped by `if: cache-hit != 'true'`, and a local `./gradlew assembleDebug`
 // after an old fetch never re-downloads anything. scripts/verify-android-elf.py
-// is also in neither CI cache key -- measured, 0 hits in both, against 1 for
-// verify-server-tree.py -- so tightening the checker does not invalidate a cached
-// binary that only ever passed the looser version of it.
+// is hashed into three CI cache keys: build.yml's `downloads-` and `assets-`,
+// and release.yml's `downloads-`. verify-server-tree.py is in the same three,
+// so the contrast this comment used to draw between them does not exist.
+// Tightening the checker therefore changes all three keys, the caches miss,
+// and every binary is fetched and examined again by the stricter version
+// rather than staying behind on the looser one. Re-measure with:
+//     grep -c 'verify-android-elf.py' .github/workflows/*.yml
 //
 // What that costs when it goes wrong is the quietest failure this project has:
 // a mis-built ripgrep installs perfectly and makes Search return no results,

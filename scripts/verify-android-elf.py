@@ -188,9 +188,12 @@ def main() -> int:
     # actually ships, and it exists because per-file checking left a gap: every
     # download script checks the binary it just installed, so a binary restored
     # from a build cache, or left by an earlier fetch, used to go unexamined from
-    # then on. This checker is also in neither CI cache key -- 0 hits in both,
-    # against 1 for verify-server-tree.py -- so tightening it does not by itself
-    # cause a cached binary to be looked at again.
+    # then on. This checker is hashed into three CI cache keys (build.yml's
+    # `downloads-` and `assets-`, release.yml's `downloads-`), the same three
+    # that carry verify-server-tree.py. So tightening it changes those keys,
+    # the caches miss, and every binary is fetched and examined again under
+    # the stricter rule. Re-measure with:
+    #     grep -c 'verify-android-elf.py' .github/workflows/*.yml
     ap.add_argument("--dir", type=pathlib.Path,
                     help="check every *.so in this directory instead of one file")
     ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
