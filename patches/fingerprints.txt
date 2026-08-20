@@ -56,7 +56,16 @@
 # to see it, and the honest move then is to say so where the behaviour is
 # claimed, not to pick a pattern that cannot fail.
 
-0001 platform|out/server-main.js|platform==="android"
+# 0001's pattern names the isLinux widening, not the android comparison. Patch
+# 0001 adds two things that both compare against 'android': the widened _isLinux
+# and the _isAndroidPlatform export. `platform==="android"` therefore matches
+# either, and it occurs twice in the packaged bundle for that reason, so a patch
+# narrowed back to `_isLinux = (platform === 'linux')` while keeping the export
+# still satisfies it. Patch 0009's branch sits behind isLinux, so that narrowing
+# would leave 0009 unreachable with every row here still printing ok. The `||`
+# below appears only in the widening: introduced_by rejects the narrowed patch,
+# and the text occurs exactly once in the bundle.
+0001 platform|out/server-main.js|platform === 'linux' ||
 0002 userDataPath|out/vs/platform/terminal/node/ptyHostMain.js|case"android"
 0003 ptyHost worker|out/server-main.js|this._worker.once('exit'
 0004 extHost worker|out/server-main.js|worker_thread Extension Host
