@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 97 unused Material and AndroidX resources no longer ship: the date and time pickers, the navigation drawer, fragment transitions and the legacy notification templates.
 - A toolchain pack that ships a library its manifest does not list now fails the build, instead of redistributing it with no licence notice.
 - The zlib notice names the Java and Ruby toolchains, whose libraries link the copy the base app ships.
+- The weekly upstream patch check prints its verdict on the run summary, so a queued rebase is visible without opening the log.
 - The three deprecated edge-to-edge APIs Play reports are gone. Bar colours, the display cutout and bar contrast move to theme attributes; edge-to-edge and bar icons stay in code.
 
 ### Fixed

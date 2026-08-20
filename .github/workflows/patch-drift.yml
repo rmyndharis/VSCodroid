@@ -72,4 +72,26 @@ jobs:
         # consistency: check-build-steps.py recognises a shell script CI runs by
         # that exact form, so a bare `scripts/...` invocation is invisible to it
         # and the script would count as one CI never runs.
-        run: bash scripts/check-patches-apply.sh "$INPUT_TAG"
+        #
+        # The verdict goes on the run's summary page, not only into the log.
+        # Nothing watches a scheduled job, so its whole output is one mark in a
+        # list, and the mark here does not mean what a red mark usually means:
+        # it means rebase work is queued for the next bump. A reader who has to
+        # open the log to learn WHICH patch stops opening it.
+        #
+        # `|| status=$?` rather than a pipeline, both halves measured. The step
+        # shell is `bash -e`, so without it the script's non-zero exit ends the
+        # step before the summary is written and the page stays empty. And
+        # `tee` would report 0 for a script that exited 1 or 2, losing the
+        # distinction between "a patch failed" and "the check could not run"
+        # that this script's header defines and a reader depends on.
+        run: |
+          status=0
+          bash scripts/check-patches-apply.sh "$INPUT_TAG" > drift.txt 2>&1 || status=$?
+          cat drift.txt
+          {
+            echo '```text'
+            cat drift.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
