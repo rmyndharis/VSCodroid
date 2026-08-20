@@ -72,6 +72,18 @@ class SafStorageManager(private val context: Context) {
         syncEngine.onDocumentsNotCopied = announce
     }
 
+    /**
+     * Told when a directory copied out to the device arrived incomplete.
+     *
+     * Forwarded rather than set on the engine directly, for the reason the two above
+     * are. Unthrottled, like [onDocumentsNotCopied] and unlike [onWriteBackFailed]:
+     * this fires once per directory copy and the count it carries is the whole burst,
+     * so there is nothing for a throttle to collapse.
+     */
+    fun onUploadIncomplete(announce: (File, Int, Boolean) -> Unit) {
+        syncEngine.onUploadIncomplete = announce
+    }
+
     private val lastFailureAnnouncedAt = AtomicLong(0)
 
     // -- Permission Management --

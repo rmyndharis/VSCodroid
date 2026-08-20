@@ -392,6 +392,21 @@ class MainActivity : AppCompatActivity() {
         // The other direction: documents the device holds that did not reach the editor.
         // Its own wording, because "the only copy is inside VSCodroid" is the opposite of
         // true for these, and would send the user looking for a file that is safe.
+        // The outbound direction of the same silence: a folder created in the editor
+        // that did not arrive whole on the device. One notice per folder, and the cap
+        // gets its own wording because it is a limit this app chose rather than the
+        // device refusing.
+        safManager.onUploadIncomplete { dir, lost, capped ->
+            val message = if (capped) {
+                getString(R.string.saf_upload_capped, dir.name)
+            } else {
+                resources.getQuantityString(R.plurals.saf_upload_incomplete, lost, lost, dir.name)
+            }
+            runOnUiThread {
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            }
+        }
+
         safManager.onDocumentsNotCopied { count, outOfRoom ->
             runOnUiThread {
                 Toast.makeText(

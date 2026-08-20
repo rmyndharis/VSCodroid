@@ -148,4 +148,18 @@
         <item quantity="one">Not enough free space: a file could not be copied into the editor. It is unchanged in the device folder.</item>
         <item quantity="other">Not enough free space: %1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
     </plurals>
+
+    <!-- A folder copied out to the device that did not arrive whole. Counts entries
+         rather than naming them, because the failure is usually folder-wide and forty
+         separate notices is another way of telling the user nothing. Deliberately not
+         worded like saf_write_back_failed: most of the folder did arrive, so "the only
+         copy is inside VSCodroid" would overstate. -->
+    <plurals name="saf_upload_incomplete">
+        <item quantity="one">%2$s: one item did not reach the device folder.</item>
+        <item quantity="other">%2$s: %1$d items did not reach the device folder.</item>
+    </plurals>
+    <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
+         separately because the cause is a limit this app chose, not the device saying
+         no, and the user's next move is to copy the rest out by hand. -->
+    <string name="saf_upload_capped">%1$s is too large to copy out whole. The rest of it stayed inside VSCodroid.</string>
 </resources>

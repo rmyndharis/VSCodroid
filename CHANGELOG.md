@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A file the device folder refuses to create now says so. It stayed inside the app looking synced, and the difference only showed after an uninstall.
+- A folder copied out that did not arrive whole now says how much is missing, once for the folder rather than once for every file in it.
 - A first run that fails now names the step and quotes the error, instead of only "Setup failed" and a Retry that walks into the same wall.
 - A link that no installed app can open now says so. The tap did nothing and said nothing, which reads as a broken link rather than a missing app.
 - Dragging a finger inside an application menu now scrolls it instead of closing the submenu. A menu that cannot scroll still reported scrolling, and the submenu closed on it.

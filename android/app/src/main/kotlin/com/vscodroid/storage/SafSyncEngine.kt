@@ -1124,6 +1124,20 @@ class SafSyncEngine(private val context: Context) {
     internal var onDocumentsNotCopied: (Int, Boolean) -> Unit = { _, _ -> }
 
     /**
+     * Told when a directory being copied out to the device arrived incomplete: which
+     * directory, how many entries did not make it, and whether the enumeration cap was
+     * the reason rather than a provider refusal.
+     *
+     * The outbound twin of [onDocumentsNotCopied], and a separate seam from
+     * [onWriteBackFailed] for a reason of accuracy rather than symmetry. That one says
+     * the app holds the only copy, which is true of a single file that never arrived
+     * and false of a directory where most entries did: announcing forty failures with
+     * it would overstate forty times, and announcing them one by one is another way of
+     * not telling the user anything.
+     */
+    internal var onUploadIncomplete: (File, Int, Boolean) -> Unit = { _, _, _ -> }
+
+    /**
      * How much room is left where the mirror lives.
      *
      * A seam because no JVM test can make a real filesystem answer that it is full, and
@@ -1159,6 +1173,18 @@ class SafSyncEngine(private val context: Context) {
             "Not writing $describedAs back: the device holds a document there " +
                 "that this sync never read, and writing would replace it",
         )
+        announceLost(localFile)
+    }
+
+    /**
+     * Says once that [localFile] exists only inside the app.
+     *
+     * The throttle is per path and lives here rather than at each site, so a file the
+     * watcher retries on every save is announced once instead of on every keystroke.
+     * [startWatching] clears the set for a folder when it is reopened, which is the one
+     * moment the user could act on the notice again.
+     */
+    private fun announceLost(localFile: File) {
         if (refusalsAnnounced.add(localFile.absolutePath)) onWriteBackFailed(localFile)
     }
 
@@ -1303,7 +1329,16 @@ class SafSyncEngine(private val context: Context) {
      * safe to keep.
      */
     private fun createInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri) {
-        val docUri = createOneInSaf(localFile, parentSafUri, treeUri) ?: return
+        val docUri = createOneInSaf(localFile, parentSafUri, treeUri)
+        if (docUri == null) {
+            // The provider refused, and the file exists only inside the app. Exactly
+            // what onWriteBackFailed already means, so it says it rather than a second
+            // wording of the same fact. Until this line the caller returned on the null
+            // and the user was never told: a file they created in the editor simply was
+            // not on the device, and the difference only shows after an uninstall.
+            announceLost(localFile)
+            return
+        }
         if (localFile.isDirectory) {
             // A directory that just appeared brings whatever is inside it; without
             // this it landed on the device empty and its files stayed in the mirror.
@@ -1414,14 +1449,24 @@ class SafSyncEngine(private val context: Context) {
                 made++
             }
         }
-        if (entries.size >= MAX_UPLOAD_ENTRIES) {
-            // Said out loud rather than silently truncated: the user's copy on the
-            // device is then genuinely incomplete, and a log line is the only place
-            // that can say so.
+        val capped = entries.size >= MAX_UPLOAD_ENTRIES
+        if (capped) {
             Logger.w(tag, "Stopped at $MAX_UPLOAD_ENTRIES entries under ${localDir.name}; " +
                 "the rest were not copied to the device")
         }
         Logger.i(tag, "Created $made of ${entries.size} entries under ${localDir.name}")
+
+        // One notice for the directory, not one per entry. `made` already counts both
+        // ways an entry can be lost: a creation the provider refused, and a child
+        // skipped because its own parent was never created. Reading the shortfall off
+        // that count is what keeps a new silent branch from appearing here later, the
+        // way one did when this reported only to the log.
+        //
+        // The comment above the cap used to say a log line was the only place that
+        // could say so. That was true when it was written and stopped being true when
+        // the notice channel arrived, which is the shape a reason comment rots in.
+        val lost = entries.size - made
+        if (lost > 0 || capped) onUploadIncomplete(localDir, lost, capped)
     }
 
     /**
