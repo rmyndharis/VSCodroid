@@ -1,0 +1,50 @@
+Dismiss a submenu only when the parent menu actually scrolled.
+
+On a touch screen, opening the application menu and dragging a finger inside
+it closes the submenu instead of scrolling it. The chain: every menu item and
+the menu itself are gesture targets, and a gesture is dispatched to every
+registered target that contains the touch point, so one finger movement
+reaches the parent menu's own scroll handling. That handler calls
+setScrollPosition, and the scrollable's state change detection compares the
+raw, unclamped scroll position, so a menu that cannot scroll at all still
+emits onScroll events. The submenu entry subscribes to the parent's onScroll
+and dismisses itself unconditionally, so the first touch drag closes it, and
+a drag is the only way a touch user can scroll.
+
+The ScrollEvent already carries the discriminator: scrollTopChanged and
+scrollLeftChanged are computed from the clamped positions, so they are false
+for these phantom events and true whenever the menu genuinely moved. Gate the
+dismissal on them. A parent that really scrolls still dismisses its submenu,
+which is the behaviour this handler exists for: the submenu is anchored to an
+item that has moved away.
+
+Mouse users never see any of this, because a wheel over a menu that cannot
+scroll changes nothing and a menu that can scroll dismisses correctly either
+way. The visible change is touch only.
+
+Upstream: the same change is proposed against microsoft/vscode; this patch
+carries it until it lands in a version this build pins.
+
+diff --git a/src/vs/base/browser/ui/menu/menu.ts b/src/vs/base/browser/ui/menu/menu.ts
+index 7bb39f0..ca3b750 100644
+--- a/src/vs/base/browser/ui/menu/menu.ts
++++ b/src/vs/base/browser/ui/menu/menu.ts
+@@ -821,7 +821,17 @@ class SubmenuMenuActionViewItem extends BaseMenuActionViewItem {
+ 			}
+ 		}));
+ 
+-		this._register(this.parentData.parent.onScroll(() => {
++		this._register(this.parentData.parent.onScroll(e => {
++			if (!e.scrollTopChanged && !e.scrollLeftChanged) {
++				// A menu emits scroll events even when it cannot scroll: a state
++				// change is detected on the raw, unclamped scroll position, so a
++				// touch drag over a menu that fits its viewport fires onScroll
++				// with the clamped position unchanged. Dismissing the submenu on
++				// those events closes it on the first touch drag, and on a touch
++				// screen a drag is the only way to scroll. Real scrolling of the
++				// parent still dismisses below.
++				return;
++			}
+ 			if (this.parentData.submenu === this.mysubmenu) {
+ 				this.parentData.parent.focus(false);
+ 				this.cleanupExistingSubmenu(true);

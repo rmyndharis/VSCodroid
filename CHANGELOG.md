@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A first run that fails now names the step and quotes the error, instead of only "Setup failed" and a Retry that walks into the same wall.
 - A link that no installed app can open now says so. The tap did nothing and said nothing, which reads as a broken link rather than a missing app.
+- Dragging a finger inside an application menu now scrolls it instead of closing the submenu. A menu that cannot scroll still reported scrolling, and the submenu closed on it.
 - Tapping the editor now raises the keyboard, and what it types now arrives. The app never took Android input focus for its view, so keyboard input was silently discarded.
 - Brackets, quotes and other symbols on the extra key row now type into the editor. On recent WebViews they inserted nothing at all.
 - A save the sync refuses to write back now says so. It was silent, so an edit that never reached the device folder looked exactly like one that did.

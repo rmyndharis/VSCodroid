@@ -85,3 +85,9 @@
 0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
 0012 callback route|out/server-main.js|==="/callback"
 0013 level grace|out/server-main.js|while another client is connected
+# 0014 gates on the CLAMPED change flags. The pattern is the negated pair the
+# guard compiles to; measured in the pre-patch bundle it occurs zero times
+# (the positive control `scrollTopChanged` occurs 41 times), and an esbuild
+# minify of the new handler emits `!n.scrollTopChanged&&!n.scrollLeftChanged`,
+# so the token survives and only this patch introduces it.
+0014 menu submenu scroll dismiss|out/vs/workbench/workbench.web.main.internal.js|scrollTopChanged&&!
