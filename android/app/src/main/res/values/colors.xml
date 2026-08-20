@@ -22,7 +22,6 @@
     <color name="colorPopupBg">#3C3C3C</color>
 
     <!-- Notification -->
-    <color name="colorNotificationBg">#1E1E1E</color>
 
     <!-- Toolchain picker -->
     <color name="colorCardSelected">#1A007ACC</color>

@@ -236,7 +236,7 @@ android {
     sourceSets["main"].assets.srcDir(bundleNotices)
 
     lint {
-        // The baseline is what makes this affordable: the 17 issues recorded in
+        // The baseline is what makes this affordable: the 16 issues recorded in
         // lint-baseline.xml are filtered out of every report, so what remains is
         // what arrived after it was taken.
         //

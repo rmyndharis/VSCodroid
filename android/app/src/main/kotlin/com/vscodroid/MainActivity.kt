@@ -79,7 +79,6 @@ class MainActivity : AppCompatActivity() {
     private var webView: WebView? = null
     private var extraKeyRow: ExtraKeyRow? = null
     private var nodeService: NodeService? = null
-    private var serviceBound = false
     private var serviceBindingInitiated = false
     private var serverPort = 0
     private var backgroundedAt = 0L
@@ -360,14 +359,12 @@ class MainActivity : AppCompatActivity() {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as NodeService.LocalBinder
             nodeService = binder.getService()
-            serviceBound = true
             Logger.i(tag, "Bound to NodeService")
             setupServiceCallbacks()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             nodeService = null
-            serviceBound = false
             Logger.w(tag, "Disconnected from NodeService")
         }
     }
@@ -551,7 +548,6 @@ class MainActivity : AppCompatActivity() {
                 // Already unbound — safe to ignore
             }
             serviceBindingInitiated = false
-            serviceBound = false
         }
         webView?.destroy()
         webView = null
