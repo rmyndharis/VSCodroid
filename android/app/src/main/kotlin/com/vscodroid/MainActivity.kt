@@ -1426,6 +1426,22 @@ class MainActivity : AppCompatActivity() {
             openFolder = { openWorkspaceFolder },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
+            // A hand-off that no app accepted used to be indistinguishable from a
+            // dead link: the WebView does not navigate either, so the tap did
+            // nothing and said nothing. ActivityNotFoundException is separated
+            // out because it is the one the user can act on by installing
+            // something; everything else is quoted by type for a bug report.
+            onHandoffFailed = { uri, error ->
+                val scheme = uri.scheme ?: "external"
+                val message = if (error is android.content.ActivityNotFoundException) {
+                    getString(R.string.url_handoff_no_app, scheme)
+                } else {
+                    getString(R.string.url_handoff_failed, scheme, error.javaClass.simpleName)
+                }
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                }
+            },
             onPageLoaded = { url ->
                 folderFromUrl(url)?.let {
                     openWorkspaceFolder = it

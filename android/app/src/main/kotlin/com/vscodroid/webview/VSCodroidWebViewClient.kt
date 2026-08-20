@@ -270,6 +270,24 @@ class VSCodroidWebViewClient(
     private val onCrash: () -> Unit,
     private val onPageLoaded: (String?) -> Unit,
     private val onRetryServer: () -> Unit,
+    /**
+     * Told when a URL this app decided to hand away could not be handed away.
+     *
+     * A constructor parameter for the reason the three above are: this class has
+     * no screen and no context of its own beyond the one the request carries.
+     * Until it existed, `startActivity` throwing meant a `Logger.e` and nothing
+     * else, and `return true` below stops the WebView from navigating either, so
+     * the tap did nothing at all and said nothing at all. `ActivityNotFoundException`
+     * for `ssh:`, `git:` or `intent:`, `FileUriExposedException` for `file:` and
+     * `SecurityException` for a `content://` without a grant all land in the same
+     * catch and all looked identical to a broken link.
+     *
+     * Deliberately NOT a pre-flight. Detecting handlers with `<queries>` plus
+     * `resolveActivity` would answer null for handlers that do exist under
+     * package-visibility filtering, and enumerating schemes to make it work is a
+     * destination allowlist under another name. The exception is the signal.
+     */
+    private val onHandoffFailed: (Uri, Throwable) -> Unit = { _, _ -> },
 ) : WebViewClient() {
 
     private val tag = "WebViewClient"
@@ -340,6 +358,7 @@ class VSCodroidWebViewClient(
         } catch (e: Exception) {
             AuthTabWindow.disarm(armed)
             Logger.e(tag, "Failed to open external URL: ${redactToken(url.toString())}", e)
+            onHandoffFailed(url, e)
         }
         return true  // Don't navigate WebView to external URL
     }

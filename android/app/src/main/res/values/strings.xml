@@ -43,6 +43,23 @@
          failed in the same place. See FirstRunSetup.requiredStorageMb(). -->
     <string name="error_storage_full">Not enough storage space. Free at least %1$d MB and try again.</string>
     <string name="error_setup_failed">Setup failed. Tap Retry or reinstall the app.</string>
+    <!-- The same failure when setup knows which step it died on. Names the step
+         and quotes the exception, because the audience is developers and the
+         next thing they do is either free some space or file the message. The
+         version without a cause stays for a failure that happens before the
+         first progress report. -->
+    <string name="error_setup_failed_at">Setup failed while: %1$s\n\n%2$s\n\nTap Retry, or reinstall the app if it keeps failing.</string>
+
+    <!-- A tap on a link this app handed to Android that no app took. Names the
+         scheme rather than the whole address, which can be long and can carry a
+         token, and says the one thing the user can act on: nothing here is
+         broken, there is simply nothing installed that opens this kind of link. -->
+    <string name="url_handoff_no_app">No installed app opens %1$s links.</string>
+    <!-- The same tap failing for any other reason: a file:// URI Android refuses
+         to expose, a content:// without a grant, anything else. The exception
+         type is quoted because the audience is developers and it is the part
+         worth putting in a bug report. -->
+    <string name="url_handoff_failed">Could not open that %1$s link (%2$s).</string>
 
     <!-- Shown on the page itself, not in a toast, when the restart budget is
          spent. The screen behind it read "Starting server..." and went on

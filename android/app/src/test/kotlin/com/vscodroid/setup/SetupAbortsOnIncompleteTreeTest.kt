@@ -15,6 +15,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -135,5 +137,47 @@ class SetupAbortsOnIncompleteTreeTest {
         runBlocking { FirstRunSetup(context).runSetup() }
 
         verify(exactly = 0) { editor.putString(any(), any()) }
+    }
+
+    /**
+     * And the failure has to be able to say what it was.
+     *
+     * The description itself is pinned by `SetupFailureCauseTest`, which drives
+     * the pure function directly. What that cannot show is whether the catch ever
+     * fills it in, and a describer nothing calls is the whole defect wearing a
+     * fix: the screen falls back to "Setup failed" and the user is exactly where
+     * they started. This drives the real run to a real failure and reads what was
+     * left behind.
+     */
+    @Test
+    fun `a failed setup leaves the cause behind for the screen to read`() {
+        blockTheServerWrite()
+        val setup = FirstRunSetup(context)
+
+        runBlocking { setup.runSetup() }
+
+        val failure = setup.lastFailure
+        assertNotNull(failure, "setup failed and left nothing for the screen to show")
+        assertTrue(
+            failure!!.step.isNotEmpty(),
+            "the failure names no step, so the screen can only say that something went wrong",
+        )
+        assertTrue(
+            failure.detail.isNotEmpty(),
+            "the failure carries no detail, so the exception still reaches only logcat",
+        )
+    }
+
+    /**
+     * The control. A run that succeeds must leave nothing behind, or the next
+     * failure screen would show a cause from a run that worked.
+     */
+    @Test
+    fun `a setup that succeeds leaves no cause behind`() {
+        val setup = FirstRunSetup(context)
+
+        runBlocking { setup.runSetup() }
+
+        assertNull(setup.lastFailure, "a successful run recorded a failure cause")
     }
 }

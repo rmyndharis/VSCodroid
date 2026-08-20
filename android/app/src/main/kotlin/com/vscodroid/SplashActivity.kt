@@ -205,7 +205,17 @@ class SplashActivity : AppCompatActivity() {
                     showSetupError(statusText, progressBar, message, setup)
                 }
                 FirstRunSetup.SetupResult.ERROR -> {
-                    showSetupError(statusText, progressBar, getString(R.string.error_setup_failed), setup)
+                    // The cause, when setup got far enough to know one. It reached
+                    // Logger.e and nothing else before this, so a release build
+                    // left the user with "Setup failed" and a Retry button that
+                    // walks into the same wall.
+                    val failure = setup.lastFailure
+                    val message = if (failure == null) {
+                        getString(R.string.error_setup_failed)
+                    } else {
+                        getString(R.string.error_setup_failed_at, failure.step, failure.detail)
+                    }
+                    showSetupError(statusText, progressBar, message, setup)
                 }
             }
         }

@@ -40,6 +40,30 @@ class FirstRunSetup(
 
     enum class SetupResult { SUCCESS, LOW_STORAGE, ERROR }
 
+    /** What the run was doing when it failed, and what the failure was. */
+    data class Failure(val step: String, val detail: String)
+
+    /**
+     * The cause of the last [SetupResult.ERROR], or null if setup has not failed.
+     *
+     * Read by whoever shows the failure. Until this existed the exception went to
+     * `Logger.e` and nowhere else, so a release build told the user "Setup failed"
+     * and kept the only useful sentence to itself. Retrying blind is the whole of
+     * what was left to them, and a device out of space retries into the same wall
+     * for ever.
+     *
+     * Set immediately before the ERROR is returned and never cleared: a stale
+     * value cannot be shown, because the only screen that reads it reads it in the
+     * same branch that just set it.
+     */
+    @Volatile
+    var lastFailure: Failure? = null
+        private set
+
+    /** The most recent [reportProgress] label, which names the step in flight. */
+    @Volatile
+    private var currentStep: String? = null
+
     fun isFirstRun(): Boolean = setupIsStale(
         prefs.getString(KEY_VERSION, null),
         prefs.getInt(KEY_VERSION_CODE, 0),
@@ -306,6 +330,7 @@ class FirstRunSetup(
             SetupResult.SUCCESS
         } catch (e: Exception) {
             Logger.e(tag, "First-run setup failed", e)
+            lastFailure = describeFailure(currentStep, e)
             SetupResult.ERROR
         }
     }
@@ -2171,10 +2196,45 @@ claude() {
 
     private fun reportProgress(message: String, percent: Int) {
         Logger.d(tag, "Progress: $percent% - $message")
+        // The single funnel every step already reports through, which is why the
+        // failing step can be named without threading a parameter through the
+        // twenty call sites below.
+        currentStep = message
         onProgress?.invoke(message, percent)
     }
 
     companion object {
+        /** How much of an exception message is worth putting on a splash screen. */
+        internal const val DETAIL_LIMIT = 120
+
+        /**
+         * The user-facing description of a failure: which step, and what went wrong.
+         *
+         * A pure function in the companion so it can be exercised without a
+         * `Context`, which the enclosing class needs and a JVM test cannot supply.
+         *
+         * The exception message is kept, not just its type. It is the half that
+         * says something actionable, "No space left on device" or "Permission
+         * denied", while the type alone says only that something threw. It is
+         * truncated because a message can carry a whole stack of causes, and a
+         * splash screen is not a log viewer; the untruncated one is already in
+         * `Logger.e` above the call site.
+         *
+         * Trailing ellipsis is stripped from the step because every progress label
+         * ends in one, and "failed while Extracting server files..." reads as if
+         * the sentence itself were unfinished.
+         */
+        internal fun describeFailure(step: String?, error: Throwable): Failure {
+            val type = error.javaClass.simpleName
+            val message = error.message?.trim().orEmpty()
+            val detail = when {
+                message.isEmpty() -> type
+                message.length <= DETAIL_LIMIT -> "$type: $message"
+                else -> "$type: " + message.take(DETAIL_LIMIT).trimEnd() + "\u2026"
+            }
+            return Failure(step?.trimEnd('.', ' ').orEmpty(), detail)
+        }
+
         /** The band the server extraction reports across; the next step opens at 60. */
         private const val SERVER_PROGRESS_START = 5
         private const val SERVER_PROGRESS_END = 60

@@ -1,5 +1,6 @@
 package com.vscodroid.webview
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -19,6 +20,7 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -154,8 +156,12 @@ class ExternalUrlHandoffTest {
         )
     }
 
+    /** Every hand-off failure the client announced, in order. */
+    private val announced = mutableListOf<Pair<String?, String>>()
+
     @BeforeEach
     fun setUp() {
+        announced.clear()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
@@ -183,6 +189,9 @@ class ExternalUrlHandoffTest {
             onCrash = {},
             onPageLoaded = {},
                     onRetryServer = { retried = true },
+            onHandoffFailed = { uri, error ->
+                announced += uri.scheme to error.javaClass.simpleName
+            },
         )
     }
 
@@ -397,5 +406,85 @@ class ExternalUrlHandoffTest {
                 "editor arrives here, so recording them all reopens the window an unsolicited " +
                 "vscodroid://callback is taken in.",
         )
+    }
+
+    /**
+     * The case this channel exists for. Nothing on the device answers `ssh:`, so
+     * `startActivity` throws, and `return true` below stops the WebView from
+     * navigating too. Before the channel existed the tap did nothing and said
+     * nothing, and the user's only reading was that the link was broken.
+     */
+    @Test
+    fun `a scheme no app answers is announced`() {
+        every { context.startActivity(any()) } throws ActivityNotFoundException("no handler")
+
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("ssh", "git@example.com", -1, "ssh://git@example.com")
+        )
+
+        assertTrue(handled, "the WebView was left to navigate to a scheme it cannot load")
+        assertEquals(listOf("ssh" to "ActivityNotFoundException"), announced)
+    }
+
+    /**
+     * The three exception types the audit named land in one catch, and the user
+     * cannot tell them apart from the outside. Each still has to produce a
+     * notice, because a channel that only covers the easy one leaves the same
+     * silence for the other two.
+     */
+    @Test
+    fun `a file URI Android refuses to expose is announced`() {
+        every { context.startActivity(any()) } throws IllegalStateException("FileUriExposed")
+
+        client.shouldOverrideUrlLoading(
+            view, request("file", "/sdcard/x.txt", -1, "file:///sdcard/x.txt")
+        )
+
+        assertEquals(listOf("file" to "IllegalStateException"), announced)
+    }
+
+    @Test
+    fun `a content URI without a grant is announced`() {
+        every { context.startActivity(any()) } throws SecurityException("no grant")
+
+        client.shouldOverrideUrlLoading(
+            view, request("content", "doc/1", -1, "content://authority/doc/1")
+        )
+
+        assertEquals(listOf("content" to "SecurityException"), announced)
+    }
+
+    /**
+     * The control, and it is what stops the cases above from passing because the
+     * channel fires unconditionally. A hand-off that succeeded is not a failure,
+     * and a notice on every followed link would be worse than the silence it
+     * replaced.
+     */
+    @Test
+    fun `a hand-off that succeeds announces nothing`() {
+        every { context.startActivity(any()) } returns Unit
+
+        client.shouldOverrideUrlLoading(
+            view, request("https", "example.com", -1, "https://example.com/docs")
+        )
+
+        assertTrue(announced.isEmpty(), "announced $announced for a link that opened")
+    }
+
+    /**
+     * The retry navigation is answered on this side and never handed away, so it
+     * cannot fail as a hand-off. Without this the retry case and the failure
+     * cases could both be satisfied by a channel wired to the wrong branch.
+     */
+    @Test
+    fun `the retry navigation announces nothing`() {
+        retried = false
+
+        client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "retry-server", -1, RETRY_URL)
+        )
+
+        assertTrue(retried, "the retry branch did not run")
+        assertTrue(announced.isEmpty(), "announced $announced for our own control")
     }
 }
