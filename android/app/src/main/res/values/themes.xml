@@ -25,6 +25,23 @@
              only decides API 33 and 34; naming the value the platform settles
              on keeps the two the same. See util/ViewInsets.drawBehindSystemBars. -->
         <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+
+        <!-- The bars stay transparent rather than having the platform paint a scrim
+             behind them. Both default to true, so leaving them out is not neutral:
+             it turns the two transparent colours above back into translucent ones.
+
+             This is the fifth thing enableEdgeToEdge() did and the one the move to
+             attributes first missed. Read from androidx.activity 1.13.0's bytecode:
+             EdgeToEdgeApi29.setUp calls setStatusBarContrastEnforced(false)
+             unconditionally, and setNavigationBarContrastEnforced(nightMode == 0).
+             Every call site here passed SystemBarStyle.dark(), whose nightMode is
+             MODE_NIGHT_YES, so both arrived as false.
+
+             Attributes rather than the setters for the same reason as the colours:
+             Play scans bytecode and an attribute is not a call. API 29+ honours
+             both, and minSdk is 33, so no version-qualified copy is needed. -->
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
 </resources>

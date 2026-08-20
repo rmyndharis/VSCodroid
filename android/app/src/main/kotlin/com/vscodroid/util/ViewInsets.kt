@@ -39,11 +39,20 @@ fun View.padForSystemBars(basePx: Int = 0) {
  * rather than the behaviour. Play Console reports three deprecated edge-to-edge
  * APIs, and all three are inside that one call: `Window.setStatusBarColor` and
  * `Window.setNavigationBarColor` from `EdgeToEdgeApi26`, `Api29` and `Api35`,
- * and `LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES` from `Api28` and `Api30`.
- * Measured from the release dex with `dexdump`, de-obfuscated through this
- * build's own mapping. Note `Api35`: the references are not confined to the
- * pre-35 compat half, so trimming the old implementations by minSdk would not
- * have cleared them. Dropping the call is what removes the classes.
+ * and the display-cutout write from `Api28` and `Api30`. Measured from the
+ * release dex with `dexdump`, de-obfuscated through this build's own mapping.
+ * Note `Api35`: the references are not confined to the pre-35 compat half, so
+ * trimming the old implementations by minSdk would not have cleared them.
+ * Dropping the call is what removes the classes.
+ *
+ * ⚠️ The two cutout implementations write **different** values, and this said
+ * `SHORT_EDGES` for both until it was read from the bytecode.
+ * `Api28.adjustLayoutInDisplayCutoutMode` stores `1` (`SHORT_EDGES`);
+ * `Api30` stores `3` (`ALWAYS`), and `Api35` extends `Api30` without overriding
+ * it. minSdk is 33, so the only implementation that ever ran here wrote
+ * `ALWAYS`. That is why the theme names `always`: it is what this app already
+ * had, not a new choice, and changing it to `shortEdges` to match the old
+ * comment would be a real behaviour change.
  *
  * Nothing is lost by dropping it, because `targetSdk` is 36:
  *
@@ -57,11 +66,24 @@ fun View.padForSystemBars(basePx: Int = 0) {
  *  - The display cutout moves to `android:windowLayoutInDisplayCutoutMode` in
  *    the theme, which is declarative and names `always`, the value API 35+
  *    forces anyway.
+ *  - Contrast enforcement moves to `android:enforceStatusBarContrast` and
+ *    `android:enforceNavigationBarContrast`, both `false`. This is the piece
+ *    the first version of this migration dropped: `Api29.setUp` calls
+ *    `setStatusBarContrastEnforced(false)` unconditionally and
+ *    `setNavigationBarContrastEnforced(nightMode == 0)`, and every call site
+ *    passed `SystemBarStyle.dark()`, whose nightMode is `MODE_NIGHT_YES`, so
+ *    both arrived as false. Both platform defaults are **true**, so omitting
+ *    them let the system paint a scrim behind the bars the theme had just made
+ *    transparent.
  *
  * What is kept is the part the call sites actually needed: light icons pinned
  * regardless of the device theme. This app is always dark and has no
  * `values-night`, so the `auto` default drew dark icons on a dark background
  * whenever the device was in light mode.
+ *
+ * Everything else this replaces is an attribute, so nothing about the window is
+ * set from code here beyond the two lines below. [ThemeEdgeToEdgeTest] holds the
+ * attributes in place, because a theme value has no compiler to lose it.
  */
 fun Activity.drawBehindSystemBars() {
     WindowCompat.setDecorFitsSystemWindows(window, false)
