@@ -155,7 +155,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = false, mirrorModified = 0, mirrorSize = 0,
-                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = false
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = { false }
                 ),
                 "First sync must copy: there is nothing to lose"
             )
@@ -166,7 +166,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_060_000, sourceSize = 4096, mirrorIsOurCopy = false
+                    sourceModified = 1_700_000_060_000, sourceSize = 4096, mirrorIsOurCopy = { false }
                 ),
                 "An edit made outside the app should reach the mirror"
             )
@@ -179,7 +179,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = false
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = { false }
                 ),
                 "A newer local edit must survive reopening the folder"
             )
@@ -190,7 +190,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = false
+                    sourceModified = 1_700_000_000_000, sourceSize = 4096, mirrorIsOurCopy = { false }
                 ),
                 "Same timestamp and same size means the copy is current"
             )
@@ -209,7 +209,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_060_000, mirrorSize = 700_000,
-                    sourceModified = 1_700_000_000_000, sourceSize = 2_000_000, mirrorIsOurCopy = false
+                    sourceModified = 1_700_000_000_000, sourceSize = 2_000_000, mirrorIsOurCopy = { false }
                 ),
                 "A newer local edit must survive regardless of how its length changed"
             )
@@ -222,7 +222,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 1_700_000_000_000, sourceSize = 8192, mirrorIsOurCopy = false
+                    sourceModified = 1_700_000_000_000, sourceSize = 8192, mirrorIsOurCopy = { false }
                 ),
                 "Equal timestamps with different lengths means the device copy changed"
             )
@@ -242,7 +242,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = true
+                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = { true }
                 ),
                 "the mirror is this app's own copy, so the folder must not freeze"
             )
@@ -253,7 +253,7 @@ class SafSyncEngineTest {
             assertFalse(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = true, mirrorModified = 1_700_000_000_000, mirrorSize = 4096,
-                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = false
+                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = { false }
                 ),
                 "the mirror no longer matches what was recorded for it, so it holds an " +
                     "edit that was never written back and is the only copy"
@@ -265,7 +265,7 @@ class SafSyncEngineTest {
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(
                     mirrorExists = false, mirrorModified = 0, mirrorSize = 0,
-                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = false
+                    sourceModified = 0, sourceSize = 4096, mirrorIsOurCopy = { false }
                 ),
                 "A missing mirror file must still be fetched even without timestamps"
             )
@@ -295,7 +295,7 @@ class SafSyncEngineTest {
                     mirrorModified = 1_700_000_000_000L,
                     mirrorSize = 1024,
                     sourceModified = doc.lastModified,
-                    sourceSize = doc.size, mirrorIsOurCopy = true
+                    sourceSize = doc.size, mirrorIsOurCopy = { true }
                 ),
                 "a document with no reported time must reach the unknown-time branch " +
                     "rather than falling through to the clock comparison"

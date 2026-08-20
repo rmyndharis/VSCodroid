@@ -171,21 +171,14 @@ class SafSyncEngine(private val context: Context) {
         // once here rather than per document; [reconcileDeletions] reads the same file
         // again in phase 3, after phase 2 may have changed what is on disk.
         //
-        // ⚠️ `by lazy`, and be clear about how little that defers, because this comment
-        // claimed the opposite and the claim reads plausibly. The membership test is an
-        // ARGUMENT to [shouldOverwriteMirror], and Kotlin evaluates arguments before the
-        // call, so the first ordinary file in the loop forces this whether or not its
-        // provider reports a time. It is not "only the no-timestamp branch reads it":
-        // every branch pays for it. What the laziness actually saves is a sync that
-        // reaches the call for no file at all -- an empty folder, one of only
-        // directories, or one where every entry is too large -- which is worth the two
-        // words it costs and nothing more.
-        //
-        // Making it genuinely lazy means either repeating `doc.lastModified == 0L` at
-        // the call site, which puts the callee's branch condition in the caller, or
-        // taking the argument as a lambda, which rewrites eleven assertions in
-        // SafSyncEngineTest to buy one HashSet on a path that is already correct.
-        // Neither is worth it; stating the real cost is.
+        // `by lazy`, and it takes both halves to make that true. This was passed to
+        // [shouldOverwriteMirror] by value, and Kotlin evaluates arguments before the
+        // call, so the first ordinary file forced the read whether or not its provider
+        // reported a time: the deferral the word promised never happened on any folder
+        // with a file in it. The parameter is a function now, invoked only by the
+        // unknown-time branch, so a provider that reports times never reads the record
+        // and a large folder does not hold one string per mirrored file for a sync that
+        // will not look at any of them.
         val previouslyRecorded: Set<String> by lazy {
             readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
                 .let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else emptySet() }
@@ -244,8 +237,9 @@ class SafSyncEngine(private val context: Context) {
                 if (!shouldOverwriteMirror(
                         localPath.exists(), localPath.lastModified(), localPath.length(),
                         doc.lastModified, doc.size,
-                        mirrorIsOurCopy = identityLine(doc.relativePath, localPath)
-                            in previouslyRecorded,
+                        mirrorIsOurCopy = {
+                            identityLine(doc.relativePath, localPath) in previouslyRecorded
+                        },
                     )
                 ) {
                     keptLocal++
@@ -303,21 +297,32 @@ class SafSyncEngine(private val context: Context) {
                         // without this guard every file in such a folder would look
                         // newer and be pushed over the device document on every reopen.
                         //
-                        // Deliberately NOT capped at [MAX_FILE_SIZE], which the same
-                        // loop applies a few lines up. The asymmetry is real and it is
-                        // the right way round: that cap keeps a large DEVICE document
-                        // out of `filesDir`, which is the app's own storage and the
-                        // thing that runs out. Writing back spends the device folder's
-                        // space, not ours, and the bytes are an edit the user made in
-                        // the editor. Refusing it because it grew past 50 MB would
-                        // discard their work silently, which is the failure this whole
-                        // branch exists to end. The other three write-back sites do not
-                        // cap either, so a cap added here alone would also make the
-                        // engine disagree with itself about the same question.
+                        // Deliberately NOT capped at [MAX_FILE_SIZE], which the same loop
+                        // applies a few lines up, and the asymmetry is the right way
+                        // round. That cap keeps a large DEVICE document out of
+                        // `filesDir`, which is this app's own storage and the thing that
+                        // runs out; writing back spends the device folder's space
+                        // instead, so the reason for the cap does not apply in this
+                        // direction.
+                        //
+                        // The decisive argument is consistency, not data loss. Capping
+                        // costs nothing permanent -- an uncapped file simply stays in
+                        // the mirror, where [holdsOnlyVouchedCopies] keeps it because
+                        // the record cannot vouch for it -- but none of the other three
+                        // `writeLocalToSaf` sites cap, so a cap here alone would upload
+                        // a file when the watcher saves it and refuse the same file on
+                        // reopen. One engine, two answers to one question, is worse
+                        // than either answer.
+                        //
+                        // Note also how narrow the case is: reaching here needs the
+                        // DEVICE document under the cap, since a larger one is skipped
+                        // above, so only a file the user grew past 50 MB locally
+                        // qualifies.
                         //
                         // What it costs is honest: a large file makes the folder-open
-                        // dialog sit on this one entry. Progress is per file, so the
-                        // bar does not move until the copy finishes.
+                        // dialog sit on this one entry. Progress is per file, so the bar
+                        // does not move until the copy finishes. This runs on
+                        // Dispatchers.IO, so it is a slow dialog and not an ANR.
                         uploadsDone++
                         Logger.i(tag, "Writing back a newer mirror copy: ${doc.relativePath}")
                         writeLocalToSaf(localPath, doc.uri)
@@ -1931,8 +1936,17 @@ class SafSyncEngine(private val context: Context) {
              * recorded for it. No default: there is one production caller and it has the
              * record in hand, and a default here would let a future caller answer the
              * question by not thinking about it.
+             *
+             * A function, not a value, and the laziness belongs here rather than at the
+             * call site. Only the unknown-time branch below asks, and answering costs
+             * the caller a read of the whole synced record; passed by value, that read
+             * happened for every file on every provider, including the ones that report
+             * a time and never reach the branch. The alternative was for the caller to
+             * repeat `sourceModified == 0L` before computing it, which puts this
+             * function's branch condition in the caller and goes stale the moment a
+             * second branch here wants the same answer.
              */
-            mirrorIsOurCopy: Boolean,
+            mirrorIsOurCopy: () -> Boolean,
         ): Boolean = when {
             !mirrorExists -> true
             // The provider did not report a time, so the record answers instead: our
@@ -1964,7 +1978,7 @@ class SafSyncEngine(private val context: Context) {
             // question is only asked for files this clause kept, which on a healthy
             // folder is none: every other file is answered true here and copied, which
             // reads the device document anyway.
-            sourceModified == 0L -> mirrorIsOurCopy
+            sourceModified == 0L -> mirrorIsOurCopy()
             sourceModified > mirrorModified -> true
             // A newer local copy wins, whatever its size. Checking size before this
             // was the defect: almost every edit changes a file's length, so almost
