@@ -49,6 +49,8 @@
 | KB-9 | Extra Key Row trackpad | Drag on the trackpad: slowly first, then keep going without lifting, then diagonally | Cursor steps character by character at first and speeds up the longer the drag gets; a diagonal drag moves on both axes. There are no arrow buttons to press: the trackpad replaced them, so it is the only way a touch user moves the cursor | | |
 | KB-10 | Extra Key Row, brackets on the textarea edit path | On a device whose WebView is older than 121, open a file and press {, }, (, ) on the key row. Confirm the path first in remote debugging: `document.querySelectorAll("textarea.inputarea").length` is 1 | Each character is inserted, and Monaco auto-closes the pair | | |
 | KB-11 | Extra Key Row, brackets on the EditContext edit path | On a device whose WebView is 121 or newer, same presses. Confirm the path first: `document.querySelectorAll("textarea.inputarea").length` is 0 and `document.querySelectorAll("div.native-edit-context").length` is 2 | Each character is inserted. This is the path where anything written to a textarea is inert, so a pass here and a fail on KB-10 means the fix went to the wrong layer | | |
+| KB-12 | Extra Key Row keys under a screen reader | Turn TalkBack on, open a file, swipe to a key on the row until it is announced, then double tap to activate it. **`adb shell input tap` cannot answer this row**: it injects below touch exploration, so a single tap types the character and the run looks like a pass whatever the code does. Drive it by hand, or from a test that performs ACTION_CLICK on the node | The character is inserted, exactly once. A modifier announces and latches, and the next key carries it | | |
+| KB-13 | Trackpad arrows under a screen reader | With TalkBack on, swipe to the trackpad, open its actions menu and choose each of Move cursor left, right, up and down. Same caveat as KB-12: an injected tap or swipe proves nothing here, because a drag is what touch exploration consumes | The caret moves one step in the chosen direction. A drag is the only other route and a screen reader cannot perform one, so a failure here leaves no way to move the caret at all | | |
 
 ## 4. Screen & Orientation
 
@@ -208,7 +210,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 11 | | | |
+| Keyboard Input | 13 | | | |
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 8 | | | |
 | Extensions | 6 | | | |
@@ -218,7 +220,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Toolchains | 6 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **86** | | | |
+| **Total** | **88** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
