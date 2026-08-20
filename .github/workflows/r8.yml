@@ -34,6 +34,21 @@ on:
     # is caught before anyone tags on it.
     - cron: "0 3 * * 1"
   workflow_dispatch:
+  # Most commits land straight on main rather than through a pull request, so a
+  # pull_request trigger alone leaves the configuration files below reaching a
+  # minified build only on the next cron, or first at tag time with the keystore
+  # already decoded. The paths list is repeated because GitHub Actions does not
+  # resolve YAML anchors in a workflow file.
+  push:
+    branches: [main]
+    paths:
+      - "android/app/build.gradle.kts"
+      - "android/build.gradle.kts"
+      - "android/app/proguard-rules.pro"
+      - "android/gradle/libs.versions.toml"
+      - "android/gradle.properties"
+      - "android/gradle/wrapper/gradle-wrapper.properties"
+      - ".github/workflows/r8.yml"
   pull_request:
     branches: [main]
     paths:
@@ -53,11 +68,13 @@ on:
 
 concurrency:
   group: r8-${{ github.event_name }}-${{ github.ref }}
-  # Superseding a pull request's own earlier push is the only cancellation that
-  # makes sense here. Without the event in the group, a manual run on main would
-  # cancel the weekly one mid-build and that week would record a cancellation
-  # instead of a verdict.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A branch supersedes its own earlier run, on a pull request and on main alike:
+  # only the newest configuration on that ref is worth a verdict, and without this
+  # a run of pushes to main queues a release compile per commit. The event is in
+  # the group so that superseding stays inside one trigger -- a manual run would
+  # otherwise cancel the weekly one mid-build, and that week would record a
+  # cancellation instead of a verdict.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 # Reading the checkout and writing an artifact is all this needs. build.yml and
 # lint.yml inherit the repository default instead; release.yml and pages.yml
