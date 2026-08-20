@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tapping the editor now raises the keyboard, and what it types now arrives. The app never took Android input focus for its view, so keyboard input was silently discarded.
 - A save the sync refuses to write back now says so. It was silent, so an edit that never reached the device folder looked exactly like one that did.
 - Closing a device folder while a save is still going out no longer lets the next folder share its write-back queue, which could interleave two writes into one document.
 - A file two saves are writing at once stays marked as unfinished until the last one lands, so a crash between them can no longer leave a half-written device copy unrecorded.
