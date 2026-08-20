@@ -1,6 +1,5 @@
 package com.vscodroid.storage
 
-import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -9,6 +8,7 @@ import com.vscodroid.util.Logger
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
@@ -45,15 +45,23 @@ class SafStorageManager(private val context: Context) {
     fun onWriteBackFailed(announce: (File) -> Unit) {
         syncEngine.onWriteBackFailed = { file ->
             val now = System.currentTimeMillis()
-            if (shouldAnnounce(now, lastFailureAnnouncedAt)) {
-                lastFailureAnnouncedAt = now
+            val last = lastFailureAnnouncedAt.get()
+            // `compareAndSet`, not read-then-write. Two threads genuinely arrive here:
+            // the `saf-writeback` daemon draining the queue, and `Dispatchers.IO`
+            // running the write-backs `initialSync` issues itself. `@Volatile` gave
+            // visibility but not atomicity, so both could read the same stale `last`,
+            // both find the interval elapsed, and both announce for one burst, which
+            // is the wall of toasts the throttle exists to prevent.
+            //
+            // The loser does not retry, deliberately. Losing means another thread has
+            // just announced this same burst, which is the answer the user needed.
+            if (shouldAnnounce(now, last) && lastFailureAnnouncedAt.compareAndSet(last, now)) {
                 announce(file)
             }
         }
     }
 
-    @Volatile
-    private var lastFailureAnnouncedAt = 0L
+    private val lastFailureAnnouncedAt = AtomicLong(0)
 
     // -- Permission Management --
 
@@ -471,12 +479,6 @@ class SafStorageManager(private val context: Context) {
         }
     }
 
-    private fun removeFromRecentFolders(uri: Uri) {
-        val folders = getPersistedFolders().toMutableList()
-        folders.removeAll { it.uri == uri }
-        saveRecentFolders(folders)
-    }
-
     private fun updateLastOpened(uri: Uri) {
         val folders = getPersistedFolders().toMutableList()
         val index = folders.indexOfFirst { it.uri == uri }
@@ -496,22 +498,6 @@ class SafStorageManager(private val context: Context) {
             })
         }
         prefs.edit().putString(KEY_RECENT_FOLDERS, array.toString()).apply()
-    }
-
-    private fun cleanupMirror(safUri: Uri) {
-        val mirrorDir = getMirrorDir(safUri)
-        if (mirrorDir.exists()) {
-            try {
-                mirrorDir.deleteRecursively()
-                Logger.i(tag, "Cleaned up mirror: ${mirrorDir.absolutePath}")
-            } catch (e: Exception) {
-                Logger.w(tag, "Failed to clean up mirror: ${e.message}")
-            }
-        }
-        // The sync engine keeps its record of the folder beside the mirror rather than
-        // inside it, so removing the mirror alone leaves the record orphaned.
-        File(mirrorDir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
-        syncEngine.clearUploadsUnder(mirrorDir)
     }
 
     companion object {

@@ -165,15 +165,27 @@ class SafSyncEngine(private val context: Context) {
         val unfinishedUploads = uploadsInFlight().toMutableSet()
 
         // Loaded for the same reason and read the same way: what the last sync wrote,
-        // as (path, mtime, size) lines. Phase 2 needs it only for providers that omit
+        // as (path, mtime, size) lines. Phase 2 consults it only for providers that omit
         // COLUMN_LAST_MODIFIED, where there is no clock to compare and the record is the
         // only thing that can tell this app's own copy from an edit made since. Read
         // once here rather than per document; [reconcileDeletions] reads the same file
         // again in phase 3, after phase 2 may have changed what is on disk.
-        // `by lazy` rather than eagerly: only the no-timestamp branch reads it, and a
-        // provider that reports times never asks. Building it eagerly meant one string
-        // per mirrored file held for the length of a sync that would not look at any of
-        // them, which on a large folder is real memory for nothing.
+        //
+        // ⚠️ `by lazy`, and be clear about how little that defers, because this comment
+        // claimed the opposite and the claim reads plausibly. The membership test is an
+        // ARGUMENT to [shouldOverwriteMirror], and Kotlin evaluates arguments before the
+        // call, so the first ordinary file in the loop forces this whether or not its
+        // provider reports a time. It is not "only the no-timestamp branch reads it":
+        // every branch pays for it. What the laziness actually saves is a sync that
+        // reaches the call for no file at all -- an empty folder, one of only
+        // directories, or one where every entry is too large -- which is worth the two
+        // words it costs and nothing more.
+        //
+        // Making it genuinely lazy means either repeating `doc.lastModified == 0L` at
+        // the call site, which puts the callee's branch condition in the caller, or
+        // taking the argument as a lambda, which rewrites eleven assertions in
+        // SafSyncEngineTest to buy one HashSet on a path that is already correct.
+        // Neither is worth it; stating the real cost is.
         val previouslyRecorded: Set<String> by lazy {
             readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
                 .let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else emptySet() }
@@ -290,6 +302,22 @@ class SafSyncEngine(private val context: Context) {
                         // as 0, and every real mirror timestamp is greater than 0, so
                         // without this guard every file in such a folder would look
                         // newer and be pushed over the device document on every reopen.
+                        //
+                        // Deliberately NOT capped at [MAX_FILE_SIZE], which the same
+                        // loop applies a few lines up. The asymmetry is real and it is
+                        // the right way round: that cap keeps a large DEVICE document
+                        // out of `filesDir`, which is the app's own storage and the
+                        // thing that runs out. Writing back spends the device folder's
+                        // space, not ours, and the bytes are an edit the user made in
+                        // the editor. Refusing it because it grew past 50 MB would
+                        // discard their work silently, which is the failure this whole
+                        // branch exists to end. The other three write-back sites do not
+                        // cap either, so a cap added here alone would also make the
+                        // engine disagree with itself about the same question.
+                        //
+                        // What it costs is honest: a large file makes the folder-open
+                        // dialog sit on this one entry. Progress is per file, so the
+                        // bar does not move until the copy finishes.
                         uploadsDone++
                         Logger.i(tag, "Writing back a newer mirror copy: ${doc.relativePath}")
                         writeLocalToSaf(localPath, doc.uri)
