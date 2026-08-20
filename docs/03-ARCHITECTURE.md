@@ -158,7 +158,7 @@ flowchart TD
 
 **Context**: We need VS Code running as a web server on Android. The MIT `microsoft/vscode` source carries that web-serving layer itself, as the `vscode-reh-web-linux-<arch>` build target. The pre-built server on Microsoft's update CDN is a different artifact under Microsoft's own licence terms, which do not permit modifying it and redistributing it inside an APK.
 
-**Decision**: Build Code - OSS from the MIT source. `scripts/build-vscode-oss.sh` clones `github.com/microsoft/vscode` at the tag pinned in the `VSCODE_VERSION` file, applies the numbered unified diffs in `patches/` with `git apply` and the product config in `branding/`, then runs `npm run gulp core-ci`, `npm run gulp compile-copilot-extension-build`, and the `vscode-reh-web-linux-<arch>-min-ci` packaging task. The tarball is published once per VS Code version as a `server-<version>` release, and every app build fetches it with `scripts/fetch-vscode-oss.sh`.
+**Decision**: Build Code - OSS from the MIT source. `scripts/build-vscode-oss.sh` clones `github.com/microsoft/vscode` and checks out the commit in `VSCODE_COMMIT`, not the tag in `VSCODE_VERSION`: a tag can be moved, and a clone by tag would follow it without a word. `VSCODE_VERSION` records which tag that commit belonged to when it was pinned. The script then applies the numbered unified diffs in `patches/` with `git apply` and the product config in `branding/`, then runs `npm run gulp core-ci`, `npm run gulp compile-copilot-extension-build`, and the `vscode-reh-web-linux-<arch>-min-ci` packaging task. The tarball is published once per VS Code version as a `server-<version>` release, and every app build fetches it with `scripts/fetch-vscode-oss.sh`.
 
 **Rationale**:
 - The MIT source is the artifact we are free to modify and redistribute inside an APK
@@ -316,7 +316,9 @@ flowchart TD
 - Play Store optimizes delivery per device (only arm64 assets delivered)
 - No custom CDN infrastructure needed for toolchain hosting
 - All binaries delivered via Play Store, simplifying policy compliance
-- Additional languages can be added later via Settings > Toolchains
+- Additional languages can be added later by long-pressing the launcher icon and choosing **Manage
+  toolchains**. There is no Settings entry: `ToolchainActivity` is not exported and the launcher
+  shortcut `SplashActivity.publishToolchainShortcut()` pushes is the only route to it
 - Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything other than `com.android.vending` sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`
 
 **Trade-off**: Requires internet for toolchain download after initial install. Core functionality (Node.js, Python, Git) works fully offline.

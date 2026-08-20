@@ -84,7 +84,7 @@ The VS Code editor UI communicates with the local server process over `localhost
 
 ## Android Backup (On by Default)
 
-VSCodroid allows Android's own backup service, so **one directory does leave the device** if you have backup enabled in your Android settings: `~/.vscodroid/data/Machine`, which holds your editor settings — theme, keybindings, preferences. Android uploads it to your Google account, not to us. We never see it.
+VSCodroid allows Android's own backup service, so **one directory does leave the device** if you have backup enabled in your Android settings: `~/.vscodroid/data/Machine`, which holds the editor defaults VSCodroid writes for you. Settings and keybindings you change yourself are stored by the editor inside the WebView and are not in the backup. Android uploads it to your Google account, not to us. We never see it.
 
 This is written as an allowlist, so everything not named above is excluded rather than the other way round. In particular these are **not** backed up:
 

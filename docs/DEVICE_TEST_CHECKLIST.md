@@ -116,7 +116,7 @@ development server active" here, the degradation is silent again.
 
 | ID | Metric | Steps | Target | Actual | Pass/Fail | Notes |
 |----|--------|-------|--------|--------|-----------|-------|
-| PF-1 | Cold start (first run) | Time from tap to editor visible | <15s extraction + <10s server | | | |
+| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 810 MiB across 23,494 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
 | PF-2 | Cold start (subsequent) | Kill app, re-launch, time to editor | <5s | | | |
 | PF-3 | Warm start | Home → return to app | <2s | | | |
 | PF-4 | Memory (idle) | Open app, check `dumpsys meminfo` | <400MB | | | |
@@ -132,9 +132,6 @@ development server active" here, the degradation is silent again.
 There is no Settings entry for this screen. Touch and hold the app icon on the
 home screen and pick **Manage toolchains** — `strings.xml` calls that the only
 entry point there is, and every row below starts from it.
-
-| ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
-|----|----------|-------|-----------------|-----------|-------|
 
 Run each command in the app's own terminal. `adb shell run-as` will not answer
 these: it runs in a different SELinux domain, one that is allowed to execute

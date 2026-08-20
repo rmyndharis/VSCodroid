@@ -197,8 +197,9 @@ android {
         applicationId = "com.vscodroid"
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 13            // moves every release; read build.gradle.kts, never this block
+        versionName = "1.2.0"      // both are persisted by markSetupComplete() and either one
+                                   // changing re-runs the whole of first-run extraction
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -289,7 +290,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (first run only)<br/>Check extraction state<br/>Extract assets to files/<br/>Initialize environment<br/>Start MainActivity"]
+  A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (LAUNCHER, runs on every start)<br/>Per-launch repairs: symlinks, git core, npm wrappers, SAF reclaim<br/>Extraction only when versionName or versionCode changed<br/>Start MainActivity"]
   B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Register AndroidBridge<br/>Start/bind NodeService<br/>Wait server ready -> loadUrl(http://localhost:PORT/)"]
   C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll GET /version, accept only 200<br/>Notify MainActivity: server ready"]
   D --> E["MainActivity (running)<br/>Handle ExtraKeyRow visibility<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]
@@ -299,24 +300,50 @@ flowchart TD
 ### 2.3 Environment Variables
 
 ```kotlin
+// Illustrative shape only. Environment.buildProcessEnvironment sets 27 keys plus whatever
+// getToolchainEnvironment() contributes; the list below names all 27 but abbreviates the values.
 val env = mapOf(
-    "HOME"              to "${filesDir}/home",
-    "TMPDIR"            to "${cacheDir}/tmp",
-    "PATH"              to "${nativeLibDir}:${filesDir}/usr/bin:/system/bin",
-    "LD_LIBRARY_PATH"   to "${nativeLibDir}:${filesDir}/usr/lib",
-    "NODE_PATH"         to "${filesDir}/server/vscode-reh/node_modules",
-    "SHELL"             to "${filesDir}/usr/bin/bash",
-    "TERM"              to "xterm-256color",
-    "TERMINFO"          to "${filesDir}/usr/share/terminfo",
-    "LANG"              to "en_US.UTF-8",
-    "COLORTERM"         to "truecolor",
-    "EDITOR"            to "vi",
-    "PREFIX"            to "${filesDir}/usr",
-    "PYTHONHOME"        to "${filesDir}/usr",
-    "GIT_EXEC_PATH"     to "${filesDir}/usr/lib/git-core",
-    "VSCODROID_VERSION" to BuildConfig.VERSION_NAME,
+    "HOME"                    to "${filesDir}/home",
+    "TMPDIR"                  to "${cacheDir}/tmp",
+    "TMUX_TMPDIR"             to "${cacheDir}/tmp",   // Termux tmux hunts inside Termux's prefix otherwise
+    "PATH"                    to "${nativeLibDir}:${filesDir}/usr/bin:<toolchains>:/system/bin",
+    "LD_LIBRARY_PATH"         to "${nativeLibDir}:${filesDir}/usr/lib",
+    "NODE_PATH"               to "${filesDir}/server/vscode-reh/node_modules",
+    "NODE_OPTIONS"            to "--require=${filesDir}/server/platform-fix.js",
+    "SHELL"                   to "${filesDir}/usr/bin/bash",
+    "BASH_ENV"                to "${filesDir}/home/.vscodroid/bash-env.sh",  // see below
+    "TERM"                    to "xterm-256color",
+    "TERMINFO"                to "${filesDir}/usr/share/terminfo",
+    "LANG"                    to "en_US.UTF-8",
+    "PREFIX"                  to "${filesDir}/usr",
+    "PYTHONHOME"              to "${filesDir}/usr",
+    "PYTHONDONTWRITEBYTECODE" to "1",
+    "GIT_EXEC_PATH"           to "${filesDir}/usr/lib/git-core",
+    "GIT_TEMPLATE_DIR"        to "${filesDir}/usr/share/git-core/templates",
+    "GIT_SSH_COMMAND"         to "${nativeLibDir}/libssh.so -F ${filesDir}/home/.ssh/config",
+    "GIT_SSL_CAPATH"          to "<system trust store>",
+    "GIT_SSL_CAINFO"          to "${filesDir}/usr/etc/tls/cert.pem",   // curl needs the bundle, not the dir
+    "SSL_CERT_DIR"            to "<system trust store>",
+    "NPM_CONFIG_PREFIX"       to "${filesDir}/usr",
+    "NPM_CONFIG_CACHE"        to "${cacheDir}/npm-cache",
+    "PROJECTS_DIR"            to "<projects dir>",
+    "USE_BUILTIN_RIPGREP"     to "0",                 // falsy sends the Claude CLI to rg on PATH
+    "VSCODROID_PORT"          to port.toString(),
+    "VSCODROID_VERSION"       to BuildConfig.VERSION_NAME,
 )
 ```
+
+**`COLORTERM` and `EDITOR` are not set**, and neither are `VISUAL`, `GIT_EDITOR` or `PAGER`. This
+block listed the first two until 2026-08-20 and they have never been in the map. No editor binary
+is bundled either, so `git commit` with no `-m` has nothing to open.
+
+**`BASH_ENV` is the load-bearing entry.** `npm`, `npx`, `claude` and every toolchain binary are bash
+*functions*, not files, because SELinux refuses `execve` under `filesDir`. Those functions live in
+`.bashrc`, which only an interactive bash reads, so `BASH_ENV` names a second file carrying the same
+definitions for `bash -c`, `bash script.sh` and `bash -lc`. What it does not reach is a bare
+`execve` (`child_process.spawn("go", ...)` with no shell) and `sh -c`, since Android's `sh` is mksh
+and has never heard of the variable. `child_process.exec()` and make's default recipe shell are both
+`/bin/sh`. See `FirstRunSetup.createBashEnvFile`, whose KDoc states the boundary in full.
 
 ---
 
@@ -369,20 +396,27 @@ webView.settings.apply {
     javaScriptEnabled = true
     domStorageEnabled = true
     databaseEnabled = true
-    allowFileAccess = true
+    allowFileAccess = false         // the WebView has no business reading files directly
     allowContentAccess = true
     setSupportZoom(false)           // Prevent accidental zoom
     builtInZoomControls = false
-    textZoom = 100                  // Prevent system text scaling
-    mixedContentMode = MIXED_CONTENT_ALWAYS_ALLOW  // localhost
+    displayZoomControls = false
+    textZoom = 100                  // pinned, so the system font scale does NOT reach the editor
+    mixedContentMode = MIXED_CONTENT_ALWAYS_ALLOW  // LAN dev servers on plain http
     mediaPlaybackRequiresUserGesture = false
     cacheMode = LOAD_DEFAULT
-    userAgentString = "${settings.userAgentString} VSCodroid/${BuildConfig.VERSION_NAME}"
+    javaScriptCanOpenWindowsAutomatically = true
+    setSupportMultipleWindows(false)
 }
-
-// Soft input mode
-window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 ```
+
+Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not** here:
+
+- **No `userAgentString`.** Nothing in the app assigns one; the WebView reports Chromium's default.
+- **No `setSoftInputMode` call.** The resize behaviour comes from
+  `android:windowSoftInputMode="adjustResize"` on the activity in `AndroidManifest.xml`.
+- **`textZoom = 100` is a pin, not a default.** It is why changing the system font size has no
+  effect on editor text, which is a live accessibility gap rather than a setting anyone tuned.
 
 ### 4.2 Crash Recovery
 
@@ -414,10 +448,26 @@ override fun onRenderProcessGone(
 
 ### 5.1 Layout
 
-```mermaid
-flowchart TD
-  KR["Extra Key Row"] --> K1["Tab"] --> K2["Esc"] --> K3["Ctrl"] --> K4["Alt"] --> K5["Left"] --> K6["Up"] --> K7["Down"] --> K8["Right"] --> K9["{}"] --> K10["()"] --> K11[";"]
-```
+Five swipeable pages, eight items each. Eight is a ceiling rather than a preference: every button
+gets an equal share of the row width, so sixteen on a 360dp portrait row leaves about 18.5dp a key,
+well under the 48dp minimum touch target. Source of truth is `KeyPageConfig.kt`.
+
+| Page | Contents |
+|------|----------|
+| 1 | Tab, Esc, Ctrl, Alt, Shift, the gesture trackpad, `{}`, `()` |
+| 2 | `;` `:` `"` `/` `\|` `` ` `` `&` `_` |
+| 3 | `[` `]` `<` `>` `=` `!` `#` `@` |
+| 4 | F1 to F8 |
+| 5 | F9 to F12, Home, End, PageUp, PageDown |
+
+Ctrl, Alt and Shift latch rather than repeat. The bracket and parenthesis keys insert only the
+opening character, because Monaco closes the pair and places the caret inside. Several keys carry
+long-press alternates, which `KeyPageConfig.kt` lists beside them.
+
+There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
+emits arrow keys as the finger moves (`TrackpadGesture.accumulate`), which makes it the only cursor
+movement available to a touch user, and unavailable to any assistive input that cannot perform a
+drag.
 
 ### 5.2 Key Injection
 
@@ -592,7 +642,7 @@ is absent.
 
 ```mermaid
 flowchart TD
-  A["1. User selects a toolchain (first-run picker or Settings > Toolchains)"] --> B{"2. Install source is com.android.vending?"}
+  A["1. User selects a toolchain<br/>(first-run picker, or the launcher icon's Manage toolchains shortcut)"] --> B{"2. Install source is com.android.vending?"}
   B -- "Yes" --> C["3a. assetPackManager.fetch(packName)"]
   B -- "No" --> D["3b. downloadViaHttp(): toolchain_<name>.zip from releases/latest, sha256 checked"]
   C --> E["4. installFromDirectory(): copy into filesDir/usr"]

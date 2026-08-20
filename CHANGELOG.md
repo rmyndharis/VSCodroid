@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The design documents now describe the build that ships: two on-demand toolchains, terminals that spawn bash on a real PTY, and how the server is actually patched and built.
+- Seven documents named a "Settings > Toolchains" screen the app has never had. They now name the real route, the launcher icon's **Manage toolchains** shortcut.
+- Three documents no longer list file-type "Open with" intent filters as shipped. A `content://` URI has no POSIX path, so every save would reach a copy.
+- The security document no longer lists two permissions the manifest has never declared, and now separates what this app declares from what the manifest merger adds on top.
+- The key row is documented as the five pages it is, with no arrow buttons: the gesture trackpad is the only cursor movement a touch user has.
+- The user guide says extraction repeats after an app update rather than happening only once, and names the nineteen colour themes that ship instead of claiming none do.
+- The technical specification matches the code on WebView settings, the app version, and the 27 environment variables the server process actually receives.
+- The backup test rows name the path that is really in the payload, and add the connection token and preferences as the near misses worth checking.
+- Development no longer needs a physical device in the requirements document: an arm64 emulator works, which is what the contributor guide already said.
+- A note in the implementation plan rendered as four full-width headings, because its lines began with `#` outside a code block.
+- Five section cross-references pointed at sections that do not exist or do not hold what the pointer promised.
+- The milestone checklist no longer names Python 3.12 or a `vscode-web` asset directory. Neither has been true for a long time; the Python version is resolved at build time.
+- The install figures match what the app computes: the storage gate asks for 873 MB, not 875, and the core download is about 270 MB rather than 135 MB.
+- Two passages blamed a `noexec` mount for scripts not running under `filesDir`. It is SELinux, and a `noexec` mount would also block the native addons loaded from there.
+- The first-run extraction row in the device checklist records an elapsed time instead of failing against a 15-second target nobody has ever measured.
+- Two documents said the server build clones VS Code at the tag in `VSCODE_VERSION`. It checks out the commit in `VSCODE_COMMIT`, so a moved tag cannot be followed silently.
 - The toolchain check now reads the design documents too, and no longer skips a whole line because it mentions Google Play, which is how the sentences describing toolchain delivery went unread.
 - The shrinker runs on pushes to main, not only on pull requests, so a configuration change reaches a minified build the same day.
 - The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.

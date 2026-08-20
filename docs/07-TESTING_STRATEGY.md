@@ -188,13 +188,20 @@ See [Security Design § Testing Checklist](./06-SECURITY.md#7-security-testing-c
 
 ### 3.8 Backup & Restore Tests
 
+`data_extraction_rules.xml` is written as an **allowlist with no exclusions**: it names
+`home/.vscodroid/data/Machine` and nothing else, so everything unnamed is already out. That makes
+the exclusion rows below a check on the shape of the rule as much as on the payload, and the row
+that matters most is **Rule shape**.
+
 | Test | Criteria | Method |
 |------|----------|--------|
-| Settings backup | `~/.vscodroid/User/` is included in backup payload | `adb backup`/device transfer test |
-| Settings restore | Restored app keeps themes/keybindings/settings | Uninstall → restore backup → verify settings |
-| Sensitive exclusion: SSH keys | `~/.ssh/` is excluded from backup | Inspect backup payload, verify absent |
-| Sensitive exclusion: git credentials | `~/.gitconfig` is excluded from backup | Inspect backup payload, verify absent |
-| Workspace exclusion | `workspace/` is excluded from backup | Inspect backup payload, verify absent |
+| Settings backup | `home/.vscodroid/data/Machine` is included in the backup payload. **Not** `~/.vscodroid/User/`, which this row named until 2026-08-20 and which the rules have never listed; `Environment.getMachineSettingsPath` explains why the machine path is the live one | `adb backup`/device transfer test |
+| Settings restore | Restored app keeps its machine-scoped settings. `createDefaultSettings()` writes only when the file is absent, so a restored copy is kept rather than overwritten | Uninstall → restore backup → verify settings |
+| Sensitive exclusion: SSH keys | `~/.ssh/` is absent from the payload. The key is generated without a passphrase, so this is the exclusion with real consequences | Inspect backup payload, verify absent |
+| Sensitive exclusion: connection token | `home/.vscodroid/data/token` is absent. It sits one directory from the included path, which is the near miss the allowlist exists to survive | Inspect backup payload, verify absent |
+| Workspace exclusion | The `external` domain (which holds the projects directory, `Android/data/<pkg>/files/projects`) and `filesDir/saf-mirrors` are both absent | Inspect backup payload, verify absent |
+| Preferences exclusion | The `sharedpref` domain is absent. Restoring `setup_version` onto a device with an empty `filesDir` would make the app skip extraction and start a server that is not there | Inspect backup payload, verify absent |
+| Rule shape | `backup_rules.xml` still matches the `<cloud-backup>` section of `data_extraction_rules.xml`. No supported device reads the first file, but it is the floor if `minSdk` ever drops to 30 | Diff the two files |
 | Post-update backup compatibility | Backup/restore still works after app update | Backup on version N, restore on N+1 |
 
 **Run**: Before M4 exit and before each production release.

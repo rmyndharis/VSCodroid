@@ -156,7 +156,7 @@ VSCodroid/
 │   │   │   ├── kotlin/com/vscodroid/  # Kotlin source code
 │   │   │   │   ├── MainActivity.kt       # Main activity, WebView setup, JS bridge
 │   │   │   │   ├── SplashActivity.kt     # First-run extraction, toolchain picker
-│   │   │   │   ├── ToolchainActivity.kt  # Settings > Toolchains UI
+│   │   │   │   ├── ToolchainActivity.kt  # Toolchains screen (launcher long-press shortcut)
 │   │   │   │   ├── VSCodroidApp.kt       # Application class, WebView pre-warm
 │   │   │   │   ├── bridge/               # AndroidBridge, ClipboardBridge, SecurityManager
 │   │   │   │   ├── keyboard/             # ExtraKeyRow, GestureTrackpad, KeyInjector

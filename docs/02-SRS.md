@@ -27,7 +27,7 @@ See [Glossary](./11-GLOSSARY.md).
 
 ### 2.1 Product Perspective
 
-VSCodroid is a standalone Android application that brings VS Code to mobile devices. It is built from [Code - OSS](https://github.com/microsoft/vscode) (the MIT-licensed VS Code source) directly: `scripts/build-vscode-oss.sh` clones that source at the commit pinned in `VSCODE_VERSION`, applies the unified diffs in `patches/`, and builds the `vscode-reh-web-linux-arm64` target, which serves the workbench over HTTP and WebSocket. VSCodroid adds a native Android shell (Kotlin) that hosts the VS Code web client in a WebView and manages a bundled Node.js process that runs the VS Code server, all on localhost.
+VSCodroid is a standalone Android application that brings VS Code to mobile devices. It is built from [Code - OSS](https://github.com/microsoft/vscode) (the MIT-licensed VS Code source) directly: `scripts/build-vscode-oss.sh` clones that source at the commit pinned in `VSCODE_COMMIT` (the tag it belonged to is recorded in `VSCODE_VERSION`), applies the unified diffs in `patches/`, and builds the `vscode-reh-web-linux-arm64` target, which serves the workbench over HTTP and WebSocket. VSCodroid adds a native Android shell (Kotlin) that hosts the VS Code web client in a WebView and manages a bundled Node.js process that runs the VS Code server, all on localhost.
 
 Building from source rather than adapting a pre-built server is a licence constraint, not a preference: the server artifact on Microsoft's update CDN is published under terms that do not permit modifying and redistributing it, so `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one. [code-server](https://github.com/coder/code-server) was evaluated as a base and is not used; none of its patches are carried here.
 
@@ -139,7 +139,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | ID | Requirement | Priority | Milestone |
 |----|------------|----------|-----------|
-| FR-MUX-01 | System SHALL display Extra Key Row above soft keyboard with: Tab, Esc, Ctrl, Alt, arrows, brackets | P1 | M2 |
+| FR-MUX-01 | System SHALL display Extra Key Row above the soft keyboard across five swipeable pages: Tab, Esc, Ctrl, Alt, Shift, a gesture trackpad and `{}` `()` on page 1; symbols on pages 2 and 3; F1 to F12 plus Home, End, PageUp, PageDown on pages 4 and 5. There are **no discrete arrow buttons**: the trackpad emits arrow keys and is the only cursor movement a touch user has (`KeyPageConfig.kt`, `TrackpadGesture.accumulate`) | P1 | M2 |
 | FR-MUX-02 | Extra Key Row Ctrl/Alt keys SHALL act as toggles (tap to activate, tap again to deactivate) | P1 | M2 |
 | FR-MUX-03 | System SHALL inject key events from Extra Key Row into WebView | P1 | M2 |
 | FR-MUX-04 | Extra Key Row SHALL show/hide based on soft keyboard visibility | P1 | M2 |
@@ -163,7 +163,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-DEV-06 | A package manager CLI (`vscodroid pkg`) is not built. No such command exists in the app or on the device; additional packages are the user's own business through the terminal. The design it would start from is `docs/04-TECHNICAL_SPEC.md` §8, and it sits on the post-release roadmap | P2 | Post-release |
 | FR-DEV-07 | Prompting for a toolchain by file type is out of scope: nothing watches which files are opened. Discovery is unprompted instead, the welcome walkthrough names the two toolchains and points at the picker, which is also reachable from the app icon's **Manage toolchains** shortcut | P3 | M3 |
 | FR-DEV-08 | System SHALL provide Language Picker UI during first-run for selecting toolchains to install | P1 | M3 |
-| FR-DEV-09 | System SHALL allow installing additional toolchains later via Settings > Toolchains | P2 | M3 |
+| FR-DEV-09 | System SHALL allow installing additional toolchains later from the app icon's **Manage toolchains** launcher shortcut (`SplashActivity.publishToolchainShortcut`), matching FR-DEV-07 above. There is no Settings entry and `ToolchainActivity` is not exported, so the shortcut is the only route | P2 | M3 |
 
 ### 3.8 Application Lifecycle (FR-LIFE)
 
@@ -193,7 +193,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-PERF-04 | File open (< 1MB file) | < 1 second | P0 |
 | NFR-PERF-05 | Extension install + activate | < 30 seconds | P1 |
 | NFR-PERF-06 | Terminal command response | < 100ms input echo | P0 |
-| NFR-PERF-07 | First-run binary extraction | < 15 seconds | P1 |
+| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 810 MiB across 23,494 files, unpacked one at a time | P1 |
 
 ### 4.2 Resource Usage (NFR-RES)
 
@@ -302,7 +302,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Constraint | Details |
 |-----------|---------|
 | RAM on low-end devices | 4GB devices must work without OOM |
-| Storage on 64GB devices | ~810 MB extracted for core, and ~875 MB free needed to install |
+| Storage on 64GB devices | ~810 MB extracted for core, and ~873 MB free needed to install |
 | CPU throttling | Android may throttle background processes |
 | Battery optimization | Doze mode may affect background server |
 
@@ -406,7 +406,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 - [ ] Extension Host migrated to worker_thread (reduces phantom count by 1)
 - [ ] Phantom process monitoring UI warns user when approaching limits
 - [ ] GitHub OAuth push/pull works
-- [ ] Tested on 4 device models (see Testing Strategy §7 compatibility matrix)
+- [ ] Tested on 4 device models (see Testing Strategy §3.5 Compatibility Tests and §4.3 Reference Devices)
 
 ### M5 (Release) Acceptance
 

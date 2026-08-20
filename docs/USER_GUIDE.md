@@ -23,8 +23,8 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 ### What Happens on First Open
 
-1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is approximately 135 MB, and you need about 875 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 810 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~875 MB above is that payload plus the working room setup insists on before it will start. It only happens once.
+1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 873 MB free for the extraction that follows.
+2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 810 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~873 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 177 MB rather than 873 MB), but it does re-copy the files and it does take minutes.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -211,7 +211,9 @@ The Extra Key Row is especially useful in the terminal:
 - **Ctrl+L** -- clear the terminal screen
 - **Tab** -- autocomplete file and directory names
 - **Esc** -- cancel a prompt, or leave copy mode in tmux
-- **Arrow keys** -- navigate command history (Up/Down) and cursor (Left/Right)
+- **Arrow keys** -- navigate command history (Up/Down) and cursor (Left/Right). On a touch device
+  these come from the trackpad on page 1 of the key row, not from buttons; drag it up or down to
+  walk back through history
 
 ### Multiple Terminals
 
@@ -260,12 +262,16 @@ These extensions come bundled with VSCodroid:
 - **Python** -- Python language support
 
 VSCodroid also ships four of its own, which do not appear in the marketplace:
-the Get Started walkthrough, the Android bridge behind device folders, the
-device browser and SSH keys, **Serve on Network**, and the process monitor in
-the status bar.
+the Get Started walkthrough, the Android bridge (device folders, the device
+browser, SSH keys and storage), **Serve on Network**, and the process monitor
+in the status bar.
 
-Themes are not bundled. VSCodroid opens on the editor's own dark theme; install
-whichever you prefer from the marketplace.
+VSCodroid opens on the editor's own dark theme, and it is not the only one installed. Nineteen
+colour themes ship with it: the Dark and Light defaults with their Modern and high-contrast
+variants, plus Abyss, Kimbie Dark, Monokai, Monokai Dimmed, Quiet Light, Red, Solarized Dark,
+Solarized Light and Tomorrow Night Blue. Switch with **Preferences: Color Theme** in the Command
+Palette, no download needed. Three file-icon themes ship too, Seti among them. Anything beyond
+these comes from the marketplace.
 
 ### Recommended Extensions to Install
 
@@ -701,7 +707,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 810 MB to internal storage. With both toolchains installed, expect around 990 MB. Setup needs about 875 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 810 MB to internal storage. With both toolchains installed, expect around 990 MB. Setup needs about 873 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

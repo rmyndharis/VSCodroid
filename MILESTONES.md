@@ -220,9 +220,22 @@ M6 (Release)   → Play Store release
    - [x] `GestureTrackpad` has `contentDescription = "Arrow key trackpad. Drag to move cursor."`
    - [x] Button min height enforced by ExtraKeyRow layout
 
-8. **Android Intent: "Open with VSCodroid"** (`AndroidManifest.xml`)
-   - [x] Intent filter registered for broad code file types (text/\*, application/json, etc.)
-   - [x] File reception handled in `MainActivity.handleOpenFileIntent()`
+8. **Android Intent: "Open with VSCodroid"** (`AndroidManifest.xml`) **- withdrawn, see below**
+   - [ ] ~~Intent filter registered for broad code file types (text/\*, application/json, etc.)~~ **withdrawn**
+   - [ ] ~~File reception handled in `MainActivity.handleOpenFileIntent()`~~ **never existed; see the note below**
+
+   > **This no longer ships, and must not be restored as written.** The filters advertised this app
+   > for about twenty source-file extensions and nothing ever opened one: the receiving hook had no
+   > consumer, so choosing VSCodroid from "Open with" brought up the editor on the default folder
+   > with no file and no message. `handleOpenFileIntent()` is named above but exists in no commit;
+   > it was only ever written down here.
+   >
+   > Restoring the filters is not a matter of wiring the hook up. A `content://` URI has no POSIX
+   > path and the server only ever sees POSIX paths, so the file has to be materialised locally, at
+   > which point saving writes to a copy and the user's edits never reach the file they opened.
+   > Advertising nothing is honest; advertising this and silently dropping edits would not be.
+   > Folders still open through the SAF picker, which has the sync engine that makes write-back
+   > work. `AndroidManifest.xml` carries this reasoning where the filters used to sit.
 
 9. **Crash recovery** (`VSCodroidWebViewClient.kt`, `MainActivity.kt`)
    - [x] `onRenderProcessGone`: calls `recreateWebView()` — removes crashed WebView, creates new, re-setups, reloads VS Code
@@ -236,7 +249,7 @@ M6 (Release)   → Play Store release
 - [x] Copy/paste works between VSCodroid and other apps (`ClipboardBridge`)
 - [x] App works in portrait, landscape, split-screen
 - [x] Accessibility: contentDescription on all Extra Key Row controls + GestureTrackpad
-- [x] "Open with VSCodroid" works from file manager (intent filter registered)
+- [x] "Open with VSCodroid" works from file manager (intent filter registered) **- withdrawn, see item 8**
 - [x] App recovers from WebView crash (`recreateWebView`) and Node.js death (auto-restart)
 
 ### Estimated Effort: 2-3 weeks
@@ -258,8 +271,8 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Bundle Python 3 for ARM64 Android** (`scripts/download-python.sh`)
-   - [x] Pre-compiled Python 3.12 from Termux APT repo
-   - [x] `libpython.so` in `jniLibs/arm64-v8a/` + stdlib in `assets/usr/lib/python3.12/`
+   - [x] Pre-compiled Python from the Termux APT index, version resolved at build time by `scripts/download-python.sh`
+   - [x] `libpython.so` in `jniLibs/arm64-v8a/` + stdlib in `assets/usr/lib/python<major>.<minor>/` (3.14 in the current tree)
    - [x] pip included via `python-pip` Termux package (site-packages)
    - [x] Symlinks: `python3` and `python` → `libpython.so` via `setupToolSymlinks()`
 
@@ -285,7 +298,7 @@ M6 (Release)   → Play Store release
 5. **First-run experience** (`SplashActivity.kt`, `FirstRunSetup.kt`)
    - [x] `SplashActivity` shows progress during first-run extraction
    - [x] `FirstRunSetup.runSetup()` with percentage-based progress reporting
-   - [x] Steps: create dirs → extract vscode-reh → extract vscode-web → extract tools →
+   - [x] Steps: create dirs → extract vscode-reh (the reh-web tree carries the web client) → extract tools →
          setup git → setup symlinks → extract extensions → configure settings
    - [x] Welcome project created (`createWelcomeProject`)
    - [x] Welcome extension provides quick-start tab
@@ -408,7 +421,7 @@ M6 (Release)   → Play Store release
 
 4. **Language Picker UI** (`SplashActivity.kt`, `ToolchainActivity.kt`, `ToolchainPickerAdapter.kt`)
    - [x] First-run UI: "What do you code in?" with language checkboxes (`SplashActivity.showToolchainPicker()`, `layout_toolchain_picker.xml`)
-   - [x] Settings > Toolchains page for adding/removing languages post-install (`ToolchainActivity` with MANAGER mode, `activity_toolchain.xml`)
+   - [x] Toolchains screen for adding/removing languages post-install (`ToolchainActivity` with MANAGER mode, `activity_toolchain.xml`). Reached by long-pressing the launcher icon and choosing **Manage toolchains**; there is no Settings entry, the activity is not exported, and `SplashActivity.publishToolchainShortcut()` is what makes it reachable at all
    - [x] Download progress UI, error handling, retry (`SplashActivity.startDownloads()`, `layout_toolchain_progress.xml`, `Action.RETRY/CANCEL`)
    - [x] Size display per toolchain before download (`ToolchainPickerAdapter` shows `~${formatSize(info.estimatedSize)}`)
 
@@ -418,7 +431,7 @@ M6 (Release)   → Play Store release
 - [x] ptyHost runs as worker_thread (additional phantom process saved)
 - [x] On-demand toolchains delivered via Play Asset Delivery (Go, Ruby, Java)
 - [x] ToolchainManager handles full lifecycle (install, uninstall, env vars, symlinks)
-- [x] Language Picker UI works during first-run and from Settings (`SplashActivity` + `ToolchainActivity`)
+- [x] Language Picker UI works during first-run and from the launcher icon's **Manage toolchains** shortcut (`SplashActivity` + `ToolchainActivity`)
 
 ### Estimated Effort: 3-4 weeks
 

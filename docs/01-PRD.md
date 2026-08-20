@@ -126,7 +126,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 | Android Back Button | Close panels/dialogs first, then minimize | M2 |
 | Screen Orientation | Portrait, landscape, split-screen support | M2 |
 | Crash Recovery | WebView crash recovery, Node.js auto-restart | M2 |
-| "Open with VSCodroid" | Android Intent for common code file types (app-internal storage; full external storage via SAF in M4) | M2 |
+| ~~"Open with VSCodroid"~~ | **Out of scope.** A `content://` URI has no POSIX path and the server only ever sees POSIX paths, so an opened file would have to be materialised locally and every save would write to a copy. Folders open through the SAF picker instead, which has the sync engine that makes write-back work. See `AndroidManifest.xml`, where the reasoning sits in place of the filters | withdrawn |
 | Bundled Python | Python 3 + pip, ready to use | M3 |
 | Terminal Sessions | Each terminal spawns bash directly on its own PTY through node-pty; tmux ships as a standalone tool | M1 |
 
@@ -173,12 +173,19 @@ flowchart TD
   C --> F["Git: stage, commit, push via SCM panel"]
 ```
 
-### Flow 3: Open External File
+### Flow 3: Open a Folder from Device Storage
+
+VSCodroid does not appear in Android's "Open with" sheet, and that is deliberate rather than
+missing: a single `content://` file has no POSIX path, so saving it would write to a copy. Folders
+are the unit that works, because a picked folder gets a local mirror that `SafSyncEngine`
+reconciles back to the real documents.
 
 ```mermaid
 flowchart TD
-  A["File Manager"] --> B["Tap .py file"] --> C["Open with..."] --> D["VSCodroid"]
-  D --> E["File opens in editor<br/>Terminal has python3 ready"]
+  A["VSCodroid"] --> B["Command Palette:<br/>VSCodroid: Open Folder from Device"] --> C["Android SAF picker"]
+  C --> D["Folder mirrored into a hash-named<br/>directory under filesDir/saf-mirrors"]
+  D --> E["Folder opens in editor<br/>Terminal has python3 ready"]
+  E --> F["Saves reconciled back to the device folder<br/>by SafSyncEngine"]
 ```
 
 ## 8. Competitive Analysis
@@ -230,7 +237,7 @@ flowchart TD
 | 2 | Node.js version to target? | Binary size, compatibility | **Resolved**: not a preference. `remote/.npmrc` `target` at the pinned VS Code tag names the Node the server ships and its native modules are built against, and Termux's `nodejs-lts` package supplies it (24.18.0 today) |
 | 3 | Python version? | Size, package compat | **Resolved**: not pinned here. `scripts/download-python.sh` reads the version from the Termux package index at build time, so the bundled `usr/lib/libpython*.so` is the authority (3.14 today) |
 | 4 | Monetization strategy? (Free, freemium, paid?) | Revenue, feature gating | **Resolved**: Free and Open Source (MIT license) |
-| 5 | Support x86_64 emulators for development? | Dev workflow | **Resolved**: No — ARM64 binaries don't run on x86 emulators. Physical device required (see Dev Guide §1.1) |
+| 5 | Support x86_64 emulators for development? | Dev workflow | **Resolved**: No. The app is `arm64-v8a` only, so an x86_64 image cannot load the bundled `.so` files. A physical device is **not** required, though: an arm64 emulator works, and is the default on Apple silicon. See the prerequisites table in `CONTRIBUTING.md` and `android/app/src/androidTest/README.md` for why CI cannot run one |
 
 ## 12. Timeline
 

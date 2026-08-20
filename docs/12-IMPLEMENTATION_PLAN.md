@@ -1191,7 +1191,8 @@ android/app/src/main/res/
 **Acceptance criteria**:
 
 - [ ] Multi-page Extra Key Row with ViewPager2 + dot indicators
-- [ ] All key buttons work: Tab, Esc, Ctrl, Alt, arrows, brackets, semicolons
+- [ ] All key buttons work: Tab, Esc, Ctrl, Alt, Shift, brackets, symbols, function keys. There are
+      no arrow buttons; the gesture trackpad on page 1 of the row covers that
 - [ ] Long-press on keys shows alternate key popup
 - [ ] GestureTrackpad navigates with 3-speed sensitivity
 - [ ] Modifier interceptor syncs physical keyboard state with toggle buttons
@@ -1374,7 +1375,8 @@ patches/vscodroid/
 
 **Acceptance criteria**:
 
-- [ ] "Open with VSCodroid" appears in Android share/open menus for code files
+- [ ] ~~"Open with VSCodroid" appears in Android share/open menus for code files~~ **Withdrawn**, and
+      not to be restored as written: see the M2-T6 note at the top of this document
 - [ ] File opens in editor after intent
 - [ ] WebView crash → recovery → editor reloads (no data loss)
 - [ ] Node.js kill → auto-restart → WebView reconnects
@@ -1394,7 +1396,7 @@ patches/vscodroid/
 | 6   | Portrait, landscape, split-screen work                | Rotation test                |
 | 7   | TalkBack works for native controls                    | TalkBack navigation test     |
 | 8   | Touch targets ≥ 48dp                                  | Layout Inspector measurement |
-| 9   | "Open with VSCodroid" works                           | Share from file manager      |
+| 9   | ~~"Open with VSCodroid" works~~ **withdrawn, see M2-T6 note** | n/a: the app registers no file filter |
 | 10  | Crash recovery works (WebView + Node.js)              | Kill process tests           |
 | 11  | Validated on at least 2 device models                 | Test on Pixel + Samsung      |
 
@@ -1504,7 +1506,7 @@ android/app/src/main/kotlin/com/vscodroid/
 1. **Day 1** — Create npm bash functions:
    - Define `npm` and `npx` as bash functions in `.bashrc` (not script wrappers)
    - Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
-   - Bash functions required because Android's noexec restriction prevents running script files from app storage
+   - Bash functions required because SELinux denies `execute_no_trans` on `app_data_file` for targetSdk >= 29, so a shebang script under `filesDir` cannot be exec'd
    - Create `.npmrc` with `script-shell` pointing to `libbash.so`
 
 2. **Day 2** — Validation:
@@ -1512,7 +1514,7 @@ android/app/src/main/kotlin/com/vscodroid/
    - Test: `npx create-vite-app test-app`
    - Verify npm cache directory is properly configured
 
-> **Android noexec note**: Android mounts app data partitions with `noexec`, so traditional npm shim scripts (`#!/usr/bin/env node`) cannot be executed directly. Bash functions defined in `.bashrc` bypass this by invoking Node.js with the npm CLI entry point as an argument.
+> **Android exec note**: this is SELinux, not a `noexec` mount, and the difference is load-bearing. SELinux denies `execute_no_trans` on `app_data_file` for targetSdk >= 29, so a shim script under `filesDir` cannot be exec'd, while `dlopen` of a `.node` addon from the same directory is still allowed and is what `pty.node` relies on. A `noexec` mount would block both. Bash functions defined in `.bashrc` and in the `BASH_ENV` file work around the exec side by invoking Node.js with the npm CLI entry point as an argument.
 
 **Acceptance criteria**:
 
@@ -1924,15 +1926,12 @@ flowchart TD
 
 **Effort**: 6 days | **Dependencies**: M4 gate | **High complexity**
 
-# Note: these two ship as unified diffs against the Code - OSS source,
+> **Note**: these two ship as unified diffs against the Code - OSS source,
+> `patches/0003-ptyhost-as-worker-thread.patch` and
+> `patches/0004-exthost-as-worker-thread.patch`, applied with `git apply` by
+> `scripts/build-vscode-oss.sh`. There is no `patches/vscodroid/` directory.
 
-# patches/0003-ptyhost-as-worker-thread.patch and
-
-# patches/0004-exthost-as-worker-thread.patch, applied with git apply by
-
-# scripts/build-vscode-oss.sh. There is no patches/vscodroid/ directory.
-
-**Target VS Code files** (see Tech Spec §6.3):
+**Target VS Code files** (see Tech Spec §6.1 The Patch Set, and the patches themselves):
 
 - `src/vs/workbench/api/node/extensionHostProcess.ts`
 - `src/vs/server/node/remoteExtensionHostAgentServer.ts`
@@ -1948,7 +1947,7 @@ flowchart TD
    - Prototype: replace fork with Worker for Extension Host in isolation
 
 2. **Day 3-4** — Implement Extension Host + ptyHost patches:
-   - Fork → Worker mapping (see Tech Spec §6.3 table)
+   - Fork to Worker mapping (see `patches/0003-ptyhost-as-worker-thread.patch` and `patches/0004-exthost-as-worker-thread.patch`)
    - Handle message passing: `child.send()` → `worker.postMessage()`
    - Handle stdio: explicit log forwarding via worker message channel
    - Implement crash supervisor: restart with exponential backoff
@@ -2103,10 +2102,12 @@ android/app/src/main/res/layout/
    - Handles `AssetPackStatus.DOWNLOADING`, `COMPLETED`, `FAILED`, `REQUIRES_USER_CONFIRMATION`
    - Failed packs skip to next; all done → launch `MainActivity`
 
-3. **Day 4** — Settings > Toolchains (`ToolchainActivity`):
+3. **Day 4**: the Toolchains screen (`ToolchainActivity`). Planned as a Settings page; what shipped
+   is reached from the launcher icon's **Manage toolchains** shortcut instead, and there is no
+   Settings entry anywhere in the app:
    - `ToolchainPickerAdapter(ToolchainCardMode.MANAGER)`: shows installed/available/downloading state
    - Action buttons: Install, Remove (with confirmation dialog), Cancel, Retry
-   - Opened from `AndroidBridge.openToolchainSettings()`
+   - Opened from the launcher shortcut `SplashActivity.publishToolchainShortcut()` pushes. `AndroidBridge.openToolchainSettings()` can also start it, but no bundled extension sends that relay command
    - Refreshes installed state on `onStart()`
 
 4. **Day 5** — Polish:
@@ -2118,7 +2119,8 @@ android/app/src/main/res/layout/
 
 - [ ] First-run picker shows "What do you code in?" with language grid
 - [ ] Can select and install toolchains on-demand with progress UI
-- [ ] Settings > Toolchains allows installing/removing with confirmation
+- [ ] The Toolchains screen allows installing/removing with confirmation (reached from the launcher
+      icon's **Manage toolchains** shortcut, not from Settings)
 - [ ] Size display per toolchain before download
 - [ ] Error handling (retry, cancel, skip failed) works correctly
 
@@ -2132,7 +2134,7 @@ android/app/src/main/res/layout/
 | 2   | ptyHost runs as worker_thread (additional phantom process saved)                 | `adb shell ps` comparison                   |
 | 3   | On-demand toolchains delivered via Play Asset Delivery (Go, Ruby, Java)          | Install Go or Ruby                          |
 | 4   | ToolchainManager handles full lifecycle (install, uninstall, env vars, symlinks) | Lifecycle test                              |
-| 5   | Language Picker UI works during first-run and from Settings                      | `SplashActivity` + `ToolchainActivity` test |
+| 5   | Language Picker UI works during first-run and from the **Manage toolchains** shortcut | `SplashActivity` + `ToolchainActivity` test |
 | 6   | 2-hour stability test passes with worker_thread                                  | Endurance test                              |
 
 ---
@@ -2618,7 +2620,7 @@ ships beside the server is covered by plain Node scripts (`scripts/test-*.js`), 
 
 | Milestone | Documentation Task                                             |
 | --------- | -------------------------------------------------------------- |
-| M0        | Update Dev Guide §3 with actual build steps                    |
+| M0        | Update `CONTRIBUTING.md`, Building, with actual build steps    |
 | M1        | Document patch application process, known issues               |
 | M2        | User guide: keyboard shortcuts, Extra Key Row, GestureTrackpad |
 | M3        | User guide: first-run setup, npm usage, extension management   |

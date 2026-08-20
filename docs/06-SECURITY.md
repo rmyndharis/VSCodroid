@@ -126,7 +126,8 @@ Releases. Only the first is covered by Play's signing.
 
 | Data                                   | Backup Behavior                                |
 | -------------------------------------- | ---------------------------------------------- |
-| VS Code settings (themes, keybindings) | Included in Android auto-backup                |
+| Machine-scoped defaults (`home/.vscodroid/data/Machine`) | Included. It is the only path the allowlist names |
+| Themes, keybindings and workbench state the user chose | **Excluded.** They live in the WebView's IndexedDB, which no rule includes, so they do not survive a restore |
 | SSH keys (~/.ssh/)                     | Excluded from backup                           |
 | Git credentials (~/.gitconfig)         | Excluded from backup                           |
 | User workspace files                   | Excluded from backup (too large, user-managed) |
@@ -145,25 +146,31 @@ Releases. Only the first is covered by Play's signing.
 | `FOREGROUND_SERVICE`             | Keep Node.js alive in background                | Install time   |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | Dev server foreground service type              | Install time   |
 | `POST_NOTIFICATIONS`             | Foreground Service notification (API 33+)       | Runtime        |
-| `WAKE_LOCK`                      | Prevent sleep during long operations (optional) | Runtime        |
 
-### 4.2 Optional Permissions
+Those four are what **this app's own** `AndroidManifest.xml` declares. The **installed** app holds
+more, because the manifest merger adds permissions from libraries, and a Play Store listing shows
+the merged set rather than ours:
 
-| Permission                 | Reason                                | When Requested            |
-| -------------------------- | ------------------------------------- | ------------------------- |
-| `MANAGE_EXTERNAL_STORAGE`  | Access projects outside app directory | Runtime, with explanation |
-| `REQUEST_INSTALL_PACKAGES` | N/A — not needed                      | Never                     |
+| Merged in                                        | By                                                                         |
+| ------------------------------------------------ | -------------------------------------------------------------------------- |
+| `FOREGROUND_SERVICE_DATA_SYNC`                    | `com.google.android.play:asset-delivery`, which backs toolchain downloads   |
+| `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` | AndroidX, for its own runtime-registered receivers                 |
 
-### 4.3 Permissions NOT Requested
+Neither table is the authority. `android/app/build/outputs/logs/manifest-merger-release-report.txt`
+is, and reading it is the step that catches a library adding a permission nobody asked for.
 
-| Permission              | Why Not                        |
-| ----------------------- | ------------------------------ |
-| `CAMERA`                | Not needed for code editor     |
-| `MICROPHONE`            | Not needed                     |
-| `LOCATION`              | Not needed                     |
-| `CONTACTS`              | Not needed                     |
-| `PHONE`                 | Not needed                     |
-| `READ_EXTERNAL_STORAGE` | Using SAF instead where needed |
+### 4.2 Permissions this app does not hold
+
+Nothing below is declared. The first two were listed in this document as though they were held,
+until 2026-08-20; the rest have never been in scope.
+
+| Permission                                              | Why not                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MANAGE_EXTERNAL_STORAGE`                               | It would pull in a Play declaration process the app has no need of. Folders outside app storage are reached through SAF, which is a per-folder user grant rather than a permission, and which has the sync engine that makes write-back work                       |
+| `WAKE_LOCK`                                             | A consequence worth knowing: a foreground service keeps the process alive but does not keep the CPU awake, so a long build or test run in the terminal can stall when the screen goes off. Holding a wake lock is a product decision nobody has made yet           |
+| `READ_EXTERNAL_STORAGE`                                 | SAF is used instead, which grants one folder at a time rather than the whole of shared storage                                                                                                                                                                    |
+| `REQUEST_INSTALL_PACKAGES`                              | Not needed. The app installs no APKs; toolchains land in `filesDir` as plain files                                                                                                                                                                                |
+| `CAMERA`, `MICROPHONE`, `LOCATION`, `CONTACTS`, `PHONE` | Not needed by a code editor                                                                                                                                                                                                                                      |
 
 ---
 
