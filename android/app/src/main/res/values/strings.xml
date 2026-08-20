@@ -116,4 +116,19 @@
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_write_back_failed">%1$s did not reach the device folder. The only copy is inside VSCodroid.</string>
+
+    <!-- Shown once after a folder opens when documents in it could not be copied into
+         the editor: a provider error, or no room left. The opposite of
+         saf_write_back_failed on purpose. There the app holds the only copy; here the
+         device does, and the file is simply absent from the editor. -->
+    <plurals name="saf_documents_not_copied">
+        <item quantity="one">A file could not be copied into the editor. It is unchanged in the device folder.</item>
+        <item quantity="other">%1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
+    </plurals>
+    <!-- The same shortfall when the sizes the provider reported did not fit in the space
+         left. Named separately because it is the one the user can act on. -->
+    <plurals name="saf_documents_not_copied_no_room">
+        <item quantity="one">Not enough free space: a file could not be copied into the editor. It is unchanged in the device folder.</item>
+        <item quantity="other">Not enough free space: %1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
+    </plurals>
 </resources>

@@ -1,5 +1,6 @@
 package com.vscodroid.storage
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.os.FileObserver
@@ -161,6 +162,22 @@ class SafSyncEngine(private val context: Context) {
         val rootDocId = DocumentsContract.getTreeDocumentId(safUri)
         docIdCache[""] = rootDocId  // root entry
         val enumerationComplete = walkTree(safUri, rootDocId, "", documents)
+
+        // What phase 2 is about to fetch, against what there is room for. Nothing is
+        // refused on the strength of it: these are the sizes the provider reported, and a
+        // folder that opens is worth more than a prediction. It decides one thing, which
+        // notice the user gets if a copy does fail, and that is the difference between a
+        // message they can act on and one they cannot.
+        val toFetch = bytesToFetch(documents, mirrorDir)
+        val room = usableSpaceOf(mirrorDir)
+        val outOfRoom = toFetch > room
+        if (outOfRoom) {
+            Logger.w(
+                tag,
+                "Opening ${mirrorDir.name} needs ${toFetch / 1_048_576} MB and " +
+                    "${room / 1_048_576} MB is free; some documents will not be copied",
+            )
+        }
 
         val totalFiles = documents.count { !it.isDirectory }
         var filesDone = 0
@@ -405,6 +422,12 @@ class SafSyncEngine(private val context: Context) {
                 "$uploadsDone written back, ${recorded.size} vouched for, " +
                 "$removed removed) in ${elapsed}ms"
         )
+
+        // Only the copies that were attempted and failed. A document skipped for size is
+        // an expected, permanent condition that would toast on every open of the folder
+        // holding it, and the write-back guard already keeps a local file of that name
+        // from replacing it.
+        if (failedCopies > 0) onDocumentsNotCopied(failedCopies, outOfRoom)
     }
 
     /**
@@ -1086,6 +1109,35 @@ class SafSyncEngine(private val context: Context) {
      * is gone.
      */
     internal var onWriteBackFailed: (File) -> Unit = {}
+
+    /**
+     * Told, once per [initialSync], when documents the device holds did not reach the
+     * mirror: how many, and whether the sizes reported for them did not fit in the room
+     * that was left.
+     *
+     * Its own seam rather than a reuse of [onWriteBackFailed], because the two say
+     * opposite things. That one means the app holds the only copy; this one means the
+     * DEVICE does and the editor simply does not have the file, so a notice worded "the
+     * only copy is inside VSCodroid" would send the user looking after a file that is
+     * safe where it is. A no-op by default for the reason that one is: no screen here.
+     */
+    internal var onDocumentsNotCopied: (Int, Boolean) -> Unit = { _, _ -> }
+
+    /**
+     * How much room is left where the mirror lives.
+     *
+     * A seam because no JVM test can make a real filesystem answer that it is full, and
+     * the pre-flight that reads this is exactly the code that has to be right when it is.
+     *
+     * `usableSpace` rather than `StorageManager.getAllocatableBytes`, which lint asks for
+     * and which reports more, because it counts cache Android is willing to evict. The
+     * larger figure is the right one for deciding whether to attempt a write; this decides
+     * nothing of the kind. It runs after a copy has already failed and only picks which
+     * sentence explains it, so the question is not "could this have fit" but "was the disk
+     * visibly full when it did not", and free space is what answers that one.
+     */
+    @SuppressLint("UsableSpace")
+    internal var usableSpaceOf: (File) -> Long = { it.usableSpace }
 
     /**
      * Declines to write [localFile] out, because the device holds a document under that
@@ -2057,6 +2109,32 @@ class SafSyncEngine(private val context: Context) {
          * memory of what this sync could not read, and the document may have been deleted
          * on the device since, in which case the local file is an ordinary new file.
          */
+        /**
+         * How many bytes phase 2 would have to fetch for [documents] into [mirrorDir].
+         *
+         * Counts only what a copy would actually spend: a directory costs nothing, a
+         * document past [MAX_FILE_SIZE] is skipped rather than copied, and one the mirror
+         * already holds at the same length and no older is kept rather than fetched.
+         * Without those two exclusions, reopening a folder of large files reads as
+         * needing the whole folder again.
+         *
+         * A length the provider does not report arrives as 0 and is counted as 0, so a
+         * provider omitting `COLUMN_SIZE` makes the whole sync look free rather than made
+         * to fit a number nobody measured. That is the direction to fail in: the caller
+         * chooses the wording of a notice with this and refuses nothing, so a prediction
+         * that cannot be made must not become a claim.
+         */
+        internal fun bytesToFetch(documents: List<DocumentInfo>, mirrorDir: File): Long =
+            documents.asSequence()
+                .filterNot { it.isDirectory }
+                .filter { it.size in 1..MAX_FILE_SIZE }
+                .filterNot { doc ->
+                    val mirrored = File(mirrorDir, doc.relativePath)
+                    mirrored.isFile && mirrored.length() == doc.size &&
+                        mirrored.lastModified() >= doc.lastModified
+                }
+                .sumOf { it.size }
+
         internal fun writeWouldReplaceUnreadDocument(
             localPath: String,
             deviceHoldsDocument: Boolean,

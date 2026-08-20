@@ -389,6 +389,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // The other direction: documents the device holds that did not reach the editor.
+        // Its own wording, because "the only copy is inside VSCodroid" is the opposite of
+        // true for these, and would send the user looking for a file that is safe.
+        safManager.onDocumentsNotCopied { count, outOfRoom ->
+            runOnUiThread {
+                Toast.makeText(
+                    this@MainActivity,
+                    resources.getQuantityString(
+                        if (outOfRoom) R.plurals.saf_documents_not_copied_no_room
+                        else R.plurals.saf_documents_not_copied,
+                        count,
+                        count,
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+
         setupWebView()
         setupExtraKeyRow()
         setupBackNavigation()

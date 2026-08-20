@@ -61,6 +61,17 @@ class SafStorageManager(private val context: Context) {
         }
     }
 
+    /**
+     * Told when a folder opened without every document reaching the mirror.
+     *
+     * Forwarded rather than set on the engine directly, for the reason
+     * [onWriteBackFailed] is, and unthrottled for the reason that one is throttled: this
+     * fires at most once per folder open and the count it carries is the whole burst.
+     */
+    fun onDocumentsNotCopied(announce: (Int, Boolean) -> Unit) {
+        syncEngine.onDocumentsNotCopied = announce
+    }
+
     private val lastFailureAnnouncedAt = AtomicLong(0)
 
     // -- Permission Management --
