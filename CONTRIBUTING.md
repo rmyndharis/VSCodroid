@@ -201,7 +201,9 @@ VSCodroid/
 │   ├── download-java.sh              # Download Java (OpenJDK 17) toolchain
 │   ├── build-all.sh                  # Run all download/build scripts
 │   ├── deploy.sh                     # Build + install + launch on device
-│   └── device-test.sh                # Run device tests
+│   ├── device-test.sh                # Run device tests
+│   ├── device-launch.sh              # Launch on device, dismissing first-run dialogs
+│   └── generate-branding-icons.py    # Regenerate the web client's PWA icons
 ├── toolchains/                    # Work dir for the download scripts — gitignored,
 │                                  #   cached by CI, safe to delete (costs a re-download)
 ├── patches/                       # Unified diffs applied to the VS Code source
@@ -252,6 +254,8 @@ checkouts differed.
 | ------ | ------------ | --------------- |
 | `fetch-vscode-oss.sh` | Downloads the Code - OSS server tree from the `server-<version>` release, verifies it, and installs ripgrep as `libripgrep.so` | `server/vscode-reh/`, `jniLibs/arm64-v8a/libripgrep.so` |
 | `build-vscode-oss.sh` | Builds that tree from the MIT source with `patches/` and `branding/` applied. Run by the build-vscode-oss workflow on an arm64 runner, or locally in Docker; not needed for a normal build | a `.tar.gz` published as a release asset |
+| `generate-branding-icons.py` | Renders the web client's PWA icon set from the Android launcher icon. Run **by hand** when the launcher icon changes, never by CI, and its outputs are committed: `build-vscode-oss.sh` copies them into the server tree, so the build consumes the committed files and not this script. Load-bearing rather than cosmetic, because upstream ships Microsoft's VS Code icon there and that cannot travel with this app. Needs Pillow | `branding/server/{code-192.png,code-512.png,favicon.ico}` |
+| `device-launch.sh` | Launches the app on a connected device and clears what blocks a first run, matching the POST_NOTIFICATIONS prompt and the toolchain picker by their on-screen text through `uiautomator` rather than by fixed coordinates. Worth knowing why it exists: both dialogs take focus, so the app is backgrounded and its process is gone, which through `ps` and `logcat` reads exactly like a crash. Run by hand, not by CI | the app running on the device |
 | `verify-server-tree.py` | Checks a server tree: required paths, no vsda, no bundled GNU/Linux node, every native binary aarch64, branding applied. Run by both scripts above on the tree they produce, and again by the `verifyServerTree` Gradle task on the copy in `assets/` that is actually packaged — which on a warm-cache build is the only run that happens | exit status |
 | `download-termux-tools.sh` | Downloads bash, git, tmux, make, openssh and every shared library the bundled binaries link against, including Node's | `jniLibs/arm64-v8a/`, `assets/usr/` |
 | `download-node.sh` | Installs Termux's `nodejs-lts` as `libnode.so`. Run after `download-termux-tools.sh`, which places the libraries it links against | `jniLibs/arm64-v8a/libnode.so` |

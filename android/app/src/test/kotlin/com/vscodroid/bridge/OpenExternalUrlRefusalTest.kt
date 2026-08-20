@@ -3,9 +3,7 @@ package com.vscodroid.bridge
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Bundle
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import io.mockk.Runs

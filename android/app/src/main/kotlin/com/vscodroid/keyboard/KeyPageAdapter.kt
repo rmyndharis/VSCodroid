@@ -1,6 +1,5 @@
 package com.vscodroid.keyboard
 
-import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.LinearLayout
