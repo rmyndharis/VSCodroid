@@ -34,6 +34,7 @@ to make sure they find out from the build rather than from a review.
 import pathlib
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GRADLE = ROOT / "android/app/build.gradle.kts"
@@ -42,13 +43,95 @@ MANIFEST = ROOT / "android/app/src/main/AndroidManifest.xml"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 ENFORCED_FROM_SDK = 37
 
+# The SOURCE manifest, not the merged one. AGP merges this file with every
+# library's manifest, so a permission a dependency adds is decided after this
+# runs and is outside what this can see. That gap only ever fails a build whose
+# merged manifest would have been fine, and declaring the permission here is the
+# fix either way. The gap in the other direction is closed below.
+ANDROID_NS = "http://schemas.android.com/apk/res/android"
+TOOLS_NS = "http://schemas.android.com/tools"
+NAME = f"{{{ANDROID_NS}}}name"
+NODE = f"{{{TOOLS_NS}}}node"
+
+# The two elements that request a permission the platform can grant. Deliberately
+# NOT "any element with a name attribute": this file is mostly <activity
+# android:name=...>, <service android:name=...> and <provider android:name=...>,
+# so accepting any element would answer yes to a component that merely happened
+# to be named after the permission. That is a weaker version of the same defect
+# as the substring test this replaces, and harder to see, because it would look
+# like a parse. <permission> is absent for the same reason: it defines a
+# permission this app can hand out, which is the opposite operation.
+PERMISSION_ELEMENTS = ("uses-permission", "uses-permission-sdk-23")
+
+# The manifest-merger operations that delete a declaration written here. Without
+# them a `tools:node="remove"` would read as a declaration and this would pass a
+# build whose merged manifest has no permission at all, which is precisely the
+# shape of failure this gate exists to catch. No other operation removes.
+REMOVING_NODES = ("remove", "removeAll")
+
+# Controls the reader is run against on every invocation, not only in a test
+# somebody remembers to run. A reader that has quietly stopped recognising a
+# declaration prints the same reassuring line as a tree that genuinely has none,
+# and this gate is dormant at targetSdk 36, so nothing else would notice for as
+# long as the bump takes.
+_CONTROLS = (
+    (
+        "a real declaration",
+        f'<manifest xmlns:android="{ANDROID_NS}">'
+        f'<uses-permission android:name="{PERMISSION}" /></manifest>',
+        True,
+    ),
+    (
+        "a uses-permission-sdk-23 declaration",
+        f'<manifest xmlns:android="{ANDROID_NS}">'
+        f'<uses-permission-sdk-23 android:name="{PERMISSION}" /></manifest>',
+        True,
+    ),
+    (
+        "the literal in a comment and in a component name only",
+        f'<manifest xmlns:android="{ANDROID_NS}"><!-- {PERMISSION} -->'
+        f'<application><activity android:name="{PERMISSION}" />'
+        f"</application></manifest>",
+        False,
+    ),
+    (
+        "a declaration the merger is told to remove",
+        f'<manifest xmlns:android="{ANDROID_NS}" xmlns:tools="{TOOLS_NS}">'
+        f'<uses-permission android:name="{PERMISSION}" tools:node="remove" />'
+        f"</manifest>",
+        False,
+    ),
+)
+
 
 def fail(message: str) -> int:
     print(f"  FAIL   {message}", file=sys.stderr)
     return 1
 
 
+def declares_permission(manifest_xml: str) -> bool:
+    """Whether the manifest asks the platform for PERMISSION.
+
+    Raises ElementTree.ParseError for input that does not parse. The caller
+    fails on that rather than reading the absence as "not declared".
+    """
+    root = ET.fromstring(manifest_xml)
+    return any(
+        element.tag in PERMISSION_ELEMENTS
+        and element.get(NAME) == PERMISSION
+        and element.get(NODE) not in REMOVING_NODES
+        for element in root.iter()
+    )
+
+
 def main() -> int:
+    for label, xml, expected in _CONTROLS:
+        if declares_permission(xml) is not expected:
+            return fail(
+                f"the manifest reader answers {not expected} for {label}, so its "
+                "verdict on the real manifest cannot be trusted"
+            )
+
     if not GRADLE.is_file():
         return fail(f"{GRADLE.relative_to(ROOT)} is missing; this check cannot run")
     if not MANIFEST.is_file():
@@ -65,7 +148,16 @@ def main() -> int:
         )
 
     target = int(match.group(1))
-    declared = PERMISSION in MANIFEST.read_text()
+    try:
+        declared = declares_permission(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ET.ParseError) as exc:
+        # Fail closed. A manifest that cannot be parsed is a check that cannot
+        # answer, and answering "not declared" would print the reassuring line
+        # for a file nothing read.
+        return fail(
+            f"{MANIFEST.relative_to(ROOT)} could not be read as XML ({exc}); "
+            "the check cannot tell whether the permission is declared"
+        )
 
     if target < ENFORCED_FROM_SDK:
         state = "declared" if declared else "not declared"
