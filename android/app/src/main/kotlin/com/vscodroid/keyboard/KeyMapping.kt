@@ -84,6 +84,29 @@ object KeyMapping {
      */
     fun getKeyDef(key: String): KeyDef? = mappings[key]
 
+    /**
+     * The character a latched Shift produces for [key] on the US layout this
+     * table describes, or null when Shift produces nothing different.
+     *
+     * The table already carries both halves of every pair: `/` and `?` are both
+     * Slash with keyCode 191 and differ only in [KeyDef.requiresShift], as are
+     * `;` and `:`, `=` and `+`, `[` and `{`. Reading the pair back out of it
+     * keeps one description of the layout instead of a second opinion, which is
+     * the same reason [virtualKeyboardEvents] asks the layout rather than
+     * carrying a table of its own.
+     *
+     * This matters because the row has no `?`, `+`, `*`, `%`, `^`, `$`, `}` or
+     * `)` on any page, so a latched Shift is the only route the row offers to
+     * them. Dropping it types the base character, which is worse than typing
+     * nothing: it is confidently wrong output.
+     */
+    fun shiftedForm(key: String): String? {
+        if (key.length == 1 && key[0].isLetter()) return key.uppercase()
+        val base = mappings[key] ?: return null
+        if (base.requiresShift) return key
+        return mappings.values.firstOrNull { it.keyCode == base.keyCode && it.requiresShift }?.key
+    }
+
     fun getKeyDefOrLetter(key: String): KeyDef {
         return mappings[key] ?: run {
             val char = key.firstOrNull() ?: ' '

@@ -1,11 +1,29 @@
 package com.vscodroid.keyboard
 
+import android.view.KeyEvent
 import android.webkit.WebView
 import com.vscodroid.util.Logger
 
-class KeyInjector(private val webView: WebView) {
+/**
+ * @param keyEventsFor how a character becomes key presses. Defaulted rather than
+ * called directly so the routing can be exercised on the JVM: `KeyCharacterMap`
+ * and `KeyEvent` are android.jar stubs that throw off a device.
+ */
+class KeyInjector(
+    private val webView: WebView,
+    private val keyEventsFor: (String) -> List<KeyEvent>? = ::virtualKeyboardEvents
+) {
     private val tag = "KeyInjector"
 
+    /**
+     * Delivers one press of [key], by whichever of the two routes it needs.
+     *
+     * See [isTextEntry] for which is which and why there have to be two. In
+     * short: a character is typed as a real key press, because a synthetic DOM
+     * event performs no default action and inserts nothing; everything else,
+     * and anything held with Ctrl, Alt or Meta, is announced as a DOM event,
+     * because that is what the workbench resolves its bindings from.
+     */
     fun injectKey(
         key: String,
         ctrlKey: Boolean = false,
@@ -13,20 +31,73 @@ class KeyInjector(private val webView: WebView) {
         shiftKey: Boolean = false,
         metaKey: Boolean = false
     ) {
+        // A latched Shift changes WHICH character is typed, not whether it is
+        // typed. The row offers no other route to `?`, `+`, `}` and the rest,
+        // so resolving it here is what makes those reachable at all.
+        val typed = if (shiftKey) KeyMapping.shiftedForm(key) ?: key else key
+        if (isTextEntry(typed, ctrlKey, altKey, metaKey) && typeCharacter(typed)) return
+        announceKeystroke(key, ctrlKey, altKey, shiftKey, metaKey)
+    }
+
+    /**
+     * Types [key] through the WebView's own key handling. False when the layout
+     * has no press for it, which leaves the caller to fall back.
+     *
+     * Read that fallback for what it is. The path it falls back to is the one
+     * that inserts nothing, which is the whole defect this routing exists to
+     * fix, so for such a character nothing is recovered: the press is preserved
+     * as a keystroke the page can see and the text still does not arrive.
+     * Swallowing the key would be worse, which is why it stays, but "fell back"
+     * must not be read as "handled".
+     *
+     * The [Logger.w] below is the only signal that a key on the row cannot type
+     * on the layout in force, and it is deliberately a warning rather than a
+     * debug line: `Logger.d` is gated on a debuggable build, so on the builds
+     * users run it would say nothing at all. On the US layout this is expected
+     * to be no keys, and "expected to be none" on a layout nobody here chose is
+     * exactly the claim worth instrumenting rather than assuming.
+     */
+    private fun typeCharacter(key: String): Boolean {
+        val events = keyEventsFor(key)
+        if (events.isNullOrEmpty()) {
+            Logger.w(tag, "no press types '$key' on the virtual keyboard layout")
+            return false
+        }
+        var handled = true
+        for (event in events) handled = webView.dispatchKeyEvent(event) && handled
+        if (!handled) {
+            // The view refused the press: the renderer is being rebuilt after a
+            // crash, or the WebView is detached mid folder switch. Reporting
+            // success here would swallow the key entirely, so say so and let the
+            // caller fall back to the path that at least reaches the page.
+            Logger.w(tag, "the WebView refused the press for '$key'")
+            return false
+        }
+        Logger.d(tag, "typed key=$key presses=${events.size}")
+        return true
+    }
+
+    private fun announceKeystroke(
+        key: String,
+        ctrlKey: Boolean,
+        altKey: Boolean,
+        shiftKey: Boolean,
+        metaKey: Boolean
+    ) {
         val keyDef = KeyMapping.getKeyDefOrLetter(key)
         // Quoted by [KeyMapping.jsQuote], which is the table's own escaper and
         // the only one in this package that is correct.
         //
         // What was here escaped `'` and `"` and left `\` alone, which is exactly
         // the character the table holds as a key. For the `\` entry it rendered
-        // `key: '\',` -- the backslash escapes the closing quote, the string
+        // `key: '\',` : the backslash escapes the closing quote, the string
         // runs on into the rest of the object, and the whole injected IIFE is a
         // SyntaxError. `evaluateJavascript` reports a parse failure to a null
         // callback, so the key did nothing at all and did it silently. It is
         // reachable: the `/` key offers `\` as its long-press alternate.
         //
         // jsQuote emits a double-quoted literal, so these are no longer wrapped
-        // in quotes here -- doing both would produce a quoted quote.
+        // in quotes here; doing both would produce a quoted quote.
         val jsKey = KeyMapping.jsQuote(keyDef.key)
         val jsCode = KeyMapping.jsQuote(keyDef.code)
         // Force shiftKey=true for characters that require Shift on a physical keyboard
@@ -50,12 +121,22 @@ class KeyInjector(private val webView: WebView) {
                 };
                 target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
                 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+                return target === document.body ? 'body' : (target.tagName || 'unknown');
             })();
         """.trimIndent()
 
-        webView.evaluateJavascript(js, null)
-        Logger.d(tag, "Injected key=$key ctrl=$ctrlKey alt=$altKey shift=$shiftKey")
+        webView.evaluateJavascript(js) { target ->
+            // What this can honestly report is where the event went, not what
+            // the page did with it: a synthetic KeyboardEvent runs the
+            // workbench's bindings and performs no default action, so "it was
+            // delivered" and "something happened" are different claims and only
+            // the first is observable from here. The line this replaced said
+            // "Injected key={" for a press that inserted nothing, on every tap,
+            // for as long as that key had been broken.
+            Logger.d(tag, "sent key=$key to $target ctrl=$ctrlKey alt=$altKey shift=$effectiveShift")
+        }
     }
+
 
     /**
      * Installs a JS `beforeinput` listener that intercepts soft keyboard text input

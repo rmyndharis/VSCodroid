@@ -43,7 +43,12 @@ class KeyInjectorEscapingTest {
     }
 
     private fun inject(key: String): String {
-        KeyInjector(webView).injectKey(key)
+        // Ctrl, and it is load-bearing rather than incidental. A bare character
+        // is now typed as a real key press and never reaches the page as
+        // JavaScript, so there would be no script to capture. A modifier makes
+        // any key a chord, and a chord is what this generated source is for; the
+        // escaping it checks is identical either way.
+        KeyInjector(webView).injectKey(key, ctrlKey = true)
         return script.captured
     }
 

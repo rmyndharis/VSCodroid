@@ -19,11 +19,15 @@ import org.junit.jupiter.api.Test
  * the injector leaves every one of those green, and leaves the extra key row
  * sending `shiftKey: false` for `{`, `(`, `:` and the rest.
  *
- * What that costs is the whole point of those keys. Monaco decides how to handle
- * a keystroke from the modifiers on the event, not from the character, so a `{`
- * arriving without Shift is not the same keystroke — auto-closing brackets and
- * the bindings that watch for shifted punctuation stop matching. The character
- * still appears, which is why nothing would look broken.
+ * What that costs is which chord the workbench resolves. Monaco decides how to
+ * handle a keystroke from the modifiers on the event, so Ctrl with an unshifted
+ * `{` is a different binding from Ctrl with a shifted one, and neither is the
+ * one the user asked for. It does not cost the character. This paragraph said
+ * "The character still appears, which is why nothing would look broken" until it
+ * was measured on a device: a synthetic KeyboardEvent is untrusted, the browser
+ * performs no default action for it, and tapping `{` inserted nothing whatever
+ * the modifiers said. Characters now go through a real key press instead, which
+ * is why every case here holds Ctrl.
  *
  * The injector already takes its WebView through the constructor, so the script
  * it hands over can be captured without touching production code.
@@ -50,7 +54,9 @@ class KeyInjectorShiftTest {
     }
 
     private fun inject(key: String, shiftKey: Boolean = false): String {
-        KeyInjector(webView).injectKey(key, shiftKey = shiftKey)
+        // Ctrl for the reason given in the class comment: it is what keeps a
+        // character on the path that generates this script.
+        KeyInjector(webView).injectKey(key, ctrlKey = true, shiftKey = shiftKey)
         return script.captured
     }
 

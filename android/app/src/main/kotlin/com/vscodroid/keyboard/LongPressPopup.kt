@@ -53,8 +53,15 @@ class LongPressPopup(
 
                 setOnClickListener {
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onKeySelected(alt.value)
+                    // Dismiss BEFORE emitting. This popup is focusable (the
+                    // fourth argument to PopupWindow below), so while it is up
+                    // the activity window does not hold input focus, and an
+                    // alternate is now delivered as a real key press rather than
+                    // as JavaScript. A key press aimed at a window that is not
+                    // focused is at best fragile, and `\`, `~` and `'` reach the
+                    // editor through no other route.
                     dismiss()
+                    onKeySelected(alt.value)
                 }
             }
             val lp = LinearLayout.LayoutParams(

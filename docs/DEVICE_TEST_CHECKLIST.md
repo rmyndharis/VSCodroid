@@ -47,7 +47,8 @@
 | KB-7 | Extra Key Row — Ctrl+S | Press Ctrl on EKR then S on keyboard | File saves (no error) | | |
 | KB-8 | Extra Key Row — Ctrl+P | Press Ctrl on EKR then P | Quick Open dialog appears | | |
 | KB-9 | Extra Key Row trackpad | Drag on the trackpad: slowly first, then keep going without lifting, then diagonally | Cursor steps character by character at first and speeds up the longer the drag gets; a diagonal drag moves on both axes. There are no arrow buttons to press: the trackpad replaced them, so it is the only way a touch user moves the cursor | | |
-| KB-10 | Extra Key Row — brackets | Press {, }, (, ) on EKR | Characters inserted in editor | | |
+| KB-10 | Extra Key Row, brackets on the textarea edit path | On a device whose WebView is older than 121, open a file and press {, }, (, ) on the key row. Confirm the path first in remote debugging: `document.querySelectorAll("textarea.inputarea").length` is 1 | Each character is inserted, and Monaco auto-closes the pair | | |
+| KB-11 | Extra Key Row, brackets on the EditContext edit path | On a device whose WebView is 121 or newer, same presses. Confirm the path first: `document.querySelectorAll("textarea.inputarea").length` is 0 and `document.querySelectorAll("div.native-edit-context").length` is 2 | Each character is inserted. This is the path where anything written to a textarea is inert, so a pass here and a fail on KB-10 means the fix went to the wrong layer | | |
 
 ## 4. Screen & Orientation
 
@@ -207,7 +208,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 10 | | | |
+| Keyboard Input | 11 | | | |
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 8 | | | |
 | Extensions | 6 | | | |
@@ -217,7 +218,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Toolchains | 6 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **85** | | | |
+| **Total** | **86** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

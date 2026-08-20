@@ -208,16 +208,6 @@ class ExtraKeyRow @JvmOverloads constructor(
                 startModifierSync()
                 Logger.d(tag, "Shift toggled: $shiftActive")
             }
-            "{" -> {
-                // Only inject opening brace — Monaco auto-closes and positions cursor inside
-                keyInjector?.injectKey("{", ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
-                resetModifiersIfNeeded()
-            }
-            "(" -> {
-                // Only inject opening paren — Monaco auto-closes and positions cursor inside
-                keyInjector?.injectKey("(", ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
-                resetModifiersIfNeeded()
-            }
             else -> {
                 keyInjector?.injectKey(key, ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
                 resetModifiersIfNeeded()
