@@ -45,7 +45,7 @@ flowchart TD
 | ----------------------------------------------------- | -------------------------- | ------ | ---------- | ----------------------------------------------------------------------------------- |
 | Other app connects to localhost server                | **Spoofing**               | Medium | Low        | localhost-only binding, plus a connection token required on all but three routes           |
 | Malicious extension impersonates trusted extension    | **Spoofing**               | Medium | Low        | Open VSX publisher verification, user review                                        |
-| Malicious extension steals files                      | **Tampering**              | High   | Medium     | Extension sandbox (Extension Host only), user awareness                             |
+| Malicious extension steals files                      | **Tampering**              | High   | Medium     | **Not mitigated.** The extension host is a fault boundary, not a security one: an extension reaches app-private storage and the network exactly as the app does. What bounds it is the Android app sandbox and the SAF grants the user gave |
 | Man-in-middle on Open VSX downloads                   | **Tampering**              | High   | Low        | HTTPS only, certificate pinning (future)                                            |
 | No audit trail for file changes by extensions         | **Repudiation**            | Low    | Medium     | VS Code timeline/git history, extension activity logging (future)                   |
 | User denies executing destructive terminal command    | **Repudiation**            | Low    | Low        | Accepted, no audit trail. Each terminal spawns bash directly on a PTY through node-pty, and the only record is bash's own history file in app-private storage, which the user can edit or clear |
@@ -55,7 +55,7 @@ flowchart TD
 | Malicious extension consuming all memory/CPU          | **Denial of Service**      | Medium | Low        | Extension Host resource limits, idle-kill for LS                                    |
 | WebView XSS via malicious file content                | **Elevation of Privilege** | Medium | Low        | VS Code CSP, WebView sandboxing                                                     |
 | Extension/webview script abuses AndroidBridge methods | **Elevation of Privilege** | High   | Medium     | Per-session capability token on every bridge method, pinned by a reflection test    |
-| Extension escapes sandbox to access system files      | **Elevation of Privilege** | High   | Low        | Android app sandbox, Extension Host isolation (a worker_thread inside the server process) |
+| Extension reads files outside the app                 | **Elevation of Privilege** | High   | Low        | Android app sandbox, and SAF grants for anything outside it. The worker_thread the extension host runs in is not part of this: it exists so the host does not spend a phantom process slot |
 
 ---
 
@@ -88,7 +88,7 @@ flowchart TD
 | Control                        | Implementation                                                                                           |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | Extension Host isolation       | Runs as a worker_thread inside the server process, applied by `patches/0004-exthost-as-worker-thread.patch`, so it does not spend one of Android's 32 phantom process slots |
-| VS Code Extension API sandbox  | Extensions can only access vscode.\* APIs                                                                |
+| Extension reach                | **No sandbox.** The extension host is Node, so an extension can `require('fs')` and reach whatever the app can. The `vscode.*` API is a convenience, not a boundary |
 | AndroidBridge capability model | All bridge APIs require the valid per-session token; no origin component                                 |
 | File system scoping            | Extensions see workspace folder by default                                                               |
 | Open VSX moderation            | Open VSX has publisher verification and abuse reporting                                                  |

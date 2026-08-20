@@ -50,7 +50,7 @@ flowchart TD
   REPO --> B2["Same events, only when one of seven build-configuration paths changes<br/>r8.yml: R8, the resource shrinker and lintVitalRelease"]
   REPO --> B3["Tag v*<br/>release.yml: signed AAB and APK, toolchain ZIPs, GitHub Release"]
   REPO --> B4["Push to main touching docs/site, the user guide or the privacy policy<br/>pages.yml: publishes the usage site"]
-  REPO --> B5["Monday cron, or dispatched by hand<br/>r8.yml at 03:00 UTC, patch-drift.yml at 04:00 UTC"]
+  REPO --> B5["r8.yml: Monday 03:00 UTC, pushes to main, pull requests, or by hand<br/>patch-drift.yml: Monday 04:00 UTC, or by hand"]
   REPO --> B6["Dispatched by hand on a VS Code bump, arm64 runner<br/>build-vscode-oss.yml: builds the server once per version"]
 ```
 
@@ -101,7 +101,7 @@ jobs:
 | Workflow | Schedule | Purpose | Failure Action |
 |----------|----------|---------|----------------|
 | `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies `patches/` against an upstream VS Code tag with `git apply --check` | Rebase the patch set before the next version bump |
-| `r8.yml` | Monday 03:00 UTC, or dispatched | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
+| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. The three event triggers are filtered to the files that configure the shrinkers, so a change to Kotlin alone still waits for the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
 
 ### 2.3 Caching Strategy
 

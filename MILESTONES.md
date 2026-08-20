@@ -281,7 +281,7 @@ M6 (Release)   → Play Store release
    - [x] Symlink: `make` → `libmake.so` via `setupToolSymlinks()`
 
 3. **npm integration** (`FirstRunSetup.createNpmWrappers`)
-   - [x] npm/npx defined as bash functions in `.bashrc` (not script wrappers — Android noexec restriction)
+   - [x] npm/npx defined as bash functions in `.bashrc` (not script wrappers; SELinux denies `execute_no_trans` under `filesDir`, while `dlopen` of a `.node` addon there still works)
    - [x] Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
    - [x] `.npmrc` created with `script-shell` pointing to `libbash.so`
 

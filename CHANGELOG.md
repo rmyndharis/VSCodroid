@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The security document no longer calls the extension host a sandbox. It is a fault boundary, and an extension reaches app-private storage exactly as the app does.
+- The landing page quotes the storage figure the app computes and says extraction repeats after an update, which every other document already said.
 - The design documents now describe the build that ships: two on-demand toolchains, terminals that spawn bash on a real PTY, and how the server is actually patched and built.
 - Seven documents named a "Settings > Toolchains" screen the app has never had. They now name the real route, the launcher icon's **Manage toolchains** shortcut.
 - Three documents no longer list file-type "Open with" intent filters as shipped. A `content://` URI has no POSIX path, so every save would reach a copy.

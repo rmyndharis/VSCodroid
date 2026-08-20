@@ -216,8 +216,8 @@ class FirstRunSetup(
             // prefix everything on PATH resolves through. Losing one silently
             // left an install that reached the editor and could never serve it,
             // with markSetupComplete() certifying the result and isFirstRun()
-            // keyed on versionName, so nothing tried again until the app
-            // updated. Nothing on device checks these trees are complete --
+            // keyed on versionName or versionCode, so nothing tried again until
+            // the app updated. Nothing on device checks these trees are complete --
             // verify-server-tree.py checks the build, not the install.
             //
             // Aborting was held back on the argument that a single lost file
@@ -383,8 +383,8 @@ class FirstRunSetup(
      * reach them, so they only ever need creating. This one needs repairing.
      *
      * Creating it once per version was not enough. isFirstRun() gates on
-     * versionName, so a folder deleted after setup stayed missing through every
-     * relaunch and force-stop: the explorer was empty, new files could not be
+     * versionName or versionCode, so a folder deleted after setup stayed missing
+     * through every relaunch and force-stop: the explorer was empty, new files could not be
      * saved, and terminals started in a directory that was not there. The only
      * ways back were clearing app data or installing a new version.
      *
@@ -499,9 +499,10 @@ class FirstRunSetup(
      *
      * The interpreter ships in the APK and every install replaces it. Its
      * runtime library and stdlib travel in assets and reach filesDir only
-     * through first-run extraction, which [isFirstRun] gates on versionName. An
-     * install that changes the bundled Python without changing versionName --
-     * `adb install -r` of a rebuilt debug APK is the everyday case -- therefore
+     * through first-run extraction, which [isFirstRun] gates on versionName or
+     * versionCode. An install that changes the bundled Python without moving
+     * either -- `adb install -r` of a rebuilt debug APK is the everyday case --
+     * therefore
      * leaves a new interpreter next to the previous runtime. Python then dies
      * with `CANNOT LINK EXECUTABLE ... library "libpython3.X.so" not found`,
      * naming a missing file rather than the install that removed it.
@@ -1548,8 +1549,8 @@ claude() {
             // Thrown, not logged. This runs only from runSetupLocked, whose
             // markSetupComplete() is the last statement of the same try block --
             // so swallowing the failure certifies an install that has no
-            // .bashrc, and isFirstRun() is keyed on versionName, so nothing
-            // writes one until the app updates. The every-launch repairs cannot
+            // .bashrc, and isFirstRun() is keyed on versionName or versionCode,
+            // so nothing writes one until the app updates. The every-launch repairs cannot
             // cover it either: createNpmWrappers, ensureToolchainEnvSourcing
             // and ensurePromptFix all open with `if (bashrc.exists())`.
             //
