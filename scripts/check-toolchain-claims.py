@@ -52,15 +52,19 @@ WELCOME = ROOT / "android/app/src/main/assets/extensions/vscodroid.vscodroid-wel
 # `ToolchainRegistry.kt` as their source while contradicting it.
 #
 # Not gated, and this is a boundary rather than an oversight: files whose job is
-# to record what happened. `CHANGELOG.md` and the version history in
+# to record what happened on a date. `CHANGELOG.md` and the version history in
 # `docs/10-RELEASE_PLAN.md` are where a withdrawal is described. `MILESTONES.md`
-# and `docs/12-IMPLEMENTATION_PLAN.md` hold completed checklists and device
-# measurements taken while the toolchain still shipped; rewriting those would
-# falsify a record rather than correct a claim. `docs/DEVICE_TEST_CHECKLIST.md`
-# is out because its Go rows test that a previously installed Go is REMOVED on
-# update, which is live behaviour in `ToolchainManager.removeRetiredToolchainsSync`.
-# Those files also carry "go/no-go" as ordinary English, which this check reads
-# as an offer.
+# holds completed checklist items and device measurements taken while the
+# toolchain still shipped, and rewriting those would falsify a record rather than
+# correct a claim. `docs/12-IMPLEMENTATION_PLAN.md` is a mix: alongside those
+# records it carries unchecked `- [ ]` items and acceptance tables, so it is out
+# for a weaker reason, that nobody has separated the two.
+# `docs/DEVICE_TEST_CHECKLIST.md` is out because its Go rows test that an already
+# installed Go is REMOVED on update, which is live behaviour in
+# `ToolchainManager.removeRetiredToolchainsSync`.
+#
+# `docs/12-IMPLEMENTATION_PLAN.md` also writes "Go/no-go" for a decision gate,
+# which this check would read as an offer. None of the other excluded files do.
 OFFER_FILES = [
     ROOT / "README.md",
     ROOT / "NOTICE.md",
@@ -92,11 +96,73 @@ RETIRED_SPELLINGS = {
     ],
 }
 
-# Ordinary English that the capitalised name collides with. Kept narrow on
-# purpose: a line excused here is a line this check cannot see.
+# Ordinary English that the capitalised name collides with. These are cut OUT of
+# a line before it is searched, rather than excusing the whole line: the
+# sentences that state how toolchains are delivered are exactly the ones that say
+# "Google Play", so skipping any line containing one hid the highest-value claims
+# in the set. Measured: a line reading "on-demand toolchain packs (Go, Ruby, Java)
+# are delivered via Google Play Asset Delivery" passed the check.
+#
+# Case-insensitive because the excuses are written lowercase while the name is
+# matched capitalised, so "Go Back" and "Go To Definition" matched the name and
+# not the excuse. Both are ordinary VS Code menu wording in the documents this
+# now reads.
 INNOCENT = re.compile(
-    r"Go (?:to|back|ahead|live)\b|on-the-go|Google|\bGo Gopher\b|Let's Go\b"
+    r"go (?:to|back|ahead|live)\b|on-the-go|google|\bgo gopher\b|let's go\b",
+    re.IGNORECASE,
 )
+
+
+RETIRED_OPEN = re.compile(r"RETIRED_TOOLCHAINS\s*(?::[^=]+)?=\s*(?:setOf|mapOf)\(")
+
+
+def retired_body(text):
+    """What is inside `RETIRED_TOOLCHAINS = mapOf(...)`, or None if it will not parse.
+
+    Balances the parentheses rather than reading to the first `)`. The regex this
+    replaces used `[^)]*`, which stops at any close paren, including one inside a
+    value expression or a trailing comment: `mapOf("go" to (179L * 1_000_000L),
+    "ruby" to ...)` and a `// measured (unpacked)` comment both truncated the body
+    to the first entry, and the second identifier was dropped with nothing said.
+    That is the one outcome this whole function exists to prevent, since a short
+    list means the check looks for less than it claims to.
+
+    Parens inside double-quoted strings and after `//` do not count. A body that
+    never balances returns None, so the caller fails rather than searching an
+    empty string.
+    """
+    match = RETIRED_OPEN.search(text)
+    if not match:
+        return None
+    depth, in_string, escaped, out = 1, False, False, []
+    i = match.end()
+    while i < len(text):
+        char = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif text.startswith("//", i):
+            end_of_line = text.find("\n", i)
+            if end_of_line < 0:
+                return None
+            out.append(" ")
+            i = end_of_line
+            continue
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(char)
+        i += 1
+    return None
 
 
 def retired_ids():
@@ -108,12 +174,9 @@ def retired_ids():
     passes -- and only one of them means the tree is clean.
     """
     text = MANAGER.read_text(encoding="utf-8")
-    match = re.search(
-        r"RETIRED_TOOLCHAINS\s*(?::[^=]+)?=\s*(setOf|mapOf)\(([^)]*)\)", text
-    )
-    if not match:
+    body = retired_body(text)
+    if body is None:
         sys.exit("FAIL could not read RETIRED_TOOLCHAINS from ToolchainManager.kt")
-    body = match.group(2)
     # mapOf entries are `"name" to <size>`; setOf entries are bare strings.
     ids = re.findall(r'"([^"]+)"\s+to\b', body) or re.findall(r'"([^"]+)"', body)
     if body.strip() and not ids:
@@ -146,10 +209,13 @@ def main():
         if not path.exists():
             sys.exit(f"FAIL {path.relative_to(ROOT)} is listed here but absent")
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if INNOCENT.search(line):
-                continue
+            # The excused wording is removed and the rest of the line is still
+            # read, so "Go to Settings, then install Go" is caught on its second
+            # half. The whole line is reported, not the scrubbed copy, because
+            # that is what a person has to go and edit.
+            scrubbed = INNOCENT.sub(" ", line)
             for ident, pattern in patterns:
-                if pattern.search(line):
+                if pattern.search(scrubbed):
                     findings.append(
                         (path.relative_to(ROOT), n, ident, line.strip()[:96])
                     )

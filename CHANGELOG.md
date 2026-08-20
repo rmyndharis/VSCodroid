@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The design documents now describe the build that ships: two on-demand toolchains, terminals that spawn bash on a real PTY, and how the server is actually patched and built.
-- The toolchain check now reads the design documents too, so a document cannot offer a language the app will not install.
+- The toolchain check now reads the design documents too, and no longer skips a whole line because it mentions Google Play, which is how the sentences describing toolchain delivery went unread.
 - The shrinker runs on pushes to main, not only on pull requests, so a configuration change reaches a minified build the same day.
 - The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
 - Kotlin now comes from the Android Gradle plugin rather than a separate plugin, so the compiler is 2.2.10 and the version catalog no longer names one.
