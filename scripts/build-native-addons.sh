@@ -278,11 +278,20 @@ echo ""
 echo "@parcel/watcher..."
 WATCHER_VERSION=2.5.6
 WATCHER_SRC=$(fetch @parcel/watcher "$WATCHER_VERSION")
-# Sources and defines are binding.gyp's OS=="linux" branch. Android has inotify,
-# so that backend is the one that matters; watchman stays compiled in and inert
-# because nothing serves its socket here.
+# binding.gyp holds the sources in TWO arrays and both are needed: the
+# unconditional one at the top of the target, and the OS=="linux" or OS=="android"
+# branch. Taking only the branch, or the top array minus a file, links an addon
+# that still builds and still passes an ELF check, because the gap shows up as an
+# undefined symbol rather than a missing library. src/Debounce.cc is the one that
+# was lost that way: Watcher.cc calls Debounce::getShared(), so the addon reached
+# the device with four UND Debounce symbols, nothing to resolve them, and dlopen
+# refusing the whole file. Recursive watching was dead, not degraded.
+#
+# Android has inotify, so that backend is the one that matters; watchman stays
+# compiled in and inert because nothing serves its socket here.
 compile "$WATCHER_SRC" "$OUTPUT_ROOT/node_modules/@parcel/watcher/build/Release/watcher.node" \
     src/binding.cc src/Watcher.cc src/Backend.cc src/DirTree.cc src/Glob.cc \
+    src/Debounce.cc \
     src/watchman/BSER.cc src/watchman/WatchmanBackend.cc \
     src/shared/BruteForceBackend.cc src/linux/InotifyBackend.cc src/unix/legacy.cc \
     -- -fexceptions -DNAPI_DISABLE_CPP_EXCEPTIONS \

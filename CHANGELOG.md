@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The editor sees files changed outside it again. One source file was missing from the watcher build, so the addon could not load and nothing in a folder was watched.
 - Narrowing the platform-detection patch now fails the build. It could previously be narrowed with every check still green, leaving the marketplace asked for a binary that cannot start on Android.
 - First-run setup now shows progress while it extracts the editor, instead of holding at 5% for minutes and looking like it has hung.
 - Installing a toolchain from Play now checks for space first. Without room it failed partway and left a half-installed toolchain behind.
