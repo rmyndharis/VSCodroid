@@ -237,7 +237,7 @@ class SafSyncEngine(private val context: Context) {
                 // owns this moment; it is on the IO dispatcher and mid-copy.
                 if (localPath.exists() && localPath.absolutePath in unfinishedUploads) {
                     unfinishedUploads.remove(localPath.absolutePath)
-                    clearUploadInFlight(localPath.absolutePath)
+                    consumeStaleUploadRecord(localPath.absolutePath)
                     keptLocal++
                     Logger.i(
                         tag,
@@ -1112,7 +1112,9 @@ class SafSyncEngine(private val context: Context) {
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
 
+    /** Takes this writer's claim on [absolutePath] and records that a write began. */
     private fun markUploadInFlight(absolutePath: String) = synchronized(uploadJournalLock) {
+        uploadWriters[absolutePath] = (uploadWriters[absolutePath] ?: 0) + 1
         try {
             val journal = uploadJournal()
             val lines = if (journal.isFile) journal.readLines() else emptyList()
@@ -1124,7 +1126,44 @@ class SafSyncEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Releases this writer's claim on [absolutePath], and removes the journal line only
+     * when it was the last claim.
+     *
+     * Paired with [markUploadInFlight] and called by writers alone. A second writer of
+     * the same path is reachable whenever a folder is reopened while a drain of the
+     * previous session is still streaming: the mirror is named by a hash of the folder,
+     * so both writers address one file, and before the count the first to finish removed
+     * the line the other was still inside.
+     */
     private fun clearUploadInFlight(absolutePath: String) = synchronized(uploadJournalLock) {
+        val stillWriting = (uploadWriters[absolutePath] ?: 0) - 1
+        if (stillWriting > 0) {
+            uploadWriters[absolutePath] = stillWriting
+            return@synchronized
+        }
+        uploadWriters.remove(absolutePath)
+        removeJournalLine(absolutePath)
+    }
+
+    /**
+     * Drops a journal line this sync has already acted on, without touching any claim.
+     *
+     * Not the same operation as [clearUploadInFlight] and deliberately not spelled as
+     * one. [initialSync] consumes a record left by a process that died, and it does that
+     * for a path it is about to write itself; treating that as releasing a claim would
+     * decrement a live writer to zero and remove the line while that writer was still
+     * streaming, which is the defect the count exists to prevent, arriving through a
+     * different door. A path somebody is writing right now is left alone, and that
+     * writer's own clear removes the line when it lands.
+     */
+    private fun consumeStaleUploadRecord(absolutePath: String) = synchronized(uploadJournalLock) {
+        if (uploadWriters.containsKey(absolutePath)) return@synchronized
+        removeJournalLine(absolutePath)
+    }
+
+    /** Caller must hold [uploadJournalLock]. */
+    private fun removeJournalLine(absolutePath: String) {
         try {
             val journal = uploadJournal()
             if (journal.isFile) {
@@ -1837,6 +1876,25 @@ class SafSyncEngine(private val context: Context) {
          * one file on its own monitor otherwise.
          */
         private val uploadJournalLock = Any()
+
+        /**
+         * How many write-backs are streaming into each mirror path right now, across
+         * engine instances and guarded by [uploadJournalLock].
+         *
+         * The journal line means "an upload of this path did not finish", and one line
+         * cannot carry two writers: [initialSync] writes a newer mirror copy back on the
+         * IO dispatcher while a drain that outlived its folder is still streaming the
+         * same file, and whichever landed first used to remove the line for both. The
+         * next sync then read a device copy another writer was still part way through as
+         * a finished one, and copied it over the mirror. Reopening the same folder is
+         * what makes the two paths identical, because the mirror is named by a hash of
+         * the folder rather than by the session.
+         *
+         * In memory rather than in the file, because the writers are threads of one
+         * process. A process that dies mid-write leaves the line behind, which is exactly
+         * what the journal is for.
+         */
+        private val uploadWriters = mutableMapOf<String, Int>()
 
         /**
          * Suffix of the sibling file recording what the last complete sync found.

@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.FileObserver
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -18,9 +19,16 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 import java.io.ByteArrayInputStream
 import java.io.File
 
@@ -52,6 +60,7 @@ class SafUploadInterruptionTest {
     lateinit var filesDir: File
 
     private lateinit var resolver: ContentResolver
+    private lateinit var context: Context
     private lateinit var engine: SafSyncEngine
     private lateinit var treeUri: Uri
     private val uris = mutableMapOf<String, Uri>()
@@ -81,7 +90,7 @@ class SafUploadInterruptionTest {
         }
 
         resolver = mockk(relaxed = true)
-        val context = mockk<Context>(relaxed = true)
+        context = mockk<Context>(relaxed = true)
         every { context.contentResolver } returns resolver
         every { context.filesDir } returns filesDir
         engine = SafSyncEngine(context)
@@ -220,5 +229,116 @@ class SafUploadInterruptionTest {
                 "and a surviving entry would throw away the device edits that " +
                 "followed"
         )
+    }
+
+    /**
+     * Two write-backs of one file overlap: a drain that outlived the folder it belongs
+     * to is still streaming when the next sync writes the same path. Both bracket the
+     * copy with the journal, and the journal has one line per path, so the writer that
+     * finished first removed the bracket the other was still inside. A death in that
+     * window then left a device copy that is newer, shorter and unrecorded, which the
+     * next sync reads as an edit made on the device and copies over the mirror.
+     */
+    @Test
+    fun `a path stays recorded while another write to it is still in flight`() {
+        deviceHolding("notes.txt")
+        val file = File(mirror, "notes.txt").apply { writeText("the whole edit") }
+        val released = AtomicBoolean(false)
+        val firstWriteStarted = CountDownLatch(1)
+        var opens = 0
+        every { resolver.openOutputStream(any(), any()) } answers {
+            if (opens++ == 0) {
+                object : OutputStream() {
+                    override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+                    override fun write(b: ByteArray, off: Int, len: Int) {
+                        firstWriteStarted.countDown()
+                        // Uninterruptible: the point is a write still in flight.
+                        while (!released.get()) {
+                            try { Thread.sleep(10) } catch (_: InterruptedException) { }
+                        }
+                    }
+                }
+            } else {
+                ByteArrayOutputStream()
+            }
+        }
+
+        // The first writer: this engine's drain, still streaming.
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        val drain = thread(isDaemon = true) { engine.runWriteBackLoop { false } }
+        assertTrue(
+            firstWriteStarted.await(5, TimeUnit.SECONDS),
+            "setup failed: the first write never reached the provider",
+        )
+
+        // The second: a different engine over the same journal, which is what a
+        // recreated Activity builds, writing the same file and finishing at once.
+        val second = SafSyncEngine(context)
+        second.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        second.runWriteBackLoop { false }
+
+        assertEquals(
+            listOf(file.absolutePath), engine.uploadsInFlight().toList(),
+            "the writer that landed first cleared the record the other one is inside",
+        )
+
+        released.set(true)
+        drain.join(5_000)
+        assertFalse(journal.isFile, "the record outlived the last writer")
+    }
+
+    /**
+     * The record a dead process left is consumed without touching a live writer's claim.
+     *
+     * `initialSync` clears the record for a path it is about to write itself, and that is
+     * a different operation from a writer releasing its own claim. Spelling it as one
+     * would decrement a live writer to zero and drop the line while that writer was still
+     * streaming, which is the defect the count exists to prevent, reached by another door.
+     * Reopening the same folder is what puts a live writer and a stale record on one path,
+     * because the mirror is named by a hash of the folder rather than by the session.
+     */
+    @Test
+    fun `consuming a stale record leaves a live writer's claim alone`() {
+        deviceHolding("notes.txt")
+        val file = File(mirror, "notes.txt").apply { writeText("the whole edit") }
+        val released = AtomicBoolean(false)
+        val firstWriteStarted = CountDownLatch(1)
+        // Only the drain's write blocks. The sync writes the same file itself right
+        // after consuming the record, and blocking that one would hang the test on the
+        // very call it is here to observe.
+        var opens = 0
+        every { resolver.openOutputStream(any(), any()) } answers {
+            if (opens++ == 0) {
+                object : OutputStream() {
+                    override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+                    override fun write(b: ByteArray, off: Int, len: Int) {
+                        firstWriteStarted.countDown()
+                        while (!released.get()) {
+                            try { Thread.sleep(10) } catch (_: InterruptedException) { }
+                        }
+                    }
+                }
+            } else {
+                ByteArrayOutputStream()
+            }
+        }
+
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        val drain = thread(isDaemon = true) { engine.runWriteBackLoop { false } }
+        assertTrue(
+            firstWriteStarted.await(5, TimeUnit.SECONDS),
+            "setup failed: the write never reached the provider",
+        )
+
+        // What initialSync does when it finds that path in the journal it read at start.
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(
+            listOf(file.absolutePath), engine.uploadsInFlight().toList(),
+            "the sync consumed a record belonging to a writer that is still streaming",
+        )
+
+        released.set(true)
+        drain.join(5_000)
     }
 }
