@@ -81,8 +81,8 @@ jobs:
     runs-on: ubuntu-latest
 
   unit-test:
-    # JUnit tests (Kotlin), Jest tests (JS)
-    # Coverage gate: Kotlin ≥ 80%, JS ≥ 70% — fails build if below targets
+    # JUnit tests (Kotlin), node:assert scripts run by node (JS)
+    # No coverage measurement and no coverage gate: nothing in the build computes one
     runs-on: ubuntu-latest
 
   build-binaries:
@@ -269,7 +269,7 @@ list says so outright, because a listing is read before the guide is.
 
 | Policy | Compliance |
 |--------|-----------|
-| Binary execution | On a Play install, every binary is delivered by Play. Core tools (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) ship as `.so` in the base APK's `jniLibs`. The optional toolchains (**Ruby and Java 17, those two and no others**) are never in the APK and arrive as on-demand asset packs, selected by the user and fetched by Play. Note that the app has a second delivery path outside Play's scope: an install whose installing package is not `com.android.vending` (sideload, debug build, `adb install`) downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases. Pre-compiled development tools for developer use. |
+| Binary execution | On a Play install, every binary is delivered by Play. Core tools (Node.js, Python, Git plus its `git-remote-curl` helper, bash, tmux, make, ripgrep, ssh, ssh-keygen and the musl loader) ship as `.so` in the base APK's `jniLibs`. The optional toolchains (**Ruby and Java 17, those two and no others**) are never in the APK and arrive as on-demand asset packs, selected by the user and fetched by Play. Note that the app has a second delivery path outside Play's scope: an install whose installing package is not `com.android.vending` (sideload, debug build, `adb install`) downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases. Pre-compiled development tools for developer use. |
 | Foreground Service (specialUse) | Local development server powering the code editor. Must run persistently to serve the IDE UI and handle file operations. |
 | Permissions | The manifest declares four, and nothing else: INTERNET (extension marketplace, toolchain downloads), FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE (dev server), POST_NOTIFICATIONS (service notification). **No WAKE_LOCK and no MANAGE_EXTERNAL_STORAGE** — this row claimed both as "optional" and neither was ever declared; MANAGE_EXTERNAL_STORAGE would pull in a Play declaration process the app has no need of. External folders are reached through SAF, which is a user grant per folder and not a permission. No camera/mic/location/contacts. Check against `AndroidManifest.xml` before submitting, not against this row. |
 | Privacy | No telemetry collected and nothing sent to any server of ours. One bundled feature does send user content to a third party and must be declared: GitHub Copilot Chat, which is inert until the user signs in to GitHub, after which the prompt and the code it attaches as context go to GitHub. Everything else stays on device. See §5.4 and https://rmyndharis.github.io/VSCodroid/privacy-policy.html |

@@ -20,7 +20,7 @@ Specifies how binary code interacts at the machine level. VSCodroid targets `arm
 A document that captures an important architectural decision along with its context and consequences. See [Architecture § ADRs](./03-ARCHITECTURE.md#4-key-architecture-decisions-adrs).
 
 **Asset Pack (Play Asset Delivery)**
-A mechanism for delivering additional assets with an Android App Bundle (AAB). VSCodroid uses on-demand asset packs to deliver its language toolchains, **Go, Ruby and Java 17, those three** (`ToolchainRegistry.available`, `android/settings.gradle.kts`). Packs are downloaded when the user selects them in the Language Picker during first-run or via Settings > Toolchains. Play handles that download only for installs that came from Play; every other install (sideload, debug build, `adb install`) fetches the same toolchains as ZIPs over HTTPS from this project's GitHub Releases and checks them against a published sha256 manifest before installing. Either way the payload lands in `filesDir`, never in the APK.
+A mechanism for delivering additional assets with an Android App Bundle (AAB). VSCodroid uses on-demand asset packs to deliver its language toolchains, **Ruby and Java 17, those two** (`ToolchainRegistry.available`, `android/settings.gradle.kts`). Packs are downloaded when the user selects them in the toolchain picker during first-run or via Settings > Toolchains. Play handles that download only for installs that came from Play; every other install (sideload, debug build, `adb install`) fetches the same toolchains as ZIPs over HTTPS from this project's GitHub Releases and checks each one against the `toolchains.sha256` manifest the release publishes before installing. Either way the payload lands in `filesDir`, never in the APK, so an installed toolchain survives an app update. A toolchain whose compiler forks its own assembler and linker cannot be delivered this way at all: SELinux refuses `execve` under the app's data directory, and those forks are refused however the driver command is reached.
 
 **adjustResize**
 Android `windowSoftInputMode` flag. When the soft keyboard appears, the app window resizes (shrinks) to fit. Essential for VS Code to remain usable with the keyboard open.
@@ -34,7 +34,7 @@ The `@JavascriptInterface`-annotated Kotlin object exposed to WebView JavaScript
 An open-source project by Coder that runs VS Code in the browser. VSCodroid does **not** fork it and carries none of its patches; it was evaluated as a base and not used. The server VSCodroid ships is vanilla Code - OSS built from source, see the Code-OSS entry.
 
 **Code-OSS**
-The open-source (MIT-licensed) version of VS Code, at `github.com/microsoft/vscode`. Microsoft's "Visual Studio Code" product adds proprietary branding, telemetry, and marketplace access on top of Code-OSS. This source is what VSCodroid builds: `scripts/build-vscode-oss.sh` clones it at the commit pinned in `VSCODE_VERSION`, applies the unified diffs in `patches/`, and produces `vscode-reh-web-linux-arm64`; app builds fetch that result with `scripts/fetch-vscode-oss.sh`. The pre-built server on Microsoft's update CDN is a different artifact under different terms that do not permit modifying and redistributing it, so `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one.
+The open-source (MIT-licensed) version of VS Code, at `github.com/microsoft/vscode`. Microsoft's "Visual Studio Code" product adds proprietary branding, telemetry, and marketplace access on top of Code-OSS. This source is what VSCodroid builds: `scripts/build-vscode-oss.sh` checks out the tag in `VSCODE_VERSION` at the commit in `VSCODE_COMMIT`, applies the numbered unified diffs in `patches/` with `git apply` and the overlay in `branding/product.json`, then runs gulp to produce `vscode-reh-web-linux-arm64`; app builds fetch that result with `scripts/fetch-vscode-oss.sh`. The pre-built server on Microsoft's update CDN is a different artifact under different terms that do not permit modifying and redistributing it, so `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one or that carries `node_modules/vsda`.
 
 **Chrome Custom Tabs**
 An Android component that opens web content in a lightweight Chrome-powered tab while keeping app context. VSCodroid uses it for GitHub OAuth login and consent flow.
@@ -136,10 +136,10 @@ A terminal multiplexer. Allows multiple terminal sessions to run within a single
 ### V
 
 **vscode-reh (Remote Extension Host)**
-A VS Code build target. Produces the server component that runs the Extension Host, terminal service, file system service, and search service. Communicates with the web client over WebSocket.
+A VS Code build target. Produces the server component that runs the Extension Host, terminal service, file system service, and search service. Communicates with the web client over WebSocket. Readiness is `GET /version`, which the server answers before it checks the connection token, and only a `200` counts.
 
 **vscode-web**
-A VS Code build target. Produces the web client (HTML, JavaScript, CSS) that renders the VS Code Workbench UI in a browser or WebView.
+A VS Code build target. Produces the web client (HTML, JavaScript, CSS) that renders the VS Code Workbench UI in a browser or WebView. VSCodroid builds the `reh-web` target, which carries the client inside the server tree, so the app ships one directory, `assets/vscode-reh/`, and there is no separate `vscode-web` to copy.
 
 **VSIX**
 The file format for VS Code extensions. A ZIP archive containing the extension's code, manifest (package.json), and assets.

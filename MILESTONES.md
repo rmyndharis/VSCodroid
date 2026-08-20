@@ -635,10 +635,10 @@ Features planned for after Play Store launch, prioritized by user demand.
 
 - **Rust** (rustc + cargo, ~100 MB) — high demand, self-contained
 - **C/C++** (clang/LLVM from Termux, ~84 MB) — large, needs careful stripping
-- Delivered via same Play Asset Delivery pipeline as Go/Ruby/Java
+- Delivered via same Play Asset Delivery pipeline as Ruby and Java 17
 
 ### Future Enhancements
 
-- Toolchain version management (multiple Go/Ruby/Java versions)
+- Toolchain version management (multiple Ruby and Java versions)
 - Automatic toolchain updates via Play Store asset pack updates
 - Community-contributed toolchain recipes

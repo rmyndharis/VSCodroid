@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The design documents now describe the build that ships: two on-demand toolchains, terminals that spawn bash on a real PTY, and how the server is actually patched and built.
+- The toolchain check now reads the design documents too, so a document cannot offer a language the app will not install.
+- The shrinker runs on pushes to main, not only on pull requests, so a configuration change reaches a minified build the same day.
 - The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
 - Kotlin now comes from the Android Gradle plugin rather than a separate plugin, so the compiler is 2.2.10 and the version catalog no longer names one.
 - 97 unused Material and AndroidX resources no longer ship: the date and time pickers, the navigation drawer, fragment transitions and the legacy notification templates.
@@ -16,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Narrowing the platform-detection patch now fails the build. It could previously be narrowed with every check still green, leaving the marketplace asked for a binary that cannot start on Android.
 - First-run setup now shows progress while it extracts the editor, instead of holding at 5% for minutes and looking like it has hung.
 - Installing a toolchain from Play now checks for space first. Without room it failed partway and left a half-installed toolchain behind.
 - The storage figures in the README can be re-measured on Linux. The command printed a plausible 0 MB there, because it used the macOS spelling of `stat`.

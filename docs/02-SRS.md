@@ -64,7 +64,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Android WebView (Chrome 105+) supports all VS Code UI features | May need to bundle Chromium (~100MB more) |
 | Termux Node.js patches apply to current LTS | May need to create patches from scratch |
 | Open VSX has sufficient extension coverage | Users may be frustrated by missing extensions |
-| The diffs in `patches/` keep applying across VS Code updates (this row named code-server's patch system; the build carries its own patches against the MIT source instead) | Rebase effort increases significantly |
+| The diffs in `patches/` keep applying across VS Code updates | Rebase effort increases significantly |
 | 4GB RAM devices can run VS Code server + WebView | May need to raise minimum requirement |
 | Google Play Store allows .so-bundled binaries | Need alternative distribution (GitHub, F-Droid) |
 
@@ -103,7 +103,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | ID | Requirement | Priority | Milestone |
 |----|------------|----------|-----------|
 | FR-TERM-01 | System SHALL provide integrated terminal with bash shell | P0 | M1 |
-| FR-TERM-02 | System SHALL support multiple terminal sessions ~~(via tmux)~~, one bash per session, each on its own PTY through node-pty. See FR-DEV-04a | P0 | M1 |
+| FR-TERM-02 | System SHALL support multiple terminal sessions, one bash per session, each on its own PTY through node-pty. See FR-DEV-04a | P0 | M1 |
 | FR-TERM-03 | System SHALL support terminal input/output with ANSI colors | P0 | M1 |
 | FR-TERM-04 | System SHALL provide Node.js accessible from terminal | P0 | M1 |
 | FR-TERM-05 | System SHALL provide Python 3 accessible from terminal | P1 | M3 |
@@ -118,7 +118,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-EXT-01 | System SHALL connect to Open VSX marketplace for extension discovery | P0 | M1 |
 | FR-EXT-02 | System SHALL support installing extensions from Open VSX | P0 | M1 |
 | FR-EXT-03 | System SHALL support extension activation and lifecycle management | P0 | M1 |
-| FR-EXT-04 | System SHALL run Extension Host via child_process.fork() initially (M1), migrating to worker_thread in M4 for phantom process optimization | P0 | M1 (fork), M4 (worker_thread) |
+| FR-EXT-04 | System SHALL run the Extension Host as a `worker_thread` rather than a `child_process.fork()`, so it costs no phantom process. `patches/0004` makes the change and `patches/fingerprints.txt` proves it reached the packaged bundle | P0 | M4 |
 | FR-EXT-05 | System SHALL support theme extensions (color themes, icon themes) | P0 | M1 |
 | FR-EXT-06 | System SHALL support language extensions (syntax, snippets, LSP) | P0 | M1 |
 | FR-EXT-07 | System SHALL support extension settings and configuration | P1 | M1 |
@@ -148,7 +148,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-MUX-07 | System SHALL support portrait and landscape orientations | P1 | M2 |
 | FR-MUX-08 | System SHALL support split-screen / multi-window mode | P2 | M2 |
 | FR-MUX-09 | System SHALL disable WebView zoom (prevent accidental pinch-zoom) | P0 | M2 |
-| FR-MUX-10 | ~~System SHALL register intent filter for common code file types~~ **Withdrawn.** The filters were implemented and removed: they advertised the app for about twenty extensions and opened none of them, because the handler called `window.__vscodroid.onFileOpen`, which never had a consumer. Re-implementing is blocked on a deeper constraint, not on wiring — a `content://` URI has no POSIX path, the server only ever sees POSIX paths, so the file has to be materialised locally and saving would then write to a copy. `AndroidManifest.xml` records this where the filters used to be. Folders still open through SAF, which has the sync engine that makes write-back work | — | M2 |
+| FR-MUX-10 | Intent filters for common code file types are out of scope. A `content://` URI has no POSIX path and the server only ever sees POSIX paths, so the file would have to be materialised locally and every save would write to that copy. `AndroidManifest.xml` records the constraint. Folders open through SAF, which has the sync engine that makes write-back work | n/a | M2 |
 
 ### 3.7 Dev Environment (FR-DEV)
 
@@ -158,10 +158,10 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-DEV-02 | System SHALL bundle Python 3 + pip in APK | P1 | M3 |
 | FR-DEV-03 | System SHALL bundle Git in APK | P0 | M1 |
 | FR-DEV-04 | System SHALL bundle bash in APK | P0 | M1 |
-| FR-DEV-04a | System SHALL bundle tmux in APK ~~for terminal multiplexing~~. **Amended.** tmux ships and works, but the editor's terminals are not wrapped in it: the default profile `FirstRunSetup` writes points at bash, and each terminal spawns bash directly through node-pty on a real PTY. The phantom-process saving the multiplexing was for comes from running the Extension Host and ptyHost as `worker_thread`s instead | P1 | M1 |
-| FR-DEV-05 | System SHALL deliver ~~Go, Rust, Java, C/C++, Ruby~~ **Go, Ruby and Java 17** toolchains as on-demand asset packs. **Amended.** Rust and C/C++ were deferred and have no Gradle module, no asset pack and no `ToolchainRegistry` entry. Delivery is also not Play-only: `ToolchainManager` reads the installing package name and, for any install that did not come from Play, downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases, verified against a published sha256 manifest | P2 | M3 |
-| FR-DEV-06 | ~~System SHALL provide package manager CLI (`vscodroid pkg`)~~ **Not built.** No such command exists in the app or on the device. Additional packages are the user's own business through the terminal | P2 | M3 |
-| FR-DEV-07 | ~~System SHALL detect file types and prompt to download relevant toolchain if not installed~~ **Not built.** Nothing watches which files are opened. What shipped instead is unprompted: the welcome walkthrough names the three toolchains and points at the picker, which is also reachable from the app icon's **Manage toolchains** shortcut | P3 | M3 |
+| FR-DEV-04a | System SHALL bundle tmux in APK as a standalone tool. The editor's terminals are not wrapped in it: the default profile `FirstRunSetup` writes points at bash, and each terminal spawns bash directly through node-pty on a real PTY. The phantom-process saving comes from running the Extension Host and ptyHost as `worker_thread`s | P1 | M1 |
+| FR-DEV-05 | System SHALL deliver Ruby and Java 17 toolchains as on-demand asset packs. Delivery is not Play-only: `ToolchainManager` reads the installing package name and, for any install that did not come from Play, downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases, verified against a published sha256 manifest | P2 | M3 |
+| FR-DEV-06 | A package manager CLI (`vscodroid pkg`) is out of scope. No such command exists in the app or on the device; additional packages are the user's own business through the terminal | P2 | M3 |
+| FR-DEV-07 | Prompting for a toolchain by file type is out of scope: nothing watches which files are opened. Discovery is unprompted instead, the welcome walkthrough names the two toolchains and points at the picker, which is also reachable from the app icon's **Manage toolchains** shortcut | P3 | M3 |
 | FR-DEV-08 | System SHALL provide Language Picker UI during first-run for selecting toolchains to install | P1 | M3 |
 | FR-DEV-09 | System SHALL allow installing additional toolchains later via Settings > Toolchains | P2 | M3 |
 
@@ -202,18 +202,16 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-RES-01 | RAM usage (typical coding session) | < 700 MB | P1 |
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
 | NFR-RES-03 | Phantom process count | ≤ 5 in typical use | P0 |
-| NFR-RES-04 | AAB base download size | < 200 MB (core); toolchains 20-100 MB each (on-demand) | P1 |
+| NFR-RES-04 | AAB base download size | < 200 MB (core); toolchains 10-60 MB each (on-demand) | P1 |
 | NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~990 MB with both toolchains | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
 | NFR-RES-07 | V8 heap limit | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
 
-> NFR-RES-05 and NFR-RES-07 carry measured figures, not targets. Both once stated a
-> goal the build no longer meets: storage was written as `< 400 MB` against a tree that
-> now extracts ~810 MB, and the heap as a flat `512MB` against a ceiling that has been
-> derived per device since the limit started leaving 3-4 GB phones nothing to work with.
-> Verify against `ProcessManager.heapCeilingMb` and `BuildConfig.EXTRACTED_ASSET_BYTES`
-> rather than this table.
+> NFR-RES-05 and NFR-RES-07 carry measured figures, not targets. Verify them against
+> `BuildConfig.EXTRACTED_ASSET_BYTES` and `ProcessManager.heapCeilingForDevice` rather than
+> this table: the extracted tree grows with every VS Code bump, and the heap ceiling is
+> derived per device because a flat cap leaves 3-4 GB phones nothing to work with.
 
 ### 4.3 Reliability (NFR-REL)
 
@@ -245,7 +243,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-SEC-02 | No telemetry sent to external services | Microsoft telemetry stripped | P0 |
 | NFR-SEC-03 | Server listens on localhost only | No external network exposure | P0 |
 | NFR-SEC-04 | App-private storage for workspace | Android sandbox enforced | P0 |
-| NFR-SEC-05 | All binaries delivered via Play Store (Play install) | Core as .so in base APK; toolchains as on-demand asset packs via Language Picker. ~~Sideload version additionally supports vscodroid pkg from Termux repos~~, there is no separate sideload build and no `vscodroid pkg`; what a non-Play install does differently is fetch the same toolchain ZIPs over HTTPS from GitHub Releases, against a published sha256 manifest | P0 |
+| NFR-SEC-05 | All binaries delivered via Play Store (Play install) | Core as .so in base APK; toolchains as on-demand asset packs via Language Picker. A non-Play install fetches the same toolchain ZIPs over HTTPS from GitHub Releases, against a published sha256 manifest | P0 |
 | NFR-SEC-06 | Extension sandbox | Extensions run in Extension Host only | P1 |
 
 ### 4.6 Usability (NFR-USE)
@@ -379,7 +377,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-android-bridge-a
 - [ ] Can install an extension from Open VSX
 - [ ] Extension activates and functions (theme applies, linter runs)
 - [ ] Terminal opens with bash, `node --version` works
-- [ ] Multiple terminal sessions work, one bash per session (not multiplexed; see FR-DEV-04a)
+- [ ] Multiple terminal sessions work, one bash per session on its own PTY (see FR-DEV-04a)
 - [ ] File explorer shows files, create/edit/save works
 - [ ] Git status displays in SCM panel
 
@@ -396,7 +394,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-android-bridge-a
 
 - [ ] `python3 --version` and `pip install requests` work in terminal
 - [ ] `git clone` and `git push` work in terminal
-- [ ] On-demand toolchain install works (test: Go)
+- [ ] On-demand toolchain install works (test: Ruby)
 - [ ] Pre-bundled extensions available without internet
 
 ### M4 (Polish) Acceptance

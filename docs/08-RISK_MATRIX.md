@@ -4,32 +4,10 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
-> **Historical document, records the risks as assessed on 2026-02-10, not the ones that
-> materialised.** Every score below is a probability and impact judged before the app existed,
-> and the decision log in §6 is dated to the day those decisions were taken. Both are kept as
-> the record, so two things a reader would otherwise carry away wrong are named here instead.
->
-> **R02, and the §6 row "Fork code-server, not VS Code directly", describe a mechanism that was
-> never built.** The server that ships is vanilla Code - OSS: `scripts/build-vscode-oss.sh`
-> clones the MIT `microsoft/vscode` source at the commit pinned in `VSCODE_VERSION`, applies the
-> unified diffs in `patches/`, and gulp builds `vscode-reh-web-linux-arm64`; app builds fetch the
-> result with `scripts/fetch-vscode-oss.sh`. No code-server patch set is involved, so there is no
-> code-server upstream to track. The reason is not the patch-maintenance trade-off this document
-> weighs, either: the pre-built server on Microsoft's update CDN carries licence terms that do not
-> permit modifying and redistributing it, which is why the source build exists and why
-> `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one.
->
-> **The P01 mitigation names five toolchains; three ship.** Go, Ruby and Java 17, and no others
-> (`android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt`,
-> `android/settings.gradle.kts`). Rust and C/C++ were deferred and have no module, no asset pack
-> and no registry entry. Delivery is also not Play-only, which matters to that same compliance
-> argument: an install whose installing package is not `com.android.vending` downloads the same
-> toolchains as ZIPs over HTTPS from this project's GitHub Releases, verified against a published
-> sha256 manifest before install (`ToolchainManager.shouldUseHttpFallback()`,
-> `downloadViaHttp()`). Neither path puts a toolchain in the APK, so T09's contingency, "sideload
-> distribution path with bundled toolchains", is not the shape the sideload path took.
->
-> For the risks the project actually carries today, read the code and `CONTRIBUTING.md`.
+> **This records the risks as assessed on 2026-02-10.** Every score below is a probability and
+> impact judged before the app existed, and the decision log in §6 is dated to the day those
+> decisions were taken. For the risks the project carries today, read the code and
+> `CONTRIBUTING.md`.
 
 ---
 
@@ -63,7 +41,7 @@
 | T07 | **16KB page alignment** issues on Android 16 | 3 | 3 | **9** | Medium |
 | T08 | **Extension Host worker_thread** patch too complex | 3 | 4 | **12** | Medium |
 | T09 | **On-demand asset pack download** requires internet for toolchains | 2 | 2 | **4** | Low |
-| T10 | **Python cross-compile** fails or stdlib incomplete | 2 | 2 | **4** | Low |
+| T10 | **Python packaging** fails or stdlib incomplete | 2 | 2 | **4** | Low |
 
 ### 2.2 Platform Risks
 
@@ -88,7 +66,7 @@
 | ID | Risk | Prob | Impact | Score | Category |
 |----|------|------|--------|-------|----------|
 | R01 | **Scope creep** — too many features before stable core | 3 | 4 | **12** | Medium |
-| R02 | **code-server upstream** changes patch system significantly | 2 | 4 | **8** | Medium |
+| R02 | **Upstream source layout** changes force patch rewrites | 2 | 4 | **8** | Medium |
 | R03 | **Solo developer burnout** (if single contributor) | 3 | 4 | **12** | Medium |
 | R04 | **Testing on real devices** — limited device access | 3 | 3 | **9** | Medium |
 
@@ -104,8 +82,8 @@
 
 | Layer | Action | Impact |
 |-------|--------|--------|
-| 1. Extension Host | Patch to run as worker_thread (phased: fork in M1-M3, worker_thread in M4) | -1 phantom process (from M4) |
-| 2. Terminal | Use tmux (1 process for all sessions) | N terminals → 1 process |
+| 1. Extension Host | Runs as a worker_thread, not a `child_process.fork()` (`patches/0004`) | Costs no phantom process |
+| 2. Terminal | ptyHost as worker_thread; each terminal spawns bash directly on a real PTY | Terminal host costs no phantom process |
 | 3. Language Servers | Lazy start + idle kill after 5 min | Reduce concurrent LSP to 2-3 |
 | 4. Hard cap | Max 2-3 concurrent language servers | Predictable process count |
 | 5. Foreground Service | specialUse type — protects main process | Main app not killed |
@@ -120,15 +98,15 @@
 
 ### T02: Node.js ARM64 Build (Score: 15 — High)
 
-**Risk**: Cross-compiling Node.js for ARM64 Android may fail or produce unstable binary.
+**Risk**: The bundled Node.js has to be ARM64, Bionic-linked, 16KB page aligned, and the same Node line the VS Code server's native modules are built against. A binary that misses any of these fails late and obscurely.
 
 **Mitigation**:
-1. **Use Termux recipes** — Termux has been building Node.js for ARM64 Android for years. Use their patches as starting point.
-2. **Start with known-good version** — Use same Node.js version Termux ships, not bleeding edge.
-3. **Binary fallback** — If cross-compile fails, extract pre-built binary from Termux .deb package (verify license).
-4. **Early validation** — M0 milestone is specifically designed to validate this risk first.
+1. **Take Termux's build**: `scripts/download-node.sh` fetches the `nodejs-lts` package and installs `bin/node` as `jniLibs/arm64-v8a/libnode.so`. Termux has been building Node.js for ARM64 Android for years.
+2. **Version is not a preference**: `remote/.npmrc` `target` at the pinned VS Code tag names the Node the server ships against, so the Termux package has to match it. Bumping one means checking the other.
+3. **Gate every bundled ELF**: `scripts/verify-android-elf.py` checks 16KB alignment and refuses any DT_NEEDED that neither Bionic provides nor we bundle.
+4. **Early validation**: M0 milestone is specifically designed to validate this risk first.
 
-**Contingency**: If custom build fails entirely, use Termux-extracted binary (still ARM64, still works).
+**Contingency**: Stay on the last known-good Termux package version until the newer one is understood.
 
 ---
 
@@ -153,7 +131,7 @@
 
 **Mitigation**:
 1. **Precedent**: Termux and UserLAnd are on Play Store using same .so technique.
-2. **All binaries via Play Store** — Core binaries bundled as .so in base APK. Toolchains (Go, Rust, Java, C/C++, Ruby) delivered as on-demand asset packs via Play Store — user selects in Language Picker, Play Store handles download. All binaries from Play Store = strong compliance story.
+2. **All binaries via Play Store**: core binaries bundled as .so in the base APK, and the Ruby and Java 17 toolchains delivered as on-demand asset packs the user selects in the Language Picker, with Play handling the download. On a Play install nothing is fetched from a third party, which is the compliance story. A sideloaded install has no Play Asset Delivery, so it downloads the same toolchain ZIPs over HTTPS from this project's GitHub Releases, checked against a published sha256 manifest.
 3. **Prepare justification** — Document for Play Store review: "Educational developer tool, all binaries bundled at build time, no remote code execution."
 4. **specialUse service justification** — Clearly explain: "Local development server for code editor."
 5. **Content rating** — Properly categorize as Developer Tools.
@@ -207,20 +185,20 @@ These plans cover risks that did not yet have dedicated sections above.
 | Risk | Mitigation Plan | Contingency |
 |------|------------------|-------------|
 | T04 (WebView fragmentation) | **Done:** a runtime check reads the installed WebView at launch and warns when it is below Chrome 105 (`MainActivity.checkWebViewVersion`). **Not done:** no compatibility matrix in CI or a device lab, and no release gate on WebView smoke tests | Deliberately a warning, not a blocking dialog: the floor is a tested one rather than a hard incompatibility, and an editor that degrades beats one that will not open |
-| T05 — Memory pressure/OOM | Keep V8 heap cap (`--max-old-space-size=512`), lazy-load extensions/LSP, add memory watchdog and pressure-based cleanup | Auto-disable heavy extensions and reduce concurrent LSP to 1 |
+| T05 (memory pressure/OOM) | Derive the V8 heap ceiling from device RAM (`ProcessManager.heapCeilingForDevice`, held between 256 MB and 768 MB), lazy-load extensions/LSP, add memory watchdog and pressure-based cleanup | Auto-disable heavy extensions and reduce concurrent LSP to 1 |
 | T06 — node-pty failure | Build node-pty in CI for each Node.js bump, run PTY integration tests on physical device, keep pinned known-good node-pty version | Fallback terminal mode with reduced features until PTY patch is fixed |
 | T07 — 16KB page alignment | Enforce linker flags in all native build scripts, validate with `readelf` checks in CI | Block release for API 36 target until all binaries pass alignment checks |
-| T09 — Asset pack download requires internet | Keep core toolchain offline-ready (Node/Python/Git), clear UI states for pending downloads, retry/backoff for flaky networks | Offer sideload distribution path with bundled toolchains |
-| T10 — Python compile/stdlib gaps | Smoke-test stdlib modules and pip in CI, pin CPython patch version, compare against Termux recipe outputs | Ship interim Python-only hotfix or downgrade to last known-good Python build |
+| T09 (asset pack download requires internet) | Keep the core toolchain offline-ready (Node/Python/Git), clear UI states for pending downloads, retry/backoff for flaky networks | A non-Play install fetches the same toolchain ZIPs over HTTPS from GitHub Releases, checked against a published sha256 manifest |
+| T10 (Python packaging/stdlib gaps) | Take Python from the Termux package index at build time, smoke-test stdlib modules and pip in CI, and check every shared library the interpreter needs is bundled | Stay on the last known-good Termux python package |
 | P02 — Future Android binary restrictions | Track Android previews quarterly, keep alternative architecture spikes (remote execution mode) in backlog | Shift distribution toward sideload/F-Droid while redesigning runtime model |
 | P03 — Restriction of .so execution model | Keep policy documentation and precedent evidence updated, minimize dynamic execution surface, review Play policy each milestone | Prepare fast migration plan to policy-compliant delivery variant |
 | P05 — Scoped storage tightening | Default to app-private workspace + SAF, keep MANAGE_EXTERNAL_STORAGE optional and documented, add migration tooling for moved workspaces | Disable broad storage path and require SAF-only mode |
 | L01 — Trademark risk | Keep Code-OSS attribution + disclaimer visible, prepare backup branding set, run pre-launch legal checklist | Rename app and migrate package/display name with compatibility notes |
 | L02 — Open VSX outage/API change | Cache extension metadata locally, keep retry + graceful degradation in UI, monitor Open VSX status | Support manual VSIX install for critical workflows |
 | L03 — License compliance drift | Maintain SBOM/license inventory per release, automate NOTICE generation in CI, review bundled binaries/licenses at tag time | Pull non-compliant artifact from release and republish patched build |
-| R02 — code-server patch system change | Pin code-server baseline, run monthly patch regression, track upstream changes in impacted modules | Delay upstream bump and maintain LTS branch temporarily |
+| R02 (upstream source layout changes) | Pin `VSCODE_VERSION`, rebuild the server once per bump, and prove every patch reached the packaged bundle with `scripts/check-patch-fingerprints.py` against `patches/fingerprints.txt` | Stay on the pinned version until the diffs are reworked |
 | R03 — burnout/single maintainer risk | Enforce milestone scope limits, reserve buffer in each milestone, document key build/release runbooks | Freeze new features and run maintenance-only cycle |
-| R04 — limited real-device access | Use Firebase Test Lab ARM64 + shared physical device matrix, define minimum required test set per milestone | Delay milestone exit until mandatory device matrix is met |
+| R04 (limited real-device access) | CI compiles the instrumented suite (`assembleDebugAndroidTest`); a person runs it on a physical device, because an arm64 emulator on hosted runners has no KVM. Define the minimum required test set per milestone | Delay milestone exit until the mandatory device matrix is met |
 
 ---
 
@@ -296,9 +274,9 @@ Decisions made based on risk analysis:
 | Date | Decision | Risk Addressed | Rationale |
 |------|----------|---------------|-----------|
 | 2026-02-10 | Use Termux-style binary, not nodejs-mobile | T02, T06 | nodejs-mobile lacks critical APIs |
-| 2026-02-10 | Fork code-server, not VS Code directly | T03, R01 | Reduces patch maintenance burden |
+| 2026-02-10 | Build Code - OSS from the MIT `microsoft/vscode` source | T03, R01 | The pre-built server on Microsoft's update CDN cannot be modified and redistributed |
 | 2026-02-10 | Extension Host as worker_thread (phased: fork M1-M3, worker_thread M4) | T01 | Critical for phantom process limit; phased to reduce M1 complexity |
-| 2026-02-10 | tmux for terminal multiplexing | T01 | Reduces phantom processes |
+| 2026-02-10 | ptyHost as worker_thread, one bash per terminal | T01 | Keeps the terminal host off the phantom count |
 | 2026-02-10 | Open VSX, not Microsoft Marketplace | L01 | Legal requirement (ToS compliance) |
 | 2026-02-10 | .so bundling for all binaries | P01, P02 | Only officially supported method |
 | 2026-02-10 | M0 validates Node.js first | T02 | Fail fast on highest-risk item |

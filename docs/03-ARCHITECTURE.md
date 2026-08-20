@@ -5,13 +5,13 @@
 **Date**: 2026-02-10
 **Standard Reference**: IEEE 1016 (adapted), C4 Model
 
-> **Historical document — describes the design as of 2026-02-10, not the code.**
-> The ADRs in §4 record decisions at the moment they were taken, and several have since been
-> reversed. The server that ships is vanilla Code - OSS, built from the MIT `microsoft/vscode`
-> source by `scripts/build-vscode-oss.sh` with the unified diffs in `patches/` applied before the
-> build; app builds fetch the result with `scripts/fetch-vscode-oss.sh`. Where this document and
-> the code disagree, the code wins — read those scripts and the sources under
-> `android/app/src/main/kotlin/com/vscodroid/`, and verify against them.
+> **The code is the only authority; this document describes it.**
+> The ADRs in §4 record the decisions the build actually implements. The server that ships is
+> vanilla Code - OSS, built from the MIT `microsoft/vscode` source by `scripts/build-vscode-oss.sh`
+> with the unified diffs in `patches/` applied before the build; app builds fetch the result with
+> `scripts/fetch-vscode-oss.sh`. Where this document and the code disagree, the code wins: read
+> those scripts and the sources under `android/app/src/main/kotlin/com/vscodroid/`, and verify
+> against them.
 
 ---
 
@@ -26,14 +26,14 @@ flowchart TD
       WV["WebView (vscode-web)"]
       UI["Monaco / File Explorer / Panels / Extensions UI"]
       NODE["Node.js Process (VS Code Server, vscode-reh)"]
-      SRV["Extension Host / Terminal (tmux) / File System / Search"]
+      SRV["Extension Host / Terminal (node-pty -> bash) / File System / Search"]
       EXTRA["Extra Key Row (Native Android View)"]
       WV --> UI
       NODE --> SRV
       EXTRA --> WV
     end
     FG["Foreground Service (keeps alive)"]
-    BIN["Bundled Binaries (.so): node, python, git, bash, tmux"]
+    BIN["Bundled Binaries (.so): node, python launcher, git, bash, tmux, make, ripgrep, ssh"]
   end
 
   WV <--> LOCAL["localhost:PORT (HTTP + WebSocket)"]
@@ -66,13 +66,19 @@ flowchart TD
   USER["Developer (User)"] --> APP["VSCodroid (Android App)"]
   APP --> OVSX["Open VSX (Extensions Registry)"]
   APP --> GIT["GitHub/GitLab remotes"]
-  APP --> TERMUX["Termux Repositories (Packages)"]
+  APP --> PAD["Play Asset Delivery (toolchain packs)"]
+  APP --> REL["GitHub Releases (toolchain ZIPs)"]
 ```
 
 **External Systems:**
 - **Open VSX**: Extension search, download, update (HTTPS)
 - **GitHub/GitLab**: Remote git operations (HTTPS/SSH)
-- **Termux Package Repository**: Additional tool downloads (sideload version only; Play Store version uses on-demand asset packs)
+- **Play Asset Delivery**: Ruby and Java 17 packs, for installs whose `installingPackageName` is `com.android.vending`
+- **GitHub Releases**: the same two toolchains as ZIPs under `releases/latest`, for every other install source
+
+Termux's package repository is a build-time source, not a runtime one: `scripts/download-node.sh`,
+`download-python.sh` and `download-termux-tools.sh` fetch the runtime and the tools from it while the
+APK is being built, and nothing in the app contacts it on device.
 
 ### 3.2 Level 2 — Container Diagram
 
@@ -87,7 +93,7 @@ flowchart TD
 
       subgraph SERVER["Server Container"]
         VSS["VS Code Server (Node.js, vscode-reh)<br/>Extension Host / Terminal Backend / File Service / Search Service"]
-        CHILD["Child Processes<br/>tmux -> bash sessions<br/>Language Servers (lazy)"]
+        CHILD["Child Processes<br/>bash, one per terminal via node-pty<br/>Language Servers (lazy)"]
       end
 
       subgraph SERVICES["Android Services"]
@@ -97,7 +103,7 @@ flowchart TD
       end
     end
 
-    LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so,<br/>libbash.so, libtmux.so, libnode_pty.so,<br/>libc++_shared.so, libmake.so"]
+    LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so, libgit-remote-curl.so,<br/>libbash.so, libtmux.so, libmake.so, libripgrep.so,<br/>libssh.so, libssh-keygen.so, libldmusl.so"]
   end
 
   EXTRAROW --> WEBVIEW
@@ -121,7 +127,7 @@ flowchart TD
       REG["Service Registry"]
       FS["File System Service (Node fs)"]
       SEARCH["Search Service (ripgrep)"]
-      TERM["Terminal Service (node-pty -> tmux -> bash)"]
+      TERM["Terminal Service (Pty Host worker_thread -> node-pty -> bash)"]
       EXTHOST["Extension Host (worker_thread)"]
       DEBUG["Debug Service"]
       TASK["Task Service"]
@@ -137,9 +143,8 @@ flowchart TD
     end
 
     EXTHOST --> THREAD["Extension Host Thread<br/>Extension A (active)<br/>Extension B (active)<br/>Extension C (idle)"]
-    TERM --> TMUX["tmux server [phantom #2]"]
-    TMUX --> BASH["bash sessions (N)"]
-    EXTHOST -. lazy start .-> LS["Language Servers (0-3) [phantom #3-5]<br/>tsserver, pylsp (idle-killed after 5 min)"]
+    TERM --> BASH["bash, one per terminal on a real PTY [phantom #2+]"]
+    EXTHOST -. lazy start .-> LS["Language Servers (0-3) [phantom #3+]<br/>tsserver, pylsp (idle-killed after 5 min)"]
   end
 ```
 
@@ -147,29 +152,22 @@ flowchart TD
 
 ## 4. Key Architecture Decisions (ADRs)
 
-### ADR-001: Fork code-server, not VS Code directly
+### ADR-001: Build Code - OSS from the MIT source
 
-**Status**: Superseded 2026-08-12 — see **Superseded by** below
+**Status**: Accepted (legal requirement)
 
-**Context**: We need VS Code running as a web server on Android. VS Code itself doesn't include a web-serving layer.
+**Context**: We need VS Code running as a web server on Android. The MIT `microsoft/vscode` source carries that web-serving layer itself, as the `vscode-reh-web-linux-<arch>` build target. The pre-built server on Microsoft's update CDN is a different artifact under Microsoft's own licence terms, which do not permit modifying it and redistributing it inside an APK.
 
-**Decision**: Fork code-server which already patches VS Code to serve via HTTP/WebSocket.
+**Decision**: Build Code - OSS from the MIT source. `scripts/build-vscode-oss.sh` clones `github.com/microsoft/vscode` at the tag pinned in the `VSCODE_VERSION` file, applies the numbered unified diffs in `patches/` with `git apply` and the product config in `branding/`, then runs `npm run gulp core-ci`, `npm run gulp compile-copilot-extension-build`, and the `vscode-reh-web-linux-<arch>-min-ci` packaging task. The tarball is published once per VS Code version as a `server-<version>` release, and every app build fetches it with `scripts/fetch-vscode-oss.sh`.
 
 **Rationale**:
-- code-server maintains ~15-20 patches for web serving, marketplace, branding
-- Saves 3-4 weeks of development
-- Active upstream maintenance
-- Well-documented patch system
+- The MIT source is the artifact we are free to modify and redistribute inside an APK
+- Serving over HTTP and WebSocket is already what the reh-web target does, so nothing has to be added for it
+- Patches are real unified diffs against readable source, and `git apply` fails loudly when one stops applying
+- `scripts/check-patch-fingerprints.py` matches each patch against `patches/fingerprints.txt` in the packaged bundle, so a patch that applies but never reaches the output is caught; `fetch-vscode-oss.sh` runs the same check on what it downloads
+- `scripts/verify-server-tree.py` refuses any tree carrying `node_modules/vsda`, which only Microsoft's own build has
 
-**Trade-off**: Dependency on code-server's patch compatibility with VS Code updates.
-
-**Superseded by**: Building Code - OSS from the MIT source directly. The Context above was wrong on
-its premise — the OSS source already carries the web-serving layer, as the
-`vscode-reh-web-linux-<arch>` build target. `scripts/build-vscode-oss.sh` clones
-`github.com/microsoft/vscode` at the pinned tag, applies the unified diffs in `patches/` with
-`git apply`, and runs `npm run gulp core-ci`, then `compile-copilot-extension-build`, then the
-`vscode-reh-web-linux-<arch>-min-ci` packaging task; `scripts/fetch-vscode-oss.sh` then downloads
-the resulting `server-<version>` release tarball for every app build.
+**Trade-off**: A full build takes around half an hour on an arm64 runner (`.github/workflows/build-vscode-oss.yml`, dispatched by hand), and the patch set has to be rebased on every version bump. The runner architecture is not a preference: native modules are built for the build host, so an x86-64 tree builds green and then fails at exec on the device.
 
 ---
 
@@ -216,35 +214,35 @@ the resulting `server-<version>` release tarball for every app build.
 
 **Context**: VS Code Extension Host normally runs as a child process via child_process.fork(). Each child process counts toward Android's 32-process phantom limit.
 
-**Decision**: Patch Extension Host to run as a worker_thread inside the main Node.js process. Phased rollout: child_process.fork() in M1-M3, migrate to worker_thread in M4.
+**Decision**: Patch Extension Host to run as a worker_thread inside the main Node.js process (`patches/0004-exthost-as-worker-thread.patch`). The Pty Host is taken off the same budget the same way (`patches/0003-ptyhost-as-worker-thread.patch`).
 
 **Rationale**:
 - worker_thread = same process = not a phantom process
-- Saves 1 phantom process slot (significant given 32 system limit)
-- worker_threads have access to most Node.js APIs
-- code-server already explored this direction
+- The two patches together save two permanent phantom slots, out of a system-wide 32
+- worker_threads have access to most Node.js APIs, and `bootstrap-fork` installs `process.send` over `parentPort`, so the hosted module still sees the IPC channel it was written against
+- The same file serves both shapes: in a real fork `isMainThread` is true and none of the bridge runs
 
-**Trade-off**: Extension Host crash could bring down the main server process. Mitigation: watchdog that restarts server if Extension Host thread crashes.
+**Trade-off**: An Extension Host crash can take the server process with it, and a worker cannot be handed a socket over IPC, so `_canSendSocket` is forced off and the host connects back over a named pipe that the server bridges. Reconnecting after a WebView recreation needs a fresh connection rather than a resumed one. Mitigation: the watchdog in `ProcessManager` restarts the server, and readiness is re-probed before the WebView is navigated.
 
 **Implementation note**: Patch details (target files, fork→worker mapping, restart semantics, validation tests) are specified in [Technical Spec §6.3 Extension Host worker_thread Migration](./04-TECHNICAL_SPEC.md#63-extension-host-worker_thread-migration).
 
 ---
 
-### ADR-005: tmux for terminal multiplexing
+### ADR-005: bash directly through node-pty for terminals
 
 **Status**: Accepted
 
-**Context**: VS Code supports multiple terminal tabs. Each terminal would normally be a separate process (phantom).
+**Context**: VS Code supports multiple terminal tabs, and every terminal process counts toward Android's 32-process phantom limit. The limit has to be respected without changing what a terminal is.
 
-**Decision**: Use tmux as a single process managing all terminal sessions.
+**Decision**: Each VS Code terminal spawns bash directly through node-pty on a real PTY (`/dev/pts/*`). `FirstRunSetup` writes a single `bash` profile into the default settings, with `terminal.integrated.defaultProfile.linux` set to `bash` and its `path` taken from `Environment.getTerminalShellPath`. The phantom budget is held down instead by hosting the Extension Host and the Pty Host as worker threads (patches `0003` and `0004`), which are threads rather than processes and so cost nothing against it. tmux stays bundled as a standalone tool a user can run from a terminal; nothing in the terminal path goes through it.
 
 **Rationale**:
-- 1 tmux process + N sessions = only 1 phantom process
-- Without tmux: N terminals = N bash processes = N phantoms
-- tmux also provides session persistence (survive server restart)
-- Proven technology, small binary (~500KB)
+- A real PTY is what job control, `isatty`, resize signals and shell integration all need; anything layered in front of bash is another thing that can break them
+- The two worker-thread patches remove two guaranteed phantoms, which is the same saving a multiplexer was meant to buy, without touching the terminal path
+- Terminals are opened a few at a time in practice, and idle language servers are reclaimed by `process-monitor.js`, so bash processes are not what pushes the count toward the limit
+- VS Code's terminal profiles map cleanly onto one shell per tab, so nothing has to translate tab lifecycle into session lifecycle
 
-**Trade-off**: Added complexity in terminal management. Must map VS Code terminal tabs to tmux sessions.
+**Trade-off**: N terminals are N bash processes, so a user who opens many tabs spends phantom slots on them. tmux is available to anyone who wants session persistence, as an explicit choice rather than a layer under every tab.
 
 ---
 
@@ -262,7 +260,7 @@ the resulting `server-<version>` release tarball for every app build.
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux) bundled as .so files in the base APK. Additional toolchains (Go, Rust, Java, C/C++, Ruby) delivered as on-demand asset packs via Play Store — user selects desired languages during first-run Language Picker, Play Store downloads automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks — so installed toolchains survive app updates.
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The two on-demand toolchains, Ruby and Java 17, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, shown once) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates.
 
 ---
 
@@ -302,17 +300,18 @@ the resulting `server-<version>` release tarball for every app build.
 
 ---
 
-### ADR-009: Install-time Asset Packs for toolchains
+### ADR-009: On-demand Asset Packs for toolchains
 
 **Status**: Accepted
 
-**Context**: VSCodroid bundles multiple language toolchains (Go, Rust, Java, C/C++, Ruby). Bundling all in the base APK would make it very large. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
+**Context**: VSCodroid offers language toolchains beyond the bundled core: Ruby and Java 17. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
 
-**Decision**: Use Play Store on-demand asset packs for toolchain delivery, with a Language Picker UI during first-run.
+**Decision**: Use Play Store on-demand asset packs for toolchain delivery, with a toolchain picker UI during first-run.
 
 **Rationale**:
 - On-demand packs keep base APK small (~150-200MB) for fast initial install
-- User selects needed languages during first-run — only downloads what they need
+- User selects needed languages during first-run, so only what they ask for is downloaded
+- `android/toolchain_ruby/build.gradle.kts` and `android/toolchain_java/build.gradle.kts` each declare `dynamicDelivery { deliveryType.set("on-demand") }`, and `ToolchainRegistry.available` is the single list the picker and the manage screen read
 - Play Store handles download/install automatically (no manual steps for user)
 - Play Store optimizes delivery per device (only arm64 assets delivered)
 - No custom CDN infrastructure needed for toolchain hosting
@@ -401,10 +400,10 @@ flowchart TD
 ```mermaid
 flowchart TD
   A["1. User types command in terminal panel"] --> B["2. WebSocket: Terminal.input(sessionId, data)"]
-  B --> C["3. Node.js -> node-pty writes to PTY master fd"]
-  C --> D["4. tmux session receives input -> forwards to bash"]
+  B --> C["3. Pty Host worker_thread -> node-pty writes to the PTY master fd"]
+  C --> D["4. bash, the session's own process, reads it from the PTY slave"]
   D --> E["5. bash executes command"]
-  E --> F["6. Output path:<br/>bash -> tmux -> PTY slave -> node-pty -> WebSocket -> terminal panel"]
+  E --> F["6. Output path:<br/>bash -> PTY slave -> node-pty -> WebSocket -> terminal panel"]
 ```
 
 ---
@@ -418,25 +417,37 @@ flowchart TD
   A["app.aab"] --> B["base/"]
   B --> C["dex/ (Kotlin compiled code)"]
   B --> D["lib/arm64-v8a/ (native binaries as .so)"]
-  D --> D1["libnode.so (~50MB)"]
-  D --> D2["libpython.so (~30MB)"]
-  D --> D3["libgit.so (~15MB)"]
-  D --> D4["libbash.so (~1.5MB)"]
-  D --> D5["libtmux.so (~500KB)"]
-  D --> D6["libmake.so (~500KB)"]
-  D --> D7["libnode_pty.so (~300KB)"]
-  D --> D8["libc++_shared.so (~1.2MB)"]
+  D --> D1["libnode.so (Node.js runtime)"]
+  D --> D2["libpython.so (Python launcher)"]
+  D --> D3["libgit.so, libgit-remote-curl.so"]
+  D --> D4["libbash.so"]
+  D --> D5["libtmux.so"]
+  D --> D6["libmake.so"]
+  D --> D7["libripgrep.so"]
+  D --> D8["libssh.so, libssh-keygen.so"]
+  D --> D9["libldmusl.so (musl loader)"]
   B --> E["assets/"]
-  E --> E1["vscode-reh/ (VS Code server files)"]
-  E --> E2["vscode-web/ (VS Code web client files)"]
-  E --> E3["python-stdlib/ (Python standard library)"]
-  E --> E4["node-modules/ (required node_modules, incl. @vscode/ripgrep)"]
+  E --> E1["vscode-reh/ (Code - OSS server, and the web client it serves)"]
+  E --> E2["usr/lib/ (libpython3.x.so, ICU, OpenSSL, libc++_shared.so and the rest of Node's dependencies)"]
+  E --> E3["usr/lib/python3.x/ (Python standard library)"]
+  E --> E4["usr/share/ (terminfo, git-core)"]
   E --> E5["extensions/ (pre-bundled extensions)"]
+  E --> E6["server.js, process-monitor.js, platform-fix.js, dns-proxy.js"]
   B --> F["res/ (Android resources)"]
   B --> G["AndroidManifest.xml"]
 ```
 
-`ripgrep` delivery model: bundled inside VS Code server dependencies (`node_modules/@vscode/ripgrep`), extracted together with `vscode-reh`. It is not shipped as a separate `lib*.so` binary.
+Sizes move with every rebuild, so read them rather than a document:
+`ls -la android/app/src/main/jniLibs/arm64-v8a/` and `ls -la android/app/src/main/assets/usr/lib/`.
+
+Native Node addons (`pty.node`, `watcher.node`, `vscode-sqlite3`) ship inside
+`assets/vscode-reh/node_modules`, not as `lib*.so` in `jniLibs`: SELinux refuses `execve` under the
+app data directory but still allows `dlopen`, so an addon loaded from `filesDir` works.
+
+`ripgrep` is bundled as `libripgrep.so` in `jniLibs`. The Search service looks for it under
+`node_modules/@vscode/ripgrep/bin/rg`, so `FirstRunSetup.setupRipgrepVscodeSymlink()` creates that
+link (and the `@vscode/ripgrep-universal` one) pointing at the `.so`, on every launch, because a
+reinstall moves `nativeLibraryDir` and dangles it.
 
 ### 7.2 Runtime File Layout
 
@@ -446,8 +457,9 @@ flowchart TD
   B --> B1["home/ ($HOME)"]
   B1 --> B1a[".vscodroid/ (VS Code data folder)"]
   B1a --> B1a1["extensions/ (installed extensions)"]
-  B1a --> B1a2["User/ (user settings)"]
-  B1a --> B1a3["logs/ (server logs)"]
+  B1a --> B1a2["data/Machine/settings.json (default settings the server reads)"]
+  B1a --> B1a3["data/logs/remoteagent.log (server log)"]
+  B1a --> B1a4["data/token (connection token, mode 0600)"]
   B1 --> B1b[".gitconfig"]
   B1 --> B1c[".ssh/ (SSH keys)"]
   B --> B2["usr/ (Unix-like layout)"]
@@ -458,8 +470,9 @@ flowchart TD
   B --> B3["workspace/ (default workspace)"]
   B --> B4["tmp/ (temporary files)"]
   B --> B5["server/ (VS Code extracted)"]
-  B5 --> B5a["vscode-reh/"]
-  B5 --> B5b["vscode-web/"]
+  B5 --> B5a["vscode-reh/ (server plus the web client it serves)"]
+  B5 --> B5b["server.js, process-monitor.js, platform-fix.js, dns-proxy.js"]
+  B5 --> B5c["editor-server.pid (pid and port of the running server)"]
   A --> C["lib/ (nativeLibraryDir, read-only)"]
   C --> C1["libnode.so"]
   C --> C2["libpython.so"]
@@ -480,7 +493,7 @@ flowchart TD
 | WebView | onRenderProcessGone → recreate WebView, reload server URL |
 | Node.js server | Process death → Kotlin detects via pid monitor → auto-restart |
 | Extension Host | worker_thread crash → restart thread, reload extensions |
-| Terminal | tmux session persistence → survive server restart |
+| Terminal | bash exit or PTY failure → the tab reports it; one session per bash, so a failed one leaves the others running |
 | File operations | Node.js fs errors → propagate to VS Code UI as notifications |
 
 ### 8.2 Logging
@@ -507,8 +520,8 @@ server's own log service writes `remoteagent.log` there, Extension Host output i
 
 | Config | Location | Format |
 |--------|----------|--------|
-| VS Code settings | ~/.vscodroid/User/settings.json | JSON |
-| product.json | Built into vscode-web and vscode-reh assets | JSON |
+| VS Code settings | ~/.vscodroid/data/Machine/settings.json (the server rewrites `--user-data-dir` to `<server-data-dir>/data`, and only remote-machine scopes are read from it) | JSON |
+| product.json | `vscode-reh/product.json`, rewritten by `server.js` on every start from its `productOverrides` | JSON |
 | Environment variables | Set by Kotlin ProcessBuilder | Shell |
 | App preferences | Android SharedPreferences | XML |
 
@@ -518,14 +531,14 @@ server's own log service writes `remoteagent.log` there, Extension Host output i
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Android app | Kotlin | 2.0+ |
-| Build system | Gradle (Kotlin DSL) | 8.x |
+| Android app | Kotlin, compiled to JVM target 17 | The version AGP 9.3.1 brings (`agp` in `android/gradle/libs.versions.toml`) |
+| Build system | Gradle (Kotlin DSL), pinned by the wrapper | 9.5.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
 | UI framework | Android View + WebView | API 33-36 |
-| Node.js | Node.js LTS | 20.x (pinned at M0 start) |
+| Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0, the version `remote/.npmrc` `target` names at the pinned VS Code tag |
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.133.0 (pinned in the `VSCODE_VERSION` file at the repo root) |
-| Extension Host | VS Code Extension Host (child_process.fork initially, worker_thread in M4) | Same as VS Code |
-| Terminal | node-pty + tmux + bash | Latest |
-| Package manager | Custom (Termux repo compatible) | v1.0 |
-| SCM | Git | 2.40+ |
-| Python | Python 3 | 3.11+ |
-| C++ stdlib | libc++ from NDK | r27 |
+| Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |
+| Terminal | node-pty spawning bash on a real PTY (tmux bundled as a standalone tool) | Latest |
+| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 17 |
+| SCM | Git from Termux, as `libgit.so` and `libgit-remote-curl.so` plus `usr/lib/git-core` | Whatever the Termux index names at build time |
+| Python | Python 3 from Termux, fetched by `scripts/download-python.sh` | Whatever the Termux index names at build time; read it from `assets/usr/lib/libpython*.so` |
+| C++ stdlib | `libc++_shared.so` from Termux's `libc++` package, in `assets/usr/lib` | Whatever `scripts/download-termux-tools.sh` resolves |

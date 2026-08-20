@@ -4,14 +4,13 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
-> **Historical document — describes the plan as of 2026-02-10, not the code.**
-> The server is built from the MIT Code - OSS source by `.github/workflows/build-vscode-oss.yml`,
-> with unified diffs in `patches/` applied before the build; app builds fetch the result with
-> `scripts/fetch-vscode-oss.sh`. Anything here about downloading a pre-built server from Microsoft's
-> CDN, or about inline regex patches in `download-vscode-server.sh`, describes a path that was
-> removed on 2026-08-12. For what the code actually does, read the code — `scripts/build-vscode-oss.sh`,
-> `patches/`, and the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is
-> the prose kept current alongside it.
+> **The code is the only authority.** The server is built from the MIT Code - OSS source by
+> `.github/workflows/build-vscode-oss.yml`, which applies the unified diffs in `patches/` and the
+> branding in `branding/` before the gulp build; app builds fetch the published result with
+> `scripts/fetch-vscode-oss.sh`. Where this document summarises a mechanism, the mechanism itself
+> lives in `scripts/build-vscode-oss.sh`, `patches/`, and the Kotlin under
+> `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is the prose kept current
+> alongside it.
 
 ---
 
@@ -21,222 +20,170 @@
 
 ```mermaid
 flowchart TD
-  S1["Stage 1: Cross-compile binaries<br/>Node.js, Python, Git, bash/tmux, node-pty"] --> S2["Stage 2: Build VS Code<br/>code-server fork + patches<br/>outputs: vscode-web, vscode-reh, node_modules"]
+  S1["Stage 1: Assemble binaries<br/>Node, Python, git, bash, tmux, make, ssh from Termux packages<br/>node-pty and @parcel/watcher cross-compiled with the NDK"] --> S2["Stage 2: Build Code - OSS<br/>MIT microsoft/vscode source + patches/ + branding/<br/>output: vscode-reh-web-linux-arm64 (server and web client in one tree)"]
   S2 --> S3["Stage 3: Android APK/AAB<br/>Gradle assembleRelease<br/>Kotlin + WebView + assets + jniLibs<br/>output: app-release.aab"]
-  ENV["Environment: Linux x86_64 CI + Android NDK r27<br/>Compiler target: aarch64-linux-android28 (NDK ABI baseline)<br/>App minSdk: API 33"] -. applies to .-> S1
+  ENV["Environment: arm64 Linux runner for stage 2 (the gulp build needs the target arch)<br/>Android NDK r27 for the native addons: aarch64-linux-android28<br/>App minSdk: API 33"] -. applies to .-> S1
   ENV -. applies to .-> S2
   ENV -. applies to .-> S3
 ```
 
-### 1.2 Node.js Cross-Compilation
+### 1.2 Node.js Runtime
 
-**Source**: Node.js LTS (e.g., v20.x), patched with Termux patches
+**Source**: Termux's `nodejs-lts` package. Nothing here compiles Node.
 
-**Toolchain**:
+The version is not a preference. `remote/.npmrc` `target` at the pinned VS Code tag names the Node
+the server ships and the one its native modules are built against, so the package has to be that
+line; bumping either means checking the other.
 
-```
-NDK_PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
-CC=$NDK_PATH/bin/aarch64-linux-android28-clang
-CXX=$NDK_PATH/bin/aarch64-linux-android28-clang++
-AR=$NDK_PATH/bin/llvm-ar
-RANLIB=$NDK_PATH/bin/llvm-ranlib
-```
-
-**Configure flags**:
+**`scripts/download-node.sh`**:
 
 ```bash
-./configure \
-  --dest-cpu=arm64 \
-  --dest-os=android \
-  --cross-compiling \
-  --partly-static \
-  --with-intl=small-icu \
-  --openssl-no-asm \
-  --without-inspector \
-  --without-node-snapshot \
-  --shared-zlib \
-  --prefix=/data/data/com.vscodroid/files/usr
+# 1. Fetch and verify the Termux package index (scripts/verify-termux-index.sh):
+#    a pinned key signs InRelease, which carries the digest of the package index,
+#    which carries the digest of each .deb.
+# 2. Download nodejs-lts and extract bin/node.
+# 3. Install it as jniLibs/arm64-v8a/libnode.so (the .so trick), mode 0755.
+# 4. patch-default-shell.py repoints the built-in default shell, which Termux
+#    compiles as /data/data/com.termux/files/usr/bin/sh, at /system/bin/sh.
+# 5. verify-android-elf.py checks 16 KB LOAD alignment and refuses any DT_NEEDED
+#    that neither Bionic provides nor this app bundles.
 ```
 
-**Post-build**:
+**Not statically linked**: it needs `libcares`, `libicu*`, `libc++_shared`, `libsqlite3`,
+`libcrypto`, `libssl` and `libz`. `scripts/download-termux-tools.sh` places those in
+`assets/usr/lib`, and `Environment.kt` puts that directory on `LD_LIBRARY_PATH`. `libicudata` is
+32 MB on its own and is not optional; the other ICU libraries do nothing without it.
+
+**16KB page alignment** (Android 16): Termux's build is already aligned, and
+`verify-android-elf.py` gates every bundled ELF on it.
+
+### 1.3 Python Runtime
+
+**Source**: Termux's `python` and `python-pip` packages, installed by `scripts/download-python.sh`.
+
+**Key points**:
+
+- The version is read from the Termux index at build time and never hardcoded: the script derives
+  `PYTHON_MAJOR_MINOR` from the package it resolved and writes every path from it.
+- The interpreter is installed as `jniLibs/arm64-v8a/libpython.so`.
+- Stdlib and pip land in `assets/usr/lib/python<major>.<minor>/`, and an older stdlib directory
+  is removed rather than left beside the new one.
+- Its own dependencies (`libffi`, `libbz2`, `liblzma`, `libsqlite`, `libcrypt`, `gdbm`, `zstd`,
+  `libandroid-posix-semaphore`) go to `assets/usr/lib/`.
+- `patch-python-platform.py` and `patch-default-shell.py` correct what the stdlib assumes about
+  the platform and about where a shell lives.
+
+### 1.4 Native Node Addons
+
+`scripts/build-native-addons.sh` is where cross-compilation actually happens. It builds the addons
+the server cannot run without, against Bionic, with the NDK:
 
 ```bash
-# Strip debug symbols
-aarch64-linux-android-strip --strip-unneeded out/Release/node
-
-# Rename for .so trick
-cp out/Release/node app/src/main/jniLibs/arm64-v8a/libnode.so
-
-# Verify
-file libnode.so  # ELF 64-bit LSB pie executable, ARM aarch64
+# node-pty        -> node_modules/node-pty/build/Release/pty.node
+# @parcel/watcher -> node_modules/@parcel/watcher/build/Release/watcher.node
+#
+# Linked with -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
+# OUTPUT_ROOT defaults to android/app/src/main/assets/vscode-reh
 ```
 
-**16KB page alignment** (Android 16):
+Both land inside the packaged `vscode-reh` tree, **not** in `jniLibs/`. That works because SELinux
+denies `execve` under the app's data directory but not `dlopen`, so an addon is loadable from
+`filesDir` even though a binary there cannot be executed. Each addon's version is checked against
+the `package.json` the server was built with, since an addon compiled for a different Node ABI
+loads and then fails at the first call.
+
+### 1.5 Code - OSS Build (server and web client)
+
+The server is built from the MIT `microsoft/vscode` source, once per VS Code version, by
+`scripts/build-vscode-oss.sh`. `.github/workflows/build-vscode-oss.yml` runs it on an arm64 runner
+and publishes the result as a `server-<version>` release; every app build then fetches that
+artifact with `scripts/fetch-vscode-oss.sh` instead of building it again.
 
 ```bash
-# Add to configure/build flags
-LDFLAGS="-Wl,-z,max-page-size=16384"
-```
+# 1. Fetch the pinned source. VSCODE_VERSION holds the tag and VSCODE_COMMIT the
+#    commit it resolved to when it was pinned. The build refuses a tree whose
+#    package.json version disagrees with the pin, because the pin is what makes
+#    the patches apply.
 
-### 1.3 Python Cross-Compilation
-
-**Source**: CPython 3.11+, Termux build recipes as reference
-
-**Key considerations**:
-
-- Cross-compile with android-ndk toolchain
-- Bundle python3 binary + lib/python3.11/ stdlib
-- Include pip via ensurepip
-- Strip .pyc files for size reduction
-- Bundle as libpython.so (binary) + assets/python-stdlib/ (stdlib)
-
-### 1.4 node-pty Cross-Compilation
-
-**Source**: node-pty npm package
-
-**Build**:
-
-```bash
-# node-gyp cross-compile
-node-gyp rebuild \
-  --target=20.0.0 \
-  --arch=arm64 \
-  --nodedir=/path/to/node-source \
-  CC=$NDK_CC CXX=$NDK_CXX
-
-# Output: build/Release/pty.node
-cp build/Release/pty.node app/src/main/jniLibs/arm64-v8a/libnode_pty.so
-```
-
-### 1.5 code-server Build (VS Code)
-
-**Process**:
-
-```bash
-# 1. Clone code-server fork
-git clone https://github.com/rmyndharis/code-server.git
-cd code-server
-
-# 2. Apply code-server patches to VS Code
-./ci/dev/patch-vscode.sh
-
-# 3. Apply VSCodroid-specific patches
-for patch in patches/vscodroid/*.diff; do
-  git -C lib/vscode apply "$patch"
+# 2. Apply the Android adaptations, as unified diffs against readable source.
+for patch in patches/*.patch; do
+    git -C "$SRC" apply --verbose "$patch"
 done
 
-# 4. Build web client
-cd lib/vscode
-yarn gulp vscode-web-min
+# 3. Overlay branding/product.json onto the source product.json.
 
-# 5. Build remote extension host (server)
-yarn gulp vscode-reh-min
+# 4. Build.
+npm run gulp core-ci
+npm run gulp compile-copilot-extension-build
+npm run gulp "vscode-reh-web-linux-arm64-min-ci"
 
-# 6. Output directories
-# lib/vscode/out-vscode-web/     → assets/vscode-web/
-# lib/vscode/out-vscode-reh/     → assets/vscode-reh/
-# lib/vscode/node_modules/@vscode/ripgrep/bin/rg  → bundled inside vscode-reh assets
+# 5. Check and pack.
+python3 scripts/verify-server-tree.py       vscode-reh-web-linux-arm64
+python3 scripts/check-patch-fingerprints.py vscode-reh-web-linux-arm64 patches
+tar czf vscode-reh-web-linux-arm64-$VSCODE_VERSION.tar.gz vscode-reh-web-linux-arm64
 ```
 
-**Note on ripgrep delivery**: VS Code search requires ripgrep for file search. The build script (`download-vscode-server.sh`) extracts the ARM64 `rg` binary from `@vscode/ripgrep` in `node_modules` (or downloads it from [microsoft/ripgrep-prebuilt](https://github.com/microsoft/ripgrep-prebuilt)) and bundles it as `libripgrep.so` in `jniLibs/arm64-v8a/`. A symlink `rg → libripgrep.so` is created at first run.
+The `reh-web` target carries both halves, so one tree is the server and the web client it serves;
+`scripts/package-assets.sh` copies it to `assets/vscode-reh/` and there is no separate `vscode-web`
+to copy. `verify-server-tree.py` rejects any tree whose `LICENSE.txt` is not the MIT one, or that
+carries `node_modules/vsda`, which only Microsoft's own build has.
 
-### 1.6 Git Cross-Compilation
+**Note on ripgrep delivery**: VS Code search requires ripgrep. `scripts/fetch-vscode-oss.sh` takes
+the ARM64 `rg` out of `node_modules/@vscode/ripgrep-universal/bin/linux-arm64/` in the fetched tree,
+runs `verify-android-elf.py` over it, and installs it as `libripgrep.so` in `jniLibs/arm64-v8a/`. It
+cannot stay where it was: nothing under `filesDir` is executable. `FirstRunSetup` symlinks the path
+VS Code looks for back at the `.so` on every launch.
 
-**Source**: Git 2.40+ (Termux recipes as baseline)
+### 1.6 Git
 
-**Toolchain**:
-
-```bash
-CC=$NDK_PATH/bin/aarch64-linux-android28-clang
-AR=$NDK_PATH/bin/llvm-ar
-RANLIB=$NDK_PATH/bin/llvm-ranlib
-```
-
-**Configure/build**:
-
-```bash
-make configure
-./configure \
-  --host=aarch64-linux-android \
-  --prefix=/data/data/com.vscodroid/files/usr \
-  ac_cv_fread_reads_directories=no \
-  ac_cv_snprintf_returns_bogus=no
-
-make -j$(nproc) NO_GETTEXT=YesPlease NO_TCLTK=YesPlease
-make install
-```
+**Source**: Termux's `git` package, with `libcurl`, `openssl`, `pcre2`, `zlib`, `libssh2` and the
+rest of its dependency set, fetched by `scripts/download-termux-tools.sh`.
 
 **Output artifacts**:
 
-- `libgit.so` (main git executable via `.so` trick)
-- `usr/lib/git-core/*` helper binaries
+- `libgit.so` and `libgit-remote-curl.so` in `jniLibs/arm64-v8a/`
+- `usr/lib/git-core/*` helper binaries, reached through `GIT_EXEC_PATH`; the ones that must be
+  executable become symlinks to `libgit.so` at first run
+- `usr/share/git-core/templates`, reached through `GIT_TEMPLATE_DIR`
 
-### 1.7 Bash Cross-Compilation
+Shebangs and built-in shell paths are rewritten to `/system/bin/sh`, because the path Termux
+compiles in sits inside another application's data directory that this app can neither read nor
+create.
 
-**Source**: bash 5.x (Termux-compatible patches)
+### 1.7 Bash
 
-**Configure/build**:
-
-```bash
-./configure \
-  --host=aarch64-linux-android \
-  --prefix=/data/data/com.vscodroid/files/usr \
-  --without-bash-malloc
-
-make -j$(nproc)
-make install
-```
+**Source**: Termux's `bash` package, with `readline` and `ncurses`.
 
 **Output artifacts**:
 
-- `libbash.so`
-- `usr/share/bash/*` runtime files
+- `libbash.so` in `jniLibs/arm64-v8a/`
+- `usr/bin/bash`, a symlink to it that `FirstRunSetup.setupToolSymlinks()` rebuilds on every launch,
+  because a reinstall moves `nativeLibraryDir` and dangles every absolute link
 
-### 1.8 tmux Cross-Compilation
+The terminal profile names the symlink, never the `.so`: VS Code decides whether it can inject
+shell integration by switching on the executable's basename, and `libbash.so` matches no case.
 
-**Source**: tmux 3.x
+### 1.8 tmux
 
-**Dependencies**:
-
-- `libevent` (cross-compiled)
-- `ncurses`/terminfo data
-
-**Configure/build**:
-
-```bash
-./configure \
-  --host=aarch64-linux-android \
-  --prefix=/data/data/com.vscodroid/files/usr \
-  CFLAGS="-I$PREFIX/include" \
-  LDFLAGS="-L$PREFIX/lib"
-
-make -j$(nproc)
-make install
-```
+**Source**: Termux's `tmux` package, with `libevent` and the `ncurses` terminfo data.
 
 **Output artifacts**:
 
-- `libtmux.so`
-- `usr/share/terminfo/*`
+- `libtmux.so` in `jniLibs/arm64-v8a/`
+- `usr/share/terminfo/*`, reached through `TERMINFO`
 
-### 1.9 make Cross-Compilation
+tmux is a standalone tool for whoever wants it. VS Code's terminals do not go through it: the
+default profile is bash, and each terminal spawns bash directly through node-pty on a real PTY.
+`TMUX_TMPDIR` has to be set, because the Termux build otherwise hunts for its socket inside Termux's
+own prefix and every session dies with "no suitable socket path".
 
-**Source**: GNU make 4.x
+### 1.9 make
 
-**Configure/build**:
-
-```bash
-./configure \
-  --host=aarch64-linux-android \
-  --prefix=/data/data/com.vscodroid/files/usr
-
-make -j$(nproc)
-make install
-```
+**Source**: Termux's `make` package.
 
 **Output artifacts**:
 
-- `libmake.so`
+- `libmake.so` in `jniLibs/arm64-v8a/`
 
 ### 1.10 Gradle Build Configuration
 
@@ -289,17 +236,19 @@ flowchart TD
   APP --> A1["VSCodroidApp.kt (Application class)"]
   APP --> A2["MainActivity.kt (Main activity with WebView)"]
   APP --> A3["SplashActivity.kt (First-run setup)"]
+  APP --> A4["ToolchainActivity.kt (Toolchain picker and manage screen)"]
   APP --> SVC["service/"]
   SVC --> SVC1["NodeService.kt (Foreground Service for Node.js)"]
   SVC --> SVC2["ProcessManager.kt (Node.js process lifecycle)"]
   APP --> WEB["webview/"]
   WEB --> WEB1["VSCodroidWebView.kt (WebView configuration)"]
-  WEB --> WEB2["WebViewClient.kt (URL loading, error handling)"]
-  WEB --> WEB3["WebChromeClient.kt (Console, file picker, permissions)"]
+  WEB --> WEB2["VSCodroidWebViewClient.kt (request interception, URL loading, errors)"]
+  WEB --> WEB3["VSCodroidWebChromeClient.kt (console, file picker, permissions)"]
+  WEB --> WEB4["DownloadCoordinator.kt, DownloadNaming.kt (downloads out of the WebView)"]
   APP --> BR["bridge/"]
   BR --> BR1["AndroidBridge.kt (@JavascriptInterface methods)"]
   BR --> BR2["ClipboardBridge.kt (Clipboard read/write)"]
-  BR --> BR3["IntentBridge.kt (Open URLs, file picker results)"]
+  BR --> BR3["SecurityManager.kt (session token for bridge calls)"]
   APP --> KEY["keyboard/"]
   KEY --> KEY1["ExtraKeyRow.kt (Custom View for extra keys)"]
   KEY --> KEY2["ExtraKeyButton.kt (Individual key button)"]
@@ -307,25 +256,31 @@ flowchart TD
   APP --> SETUP["setup/"]
   SETUP --> SET1["FirstRunSetup.kt (Binary extraction, initialization)"]
   SETUP --> SET2["ToolchainManager.kt (On-demand toolchain install)"]
-  SETUP --> SET3["PackageManager.kt (vscodroid pkg operations)"]
+  SETUP --> SET3["ToolchainRegistry.kt (what the picker offers)"]
+  SETUP --> SET4["ToolchainCardState.kt, ToolchainPickerAdapter.kt (picker UI state)"]
+  APP --> STORE["storage/"]
+  STORE --> ST1["SafStorageManager.kt (SAF folder grants and mirrors)"]
+  STORE --> ST2["SafSyncEngine.kt (reconcile mirror with content URI)"]
   APP --> UTIL["util/"]
   UTIL --> U1["Environment.kt (PATH, HOME, env setup)"]
   UTIL --> U2["PortFinder.kt (find available localhost port)"]
-  UTIL --> U3["Logger.kt (logging utilities)"]
+  UTIL --> U3["Logger.kt (logging utilities, redaction)"]
+  UTIL --> U4["CrashReporter.kt, Notices.kt, StorageManager.kt, ViewInsets.kt, WebViewVersion.kt"]
 
   ROOT --> RES["res/"]
   RES --> LAYOUT["layout/"]
   LAYOUT --> L1["activity_main.xml (WebView + ExtraKeyRow)"]
   LAYOUT --> L2["activity_splash.xml (First-run progress)"]
+  LAYOUT --> L3["activity_toolchain.xml, item_toolchain_card.xml, layout_toolchain_picker.xml, layout_toolchain_progress.xml"]
   RES --> VALUES["values/"]
   VALUES --> V1["strings.xml"]
   RES --> DRAW["drawable/"]
   DRAW --> D1["ic_launcher.xml (VSCodroid icon)"]
 
   ROOT --> ASSET["assets/"]
-  ASSET --> AS1["vscode-reh/ (VS Code server)"]
-  ASSET --> AS2["vscode-web/ (VS Code web client)"]
-  ASSET --> AS3["python-stdlib/ (Python standard library)"]
+  ASSET --> AS1["vscode-reh/ (Code - OSS server, and the web client it serves)"]
+  ASSET --> AS2["usr/ (Termux binaries, shared libs, terminfo, git-core)"]
+  ASSET --> AS3["usr/lib/python3.x/ (Python standard library and pip)"]
   ASSET --> AS4["extensions/ (Pre-bundled extensions)"]
   ASSET --> AS5["server.js (Server bootstrap script)"]
 ```
@@ -336,7 +291,7 @@ flowchart TD
 flowchart TD
   A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (first run only)<br/>Check extraction state<br/>Extract assets to files/<br/>Initialize environment<br/>Start MainActivity"]
   B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Register AndroidBridge<br/>Start/bind NodeService<br/>Wait server ready -> loadUrl(http://localhost:PORT/)"]
-  C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll /healthz until 200 OK<br/>Notify MainActivity: server ready"]
+  C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll GET /version, accept only 200<br/>Notify MainActivity: server ready"]
   D --> E["MainActivity (running)<br/>Handle ExtraKeyRow visibility<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]
   E --> F["MainActivity.onDestroy()<br/>Stop the SAF file watcher, unbind the service<br/>Destroy the WebView. The service is not stopped here<br/>Rotation does not reach this: configChanges keeps the activity"]
 ```
@@ -350,14 +305,14 @@ val env = mapOf(
     "PATH"              to "${nativeLibDir}:${filesDir}/usr/bin:/system/bin",
     "LD_LIBRARY_PATH"   to "${nativeLibDir}:${filesDir}/usr/lib",
     "NODE_PATH"         to "${filesDir}/server/vscode-reh/node_modules",
-    "SHELL"             to "${nativeLibDir}/libbash.so",
+    "SHELL"             to "${filesDir}/usr/bin/bash",
     "TERM"              to "xterm-256color",
     "TERMINFO"          to "${filesDir}/usr/share/terminfo",
     "LANG"              to "en_US.UTF-8",
     "COLORTERM"         to "truecolor",
     "EDITOR"            to "vi",
     "PREFIX"            to "${filesDir}/usr",
-    "PYTHON_HOME"       to "${filesDir}/usr/lib/python3.11",
+    "PYTHONHOME"        to "${filesDir}/usr",
     "GIT_EXEC_PATH"     to "${filesDir}/usr/lib/git-core",
     "VSCODROID_VERSION" to BuildConfig.VERSION_NAME,
 )
@@ -504,148 +459,156 @@ ViewCompat.setOnApplyWindowInsetsListener(rootView) { _, insets ->
 
 ## 6. Patch System
 
-### 6.1 Patch Categories
+### 6.1 The Patch Set
+
+The Android adaptations are unified diffs against readable Code - OSS source, numbered so that the
+order they apply in is fixed. They live in `patches/`, one file each:
 
 ```mermaid
 flowchart TD
-  P["patches/"] --> CS["code-server/ (inherited patches)"]
-  CS --> CS1["product.diff (branding, marketplace URLs)"]
-  CS --> CS2["disable-telemetry.diff (disable Microsoft telemetry)"]
-  CS --> CS3["disable-update-check.diff (disable update checker)"]
-  CS --> CS4["marketplace.diff (Open VSX integration)"]
-  CS --> CS5["serve-web.diff (HTTP serving layer)"]
-  CS --> CS6["webview.diff (extension webviews in web)"]
-  CS --> CS7["browser-command.diff (open URLs externally)"]
-  CS --> CS8["github-auth.diff (OAuth flow)"]
-  CS --> CS9["local-storage.diff (state persistence)"]
-
-  P --> VC["vscodroid/ (inline patches in download-vscode-server.sh)"]
-  VC --> VC1["Extension Host → worker_thread (inline Python, 3 patches)"]
-  VC --> VC2["ptyHost → worker_thread (inline Python, 2 patches)"]
-  VC --> VC3["IPC bridge module injection (inline sed)"]
-  VC --> VC4["Future: touch-ui, keyboard-aware, android-fs, etc."]
+  P["patches/"] --> P1["0001 platform: treat Android as Linux"]
+  P --> P2["0002 user data path: accept Android"]
+  P --> P3["0003 Pty Host as a worker_thread"]
+  P --> P4["0004 Extension Host as a worker_thread"]
+  P --> P5["0005 webview: disable the service worker, relax its CSP"]
+  P --> P6["0006 OAuth callback relayed into the app over intent://"]
+  P --> P7["0007 persist secrets across a restart"]
+  P --> P8["0008 activity bar overflow sized from live height"]
+  P --> P9["0009 marketplace: request the alpine target on Android"]
+  P --> P10["0010 .moduleignore: keep the Copilot SDK entry"]
+  P --> P11["0011 brand the web walkthrough"]
+  P --> P12["0012 serve /callback before the connection-token check"]
+  P --> P13["0013 shorten the reconnection grace when a client is connected"]
 ```
+
+Five of these are load-bearing in ways their titles understate:
+
+- **0001 and 0002 are the platform pair.** Node on Android reports `process.platform === "android"`
+  and VS Code only ever compares against `"linux"`, so `isLinux`, `isWindows` and `isMacintosh` are
+  false at once and every Linux-shaped decision falls to an untested default. 0002 exists separately
+  because `doGetUserDataPath` switches on `process.platform` directly, where the default arm throws
+  `Platform not supported` and kills the Pty Host during construction.
+- **0003 and 0004 take the two long-lived forks off Android's phantom-process budget.** Threads are
+  not processes. `bootstrap-fork` installs `process.send` over `parentPort` on the worker side, so
+  the module inside still sees the IPC channel it was written against. The Extension Host needs more
+  than the Pty Host does, because it is handed the client's socket over IPC and a worker has no
+  channel that can carry a handle; it takes the route upstream already uses on Windows, where the
+  host connects back over a pipe and the server bridges the two sockets itself.
+- **0009 depends on 0001.** The marketplace target selector tests `isLinux` before it tests Android,
+  so without 0001 the CLI-bearing extensions are served the glibc build, which cannot start in an
+  app process: glibc's `__tls_init_tp` calls `set_robust_list` and `rseq`, Android's app seccomp
+  filter rejects both, and the process dies with SIGSYS before `main()`. That coupling is read
+  from the selector, not measured: no tree has been built without 0001 to watch it happen.
 
 ### 6.2 Patch Application
 
 ```bash
-#!/bin/bash
-# apply-patches.sh
+# scripts/build-vscode-oss.sh, "Patches" step
 
-VSCODE_DIR="lib/vscode"
+PATCHES="${PATCHES:-$REPO_ROOT/patches}"
 
-# Apply code-server patches first
-for patch in patches/code-server/*.diff; do
-    echo "Applying: $patch"
-    git -C "$VSCODE_DIR" apply --check "$patch" || {
-        echo "FAILED: $patch"
-        exit 1
-    }
-    git -C "$VSCODE_DIR" apply "$patch"
+# Applied to a clean tree every time, so a rerun cannot fail on an already
+# applied hunk or accumulate half-states. reset comes first: a patch that adds a
+# file leaves it staged, where neither checkout nor clean will touch it, and the
+# next run dies with "already exists in working directory".
+git -C "$SRC" reset -q
+git -C "$SRC" checkout -- src/ build/
+git -C "$SRC" clean -fdq src/ build/
+
+for patch in "$PATCHES"/*.patch; do
+    git -C "$SRC" apply --verbose "$patch"
+    echo "  applied $(basename "$patch")"
 done
-
-# Apply VSCodroid-specific patches (inline in download-vscode-server.sh)
-# These are applied as Python string replacements during the server build.
-# Patches include:
-#   - Extension Host: child_process.fork() → worker_threads.Worker()
-#   - ptyHost: child_process.fork() → worker_threads.Worker()
-#   - IPC bridge: process.send/on("message") compatibility for worker_threads
-#
-# See: scripts/download-vscode-server.sh lines 198-337
-# Note: patches/vscodroid/ directory is reserved for future .diff-based patches.
-
-echo "All patches applied successfully"
 ```
 
-### 6.3 Extension Host worker_thread Migration
+`build/` is reset alongside `src/` because patches reach the build tooling too. `git apply` exits
+non-zero the moment context has shifted and `set -e` turns that into a failed build, which is the
+property the whole arrangement exists for. A missing `patches/` directory is fatal as well, unless
+`ALLOW_UNADAPTED=1` says an unadapted tree is wanted on purpose: without them there is no Android
+platform detection, no worker_thread hosts and no Open VSX target platform, and the result is not
+this product. The branding overlay in `branding/product.json` is applied in the following step,
+still before gulp runs.
 
-This patch is implemented in M4 (M1-M3 still use `child_process.fork()`).
+### 6.3 Proving a Patch Reached the Package
 
-**Primary VS Code files to patch** (paths may shift by upstream version):
+Applying a patch to the source proves nothing about the package: the file may not be in the
+target's graph, or the build may inline an older copy. Every patch therefore leaves a fingerprint
+that survives minification, and `scripts/check-patch-fingerprints.py` searches the packaged tree for
+it against the table in `patches/fingerprints.txt`.
 
-- `src/vs/workbench/api/node/extensionHostProcess.ts`
-- `src/vs/server/node/remoteExtensionHostAgentServer.ts`
-- `src/vs/workbench/services/extensions/common/extensionHostEnv.ts`
-- `src/vs/platform/extensions/common/extensionHostStarter.ts` (or equivalent starter module in fork)
+| Rule | Consequence |
+| ---- | ----------- |
+| The checker walks `patches/`, not the table | A patch added without a row fails, rather than producing a run of "ok" lines |
+| A row may declare that no fingerprint is possible, and say how the patch is proven instead | 0007 and 0010 are the two: 0007's added half minifies to `!0`, and 0010 edits `build/.moduleignore`, so its proof is the kept file, which `verify-server-tree.py` requires |
+| Matching tolerates quote style and whitespace | `case"android"` and `case "android"` both count, so a new esbuild version cannot fail a row describing a correct tree |
+| The pattern must appear in what the patch itself adds | A pattern lifted from surrounding code cannot be evidence that the patch arrived |
 
-**Fork → Worker mapping**:
+Example rows, one per shape:
 
-| Existing behavior                           | worker_thread replacement                                 |
-| ------------------------------------------- | --------------------------------------------------------- |
-| `child_process.fork(module, args, options)` | `new Worker(module, { argv, env, execArgv, workerData })` |
-| `child.send(message)`                       | `worker.postMessage(message)`                             |
-| `child.on('message', ...)`                  | `worker.on('message', ...)`                               |
-| `child.on('exit', code)`                    | `worker.on('exit', code)`                                 |
-| `child.kill()`                              | `worker.terminate()`                                      |
-| stdio pipes                                 | worker message channel + explicit log forwarding          |
+```
+0004 extHost worker|out/server-main.js|worker_thread Extension Host
+0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
+0010 moduleignore keep|-|edits build/.moduleignore, so its proof is the file surviving into the tree
+```
 
-**Crash isolation and supervision**:
-
-1. Worker runs inside main Node.js process, so crash handling must be explicit.
-2. Supervisor restarts Extension Host worker with exponential backoff.
-3. If restart budget exceeded (e.g., 3 crashes in 60s), server enters degraded mode and prompts user to disable problematic extensions.
-4. Main server process is only restarted if worker recovery fails repeatedly.
-
-**Compatibility constraints**:
-
-- Extensions that depend on process-level isolation or unsupported native binaries may fail.
-- Existing extension allowlist/denylist policy must be applied before worker activation.
-- Migration must preserve VS Code RPC protocol semantics (message framing and ordering).
-
-**Validation checklist (M4 gate)**:
-
-- Extension activation/deactivation parity test vs M3 baseline.
-- Fault injection: throw uncaught error in worker; verify supervisor restart.
-- Long-run stability: 2-hour session with extensions + terminal + SCM.
-- Phantom process count reduction verified (at least -1 vs M3 baseline).
-
----
+Both sides run the check: `build-vscode-oss.sh` over what it built, and `fetch-vscode-oss.sh` over
+what it downloaded. The second caller is the one that matters, because a server tarball predating a
+patch carries the same name, the same version, and a digest that verifies. A digest proves a tarball
+is intact, not that it is the right tarball.
 
 ## 7. Toolchain Asset Pack System
 
 ### 7.1 Toolchain Configuration
 
-```json
-{
-  "toolchains": {
-    "go": {
-      "name": "Go",
-      "version": "1.22",
-      "size_mb": 60,
-      "asset_pack": "toolchain_ruby",
-      "env": {
-        "GOROOT": "$PREFIX/lib/go",
-        "GOPATH": "$HOME/go"
-      },
-      "path_add": "$GOROOT/bin",
-      "file_associations": [".go", "go.mod", "go.sum"],
-      "recommended_extensions": ["golang.Go"]
-    }
-  }
-}
+Toolchains are declared in Kotlin, in `ToolchainRegistry.available`, and both the first-run picker
+and the manage screen are built from that list. Two are shipped, Ruby and Java 17:
+
+```kotlin
+ToolchainInfo(
+    packName = "toolchain_ruby",
+    displayName = "Ruby",
+    shortLabel = "Ruby",
+    description = "Ruby with irb, gem, bundler",
+    estimatedSize = 34_000_000,   // unpacked, what the free-space gate uses
+    downloadSize = 9_900_000,     // the ZIP, what the picker quotes to the user
+    downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
+)
 ```
+
+The second entry is `toolchain_java`, OpenJDK 17 with `javac`, `jar` and `jshell`.
+
+The shipped set is interpreters and a JVM, and that is a constraint rather than a preference. A
+toolchain whose compiler forks its own assembler and linker cannot work here at all: Android refuses
+`execve` on anything under the app's data directory, so those forks are refused however the driver
+command is reached, and a toolchain that installs, runs, and cannot compile is worse than one that
+is absent.
 
 ### 7.2 Asset Pack Extraction Flow
 
 ```mermaid
 flowchart TD
-  A["1. App first launch (or update)"] --> B["2. Check if toolchain assets are extracted"]
-  B --> C{"3. Extracted?"}
-  C -- "No" --> D["4. Extract toolchain from asset pack to $PREFIX/lib/<toolchain>/"]
-  D --> E["5. Create symlinks in $PREFIX/bin/"]
-  E --> F["6. Configure PATH environment variable"]
-  F --> G["7. Ready to use"]
-  C -- "Yes" --> G
+  A["1. User selects a toolchain (first-run picker or Settings > Toolchains)"] --> B{"2. Install source is com.android.vending?"}
+  B -- "Yes" --> C["3a. assetPackManager.fetch(packName)"]
+  B -- "No" --> D["3b. downloadViaHttp(): toolchain_<name>.zip from releases/latest, sha256 checked"]
+  C --> E["4. installFromDirectory(): copy into filesDir/usr"]
+  D --> E
+  E --> F["5. chmod +x binaries, create symlinks in usr/bin/"]
+  F --> G["6. Write ~/.vscodroid/toolchain-env.sh, persist toolchains.json"]
+  G --> H["7. removePack() to free the duplicate pack storage"]
+  H --> I["8. Ready to use"]
 ```
+
+Because the payload lands in `filesDir`, an installed toolchain survives an app update.
 
 ### 7.3 Gradle Asset Pack Configuration
 
 ```kotlin
 // settings.gradle.kts
-assetPacks += listOf(
-    ":toolchain_ruby",
-    ":toolchain_java"
-)
+include(":toolchain_ruby")
+include(":toolchain_java")
+
+// app/build.gradle.kts
+assetPacks += listOf(":toolchain_ruby", ":toolchain_java")
 ```
 
 Each asset pack module:
@@ -663,39 +626,46 @@ assetPack {
 }
 ```
 
-**Asset pack contents**: Pre-compiled ARM64 binaries + standard libraries for each toolchain. Extracted to `$PREFIX/lib/<toolchain>/` on first run.
+**Asset pack contents**: pre-compiled ARM64 binaries and standard libraries for one toolchain,
+copied into `filesDir/usr` at install time. On-demand packs draw on a separate 30 GB Play budget and
+count against neither the base module cap nor the app size shown on the store listing.
 
-**Sideloading (APK)**: When distributing via GitHub Releases (not Play Store), all toolchain assets are included directly in the APK's `assets/` directory. The app detects whether it was installed via Play Store or sideloaded and uses the appropriate asset source.
+**Delivery is not Play-only, and no build bundles a toolchain in the APK.**
+`ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName` at
+runtime: `com.android.vending` takes the Play Asset Delivery path, and every other installer
+(sideload, debug build, `adb install`) downloads `toolchain_<name>.zip` from this project's GitHub
+Releases over HTTPS and checks it against the published sha256 manifest. Both paths converge on
+`installFromDirectory()`. One consequence is worth stating plainly: the ZIPs attached to a release
+are a production delivery channel, so a release that omits them breaks toolchain installation for
+every non-Play user.
 
 ### 7.4 Language Picker Integration
 
+The picker is shown once, gated by `toolchain_picker_shown`, and it offers exactly what
+`ToolchainRegistry.available` lists:
+
 ```kotlin
-// First-run Language Picker (SplashActivity or dedicated LanguagePickerActivity)
-class LanguagePickerActivity : AppCompatActivity() {
+val toolchains = ToolchainRegistry.available   // toolchain_ruby, toolchain_java
 
-    private val toolchains = listOf("go", "rust", "java", "clang", "ruby")
-
-    fun onUserConfirmed(selected: List<String>) {
-        val packs = selected.map { "toolchain_$it" }
-        val request = AssetPackManager.fetch(packs)
-        // Show progress UI
-        // On complete: extract, configure PATH, launch MainActivity
-    }
+fun onUserConfirmed(selected: List<ToolchainInfo>) {
+    // Queue them; downloads run one at a time, driven by COMPLETED/FAILED
+    // callbacks, and a failure skips to the next rather than aborting the queue.
 }
 ```
 
 **Flow**:
 
-1. First launch → check if Language Picker has been shown before
-2. Show Language Picker with checkboxes for each toolchain
-3. User selects languages, taps "Install"
-4. Call `AssetPackManager.fetch()` for selected packs
-5. Show download progress bar per pack
-6. On completion, extract each pack to `$PREFIX/lib/<toolchain>/`
-7. Configure PATH and environment variables
-8. Proceed to Welcome Tab
+1. First launch, after asset extraction, check whether the picker has been shown before
+2. Show the picker with a card per registry entry, quoting each `downloadSize`
+3. User selects languages and confirms
+4. Fetch each pack in turn, Play Asset Delivery or HTTPS depending on install source
+5. Show download progress per pack
+6. On completion, install into `filesDir/usr` and write `toolchain-env.sh`
+7. `.bashrc` sources that file, so the toolchain is on `PATH` in every new shell
+8. Proceed to the workbench
 
-**Later installs**: Settings > Toolchains page allows adding/removing languages using the same `AssetPackManager` API.
+**Later installs**: the Toolchains screen adds and removes languages through the same
+`ToolchainManager` entry points.
 
 ---
 
@@ -744,16 +714,20 @@ VSCodroid version: X.Y.Z
   Z = Patch (bug fixes, security patches)
 
 Mapping to VS Code version:
-  VSCodroid 1.0.0 → based on VS Code 1.96.4
-  VSCodroid 1.1.0 → based on VS Code 1.133.0
-  etc.
+  The pin lives in VSCODE_VERSION, and the commit it resolved to in VSCODE_COMMIT.
+  Both are read by build-vscode-oss.sh and by fetch-vscode-oss.sh, which refuse a
+  tree or a tarball that disagrees with them.
+
+  VSCodroid 1.2.0 -> VS Code 1.133.0
 ```
 
 ### 9.2 Update Cadence
 
 - VS Code releases monthly → VSCodroid targets monthly upstream sync
 - Patch releases as needed for critical bugs
-- Toolchain updates delivered via Play Store (new asset pack versions via on-demand delivery)
+- Toolchain updates ride the release: the asset packs in the AAB and the ZIPs attached to the
+  GitHub Release must be built from the same download, or the two delivery channels ship
+  different toolchain versions for one app version
 
 ---
 

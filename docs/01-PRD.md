@@ -4,19 +4,18 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
-> **Historical document, describes the product as scoped on 2026-02-10, not the app.**
-> Two of the intentions recorded below did not survive the constraints. The server is not a
-> code-server fork: it is vanilla Code - OSS, built from the MIT `microsoft/vscode` source by
-> `scripts/build-vscode-oss.sh` with the unified diffs in `patches/` applied before the build,
-> and app builds fetch the result with `scripts/fetch-vscode-oss.sh`. Building from source is
-> not a preference, the pre-built server on Microsoft's update CDN carries licence terms that
-> do not permit modifying and redistributing it, so `scripts/verify-server-tree.py` fails any
-> tree whose `LICENSE.txt` is not the MIT one. And the on-demand toolchains are **Go, Ruby and
-> Java 17, those three** (`android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt`,
-> `android/settings.gradle.kts`): Rust and C/C++ were deferred and have no module, no asset pack
-> and no registry entry, so the five-language lists below, §6 P2, and the Language Picker in
-> Flow 1, each name two that do not exist. Where this document and the code disagree, the code
-> wins. `CONTRIBUTING.md` is the prose kept current alongside it.
+> **This is the product as scoped on 2026-02-10; the code is what ships.** Two points are worth
+> naming so they are not carried away wrong. The server is vanilla Code - OSS, built from the MIT
+> `microsoft/vscode` source by `scripts/build-vscode-oss.sh` with the unified diffs in `patches/`
+> applied before the build, and app builds fetch the result with `scripts/fetch-vscode-oss.sh`.
+> Building from source is not a preference: the pre-built server on Microsoft's update CDN carries
+> licence terms that do not permit modifying and redistributing it, so
+> `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one. And the
+> on-demand toolchains are **Ruby and Java 17, those two**
+> (`android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt`,
+> `android/settings.gradle.kts`): Rust and C/C++ have no Gradle module, no asset pack and no
+> registry entry. Where this document and the code disagree, the code wins. `CONTRIBUTING.md` is
+> the prose kept current alongside it.
 
 ---
 
@@ -129,13 +128,13 @@ Developers increasingly work across multiple devices, yet Android — the world'
 | Crash Recovery | WebView crash recovery, Node.js auto-restart | M2 |
 | "Open with VSCodroid" | Android Intent for common code file types (app-internal storage; full external storage via SAF in M4) | M2 |
 | Bundled Python | Python 3 + pip, ready to use | M3 |
-| Terminal Multiplexing | tmux for multi-session terminals and phantom process optimization | M1 |
+| Terminal Sessions | Each terminal spawns bash directly on its own PTY through node-pty; tmux ships as a standalone tool | M1 |
 
 ### P2 — Nice to Have (M3-M4)
 
 | Feature | Description | Milestone |
 |---------|-------------|-----------|
-| On-demand Toolchains | Go, Rust, Java, C/C++, Ruby via Play Store Language Picker | M3 |
+| On-demand Toolchains | Ruby and Java 17, chosen in the Language Picker: Play Asset Delivery on Play installs, ZIPs from GitHub Releases otherwise | M3 |
 | Language Picker | First-run UI for selecting which toolchains to install | M3 |
 | Package Manager | `vscodroid pkg install <package>` | M3 |
 | Pre-bundled Extensions | Themes, icon packs, language basics offline | M3 |
@@ -158,7 +157,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 flowchart TD
   A["Install from Play Store"] --> B["Open App"]
   B --> C["Splash Screen: Setting up VSCodroid<br/>Extract binaries<br/>Initialize workspace directory"]
-  C --> D["Language Picker<br/>What do you code in? [Go] [Rust] [Java] [C/C++] [Ruby] [Skip]<br/>Selected toolchains download via Play Store"]
+  C --> D["Language Picker<br/>What do you code in? [Ruby] [Java 17] [Skip]<br/>Selected toolchains download on demand"]
   D --> E["Welcome Tab<br/>Quick actions: Open Folder, Clone Repo, New File<br/>Tools ready: node, python, git + selected toolchains"]
   E --> F["Start Coding"]
 ```
@@ -227,9 +226,9 @@ flowchart TD
 
 | # | Question | Impact | Status |
 |---|----------|--------|--------|
-| 1 | Exact code-server version to fork from? | Build timeline | **Resolved**: Fork code-server, track latest stable (see Architecture ADR-001) |
-| 2 | Node.js LTS version to target? | Binary size, compatibility | **Resolved**: Node.js LTS v20.x (see Technical Spec §1.2) |
-| 3 | Python version (3.11 vs 3.12)? | Size, package compat | **Resolved**: CPython 3.11+ (see Technical Spec §1.3) |
+| 1 | Which VS Code source to build the server from? | Build timeline | **Resolved**: Code - OSS, built from the MIT `microsoft/vscode` source at the commit pinned in `VSCODE_VERSION` (see Architecture ADR-001) |
+| 2 | Node.js version to target? | Binary size, compatibility | **Resolved**: not a preference. `remote/.npmrc` `target` at the pinned VS Code tag names the Node the server ships and its native modules are built against, and Termux's `nodejs-lts` package supplies it (24.18.0 today) |
+| 3 | Python version? | Size, package compat | **Resolved**: not pinned here. `scripts/download-python.sh` reads the version from the Termux package index at build time, so the bundled `usr/lib/libpython*.so` is the authority (3.14 today) |
 | 4 | Monetization strategy? (Free, freemium, paid?) | Revenue, feature gating | **Resolved**: Free and Open Source (MIT license) |
 | 5 | Support x86_64 emulators for development? | Dev workflow | **Resolved**: No — ARM64 binaries don't run on x86 emulators. Physical device required (see Dev Guide §1.1) |
 

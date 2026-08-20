@@ -504,8 +504,8 @@ fun listSshKeys(authToken: String): String
 
 #### Toolchain Control
 
-`ToolchainRegistry.available` is the source for what these can name. It lists Go, Ruby
-and Java 17 today.
+`ToolchainRegistry.available` is the source for what these can name. It lists Ruby and
+Java 17, and nothing else.
 
 ```kotlin
 @JavascriptInterface
@@ -517,7 +517,7 @@ fun getAvailableToolchains(authToken: String): String
 
 @JavascriptInterface
 fun getInstalledToolchains(authToken: String): String
-// JSON array of installed SHORT names, e.g. ["go","ruby"]. "[]" if refused.
+// JSON array of installed SHORT names, e.g. ["ruby","java"]. "[]" if refused.
 
 @JavascriptInterface
 fun installToolchain(name: String, authToken: String)   // note: token LAST
@@ -882,16 +882,16 @@ interface ToolchainManager {
 }
 
 interface Toolchain {
-  id: string; // "go", "ruby", "java" -- those three. Rust has no module, no
-              // asset pack and no ToolchainRegistry entry; it was planned and
-              // deferred, and naming it here read as a shipped option
-  name: string; // "Go"
-  version: string; // "1.22"
-  sizeMb: number; // 60
+  id: string; // "ruby", "java" -- those two. Rust and C/C++ have no module, no
+              // asset pack and no ToolchainRegistry entry; they were planned and
+              // deferred, and naming them here read as a shipped option
+  name: string; // "Java 17"
+  version: string; // "17"
+  sizeMb: number; // 146
   installed: boolean; // Whether asset pack is downloaded and extracted
-  installPath?: string; // e.g., "$PREFIX/lib/go"
-  fileAssociations: string[]; // [".go", "go.mod"]
-  recommendedExtensions: string[]; // ["golang.Go"]
+  installPath?: string; // e.g., "$PREFIX/lib/jvm/java-17-openjdk"
+  fileAssociations: string[]; // [".java"]
+  recommendedExtensions: string[]; // Open VSX extension ids
 }
 ```
 
@@ -947,13 +947,12 @@ Exit codes:
 > merely a missing label: **E101 WEBVIEW_CRASH** is detected (`onRenderProcessGone`
 > rebuilds the view) but is never reported to the user in any form.
 >
-> **E102 WEBVIEW_TOO_OLD** was in the same position until 2026-08-16, when the check it
-> implies was added: `MainActivity.checkWebViewVersion` reads
-> `WebView.getCurrentWebViewPackage()` and compares it against
-> `WebViewVersion.MINIMUM_CHROME_MAJOR`. There is still no code named `E102` and no log
-> line carrying it, so the row remains a design record like the rest; what changed is
-> that the condition behind it is now detected, and reported as a toast rather than a
-> code. A version the app cannot parse is not treated as an old one.
+> **E102 WEBVIEW_TOO_OLD** describes a condition that is detected.
+> `MainActivity.checkWebViewVersion` reads `WebView.getCurrentWebViewPackage()` and
+> compares it against `WebViewVersion.MINIMUM_CHROME_MAJOR`, and a version the app
+> cannot parse is not treated as an old one. The result reaches the user as a toast,
+> not as a code: no production source contains the identifier `E102`, so this row is a
+> design record like the rest of the table.
 >
 > Kept as a design record. Do not write code that expects to receive these, and do not
 > cite a code in a bug report — no log line will contain one.
