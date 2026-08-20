@@ -1017,6 +1017,68 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
         dependsOn(bundleNotices)
     }
 
+// The same eight, by name, so the graph can be asked whether they are in it.
+//
+// The wiring above is by name SHAPE, which is right: AGP has moved this family
+// between versions and matching two literal names would fail the build at
+// validation the first time a third appeared. What it cannot do is notice when
+// the shape stops matching. Rename merge*Assets upstream and every gate here
+// detaches at once, in silence, and an unchecked asset tree goes into an APK.
+//
+// So the shape is asserted against the graph that is about to run, not against
+// the task container. `tasks.matching { ... }.isEmpty()` would be the obvious
+// test and is the wrong one twice over: reading it realises every task in the
+// project, which defeats configuration avoidance for the whole build, and it is
+// vacuously true anyway, because mergeDebugAssets is registered in any Android
+// application project whether or not this build is going to run it.
+//
+// Quiet unless the graph really packages assets. `./gradlew testDebugUnitTest`
+// carries no *Assets merge at all (measured), and r8.yml's
+// `optimizeReleaseResources lintVitalRelease` carries none either, so neither
+// pays for this and neither can be failed by it.
+//
+// ⚠️ `gradle.taskGraph.whenReady` is not supported with Gradle's configuration
+// cache, which is off here: gradle.properties sets only jvmargs and the AGP
+// flags, and every build prints the "Consider enabling configuration cache"
+// hint. Whoever turns it on has to move this to a build service or flow action.
+// The question being asked is about the graph, so leaving that unexplained is
+// the failure mode, not the assertion itself.
+val packagingGateNames = listOf(
+    "checkPatchFingerprints", "verifyServerTree", "verifyBundledBinaries",
+    "verifyBundledShellPaths", "verifyRubyPackShellPaths", "verifyNativeAddons",
+    "checkPackOverlap", "verifyPythonPlatform",
+)
+
+gradle.taskGraph.whenReady {
+    // This project's tasks only. The gates named below are this project's, so a
+    // merge*Assets belonging to another module would be the wrong subject: it
+    // would demand :app:'s checks of a graph that never packages :app:'s tree.
+    // Nothing contributes one today (measured: the whole bundleRelease graph
+    // holds exactly one, :app:mergeReleaseAssets, and the asset packs bring
+    // generateAssetPackManifest instead), so this scopes the question rather
+    // than filtering anything out yet.
+    val prefix = "${project.path}:"
+    val here = allTasks.filter { it.path.startsWith(prefix) }
+    val packaging = here.map { it.name }
+        .filter { it.startsWith("merge") && it.endsWith("Assets") }
+    if (packaging.isEmpty()) return@whenReady
+
+    val present = here.map { it.name }.toSet()
+    val missing = packagingGateNames.filterNot { it in present }
+    if (missing.isNotEmpty()) {
+        throw GradleException(
+            "This build packages an asset tree (${packaging.joinToString(", ")}) " +
+                "without ${missing.size} of the ${packagingGateNames.size} checks " +
+                "that decide whether the tree may ship:\n" +
+                missing.joinToString("\n") { "  $it" } +
+                "\n\nThe checks are attached by name shape to tasks called " +
+                "merge*Assets. A task above matched that shape and carries none of " +
+                "them, so the attachment is no longer reaching this variant. Fix " +
+                "the tasks.matching predicate that wires them, not this message."
+        )
+    }
+}
+
 // The finished bundle is a Gradle product, so the edge is `finalizedBy` rather
 // than `dependsOn`: the file does not exist until bundleRelease has run. Writing
 // it the other way round would either check a file that is not there yet or, if
