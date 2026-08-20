@@ -43,16 +43,39 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANAGER = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManager.kt"
 WELCOME = ROOT / "android/app/src/main/assets/extensions/vscodroid.vscodroid-welcome-1.2.2"
 
-# Files that answer "what can I install", and are read by a user rather than by
-# a maintainer. Design documents under docs/ are deliberately absent: they
-# record what was planned, and correcting them backwards would destroy the
-# record. The CHANGELOG is absent for the same reason, more sharply.
+# Files that describe what the product CONTAINS, whether a user or a maintainer
+# reads them. The split is what a file is for, not who opens it.
+#
+# Gated: everything that states the shipped set in the present tense. A design
+# document that names a retired toolchain sends the next person to build against
+# something that is not there, and the six that did all cited
+# `ToolchainRegistry.kt` as their source while contradicting it.
+#
+# Not gated, and this is a boundary rather than an oversight: files whose job is
+# to record what happened. `CHANGELOG.md` and the version history in
+# `docs/10-RELEASE_PLAN.md` are where a withdrawal is described. `MILESTONES.md`
+# and `docs/12-IMPLEMENTATION_PLAN.md` hold completed checklists and device
+# measurements taken while the toolchain still shipped; rewriting those would
+# falsify a record rather than correct a claim. `docs/DEVICE_TEST_CHECKLIST.md`
+# is out because its Go rows test that a previously installed Go is REMOVED on
+# update, which is live behaviour in `ToolchainManager.removeRetiredToolchainsSync`.
+# Those files also carry "go/no-go" as ordinary English, which this check reads
+# as an offer.
 OFFER_FILES = [
     ROOT / "README.md",
     ROOT / "NOTICE.md",
     ROOT / "docs/USER_GUIDE.md",
     ROOT / "docs/PRIVACY_POLICY.md",
     ROOT / "docs/LEGAL_NOTICES.md",
+    ROOT / "docs/01-PRD.md",
+    ROOT / "docs/02-SRS.md",
+    ROOT / "docs/03-ARCHITECTURE.md",
+    ROOT / "docs/04-TECHNICAL_SPEC.md",
+    ROOT / "docs/05-API_SPEC.md",
+    ROOT / "docs/06-SECURITY.md",
+    ROOT / "docs/07-TESTING_STRATEGY.md",
+    ROOT / "docs/08-RISK_MATRIX.md",
+    ROOT / "docs/11-GLOSSARY.md",
     WELCOME / "package.json",
     WELCOME / "media/tools.svg",
 ]
