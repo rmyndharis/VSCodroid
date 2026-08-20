@@ -43,17 +43,21 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 
 Licences here are Termux's own `TERMUX_PKG_LICENSE` for the package each binary
 comes from, and the "Linked by" column is read out of the shipped ELF headers
-rather than written by hand. `scripts/check-library-attribution.py` fails the build
+rather than written by hand. Two rows arrive from somewhere else and carry their
+own package's licence: musl's loader is an Alpine package
+(`scripts/download-musl-loader.sh`), and `libripgrep.so` is the `rg` the Code - OSS
+server tree ships, copied into `jniLibs` by `scripts/fetch-vscode-oss.sh`.
+`scripts/check-library-attribution.py` fails the build
 when a shipped binary is attributed nowhere in this file, when it is missing from
 `docs/LEGAL_NOTICES.md`, or when a copyleft component is missing from the source
-offer that file carries. Both documents are read: this one said the build was
-gated on it while only the other was, so the two agreed by habit rather than by
-anything enforcing it.
+offer that file carries. Both documents are read on every run, so a component has
+to be named in each.
 
-That the licences here are Termux's own is now checked rather than asserted,
+That the licences here are Termux's own is checked rather than asserted,
 wherever Termux states one and upstream can be read.
 `scripts/check-termux-licenses.py` reads `TERMUX_PKG_LICENSE` back from Termux
-for each package and reports where the two disagree. It fails on one difference
+for each package, reports where the two disagree, and names the entries no Termux
+package accounts for. It fails on one difference
 only: a component recorded permissive where Termux declares copyleft, which is
 what would leave a binary shipping with no offer of source.
 

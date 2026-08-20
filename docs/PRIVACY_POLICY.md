@@ -1,11 +1,11 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: August 19, 2026**
+**Last Updated: August 20, 2026**
 
 ## Summary
 
-VSCodroid is a fully offline code editor for Android. **We** do not collect, transmit, or store any personal data — there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
+VSCodroid is a code editor that runs entirely on your Android device. **We** do not collect, transmit, or store any personal data, and there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
 
 Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated (see **Network Access**).
 
@@ -22,6 +22,14 @@ The third is different in kind and worth reading before you use it: the app bund
 VSCodroid runs a local code editor server entirely on your Android device. The editor interface (VS Code Workbench) connects to this local server over `localhost` (127.0.0.1) -- your device talking to itself. No data is sent to any external server as part of normal app operation.
 
 All code execution -- whether Node.js, Python, Bash, or any other bundled runtime -- happens 100% on your device.
+
+The app declares four Android permissions and no others. `INTERNET` covers the
+user-initiated cases listed under **Network Access** below, and the loopback
+traffic between the editor page and the local server. `FOREGROUND_SERVICE` and
+`FOREGROUND_SERVICE_SPECIAL_USE` keep that local server alive while you are
+working. `POST_NOTIFICATIONS` is for the notification showing the server's
+status. There is no permission here for location, contacts, the camera, the
+microphone, the phone state, or any device identifier.
 
 ## Network Access
 
@@ -96,7 +104,7 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 - We do **not** collect device identifiers, IP addresses, or location data
 - We do **not** use cookies for tracking purposes
 - We do **not** share any data with third parties. One thing this app ships does, and it is named rather than tucked under this line: GitHub Copilot Chat sends what you ask it, and the code it attaches as context, to GitHub, once you have signed in and used it. See the section above
-- We do **not** send Microsoft telemetry. To be exact about how, because the earlier wording here said the telemetry code "has been removed from the VS Code source" and that is not what was done: the code is still in the editor build, and it is switched off and given nowhere to report to. `telemetryOptIn` is false in the product configuration applied at build time, both `telemetryOptIn` and `enableTelemetry` are set false again at every start, and the built `product.json` carries no telemetry endpoint for it to reach. Disabled and unaddressed, rather than deleted
+- We do **not** send Microsoft telemetry. To be exact about how: the telemetry code is still in the editor build, and it is switched off and given nowhere to report to. `telemetryOptIn` is false in the product configuration applied at build time, both `telemetryOptIn` and `enableTelemetry` are set false again at every start, and the built `product.json` carries no telemetry endpoint for it to reach. Disabled and unaddressed, rather than deleted
 
 ## Data Stored on Your Device
 

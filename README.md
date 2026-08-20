@@ -120,7 +120,7 @@ If you are **ready to learn**, you should be able to **start today**.
 
 - **Real VS Code** — Monaco Editor, Workbench UI, Command Palette, and all the features you know.
 - **Extension Support**: Install themes, linters, language support, and more from [Open VSX](https://open-vsx.org). The editor's own interface is English only.
-- **Integrated Terminal** — Full bash terminal with real PTY support (vim, tmux, readline all work).
+- **Integrated Terminal**: Full bash terminal with real PTY support (tmux, bash line editing and the Node and Python REPLs all work).
 - **Batteries Included** — Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
 - **Offline-First** — Code without an internet connection. Everything runs locally on your device.
 - **Mobile-Optimized**: Extra Key Row (Ctrl, Alt, Tab, Esc, F1-F12, symbols, cursor trackpad), touch-friendly UI, clipboard bridge.
@@ -133,13 +133,13 @@ If you are **ready to learn**, you should be able to **start today**.
 <p align="center">
   <img src="docs/screenshots/03_code_editor.png" alt="Code Editor with Terminal" width="250">
   &nbsp;&nbsp;
-  <img src="docs/screenshots/04_extensions.png" alt="Extensions Marketplace" width="250">
+  <img src="docs/screenshots/04_extensions.png" alt="Extensions view with the bundled extensions installed" width="250">
   &nbsp;&nbsp;
   <img src="docs/screenshots/02_terminal.png" alt="Terminal" width="250">
 </p>
 
 <p align="center">
-  <em>Code editor with syntax highlighting</em> · <em>Extensions marketplace (Open VSX)</em> · <em>Terminal with Node.js, Git, and bundled tools</em>
+  <em>Code editor with syntax highlighting</em> · <em>Extensions view, showing the bundled extensions</em> · <em>Terminal with Node.js, Git, and bundled tools</em>
 </p>
 
 ## 🏗️ Architecture
@@ -186,7 +186,7 @@ flowchart TD
 
 1. **Install** from [Google Play](https://play.google.com/store/apps/details?id=com.vscodroid).
 2. Open the app. Core binaries extract automatically the first time, behind a progress bar.
-3. Pick your languages (Ruby, Java). They install automatically.
+3. Pick your languages (Ruby, Java 17). They install automatically.
 4. Start coding. Editor, terminal, and tools are ready.
 
 > You can also download APKs directly from [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases).
@@ -196,7 +196,7 @@ flowchart TD
 | Tier                         | What                                                        | How                                                      |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
 | **Core (Base APK)**          | Node.js, npm, Python 3, Git, Bash, SSH, tmux, make, ripgrep | Available immediately                                    |
-| **Toolchains (Asset Packs)** | Ruby, Java                                                  | Select in Language Picker — Play Asset Delivery, or direct download on sideloaded installs |
+| **Toolchains (Asset Packs)** | Ruby, Java 17                                               | Select in Language Picker: Play Asset Delivery, or direct download on sideloaded installs |
 
 ## 🔨 Building from Source
 
@@ -235,7 +235,7 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | Metric                                 | Size                 |
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~135 MB              |
-| + Each toolchain (on-demand)           | 9-53 MB per language |
+| + Each toolchain (on-demand)           | 10-55 MB per language |
 | Free space required to install         | ~875 MB              |
 | Extracted to internal storage (core)   | ~810 MB              |
 | Extracted, plus both toolchains        | ~990 MB              |
@@ -289,7 +289,7 @@ Quick links:
 | [Security](docs/06-SECURITY.md)                                              | Security model and threat analysis                         |
 | [Testing Strategy](docs/07-TESTING_STRATEGY.md)                              | Test plan and quality assurance                            |
 | [Risk Matrix](docs/08-RISK_MATRIX.md)                                        | Known risks and mitigation strategies                      |
-| [Development Guide](docs/09-DEVELOPMENT_GUIDE.md)                            | Superseded; points at CONTRIBUTING.md, which is kept current |
+| [Development Guide](docs/09-DEVELOPMENT_GUIDE.md)                            | Pointer to CONTRIBUTING.md, which carries the build and contribution steps |
 | [Release Plan](docs/10-RELEASE_PLAN.md)                                      | Release strategy, CI/CD, Play Store                        |
 | [User Guide](docs/USER_GUIDE.md)                                             | How to use VSCodroid (keyboard, terminal, extensions, SSH) |
 | [Milestones](MILESTONES.md)                                                  | Development milestones M0–M6                               |
@@ -306,7 +306,7 @@ If you discover a security vulnerability, please **do not** open a public issue.
 
 VSCodroid is **not affiliated with or endorsed by Microsoft Corporation**.
 
-The bundled editor server is built from the MIT-licensed [Code - OSS](https://github.com/microsoft/vscode) source, with this project's Android patches and branding applied before the build. Its licence and third-party notices ship inside the tree, at `android/app/src/main/assets/vscode-reh/LICENSE.txt` and `ThirdPartyNotices.txt`. Earlier releases bundled Microsoft's pre-built Visual Studio Code Server distribution instead, which is covered by Microsoft's own proprietary terms rather than MIT.
+The bundled editor server is built from the MIT-licensed [Code - OSS](https://github.com/microsoft/vscode) source, with this project's Android patches and branding applied before the build. Its licence and third-party notices ship inside the tree, at `android/app/src/main/assets/vscode-reh/LICENSE.txt` and `ThirdPartyNotices.txt`.
 
 - "Visual Studio Code" and "VS Code" are trademarks of Microsoft.
 - Uses [Open VSX](https://open-vsx.org) extension registry, not Microsoft Marketplace.

@@ -73,7 +73,7 @@ Common commands:
 Open the Command Palette (**Ctrl+Shift+P**) and run `Preferences: Open Settings (UI)`.
 VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
 
-- Word wrap is enabled in the diff editor.
+- Word wrap is on, in the editor and in the diff editor.
 - Git path is preconfigured to the bundled Git binary.
 - The terminal profile points to the bundled Bash.
 
@@ -183,7 +183,7 @@ trackpad's gears in `TrackpadGesture.kt` beside it.
 
 ## Terminal
 
-Open the terminal with **Ctrl+`** or from the menu bar. VSCodroid includes a full terminal with real PTY support -- interactive programs like vim, tmux, and readline all work natively.
+Open the terminal with **Ctrl+`** or from the menu bar. VSCodroid includes a full terminal with real PTY support, so full-screen and interactive programs work natively: tmux, bash line editing, and the Node and Python REPLs.
 
 ### Bundled Tools
 
@@ -193,12 +193,12 @@ All tools are available immediately with no installation or setup:
 node -v           # Node.js 24.x
 npm -v            # npm 11.x
 python3 --version # Python 3.14.x
-pip --version     # pip (bundled with Python)
+python3 -m pip --version   # pip, bundled inside Python's site-packages
 git --version     # Git 2.55.x
 bash --version    # Bash 5.3.x
-tmux -V           # tmux 3.7.x
+tmux -V           # tmux 3.7c
 make --version    # GNU Make 4.4.1
-ssh -V            # OpenSSH (bundled client)
+ssh -V            # OpenSSH 10.5p1 client
 rg --version      # ripgrep (powers VS Code search)
 ```
 
@@ -210,7 +210,7 @@ The Extra Key Row is especially useful in the terminal:
 - **Ctrl+D** -- send EOF / exit the shell
 - **Ctrl+L** -- clear the terminal screen
 - **Tab** -- autocomplete file and directory names
-- **Esc** -- switch to normal mode in vim
+- **Esc** -- cancel a prompt, or leave copy mode in tmux
 - **Arrow keys** -- navigate command history (Up/Down) and cursor (Left/Right)
 
 ### Multiple Terminals
@@ -260,8 +260,9 @@ These extensions come bundled with VSCodroid:
 - **Python** -- Python language support
 
 VSCodroid also ships four of its own, which do not appear in the marketplace:
-the Get Started walkthrough, the device-folder bridge, **Serve on Network**, and
-the process monitor in the status bar.
+the Get Started walkthrough, the Android bridge behind device folders, the
+device browser and SSH keys, **Serve on Network**, and the process monitor in
+the status bar.
 
 Themes are not bundled. VSCodroid opens on the editor's own dark theme; install
 whichever you prefer from the marketplace.
@@ -281,7 +282,7 @@ Extensions that use webview panels (such as theme configurators, documentation v
 
 ### What Is Not Available
 
-Some extensions are exclusive to the Microsoft Marketplace and not published on Open VSX. Notable examples include Microsoft's C/C++ extension and GitHub Copilot. For most cases, open-source alternatives exist on Open VSX.
+Some extensions are exclusive to the Microsoft Marketplace and not published on Open VSX. Notable examples include Microsoft's C/C++ extension. For most cases, open-source alternatives exist on Open VSX. GitHub Copilot Chat is the exception that needs no marketplace: it ships bundled.
 
 ---
 
@@ -433,7 +434,7 @@ npm uses `--prefer-offline` by default to speed up installs by using cached pack
 mkdir flask-app && cd flask-app
 python3 -m venv venv
 source venv/bin/activate
-pip install flask
+python3 -m pip install flask
 python3 app.py
 ```
 
@@ -461,8 +462,8 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Ruby | On-demand | ~34 MB | ruby, gem, irb |
-| Java (OpenJDK) | On-demand | ~146 MB | java, javac, jar |
+| Ruby 3.4 | ~10 MB | ~34 MB | ruby, gem, irb, bundler, rake |
+| Java 17 (OpenJDK) | ~55 MB | ~146 MB | java, javac, jar, jshell |
 
 ### Installing During First Run
 
@@ -470,7 +471,7 @@ The Language Picker appears on first launch. Select the languages you want and t
 download in the background.
 
 Toolchains are never bundled inside the APK. Play Store installs fetch them as
-on-demand asset packs; sideloaded installs download them over HTTP from the
+on-demand asset packs; sideloaded installs download them over HTTPS from the
 [latest GitHub Release](https://github.com/rmyndharis/VSCodroid/releases/latest).
 Either way they land in the app's own storage and survive app updates.
 
@@ -790,7 +791,7 @@ npm cache clean --force
 rm -rf ~/projects/old-project/node_modules
 
 # Clear pip cache
-pip cache purge
+python3 -m pip cache purge
 
 # Check disk usage
 du -sh ~/projects/*
@@ -812,11 +813,16 @@ This is usually caused by Android's memory management killing background process
 
 ### Dev Server Not Accessible in Browser
 
-If the browser opens but the page does not load:
+If the preview tab or the device browser opens but the page does not load:
 
 1. Verify the server is running in the terminal (check for errors).
-2. Make sure you are using `http://localhost:PORT`, not `http://127.0.0.1:PORT` or `http://0.0.0.0:PORT`.
-3. Some frameworks bind to `127.0.0.1` by default. Try starting with `--host 0.0.0.0` or `--host localhost`.
+2. Use the host and port the dev server printed. `http://localhost:PORT` and
+   `http://127.0.0.1:PORT` reach the same loopback server, and either works.
+   `0.0.0.0` is an address to bind to, not one to browse to.
+3. To reach the server from **another device** on the same network, restart it
+   bound to every interface (`--host 0.0.0.0` for Vite, `-H 0.0.0.0` for
+   Next.js, `--bind 0.0.0.0` for Python) and run **VSCodroid: Serve on Network**
+   from the Command Palette for the address the other device should use.
 
 ### WebView Crash Recovery
 

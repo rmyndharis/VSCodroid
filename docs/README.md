@@ -1,11 +1,12 @@
-# VSCodroid — Software Planning Documentation
+# VSCodroid Documentation
 
 ## Document Index
 
-### Planning Suite — written 2026-02-10, kept as history
+### Numbered Planning Suite
 
-Each of these still carries `**Version**: 1.0-draft` and `**Date**: 2026-02-10` in its own header.
-They record what was planned, not what was built — see [Document Status](#document-status).
+Each of these carries `**Version**: 1.0-draft` and `**Date**: 2026-02-10` in its own header. That
+line records when the document was first written, not when it last changed; see
+[Document Status](#document-status) for what each one is today.
 
 | # | Document | Description | Audience |
 |---|----------|-------------|----------|
@@ -15,16 +16,17 @@ They record what was planned, not what was built — see [Document Status](#docu
 | 04 | [Technical Specification](./04-TECHNICAL_SPEC.md) | Implementation details, protocols, build system | Developers |
 | 05 | [API & Interface Spec](./05-API_SPEC.md) | WebView bridge, server API, extension interface | Developers |
 | 06 | [Security Design](./06-SECURITY.md) | Threat model, security controls, data protection | Everyone |
-| 07 | [Testing Strategy](./07-TESTING_STRATEGY.md) | Test plan, types, environments, coverage | QA, Developers |
+| 07 | [Testing Strategy](./07-TESTING_STRATEGY.md) | Test plan, test types, environments, milestone gates | QA, Developers |
 | 08 | [Risk Assessment](./08-RISK_MATRIX.md) | Risk identification, analysis, mitigation | Project leads |
-| 09 | [Development Guide](./09-DEVELOPMENT_GUIDE.md) | Superseded by `CONTRIBUTING.md`; a pointer at where each topic lives now | Developers |
+| 09 | [Development Guide](./09-DEVELOPMENT_GUIDE.md) | A pointer at where each build and contribution topic lives; the instructions are in `CONTRIBUTING.md` | Developers |
 | 10 | [Release Plan](./10-RELEASE_PLAN.md) | CI/CD, versioning, Play Store, rollout | DevOps, Project leads |
 | 11 | [Glossary](./11-GLOSSARY.md) | Terms, acronyms, technology definitions | Everyone |
 | 12 | [Implementation Plan](./12-IMPLEMENTATION_PLAN.md) | Week-by-week task breakdown, dependencies, checkpoints | Project leads, Developers |
 
-### Maintained References
+### Unnumbered References
 
-Kept current against the shipping app rather than frozen at plan time.
+Kept against the shipping app. Three of these are read by users or by reviewers rather than by
+contributors.
 
 | Document | Description | Audience |
 |----------|-------------|----------|
@@ -32,6 +34,7 @@ Kept current against the shipping app rather than frozen at plan time.
 | [Device Test Checklist](./DEVICE_TEST_CHECKLIST.md) | Manual on-device pass, run after the automated tests | QA |
 | [Legal Notices](./LEGAL_NOTICES.md) | Licenses and attribution for everything redistributed | Everyone |
 | [Privacy Policy](./PRIVACY_POLICY.md) | What the app collects, and what it does not | Everyone |
+| [Play Edge-to-Edge Note](./PLAY_EDGE_TO_EDGE.md) | The Play Console deprecation warning: which APIs it named, where they came from, how the bundle was measured | Developers |
 
 ## Reading Order
 
@@ -39,7 +42,7 @@ Kept current against the shipping app rather than frozen at plan time.
 1. PRD (understand what we're building)
 2. Architecture (understand how it works)
 3. Glossary (if any terms are unfamiliar)
-4. [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (to start contributing — the Development Guide here is planning-era)
+4. [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (to start contributing; the Development Guide here only points at it)
 
 **Technical deep-dive?**
 1. Architecture → Technical Spec → API Spec
@@ -49,45 +52,42 @@ Kept current against the shipping app rather than frozen at plan time.
 
 ## Related Files
 
-- [`../README.md`](../README.md) — Project overview: features, requirements, building from source
-- [`../MILESTONES.md`](../MILESTONES.md) — Development milestones (M0–M6)
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — Contribution guidelines, project structure, build scripts
-- [`../CHANGELOG.md`](../CHANGELOG.md) — Change log (Keep a Changelog format)
-- [`../SECURITY.md`](../SECURITY.md) — Security vulnerability reporting policy
+- [`../README.md`](../README.md): project overview, features, requirements, building from source
+- [`../MILESTONES.md`](../MILESTONES.md): development milestones (M0 to M6)
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md): contribution guidelines, project structure, build scripts
+- [`../CHANGELOG.md`](../CHANGELOG.md): change log (Keep a Changelog format)
+- [`../SECURITY.md`](../SECURITY.md): security vulnerability reporting policy
 
 ## Document Status
 
-Status is expressed by which table above a document sits in, not by a per-document row here.
+Status is expressed by which table above a document sits in, and by whether it opens with a banner.
+There is no per-document row here.
 
-The **planning suite** (01–12) was written before the app existed and is kept for its reasoning, not
-as a description of the build. Where one contradicts the code, the code is right. Two forms of note
-appear in them, and they mean different things:
+Most of the numbered suite is checked against the code and describes the build rather than the plan.
+02, 05, 06, 07, 10 and 11 carry no banner and are written that way throughout. 03, 04 and 08 open
+with a banner saying the same thing from the other side: where the document and the code could
+disagree the code settles it, and the banner names the scripts and sources to read. 01 is written
+against the code in its body, and its banner fixes the product scope to the date in its header and
+then names two things the reader must not carry away wrong, the source the server is built from and
+which toolchains ship.
 
-- **A banner at the top** (01, 03, 04, 07, 08, 12, and on §2 of 10, which is stale where the
-  rest of that document is not) says the document is a dated record and names what has since
-  overtaken it. The body below a banner is mostly left as written, on purpose: a plan, an ADR or a
-  risk score is a record of what was thought at the time, and editing it would destroy the record
-  rather than update it.
-- **A pointer** (09) replaces the body outright. That document was procedure rather than
-  reasoning: setup commands, gulp tasks, a branch strategy. Commands that no longer run leave no
-  record to preserve, only something to copy by mistake, so the instructions were removed and what
-  is left says where each topic lives now.
-- **A correction inside the text**, a struck-through clause with what shipped beside it (02), or a
-  rewritten definition (11), is used where a document's job is to describe rather than to
-  remember. 05 and 06 are corrected the same way and carry no banner, because they have been kept
-  against the code rather than frozen.
+Two things are deliberately kept as dated records under a banner, because a schedule and a pipeline
+sketch have no present-tense reading. 12 is the week-by-week plan as it stood when it was written;
+its banner names the build path it describes and points at `scripts/build-vscode-oss.sh` and
+`patches/` for what happens now. §2 of 10 is the CI/CD sketch, and its banner lists the workflows in
+`.github/workflows/` that really run. The rest of 10 is maintained, §5 in particular being checked
+against the manifest and the shipped strings before a submission.
 
-Neither note is a guarantee about the sentence next to it. The code is still the only source of
-truth.
+09 is a pointer. It carries no instructions, only a table naming the part of `CONTRIBUTING.md`, or
+the other document, that holds each topic. Commands that do not run are not a record worth keeping,
+only something to copy by mistake, so the commands are gone and the table is what is left.
 
-The **maintained references** are the unnumbered documents: the User Guide and Privacy Policy that
-ship to users, the Legal Notices recording what is redistributed, and the device test checklist run
-by hand on a real device.
+A banner is not a guarantee about the sentence next to it, and neither is the absence of one. The
+code is still the only source of truth.
 
-There is deliberately no "last updated" column. The one that stood here read `2026-02-10` for all
-eleven rows while several of the documents it listed had already changed, because a date copied into
-a table is one edit away from being wrong and nothing makes it fail loudly. Version control already
-holds the answer exactly:
+There is deliberately no "last updated" column. A date copied into a table is one edit away from
+being wrong and nothing makes it fail loudly, and the `**Date**` line inside each document answers a
+different question: when it was first written. Version control holds the answer exactly:
 
 ```bash
 git log -1 --format='%cd  %s' --date=short -- docs/04-TECHNICAL_SPEC.md

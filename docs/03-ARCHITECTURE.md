@@ -224,7 +224,7 @@ flowchart TD
 
 **Trade-off**: An Extension Host crash can take the server process with it, and a worker cannot be handed a socket over IPC, so `_canSendSocket` is forced off and the host connects back over a named pipe that the server bridges. Reconnecting after a WebView recreation needs a fresh connection rather than a resumed one. Mitigation: the watchdog in `ProcessManager` restarts the server, and readiness is re-probed before the WebView is navigated.
 
-**Implementation note**: Patch details (target files, fork→worker mapping, restart semantics, validation tests) are specified in [Technical Spec §6.3 Extension Host worker_thread Migration](./04-TECHNICAL_SPEC.md#63-extension-host-worker_thread-migration).
+**Implementation note**: `patches/0004` is the change itself, and what it does to the socket and the reconnection path is described in [Technical Spec §6.1 The Patch Set](./04-TECHNICAL_SPEC.md#61-the-patch-set) alongside `patches/0003`, which does the same for the Pty Host.
 
 ---
 

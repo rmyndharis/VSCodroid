@@ -110,7 +110,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **Project**: https://github.com/BurntSushi/ripgrep
 - **License**: The Unlicense / MIT License (dual-licensed)
 - **Copyright**: Copyright (c) Andrew Gallant
-- **Bundled via**: `@vscode/ripgrep` npm package (https://github.com/microsoft/vscode-ripgrep)
+- **Bundled via**: the `@vscode/ripgrep-universal` npm package, whose own `repository` field names https://github.com/microsoft/vscode-ripgrep. The same `rg` is copied into `jniLibs` as `libripgrep.so` by `scripts/fetch-vscode-oss.sh`
 
 ### node-pty
 
@@ -174,7 +174,7 @@ project, different licence, nearly the same name.
 - **Version**: whatever the server tree ships (`node_modules/@microsoft/mxc-sdk/package.json`)
 - **License**: MIT License
 - **Copyright**: Copyright (c) Microsoft Corporation.
-- **Ships**: `bin/arm64/linux-test-proxy` and `bin/arm64/lxc-exec`
+- **Ships**: eleven binaries in `bin/arm64/`, only two of which are ARM64 Linux executables (`linux-test-proxy`, `lxc-exec`). The rest are a Mach-O helper (`mxc-exec-mac`) and eight Windows PE files (`mxc-diagnostic-console.exe`, `winhttp-proxy-shim.exe`, `wslcsdk.dll`, `wxc-exec.exe`, `wxc-host-prep.exe`, `wxc-test-proxy.exe`, `wxc-windows-sandbox-daemon.exe`, `wxc-windows-sandbox-guest.exe`), which the directory name does not describe and which nothing here can run. They are listed because they are redistributed.
 
 ### js-debug
 
@@ -185,7 +185,7 @@ build rather than downloaded from a gallery.
 - **Version**: whatever the Code - OSS tag in `VSCODE_VERSION` pins
 - **License**: MIT License. The full text and the extension's own `ThirdPartyNotices.txt` ship inside `extensions/ms-vscode.js-debug/`.
 - **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
-- **Ships**: two `win32-app-container-tokens.win32-*-msvc-*.node` addons. These are Windows PE binaries with no use on Android; they are listed because they are redistributed.
+- **Ships**: `src/chromehash_bg.wasm`, and two `win32-app-container-tokens.win32-*-msvc-*.node` addons. The addons are Windows PE binaries with no use on Android; they are listed because they are redistributed.
 
 ### vscode-js-profile-visualizer
 
@@ -292,13 +292,13 @@ licence that asks for the notice to travel with the copy.
 - **Project**: https://tiswww.case.edu/php/chet/readline/rltop.html
 - **License**: GNU General Public License v3.0 (GPL-3.0-or-later)
 - **Full license**: `licenses/COPYING.GPLv3`, which ships in the app at **About > Licenses > License Texts**
-- **Used by**: bash
+- **Used by**: bash, and Python's `readline` module
 
 ### ncurses
 
 - **Project**: https://invisible-island.net/ncurses/
 - **License**: MIT-style (X11) License
-- **Used by**: bash, tmux
+- **Used by**: tmux, libedit, readline, and Python's `curses` modules. bash reaches it through readline rather than directly
 
 ### libffi
 
@@ -306,11 +306,12 @@ licence that asks for the notice to travel with the copy.
 - **License**: MIT License
 - **Used by**: Python
 
-### OpenSSL / BoringSSL
+### OpenSSL
 
 - **Project**: https://www.openssl.org
 - **License**: Apache License 2.0 (OpenSSL 3.x)
-- **Used by**: Node.js, Python, Git, OpenSSH
+- **Ships**: `libcrypto.so.3` and `libssl.so.3`. BoringSSL is not bundled; the bundled Node links these
+- **Used by**: Node.js, Python, Git, OpenSSH, ldns, libcrypt, libcurl, libssh2 and ngtcp2
 
 Git is GPL-2.0 and reaches OpenSSL through libcurl, and the two licenses are
 read as incompatible when a work combines them. The position taken here, stated
@@ -329,7 +330,7 @@ so that it is a recorded decision rather than an oversight:
 
 ---
 
-## Complete Bundled Native Library Inventory
+## Bundled Native Library Inventory
 
 The shared libraries and executables that sit at the top level of
 `assets/usr/lib` and `jniLibs/arm64-v8a`, with the licence each is distributed
@@ -338,15 +339,21 @@ is what these packages are built from, rather than from upstream project pages
 that may describe a different version. `scripts/check-termux-licenses.py` reads
 that field back on every release and reports where this column and Termux
 disagree, so the sentence before this one is measured rather than promised for
-every package Termux states a licence for and that upstream answered for.
+every package Termux states a licence for and that upstream answered for. Two
+rows come from elsewhere and carry the licence of the package they do come from:
+musl's loader is an Alpine package (`scripts/download-musl-loader.sh`), and
+`libripgrep.so` is the `rg` from the Code - OSS server tree, copied into
+`jniLibs` by `scripts/fetch-vscode-oss.sh`. That same gate prints both of them as
+entries no Termux package accounts for, so the exception is named by the run and
+not only here.
 
-This is not every binary in the APK, and the heading here claimed it was. Most of
+This is not every binary in the APK. Most of
 them are not below: they live deeper in the asset tree and are attributed by the
 sections above. Git's helper executables under `usr/lib/git-core/`, CPython's
 extension modules under `usr/lib/python*/lib-dynload/`, pip's vendored launchers,
 the server tree's native addons and bundled tools under `assets/vscode-reh/`, the
 WebAssembly its editor services load, and the .NET assemblies its terminal
-integration carries. 195 files against the 64 listed below, measured on the tree
+integration carries. 195 files against the 53 listed below, measured on the tree
 that built this release, redistributed on identical terms.
 
 That figure is a measurement rather than a fixed property, and the gate prints it
@@ -361,12 +368,11 @@ walks the whole asset tree, recognising a binary by its magic number (ELF,
 WebAssembly, PE or Mach-O) or a `.node` extension, and holds every component it
 finds to both this file and `NOTICE.md`. Formats this device cannot execute are
 counted too: a Windows launcher and a .NET assembly are redistributed on their
-own terms whether or not anything here can load them, and reading only ELF magic
-walked past 84 of the files now counted.
-It runs on every pull request. Before it existed, Berkeley DB shipped under **AGPL-3.0-only**
-in every release with no attribution and no source offer, having arrived as a
-transitive dependency of Kerberos that nobody classified; it is no longer bundled,
-because measurement showed nothing linked it.
+own terms whether or not anything here can load them, so testing ELF magic alone
+would walk past most of what ships.
+It runs on every pull request and every push to `main` (`.github/workflows/build.yml`),
+and twice more at release time, once before the toolchain payloads are downloaded
+and once after (`.github/workflows/release.yml`).
 
 Not listed here, because they are not third-party code: `libglibc-shim.so` and the
 stubs beside it (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`,
@@ -379,7 +385,7 @@ are covered by the root `LICENSE`.
 | Component | Licence | Copyleft | Files shipped |
 |---|---|---|---|
 | [Bash](https://www.gnu.org/software/bash/) | GPL-3.0 | **yes** | `libbash.so` |
-| [bzip2](https://sourceware.org/bzip2/) | BSD-4-Clause | no | `libbz2.so`, `libbz2.so.1.0` |
+| [bzip2](https://sourceware.org/bzip2/) | BSD-4-Clause | no | `libbz2.so.1.0` |
 | [c-ares](https://c-ares.org) | MIT | no | `libcares.so` |
 | [Expat](https://libexpat.github.io) | MIT | no | `libexpat.so.1` |
 | [gdbm](https://www.gnu.org.ua/software/gdbm/) | GPL-3.0 | **yes** | `libgdbm.so`, `libgdbm_compat.so` |
@@ -414,7 +420,7 @@ are covered by the root `LICENSE`.
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT | no | `libripgrep.so` |
 | [SQLite](https://sqlite.org) | Public Domain | no | `libsqlite3.so` |
 | [tmux](https://github.com/tmux/tmux) | ISC | no | `libtmux.so` |
-| [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so`, `liblzma.so.5` |
+| [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so.5` |
 | [zlib](https://zlib.net) | Zlib | no | `libz.so.1` |
 | [Zstandard](https://facebook.github.io/zstd/) | GPL-2.0 | **yes** | `libzstd.so.1` |
 
@@ -436,7 +442,7 @@ The built-in GitHub Copilot Chat extension depends on GitHub's `@github/copilot`
 |---|---|---|
 | `node_modules/@github/copilot` | 1.0.79-6 | The three-file npm loader (`npm-loader.js`, `package.json`, `LICENSE.md`) |
 | `node_modules/@github/copilot-linux-arm64` | 1.0.79-6 | The runtime itself — 104 files, ~175 MB |
-| `extensions/copilot/node_modules/@github/copilot` | 1.0.73 | The SDK copy the extension resolves — 98 files |
+| `extensions/copilot/node_modules/@github/copilot` | 1.0.73 | The SDK copy the extension resolves, 67 files |
 
 The CLI **application** is among them: `index.js` is a `#!/usr/bin/env node` launcher and `app.js` is the 9 MB program it runs. What is *not* shipped is the standalone single-executable build — `build/lib/copilot.ts:212-213` excludes `copilot` and `copilot.exe`, and `:214-215` excludes the optional native payloads (`foundry-local-sdk`, `webview`, `clipboard`, `pvrecorder`) along with the non-target `prebuilds`. So the accurate statement is that VSCodroid ships the CLI as JavaScript executed by the bundled Node, not as a self-contained binary.
 
@@ -456,7 +462,7 @@ The CLI **application** is among them: `index.js` is a `#!/usr/bin/env node` lau
 
 *The runtime copy* (`@github/copilot-linux-arm64@1.0.79-6`): 99 of its 104 files are byte-identical to upstream. The remaining five — `app.js`, `sdk/index.js`, and the three `voice-*` workers — differ by exactly one thing: a trailing `//# sourceMappingURL=` comment has been removed. No `.map` files ship, so the removed lines pointed at files that are not there. The change is 32 to 41 bytes per file and alters no behavior.
 
-*The SDK copy* (`@github/copilot@1.0.73`): 95 of its 98 files are byte-identical to the upstream platform package, 35 of them re-rooted under `sdk/`. The differences are `package.json`, rewritten by the extension's own `postinstall` (renamed, given an `exports` map, platform constraints dropped), and the bundled `ripgrep` binary, replaced with the editor's own — verified byte-identical to `@vscode/ripgrep-universal` — by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`, which also writes a `shims.txt` marker.
+*The SDK copy* (`@github/copilot@1.0.73`): 67 files, five of them re-rooted under `sdk/`. Its content differences from the upstream platform package are `package.json`, rewritten by the extension's own `postinstall` (renamed, given an `exports` map, platform constraints dropped), and the bundled `ripgrep` binary, replaced with the editor's own by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`, which also writes a `shims.txt` marker. That replacement is byte-identical to `@vscode/ripgrep-universal`'s `rg`, sha256 `e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda`, measured in the shipped tree.
 
 Pruning in both copies follows the upstream build's own `build/.moduleignore` and `build/lib/copilot.ts`.
 
@@ -522,10 +528,10 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`) — linked by Python's `zstd` module
 - **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`) — shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
 
-The four entries after readline were absent from this offer until the library
-inventory above was compiled. Each is dynamically linked and shipped as its own
-`.so`, so the LGPL's relinking condition is satisfied by replacing the file; the
-source offer below applies to all of them regardless.
+Every entry after readline reaches the app as a dependency of something else
+rather than as a tool of its own, and each is dynamically linked and shipped as
+its own `.so`, so the LGPL's relinking condition is satisfied by replacing the
+file; the written offer in this section applies to all of them regardless.
 
 You may also request a copy of the source code by contacting us (see contact information below). Source code will be provided for a period of three years from the date of distribution of the corresponding binary, for a charge no more than the cost of physically performing the distribution.
 
@@ -621,4 +627,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on August 18, 2026._
+_This document was last updated on August 20, 2026._

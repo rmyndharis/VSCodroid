@@ -160,7 +160,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-DEV-04 | System SHALL bundle bash in APK | P0 | M1 |
 | FR-DEV-04a | System SHALL bundle tmux in APK as a standalone tool. The editor's terminals are not wrapped in it: the default profile `FirstRunSetup` writes points at bash, and each terminal spawns bash directly through node-pty on a real PTY. The phantom-process saving comes from running the Extension Host and ptyHost as `worker_thread`s | P1 | M1 |
 | FR-DEV-05 | System SHALL deliver Ruby and Java 17 toolchains as on-demand asset packs. Delivery is not Play-only: `ToolchainManager` reads the installing package name and, for any install that did not come from Play, downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases, verified against a published sha256 manifest | P2 | M3 |
-| FR-DEV-06 | A package manager CLI (`vscodroid pkg`) is out of scope. No such command exists in the app or on the device; additional packages are the user's own business through the terminal | P2 | M3 |
+| FR-DEV-06 | A package manager CLI (`vscodroid pkg`) is not built. No such command exists in the app or on the device; additional packages are the user's own business through the terminal. The design it would start from is `docs/04-TECHNICAL_SPEC.md` §8, and it sits on the post-release roadmap | P2 | Post-release |
 | FR-DEV-07 | Prompting for a toolchain by file type is out of scope: nothing watches which files are opened. Discovery is unprompted instead, the welcome walkthrough names the two toolchains and points at the picker, which is also reachable from the app icon's **Manage toolchains** shortcut | P3 | M3 |
 | FR-DEV-08 | System SHALL provide Language Picker UI during first-run for selecting toolchains to install | P1 | M3 |
 | FR-DEV-09 | System SHALL allow installing additional toolchains later via Settings > Toolchains | P2 | M3 |
@@ -202,7 +202,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-RES-01 | RAM usage (typical coding session) | < 700 MB | P1 |
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
 | NFR-RES-03 | Phantom process count | ≤ 5 in typical use | P0 |
-| NFR-RES-04 | AAB base download size | < 200 MB (core); toolchains 10-60 MB each (on-demand) | P1 |
+| NFR-RES-04 | AAB base download size | < 200 MB (core); the on-demand toolchain ZIPs are 9.9 MB for Ruby and 55.4 MB for Java 17, per `ToolchainRegistry.available` | P1 |
 | NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~990 MB with both toolchains | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
@@ -312,7 +312,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 ### 6.1 User Interfaces
 
-Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-android-bridge-api).
+Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge-api).
 
 - Android native: Extra Key Row, status bar, Foreground Service notification
 - WebView: VS Code Workbench (as built from the Code - OSS source, with the diffs in `patches/`)

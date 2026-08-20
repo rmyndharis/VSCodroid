@@ -8,8 +8,9 @@ Thank you for your interest in contributing to VSCodroid. This guide covers ever
 - [Development Setup](#development-setup)
 - [Project Structure](#project-structure)
 - [Download Scripts](#download-scripts)
-- [Building](#building)
 - [The on-device test suite](#the-on-device-test-suite)
+- [Building](#building)
+- [Continuous Integration](#continuous-integration)
 - [Testing on Device](#testing-on-device)
 - [How to Add a New Bundled Tool](#how-to-add-a-new-bundled-tool)
 - [How to Add a New Patch](#how-to-add-a-new-patch)
@@ -33,8 +34,8 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 | Android Studio    | Latest stable                  | With Android API 36 SDK                      |
 | Android NDK       | r27+                           | For cross-compiling native modules           |
 | JDK               | 17+                            | Required by Gradle                           |
-| Node.js           | 20 LTS                         | For VS Code build tooling                    |
-| Python            | 3.x                            | For node-gyp (native module compilation)     |
+| Node.js           | 20 or newer                    | `setup.sh` refuses anything older. The Code - OSS server build does not use this one: it takes its Node from upstream's `.nvmrc` at the pinned commit |
+| Python            | 3.x                            | For node-gyp, and for every `scripts/*.py` the build and the Gradle verification tasks run |
 | Git               | Any recent version             | -                                            |
 | GnuPG (`gpg`)     | Any recent version             | `brew install gnupg` / `apt-get install gnupg`. The bundled-tool download scripts verify the Termux package index against its signature and refuse to run without it |
 | adb               | Via Android SDK platform-tools | For deploying to device                      |
@@ -69,8 +70,9 @@ This is the order CI uses, and the order matters — each step below notes why.
 #    This leaves it in server/, not in assets/.
 ./scripts/fetch-vscode-oss.sh
 
-# 2. Copy that tree into assets/. Nothing else does this, and an APK built
-#    without it installs and opens with no editor in it.
+# 2. Copy that tree into assets/. No other step in this list does it, and an APK
+#    built without it installs and opens with no editor in it. build.yml and
+#    release.yml perform the same copy inline rather than calling this script.
 ./scripts/package-assets.sh
 
 # 3. Termux tools (bash, git, tmux, make, openssh) and the shared libraries the
@@ -153,7 +155,7 @@ VSCodroid/
 │   │   ├── src/main/
 │   │   │   ├── kotlin/com/vscodroid/  # Kotlin source code
 │   │   │   │   ├── MainActivity.kt       # Main activity, WebView setup, JS bridge
-│   │   │   │   ├── SplashActivity.kt     # First-run extraction, Language Picker
+│   │   │   │   ├── SplashActivity.kt     # First-run extraction, toolchain picker
 │   │   │   │   ├── ToolchainActivity.kt  # Settings > Toolchains UI
 │   │   │   │   ├── VSCodroidApp.kt       # Application class, WebView pre-warm
 │   │   │   │   ├── bridge/               # AndroidBridge, ClipboardBridge, SecurityManager
@@ -163,15 +165,16 @@ VSCodroid/
 │   │   │   │   ├── storage/              # SAF storage bridge, sync engine
 │   │   │   │   ├── util/                 # Environment, Logger, CrashReporter, StorageManager
 │   │   │   │   └── webview/              # WebView, WebViewClient, WebChromeClient
-│   │   │   ├── assets/                # VS Code Server, tools, extensions (not in git)
-│   │   │   │   ├── vscode-reh/           # VS Code Server (Remote Extension Host)
+│   │   │   ├── assets/                # Hand-written JS is in git; the trees below are not
+│   │   │   │   ├── vscode-reh/           # VS Code Server (Remote Extension Host), downloaded
 │   │   │   │   ├── server.js             # Node.js server bootstrap
 │   │   │   │   ├── process-monitor.js    # Phantom process monitor
 │   │   │   │   ├── platform-fix.js       # Selective platform override for npm
-│   │   │   │   ├── usr/                  # Shared libraries, Python stdlib, npm
-│   │   │   │   └── extensions/           # Pre-bundled extensions
+│   │   │   │   ├── dns-proxy.js          # Loopback HTTP/CONNECT proxy giving musl DNS
+│   │   │   │   ├── usr/                  # Shared libraries, Python stdlib, npm; downloaded
+│   │   │   │   └── extensions/           # vscodroid.* in git, Open VSX ones downloaded
 │   │   │   ├── jniLibs/arm64-v8a/     # Native binaries (.so trick for exec permission)
-│   │   │   │   ├── libnode.so            # Node.js (~48 MB)
+│   │   │   │   ├── libnode.so            # Node.js
 │   │   │   │   ├── libpython.so          # Python launcher (its libpython3.x.so
 │   │   │   │   │                         #   runtime lives in assets/usr/lib)
 │   │   │   │   ├── libgit.so             # Git
@@ -221,7 +224,7 @@ VSCodroid/
 | File | Purpose |
 | ---- | ------- |
 | `MainActivity.kt` | WebView setup, JS bridge registration, intent handling, OAuth callbacks |
-| `SplashActivity.kt` | First-run asset extraction, progress UI, Language Picker |
+| `SplashActivity.kt` | First-run asset extraction, progress UI, the toolchain picker, and the per-launch repairs that run on every start |
 | `VSCodroidApp.kt` | Application class, WebView pre-warm, CrashReporter init |
 | `bridge/AndroidBridge.kt` | JS interface: clipboard, file picker, OAuth, SSH, storage, toolchains |
 | `bridge/SecurityManager.kt` | The bridge session token: issues it, and validates it on every `@JavascriptInterface` call. It judges the caller, never the destination — there is no URL allow-list, and WebView navigation is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading` |
@@ -238,10 +241,11 @@ VSCodroid/
 
 ## Download Scripts
 
-Each script downloads pre-built binaries and places them in the correct location under `android/app/src/main/`.
+The download scripts place pre-built binaries under `android/app/src/main/`. Listed with them are the checkers, patchers and self-checks that run beside those downloads, from a workflow, from another script, or from a Gradle verification task. The scripts a contributor invokes directly are in [Preparing Assets](#preparing-assets), [The on-device test suite](#the-on-device-test-suite) and [Quick Deploy Script](#quick-deploy-script).
 
 **To find out which version of something ships, read the script — never the
-assets tree.** `android/app/src/main/assets/` is build output, gitignored, and
+assets tree.** The downloaded trees under `android/app/src/main/assets/`, which are
+`vscode-reh/`, `usr/` and the marketplace extensions, are gitignored build output
 filled by whichever run of these scripts happened last; a checkout can be weeks
 stale and still hold a well-formed file that answers confidently. That has
 produced a wrong number in a published issue: `node_modules/npm/package.json`
@@ -257,7 +261,7 @@ checkouts differed.
 | `build-vscode-oss.sh` | Builds that tree from the MIT source with `patches/` and `branding/` applied. Run by the build-vscode-oss workflow on an arm64 runner, or locally in Docker; not needed for a normal build | a `.tar.gz` published as a release asset |
 | `generate-branding-icons.py` | Renders the web client's PWA icon set from the Android launcher icon. Run **by hand** when the launcher icon changes, never by CI, and its outputs are committed: `build-vscode-oss.sh` copies them into the server tree, so the build consumes the committed files and not this script. Load-bearing rather than cosmetic, because upstream ships Microsoft's VS Code icon there and that cannot travel with this app. Needs Pillow | `branding/server/{code-192.png,code-512.png,favicon.ico}` |
 | `device-launch.sh` | Launches the app on a connected device and clears what blocks a first run, matching the POST_NOTIFICATIONS prompt and the toolchain picker by their on-screen text through `uiautomator` rather than by fixed coordinates. Worth knowing why it exists: both dialogs take focus, so the app is backgrounded and its process is gone, which through `ps` and `logcat` reads exactly like a crash. Run by hand, not by CI | the app running on the device |
-| `build-aab.sh` | Builds a signed release bundle outside CI, reading the keystore from the gitignored `android/signing.properties` or the `VSCODROID_*` environment variables. Run by hand; `release.yml` builds the published bundle itself and does not call this. Useful for checking what a release build actually produces, which is also the only build that runs R8 | `app/build/outputs/bundle/release/app-release.aab` |
+| `build-aab.sh` | Builds a signed release bundle outside CI, reading the keystore from the gitignored `android/signing.properties` or the `VSCODROID_*` environment variables. Run by hand; `release.yml` builds the published bundle itself and does not call this. Useful for checking what a release build actually produces, assets and signing included. It is not the only build that reaches R8: `release.yml` runs `bundleRelease` on the tag, and the `Shrinker` workflow (`r8.yml`) runs `:app:optimizeReleaseResources :app:lintVitalRelease`, which pulls `minifyReleaseWithR8` in without needing the keystore or the asset tree | `app/build/outputs/bundle/release/app-release.aab` |
 | `verify-server-tree.py` | Checks a server tree: required paths, no vsda, no bundled GNU/Linux node, every native binary aarch64, branding applied. Run by both scripts above on the tree they produce, and again by the `verifyServerTree` Gradle task on the copy in `assets/` that is actually packaged — which on a warm-cache build is the only run that happens | exit status |
 | `download-termux-tools.sh` | Downloads bash, git, tmux, make, openssh and every shared library the bundled binaries link against, including Node's | `jniLibs/arm64-v8a/`, `assets/usr/` |
 | `download-node.sh` | Installs Termux's `nodejs-lts` as `libnode.so`. Run after `download-termux-tools.sh`, which places the libraries it links against | `jniLibs/arm64-v8a/libnode.so` |
@@ -282,16 +286,28 @@ checkouts differed.
 | `check-welcome-claims.py` | Refuses a welcome screen that names a bundled tool's version, promises a toolchain as "coming soon", or puts an undeclared number in walkthrough prose or an illustration. Those runtimes come from the Termux index at build time, so a number written into the manifest is right until the next rebuild -- it was wrong for two releases, in the illustrations as well as the text | exit status |
 | `check-bridge-api-spec.py` | Checks every `@JavascriptInterface` method in `AndroidBridge.kt` against `docs/05-API_SPEC.md` on name, parameter list and return type, both directions. The spec is what an extension author writes against and nothing had held it to the bridge: one pass found fourteen disagreements across twenty-eight methods, four of them invisible to a comparison of names because only the shape was wrong. ⚠️ Half the gate, and it reports ok on what it cannot see: a method whose annotation is spelled in a way its patterns miss (`@android.webkit.JavascriptInterface`, an aliased import), and any method the bridge **inherits** — its window is one file. `BridgeApiSpecParityTest` is the other half and settles which methods exist, by reflecting over the compiled class, so spelling and inheritance stop being categories. Return types, parameter names, order and nullability go the other way: they do not survive into bytecode, so this script checks them and the test cannot. Neither checks prose | exit status |
 | `check-bundle-size.py` | Checks the release bundle against Play's per-module size caps before anything is published, rather than at upload | exit status |
-| `check-pack-overlap.py` | Refuses an asset entry the base module and a toolchain pack both carry. Bundletool answers such a bundle by refusing the AAB outright, and the two trees are filled by different download scripts, so nothing compares them until the bundle exists; this runs right after the downloads, the one place both trees are populated. A pack needing a library the base runtime already ships relies on the base copy, which is extracted before any toolchain installs | exit status |
+| `check-pack-overlap.py` | Refuses an asset entry the base module and a toolchain pack both carry. Bundletool answers such a bundle by refusing the AAB outright, and the two trees are filled by different download scripts, so nothing compares them until the bundle exists. `release.yml` runs it right after the downloads, the one place both trees are populated, and the `checkPackOverlap` Gradle task runs it again so a local `./gradlew bundleRelease` is covered too; that task is armed by the Ruby pack holding a payload, since comparing an empty pack against the base module reports no overlap for the wrong reason. A pack needing a library the base runtime already ships relies on the base copy, which is extracted before any toolchain installs | exit status |
 | `check-local-network-permission.py` | Checks local network access survives the `targetSdk` in use | exit status |
 | `check-lint-baseline.py` | Refuses a lint baseline that has grown past the count `android/app/build.gradle.kts` states, or that carries a location naming one machine. `./gradlew updateLintBaseline` is the documented way to edit the file and rewrites all of it: measured, 17 entries became 91, 45 of them rooted at `$HOME`, and 10 issue types nobody chose to hide went quiet. Nothing else notices, since `LintBaselineFixed` is Information severity and cannot fail a build. Reads the committed XML, never the count lint prints in its report: that number is 91 in the checkout that generated the file and 46 in any other, so it reads green exactly where the accident happens. Editing the baseline means deleting entries by hand and correcting the count in the comment | exit status |
 | `check-bundled-extensions.py` | Pairs `download-extensions.sh`'s `EXTENSIONS` list with the `Bundled VS Code Extensions` table in `NOTICE.md`, matching on the extension id, and refuses a recorded licence this project cannot redistribute. Where the extracted trees exist it also checks each `package.json` declares that same licence and the tree carries the licence text. Run three times: from `lint.yml` for the committed half, because the extracted trees are gitignored and no lint job builds them; from `download-extensions.sh` once it has extracted them; and unconditionally from `build.yml`, whose download step is skipped on an asset cache hit while the restored trees stay on disk to be read. Scoped to the list, never a walk of the extensions directory: the four `vscodroid.*` trees have neither field and are covered by the root `LICENSE` | exit status |
+| `check-workflow-steps.py` | Reads every `.yml` and `.yaml` under `.github/workflows/` and refuses a step GitHub Actions would reject at dispatch: one carrying neither `uses` nor `run`, one carrying both, and a `uses` that is not pinned to a full 40-character commit SHA. Valid YAML is a different question, and it is the wrong one: a duplicated bare `- name:` loads without complaint and dies at dispatch, on a workflow that runs once per VS Code bump. Run from `lint.yml` and `release.yml` | exit status |
+| `check-toolchain-claims.py` | Refuses a document that offers a toolchain `ToolchainRegistry.available` does not install. The picker is generated from that list and follows a withdrawal at once; the README, the user guide, the privacy policy, both attribution documents, the design documents and the Get Started walkthrough name the toolchains in prose and do not. Files whose job is to record what happened, the CHANGELOG and the version history among them, are outside its list on purpose. Run from `lint.yml` and `release.yml` | exit status |
+| `check-checklist-totals.py` | Refuses a `docs/DEVICE_TEST_CHECKLIST.md` whose per-section counts or grand total disagree with the rows present in it. The total is checked against the sum and against the file, separately, because a total maintained by hand can be right about section counts that are themselves wrong. Run from `lint.yml` | exit status |
+| `check-document-dates.py` | Refuses `docs/LEGAL_NOTICES.md` or `docs/PRIVACY_POLICY.md` claiming a date earlier than the last commit that changed it; later is fine, since a policy can be dated for the release it ships in. The privacy policy promises in its own body that the date moves whenever the policy does. Run from `release.yml` alone, because that is the only workflow checking out with `fetch-depth: 0`, and a shallow clone is refused rather than skipped | exit status |
+| `check-library-attribution.py` | Walks `assets/usr/lib`, `jniLibs/arm64-v8a` and `assets/vscode-reh` to their leaves and refuses a shipped binary nobody has attributed, or a copyleft one with no offer of source. Recognises payloads by magic number rather than by ELF alone: tree-sitter's grammars are WebAssembly, PSReadLine is .NET, and pip vendors Windows launchers, none of which can run here and all of which are still redistributed. Run from `build.yml` and `release.yml`, where the libraries exist; `lint.yml` writes stubs and has nothing to attribute | exit status |
+| `check-termux-licenses.py` | Reads `TERMUX_PKG_LICENSE` from each package's `build.sh` in termux-packages and compares it with the licence recorded by hand, which `check-library-attribution.py`'s copyleft rule and two published documents all rest on. The three places that look like they should carry the field were measured and none does: the signed index has no `License:` line, the `.deb` control member has none, and the payload's `copyright` file is a document rather than a field. Run from `release.yml` | exit status |
+| `check-extension.py` | Checks one extracted extension against the `VSCODE_VERSION` this build ships and against Bionic. Both failures are quiet: an `engines.vscode` floor above the server leaves the extension registered and never activated, and a glibc native payload loads on a desktop and throws on first use here. Called by `download-extensions.sh` on each tree it extracts | exit status |
+| `patch-python-platform.py` | Rewrites the bundled Python extension's own platform detection so Android answers `OSType.Linux` instead of `OSType.Unknown`. The extension never consults VS Code's detection and Termux's Node reports `android`, which left `getEnvironmentActivationShellCommands` returning early, so selecting a virtual environment never activated it. Called by `download-extensions.sh`; `--check` is what the `verifyPythonPlatform` Gradle task runs, so a tree assembled from an older extraction cannot ship without the rewrite | the extension, rewritten in place; or exit status under `--check` |
+| `gen-glibc-forwarders.py` | For each glibc library a prebuilt addon names, emits a stub carrying that soname and exporting exactly the versioned symbols the addon asks for, each one a tail branch through a pointer resolved against Bionic's libc by name. The symbols are read out of the addons rather than listed here, since what a binary imports is a property of how it was built. Called by `build-glibc-shim.sh` to generate them, and with `--verify-against` by both that script and the `verifyNativeAddons` Gradle task | `.c` and version-script files under the shim's work dir; or exit status |
+| `build-docs-site.py` | Renders `docs/USER_GUIDE.md` and `docs/PRIVACY_POLICY.md` into the published site, so neither exists twice with nothing holding the copies together. Names its two inputs one at a time rather than walking `docs/`: the requirements, architecture, risk and plan documents are working documents and are deliberately not published. Run by `pages.yml` | `docs/site/` |
 | `test-dns-proxy.js` | Exercises the loopback DNS proxy's Basic-auth contract. Loopback on Android is not isolated per app, so that token is what stands between the proxy and every other app on the device | exit status |
 | `test-process-monitor.js` | Points a scan at a fixture `/proc` and checks the snapshot: that the language servers that ship are recognised, that an unrelated user process carrying a server's name in its path is not, and that the count includes the process the monitor runs inside | exit status |
 | `test-platform-fix.js` | Runs the platform override under a faked `process.platform` and checks it engages for node-gyp and for nothing that merely mentions it in a path or an argument | exit status |
 | `test-server-bootstrap.js` | Boots the server bootstrap against a fixture tree and checks the `product.json` rewrite: overrides applied, a truncated file named rather than thrown, an unwritable directory leaving the existing file intact | exit status |
 | `test-process-monitor-extension.js` | Drives the process monitor extension against two snapshots that differ in every count and checks its notifications read the same either way. A notification cannot be edited once open, so any number baked into one freezes while the status bar beside it keeps moving | exit status |
 | `test-bridge-relay.js` | Extracts the bridge relay from the Kotlin raw string it lives in and runs it against a stub bridge, driving the real bundled extension, so what is asserted is the message a user is shown. Nothing else reads that script: it is neither compiled nor linted, so a bridge change can be reverted with every suite green. Also refuses a command an extension sends that the relay has no branch for, whose only symptom is a five-second timeout naming neither the command nor the cause | exit status |
+| `test-download-capture.js` | Exercises the download-capture script, which is JavaScript inside a Kotlin raw string handed to `evaluateJavascript`, so nothing compiles or lints it and no Kotlin test reaches past the bridge methods it calls. What it pins is the deferred `revokeObjectURL`: the workbench revokes a `blob:` URL on the next task, and choosing a destination takes seconds, so without the deferral every save finds nothing to write while the Kotlin suite, lint and the build all stay green | exit status |
+| `test-serve-network.js` | Exercises the Serve on Network port scan and its reachable versus local-only split, both halves of which cost the user something when wrong: a loopback-only server called reachable hands out an address that refuses, and a reachable one called local-only sends them to restart a working server. The classification is inferred from two probes because an app process cannot read `/proc/net/tcp` at all, and inference is what needs a test. `scanPorts` takes its connector, so nothing here opens a socket | exit status |
 
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).
@@ -363,9 +379,6 @@ shipped, `--instrumented` runs the app:
   or `FirstRunSetup` — `--instrumented`, the only thing that runs them on a
   device. The JVM suite reaches parts of all five; what it never does is start
   the app.
-
-The last one is new because it was missing: the instrumented suite had a command
-in the block below and no moment at which anyone owed it a run.
 
 `--instrumented` writes what it did to
 `android/app/build/reports/device-run.txt`: the time, the commit, the device
@@ -485,6 +498,18 @@ cd android && ./gradlew assembleDebug
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk` (debug package name: `com.vscodroid.debug`)
 
+### Unit Tests
+
+```bash
+cd android && ./gradlew testDebugUnitTest
+```
+
+This is the JVM suite, and it needs no device and no asset tree: `build.yml`'s test job runs it
+against stub assets. Results land as XML in `android/app/build/test-results/testDebugUnitTest/`
+and as HTML in `android/app/build/reports/tests/testDebugUnitTest/`. The instrumented suite is a
+separate thing, covered under [The on-device test suite](#the-on-device-test-suite); CI compiles
+it and never runs it.
+
 ### Version Bump
 
 `versionCode` and `versionName` both live in `android/app/build.gradle.kts`, and both have
@@ -513,7 +538,30 @@ cd android && ./gradlew assembleRelease
 cd android && ./gradlew bundleRelease
 ```
 
-This produces an AAB at `android/app/build/outputs/bundle/release/app-release.aab` that includes on-demand asset packs for toolchains.
+This produces an AAB at `android/app/build/outputs/bundle/release/app-release.aab` carrying the
+Ruby and Java toolchains as asset packs. Both declare `deliveryType = "on-demand"`, so neither is
+downloaded with the app and neither counts against the base module's size cap.
+
+## Continuous Integration
+
+Seven workflows, and what triggers each is worth knowing before assuming a change was checked.
+Read the triggers from `.github/workflows/` rather than from here if the answer matters.
+
+| Workflow | Runs on | What it does |
+| -------- | ------- | ------------ |
+| `build.yml` | pull requests to `main`, and pushes to `main` | Prepares the assets and builds the debug APK, then a separate job runs `testDebugUnitTest` and compiles the instrumented suite with `assembleDebugAndroidTest`. Compiling it is all that happens: nothing runs it on a device |
+| `lint.yml` | pull requests to `main`, and pushes to `main` | Android Lint, the `check-*.py` gates that read committed sources, `device-test.sh --self-check`, and every `scripts/test-*.js` |
+| `r8.yml` (`Shrinker`) | a Monday 03:00 UTC cron, `workflow_dispatch`, pull requests to `main` touching seven configuration paths, and pushes to `main` touching the same seven | Runs the three release-only gates, R8, the resource shrinker and lintVital, through `:app:optimizeReleaseResources :app:lintVitalRelease`. The paths list names what *configures* the shrinkers, so a pull request that only adds Kotlin does not trigger it and the cron is what covers that |
+| `release.yml` | a `v*` tag | Builds and signs the APK and AAB, packages the toolchain ZIPs, writes the build manifest and publishes the release |
+| `build-vscode-oss.yml` | `workflow_dispatch` only | Builds Code - OSS from source on an arm64 runner, around half an hour, once per VS Code version, and publishes the tarball every app build fetches |
+| `patch-drift.yml` | a Monday 04:00 UTC cron, and `workflow_dispatch` | Applies `patches/` to the newest upstream stable tag. Expected to fail between an upstream move and the bump that answers it, so it is not a gate and must not be added to branch protection |
+| `pages.yml` | pushes to `main` touching `docs/site/**`, `docs/USER_GUIDE.md`, `docs/PRIVACY_POLICY.md`, `scripts/build-docs-site.py` or the workflow itself, and `workflow_dispatch` | Builds and deploys the documentation site |
+
+Two consequences of the push triggers. Most commits here land straight on `main` rather than
+through a pull request, which is why `build.yml`, `lint.yml` and `r8.yml` all carry one: a gate
+that only ran on pull requests would see a minority of what ships. And `r8.yml` is deliberately
+absent from branch protection, because a `pull_request` trigger with a paths filter creates no
+check run at all on a pull request matching none of them, so a required check would wait forever.
 
 ## Testing on Device
 
@@ -548,7 +596,12 @@ Then open `chrome://inspect` in Chrome. Note: the CDP WebSocket connection must 
 ./scripts/deploy.sh
 ```
 
-This builds the debug APK, installs it, clears data, and launches SplashActivity.
+This installs the debug APK and launches SplashActivity, building the APK first only
+when it is not already there. It does not clear app data, so first-run setup will not
+re-run on an install that has already completed it; use the `pm clear` above for that.
+Note that it starts `com.vscodroid/.SplashActivity`, the release package name, so it
+reaches a release install rather than the `com.vscodroid.debug` one `assembleDebug`
+produces.
 
 ### What to Test
 
@@ -665,7 +718,7 @@ python3 "$SCRIPT_DIR/patch-default-shell.py" "$JNI_DIR/libtool.so"
 python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libtool.so"
 ```
 
-`termux_pkg_version <pkg>` gives the version the index resolved, for a path or a manifest. If a workflow is going to run the new script, `check-build-steps.py` requires a row for it in the script table above; if the PR build's asset-preparation job runs it, `build-all.sh` and `release.yml`'s build-release job have to run it as well.
+`termux_pkg_version <pkg>` gives the version the index resolved, for a path or a manifest. If a workflow is going to run the new script with `bash scripts/...`, `check-build-steps.py` requires this document to name it; the script table above is where it goes. If the PR build's asset-preparation job runs it, `build-all.sh` and `release.yml`'s build-release job have to run it as well.
 
 ### 2. Register the binary symlink in FirstRunSetup.kt
 
@@ -695,9 +748,9 @@ If you add new standalone files to `assets/` (not inside existing extracted dire
 ## How to Add a New Patch
 
 Patches are unified diffs in `patches/`, applied to the VS Code source with `git apply` before gulp
-builds it. They used to be Python regex replacements against minified JS; that method matched on
-generated identifiers, broke on every version bump, and printed `SKIP` on a miss while still exiting
-0, so a patch could stop applying without failing anything.
+builds it. `scripts/build-vscode-oss.sh` resets the tree, then applies every
+`patches/*.patch` in glob order under `set -euo pipefail`, so a patch whose context has shifted
+fails the build instead of being skipped.
 
 ### Steps
 
@@ -714,12 +767,22 @@ generated identifiers, broke on every version bump, and printed `SKIP` on a miss
 3. **Leave a fingerprint.** The build's Verify stage greps the packaged bundles for a string from
    each patch, because a patch applying cleanly proves nothing about whether the file was in this
    target's graph. Add a row to `patches/fingerprints.txt` naming the bundle it must reach and a
-   string that survives minification — an identifier or a literal, never a comment, which
-   minification strips. Every patch needs a row: a patch with none fails the check rather than
-   passing silently. Where no fingerprint is possible, the row says so and states how the patch is
-   proven instead. `scripts/check-patch-fingerprints.py` runs these expectations, and it runs on
-   three sides — against the tree the build produced, against the tarball the fetcher downloaded,
-   and against `assets/` before Gradle packages it.
+   string minification cannot rewrite: a string literal, an HTML attribute, a comparison against
+   a literal. Never a variable name, which is mangled, and never a comment, which is stripped.
+   The pattern must also occur in what the patch itself ADDS, which `introduced_by` reads out of
+   the diff, so a string lifted from surrounding context is refused rather than accepted as
+   evidence. Matching is tolerant of quote style and whitespace, so a row written `case"android"`
+   still matches a bundle emitting `case 'android'`. Every patch needs a row: a patch with none
+   fails the check rather than passing silently. Where no fingerprint is possible, the row says
+   so and states how the patch is proven instead. `scripts/check-patch-fingerprints.py` runs
+   these expectations, and it runs on three sides: against the tree the build produced, against
+   the tarball the fetcher downloaded, and against `assets/` before Gradle packages it.
+
+   A row proves the patch ARRIVED, not which revision of it did, so a pattern has to move with a
+   revision whose behaviour is the point of the revision. Patch 0001's row names the `isLinux`
+   widening for that reason: the patch adds two things that compare against `'android'`, and a
+   pattern matching either would still pass on a patch narrowed back to the plain `'linux'` test,
+   which leaves patch 0009's branch unreachable with every row printing ok.
 
 4. **Build and test:**
    ```bash
@@ -745,10 +808,14 @@ so every bridge call from that page starts failing. The one intended
 re-registration is after a renderer crash, where `recreateWebView()` clears the
 flag for a view that no longer has the interface.
 
-**First-run setup keys on `versionName`; migrations threshold on
-`versionCode`.** Both are written together when setup completes
-(`FirstRunSetup.kt`). Bump one without the other and either setup re-runs on
-every launch or a migration never runs at all.
+**Setup staleness compares `versionName` and `versionCode` together;
+migrations threshold on `versionCode` alone.** `setupIsStale()` is true when
+either differs from what `markSetupComplete()` stored, so either one moving
+re-extracts the assets. `runPreExtractionMigrations()` and `runMigrations()` are
+both fed by `getPreviousVersionCode()`, which reads the stored code and nothing
+else (`FirstRunSetup.kt`). Move the name and leave the code alone and the
+extraction happens while the migration that was supposed to accompany it never
+runs.
 
 **Tool symlinks are rebuilt on every launch, not only on first run**
 (`SplashActivity.kt` calls `setupToolSymlinks()` unconditionally). Android
@@ -772,7 +839,7 @@ override silently removes it from the running product.
 
 ### JavaScript / Node.js
 
-- The `assets/server.js`, `assets/process-monitor.js`, and `assets/platform-fix.js` files are hand-written JavaScript (not minified). Keep them readable.
+- `assets/server.js`, `assets/process-monitor.js`, `assets/platform-fix.js`, `assets/dns-proxy.js` and the four `assets/extensions/vscodroid.*` trees are hand-written JavaScript (not minified) and are the only parts of `assets/` in git. Keep them readable.
 - Use `const`/`let`, not `var`.
 - No TypeScript -- these run directly on the bundled Node.js.
 

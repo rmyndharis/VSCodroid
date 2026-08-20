@@ -14,10 +14,13 @@ We take security seriously. If you discover a security vulnerability in VSCodroi
 
 **Please DO NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, please use one of these channels:
+Instead, please report it by email:
 
 📧 **Email**: yudhi@rmyndharis.com
-🔒 **GitHub Security Advisory**: [Report a vulnerability](https://github.com/rmyndharis/VSCodroid/security/advisories/new) (preferred for detailed reports)
+
+Private vulnerability reporting is switched off for this repository, so GitHub's
+"Report a vulnerability" form is not open to anyone outside the maintainers.
+Email is the channel that reaches us.
 
 ### What to Include
 
@@ -46,11 +49,11 @@ Instead, please use one of these channels:
 
 VSCodroid runs code locally on your device. Key security areas:
 
-- **Process isolation**: Node.js server runs on localhost only
-- **No remote access**: No network-exposed services by default
-- **Extension safety**: Extensions run in the Extension Host sandbox
-- **Storage**: All data stored in app-private directory
-- **Permissions**: Minimal Android permissions requested
+- **Loopback only**: the server is started with `--host=127.0.0.1` (`ProcessManager.startServer`), so it binds no address reachable from the network
+- **Connection token**: the server requires one on every route except `/version`, `/delay-shutdown` and `/callback` (`ProcessManager.connectionToken`). It generates the token itself and writes it mode 0600; the WebView URL carries it
+- **Extension host**: extensions run in the extension host, which `patches/0004-exthost-as-worker-thread.patch` makes a worker thread inside the server's Node process. It is a fault boundary, not a security sandbox: an extension has the same reach over app-private storage and the network as the app itself
+- **Storage**: app data lives in the app-private directory, including the mirrors of folders opened through the Storage Access Framework
+- **Permissions**: the manifest requests four: `INTERNET`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` and `POST_NOTIFICATIONS`
 
 ## Technical Security Design
 

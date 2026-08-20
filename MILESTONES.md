@@ -12,11 +12,12 @@ M5 (Toolchain) → On-demand languages, Language Picker, Play Asset Delivery
 M6 (Release)   → Play Store release
 ```
 
-> A ticked box records what was true when it was ticked, not what is true now. Several
-> carry figures the build has since moved past: the V8 heap is no longer the flat 512 MB
-> under M4, and the size measurements under M5 predate later asset growth. Boxes are still
-> open under M6, so this is a live checklist rather than a historical document; treat the
-> ticked ones as dated entries and verify any number against the code before quoting it.
+> A ticked box records what was true when it was ticked, not what is true now. Some carry
+> figures the code does not match: the V8 heap ceiling is derived from device RAM
+> (`ProcessManager.heapCeilingForDevice`), and the sizes under M5 and M6 are measurements
+> from the day they were taken. Boxes are still open under M6, so this is a live checklist
+> rather than a historical document; treat the ticked ones as dated entries and verify any
+> number against the code before quoting it.
 > Most of what is open is operational (Play Console monitoring, store reviews, adoption
 > numbers) and no state of this repository can ever close it, so do not read an open box
 > here as work waiting in the tree. The count is deliberately not written down: a number
@@ -93,18 +94,17 @@ M6 (Release)   → Play Store release
 
 1. **Build VS Code REH server for ARM64**
 
-   > Both of the first two lines describe how this was done at the time and not
-   > how it is done now, and the difference is a licensing one rather than a
-   > preference. The pre-built server on Microsoft's update CDN ships under
+   > The build compiles Code - OSS from the MIT `microsoft/vscode` source:
+   > `scripts/build-vscode-oss.sh` applies the numbered unified diffs in
+   > `patches/` with `git apply`, and app builds fetch the built server with
+   > `scripts/fetch-vscode-oss.sh`. There is no `patches/code-server/` in the
+   > tree and no pre-built server download. The reason is licensing rather than
+   > preference: the pre-built server on Microsoft's update CDN ships under
    > pre-release terms that do not permit modifying and redistributing it inside
-   > an APK, so on 2026-08-12 the build moved to compiling Code - OSS from the
-   > MIT source. `patches/code-server/` went with it; the diffs live in
-   > `patches/` and are applied by `scripts/build-vscode-oss.sh`.
+   > an APK.
    >
-   > Left as they were rather than rewritten, because a milestone records what
-   > was done to reach it. The note is here so that nobody reads the checkboxes
-   > as a description of the current build, which is the mistake this file
-   > invited, since nothing else on the page says the approach changed.
+   > The boxes below record how the server was obtained at M1, so the paths they
+   > name belong to that milestone rather than to the tree.
 
    - [x] Download pre-built VS Code Server (vscode-reh) for Linux ARM64
    - [x] Apply VSCodroid branding patch (`patches/code-server/product.diff`)

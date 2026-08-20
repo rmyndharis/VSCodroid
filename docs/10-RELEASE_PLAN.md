@@ -39,105 +39,89 @@ flowchart TD
 
 ## 2. CI/CD Pipeline
 
-> **This section is the pipeline as sketched on 2026-02-10, not the one in `.github/workflows/`.**
-> The rest of this document is maintained, §5 in particular is checked against the manifest and
-> the shipped strings before a submission, but nothing below reflects how the project builds.
-> The real workflows are `build.yml` and `lint.yml` on pull requests, `release.yml` on a `v*` tag,
-> `r8.yml` on a weekly cron, `pages.yml` when `docs/site/**` lands on main, and
-> `build-vscode-oss.yml`, which is dispatched by hand on a version bump.
->
-> Several of the jobs sketched in §2.2 describe work that is done differently or not at all.
-> `build-vscode` is not "a code-server fork": `build-vscode-oss.sh` builds vanilla Code - OSS from
-> the MIT `microsoft/vscode` source with the diffs in `patches/` applied first, on an arm64
-> runner, once per VS Code version, the pre-built server on Microsoft's update CDN carries terms
-> that do not permit modifying and redistributing it, which is what forced the source build. It is
-> also not part of an app build: those fetch the published tarball with `fetch-vscode-oss.sh`.
-> `build-binaries` cross-compiles nothing, `scripts/download-*.sh` take Termux's packages.
-> `integration-test` has no counterpart at all; no CI here runs the instrumented tests, and
-> `android/app/src/androidTest/README.md` records the measurement behind that. Nor is there a
-> monthly `patch-regression` job; the only scheduled workflow is the weekly shrinker run in
-> `r8.yml`. For the steps CI really runs, `CONTRIBUTING.md` carries the table, and
-> `scripts/check-build-steps.py` fails the build when it drifts.
+> `CONTRIBUTING.md` carries the table of the steps each workflow runs, and
+> `scripts/check-build-steps.py` fails the build when a script CI runs is missing from it.
 
 ### 2.1 Pipeline Architecture
 
 ```mermaid
 flowchart TD
-  REPO["GitHub Repository"] --> B1["Push to any branch<br/>CI: Lint + Unit Tests (~5 min)"]
-  REPO --> B2["PR to develop<br/>CI: Lint + Unit + Build APK + Integration Tests (~30 min)"]
-  REPO --> B3["Push to develop<br/>CI: Full Build + Deploy to Internal Testing (~45 min)"]
-  REPO --> B4["Tag v*.*.*<br/>CI: Full Build + Sign AAB + Deploy to release tracks (~60 min)"]
-  REPO --> B5["Scheduled monthly<br/>Patch regression against latest VS Code (~20 min)"]
+  REPO["GitHub Repository"] --> B1["Pull request to main, and every push to main<br/>build.yml: debug APK, unit tests, instrumented suite compiled<br/>lint.yml: Android lint and the repository self-checks"]
+  REPO --> B2["Same events, only when one of seven build-configuration paths changes<br/>r8.yml: R8, the resource shrinker and lintVitalRelease"]
+  REPO --> B3["Tag v*<br/>release.yml: signed AAB and APK, toolchain ZIPs, GitHub Release"]
+  REPO --> B4["Push to main touching docs/site, the user guide or the privacy policy<br/>pages.yml: publishes the usage site"]
+  REPO --> B5["Monday cron, or dispatched by hand<br/>r8.yml at 03:00 UTC, patch-drift.yml at 04:00 UTC"]
+  REPO --> B6["Dispatched by hand on a VS Code bump, arm64 runner<br/>build-vscode-oss.yml: builds the server once per version"]
 ```
 
 ### 2.2 Build Pipeline
 
-```yaml
-# .github/workflows/build.yml (simplified)
+Two workflows answer every pull request and every push to `main`.
 
+```yaml
+# .github/workflows/build.yml
+jobs:
+  build:            # "Build Debug APK"
+    # Assembles the asset tree, then ./gradlew assembleDebug.
+    # Fetches the published Code - OSS server tarball with fetch-vscode-oss.sh,
+    # takes Node, Python and the Termux tools with the download-*.sh scripts,
+    # and compiles the three native addons with build-native-addons.sh.
+    runs-on: ubuntu-latest
+
+  test:             # "Unit Tests"
+    # ./gradlew testDebugUnitTest, and assembleDebugAndroidTest so the
+    # instrumented suite is compiled. No CI here runs it on a device;
+    # android/app/src/androidTest/README.md records why.
+    runs-on: ubuntu-latest
+
+# .github/workflows/lint.yml
 jobs:
   lint:
-    # ktlint, eslint, android lint
+    # ./gradlew lint against the recorded baseline, the node:assert scripts
+    # under scripts/test-*.js, and the repository self-checks in scripts/check-*.py.
     runs-on: ubuntu-latest
+```
 
-  unit-test:
-    # JUnit tests (Kotlin), node:assert scripts run by node (JS)
-    # No coverage measurement and no coverage gate: nothing in the build computes one
-    runs-on: ubuntu-latest
+The release build type is exercised separately, because it is the only one that runs R8 and the
+resource shrinker.
 
-  build-binaries:
-    # Cross-compile Node.js, Python, etc. for ARM64
-    # Cached: only rebuild when toolchain scripts change
-    runs-on: ubuntu-latest
-    container: vscodroid/build-env  # Docker with NDK
-
-  build-vscode:
-    # Build code-server fork (vscode-web + vscode-reh)
-    # Cached: only rebuild when patches or VS Code version changes
-    runs-on: ubuntu-latest
-
-  build-android:
-    needs: [build-binaries, build-vscode]
-    # Assemble Android APK/AAB
-    runs-on: ubuntu-latest
-
-  integration-test:
-    needs: [build-android]
-    # Run on Firebase Test Lab (ARM64 device)
-    runs-on: ubuntu-latest
-
-  patch-regression:
-    # Scheduled monthly: try applying patches to latest upstream VS Code
-    # Fails if patch apply --check fails; posts issue/notification
-    runs-on: ubuntu-latest
-
-  deploy:
-    needs: [integration-test]
-    # Upload to Play Store (conditional on branch/tag)
+```yaml
+# .github/workflows/r8.yml  ("Shrinker")
+# Monday 03:00 UTC, workflow_dispatch, and pull requests or pushes to main that
+# touch one of seven build-configuration paths.
+jobs:
+  shrinker:
+    # ./gradlew :app:optimizeReleaseResources :app:lintVitalRelease
+    # Needs neither the keystore nor the asset tree.
     runs-on: ubuntu-latest
 ```
 
 ### 2.4 Scheduled Compatibility Jobs
 
-| Job | Schedule | Purpose | Failure Action |
-|-----|----------|---------|----------------|
-| Patch regression | Monthly | Apply all patches to latest VS Code snapshot | Block upstream sync, open maintenance issue |
-| Android preview smoke test | On Android beta release | Detect platform breakage early | Add risk item and mitigation task |
+| Workflow | Schedule | Purpose | Failure Action |
+|----------|----------|---------|----------------|
+| `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies `patches/` against an upstream VS Code tag with `git apply --check` | Rebase the patch set before the next version bump |
+| `r8.yml` | Monday 03:00 UTC, or dispatched | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
 
 ### 2.3 Caching Strategy
 
-| Artifact | Cache Key | Size | Rebuild When |
-|----------|-----------|------|-------------|
-| Node.js ARM64 binary | `node-{version}-{ndk-version}-{script-hash}` | ~50 MB | Node.js version change or build script change |
-| Python ARM64 binary | `python-{version}-{ndk-version}-{script-hash}` | ~30 MB | Python version change |
-| VS Code build | `vscode-{commit}-{patches-hash}` | ~200 MB | VS Code version or patch change |
-| Gradle build cache | `gradle-{dependencies-hash}` | ~100 MB | Dependency change |
-| node_modules | `yarn-{lockfile-hash}` | ~500 MB | yarn.lock change |
+`build.yml` keeps two caches, both keyed by `hashFiles` over everything that shapes their contents.
 
-**Expected CI times**:
-- Cold build (no cache): ~60 minutes
-- Warm build (cached binaries): ~15 minutes
-- Hot build (only Kotlin changes): ~5 minutes
+| Cache | Holds | Key | Rebuilt when |
+|-------|-------|-----|--------------|
+| `downloads-` | The server tarball, the Termux `.deb` files and their index, the npm and musl payloads, the fetched extensions | Hash of `VSCODE_VERSION`, `VSCODE_COMMIT`, `patches/**`, `branding/**` and every `scripts/` file that fetches or verifies one of them | Any of those change |
+| `assets-` | The unpacked tree that goes into the APK: `assets/vscode-reh/`, `assets/usr/`, `assets/extensions/` and `jniLibs/arm64-v8a/` | The same hash inputs | Any of those change |
+
+Both declare `restore-keys`, so a miss on the exact key still restores the newest older entry.
+That matters for correctness, not just speed: on an `assets-` hit the fetch step and its digest
+check against the release never run, which is why `patches/`, `branding/` and
+`build-vscode-oss.sh` are in the key even though no step in this workflow reads them. They change
+the server tarball, which is republished under the same `server-<version>` tag, and the key is
+what stops a stale tree going into the APK. The steps that build the three native addons run
+unconditionally, so a change to `build-native-addons.sh` reaches the artifact whether or not the
+cache hits.
+
+Gradle's own dependency and build caches are handled by `gradle/actions/setup-gradle`.
 
 ---
 
@@ -392,13 +376,12 @@ Notes:
 
 ```
 1. Identify critical bug (S1)
-2. Create hotfix branch from main
-3. Fix, test on device
-4. Tag patch version (e.g., v1.0.1)
-5. CI builds + signs AAB
+2. Branch from main, fix, and test on device
+3. Land it on main, so there is one line of history and nothing to cherry-pick afterwards
+4. Bump versionName and versionCode together, and add the CHANGELOG entry
+5. Tag the patch version from main (e.g., v1.0.1); release.yml triggers on `v*` and signs the AAB
 6. Upload to Play Store with expedited review request
 7. 100% rollout immediately (critical fix)
-8. Cherry-pick fix to develop branch
 ```
 
 ---

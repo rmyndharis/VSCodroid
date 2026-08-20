@@ -4,31 +4,34 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
-> **Historical document — describes the plan as of 2026-02-10, not the code.**
+> **This is the implementation plan dated 2026-02-10. The code, not this document, says how
+> the build works.**
 > The server is built from the MIT Code - OSS source by `.github/workflows/build-vscode-oss.yml`,
-> with unified diffs in `patches/` applied before the build; app builds fetch the result with
-> `scripts/fetch-vscode-oss.sh`. Anything here about downloading a pre-built server from Microsoft's
-> CDN, or about inline regex patches in `download-vscode-server.sh`, describes a path that was
-> removed on 2026-08-12. For what the code actually does, read the code — `scripts/build-vscode-oss.sh`,
-> `patches/`, and the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is
-> the prose kept current alongside it.
+> which runs `scripts/build-vscode-oss.sh`: it applies the numbered unified diffs in `patches/`
+> with `git apply`, and app builds fetch the built server with `scripts/fetch-vscode-oss.sh`.
+> There is no pre-built server download and no `scripts/download-vscode-server.sh`, so where the
+> plan below names either, read the code instead: `scripts/build-vscode-oss.sh`, `patches/`, and
+> the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is the prose
+> kept current alongside it.
 >
-> Note also that the `docker build ... toolchains/` step below cannot run: that directory's
-> Dockerfile and build scripts were removed on 2026-08-14, and `toolchains/` is now only a
-> gitignored download work dir. Bundled binaries come from Termux packages instead, via
-> `scripts/download-*.sh`.
+> Note also that the `docker build ... toolchains/` step below cannot run: `toolchains/` is a
+> gitignored download work dir holding no Dockerfile and no build scripts. Bundled binaries come
+> from Termux packages, via `scripts/download-*.sh`.
 >
-> Two M2/M4 capabilities below were built and then withdrawn, so treat them as plan rather
+> Two M2/M4 capabilities below are plans the app does not ship, so read them as plan rather
 > than description:
 >
-> - **"Open with VSCodroid" file-type intent filters** (M2-T6). Removed. They advertised the app
->   for about twenty extensions and opened none of them; `AndroidManifest.xml` carries the reason
->   where the filters used to be, and re-implementing is blocked on `content://` URIs having no
->   POSIX path rather than on wiring.
+> - **"Open with VSCodroid" file-type intent filters** (M2-T6). `AndroidManifest.xml` declares no
+>   VIEW filter for `file://` or `content://`, and says why in their place: a `content://` URI has
+>   no POSIX path and the server only ever sees POSIX paths, so the file has to be materialised
+>   locally, at which point saving writes to a copy and the edits never reach the file that was
+>   opened. Folders open through the SAF picker, which has the sync engine that makes write-back
+>   work.
 > - **A GitHub OAuth flow owned by Kotlin** (`vscodroid://oauth/github`, `startGitHubOAuth`).
->   Never shipped in that shape. What exists is one opaque relay on `vscodroid://callback`, gated
->   by whether this app itself opened a browser in the last ten minutes; `docs/05-API_SPEC.md` §2.5
->   describes the shipped flow.
+>   No such method exists in the Kotlin. What ships is one opaque relay on `vscodroid://callback`,
+>   gated by whether this app itself opened a browser in the last ten minutes
+>   (`AndroidBridge.AUTH_TAB_WINDOW_MILLIS`); `docs/05-API_SPEC.md` §2.5 describes the shipped
+>   flow.
 
 ---
 
@@ -1140,10 +1143,9 @@ android/app/src/main/kotlin/com/vscodroid/
 
 android/app/src/main/res/
 ├── layout/
-│   └── view_extra_key_row.xml      (planned; never built this way, now deleted --
-│                                    ExtraKeyRow builds its views in code, and the
-│                                    layout that did exist was a HorizontalScrollView
-│                                    of Buttons, not ViewPager2)
+│   └── view_extra_key_row.xml      (planned only; no such file is in res/layout/.
+│                                    ExtraKeyRow builds its views in code, so nothing
+│                                    inflates a layout for it)
 └── values/
     ├── dimens.xml                  (key sizes, 48dp minimum)
     └── colors.xml                  (key colors)
@@ -1698,8 +1700,9 @@ android/app/src/main/kotlin/com/vscodroid/
 **Files to modify**:
 
 ```
-# Note: VSCodroid patches (extension host, ptyHost, IPC bridge) are applied
-# inline in scripts/download-vscode-server.sh, not as .diff files.
+# Note: the VSCodroid patches (extension host, ptyHost, and the rest) are
+# numbered unified diffs in patches/, applied with git apply by
+# scripts/build-vscode-oss.sh before the Code - OSS build.
 
 android/app/src/main/kotlin/com/vscodroid/
 └── MainActivity.kt                 (onTrimMemory handling)
@@ -1921,11 +1924,13 @@ flowchart TD
 
 **Effort**: 6 days | **Dependencies**: M4 gate | **High complexity**
 
-# Note: These patches are applied inline in scripts/download-vscode-server.sh
+# Note: these two ship as unified diffs against the Code - OSS source,
 
-# using Python string replacements, not as standalone .diff files.
+# patches/0003-ptyhost-as-worker-thread.patch and
 
-# patches/vscodroid/ directory reserved for future .diff-based patches.
+# patches/0004-exthost-as-worker-thread.patch, applied with git apply by
+
+# scripts/build-vscode-oss.sh. There is no patches/vscodroid/ directory.
 
 **Target VS Code files** (see Tech Spec §6.3):
 
@@ -2502,7 +2507,13 @@ android/app/src/main/res/
 8. CI fix: node-pty subshell path resolved with `ROOT_DIR` — Build + Unit Tests green
 9. CI fix: release workflow — remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated `api-level` param — Release workflow green
 10. Build toolchain ZIPs and upload as GitHub Release assets — fallback download URL served from GitHub Releases
-11. [ ] Automated testing on Firebase Test Lab (physical ARM64 devices)
+11. [ ] Automated on-device testing. Not started, and a hosted device lab is not the shape it
+    would take: nothing under `.github/workflows/` starts the app, and the harness that does,
+    `scripts/device-test.sh`, needs an attached device or a booted arm64 emulator, which GitHub's
+    runners cannot provide (no `/dev/kvm`; measured per runner family in
+    `android/app/src/androidTest/README.md`). CI compiles the instrumented suite
+    (`assembleDebugAndroidTest` in `build.yml`) and stops there; running it on a device is a
+    person's job, before a tag and after a change to what gets bundled
 
 ---
 
@@ -2588,14 +2599,20 @@ Tests are written alongside implementation, not as a separate phase.
 | Milestone | Tests to Write                                                     | Framework                    |
 | --------- | ------------------------------------------------------------------ | ---------------------------- |
 | M0        | ProcessManager, Environment, PortFinder                            | JUnit 5 + MockK              |
-| M1        | FirstRunSetup, server bootstrap (Jest)                             | JUnit 5 + Jest               |
+| M1        | FirstRunSetup, server bootstrap                                    | JUnit 5 + MockK, node scripts |
 | M2        | ExtraKeyRow, KeyInjector, ClipboardBridge, AndroidBridge security  | JUnit 5 + Espresso           |
 | M3        | npm bash functions, extension extraction                           | JUnit 5                      |
 | M4        | StorageManager, CrashReporter, SafSyncEngine                       | JUnit 5                      |
-| M5        | ToolchainManager, ToolchainPickerAdapter, worker_thread supervisor | JUnit 5 + Jest               |
-| M6        | CI pipeline validation, E2E test suite                             | Espresso + Firebase Test Lab |
+| M5        | ToolchainManager, ToolchainPickerAdapter, worker_thread supervisor | JUnit 5 + MockK              |
+| M6        | CI pipeline validation, E2E test suite                             | Espresso, run on a device by hand |
 
-**Coverage targets**: Kotlin ≥ 80%, JS ≥ 70%
+The JVM suite is JUnit 5 with MockK (`android/app/build.gradle.kts`). The JavaScript that
+ships beside the server is covered by plain Node scripts (`scripts/test-*.js`), run by the
+"Check the bundled JavaScript runtime" step in `lint.yml`. The instrumented suite under
+`androidTest/` is compiled by `build.yml` and run by a person on a device.
+
+**Coverage**: no coverage tooling is configured and no threshold is enforced. Nothing in
+`android/` declares a coverage plugin, so a percentage cannot be quoted from this build.
 
 ### 10.2 Documentation Updates
 
@@ -2648,7 +2665,7 @@ Total new files created across all milestones:
 | Category                   | Approx Count | Key Files                                                                                                                                                                                                                    |
 | -------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Kotlin sources**         | ~30 files    | MainActivity, NodeService, ProcessManager, AndroidBridge, ExtraKeyRow, GestureTrackpad, ToolchainManager, SafStorageManager, SshKeyBridge, CrashReporter, etc.                                                               |
-| **Layouts (XML)**          | ~8 files     | activity_main, activity_splash, activity_toolchain, layout_toolchain_picker, layout_toolchain_progress, item_toolchain_card, ~~view_extra_key_row~~ (deleted — nothing inflated it)                                          |
+| **Layouts (XML)**          | 6 files      | activity_main, activity_splash, activity_toolchain, layout_toolchain_picker, layout_toolchain_progress, item_toolchain_card. ExtraKeyRow builds its views in code, so it has no layout file                                          |
 | **Build/download scripts** | ~13 files    | download-node.sh, download-python.sh, download-go.sh, download-ruby.sh, download-java.sh, build-git.sh, build-bash.sh, build-tmux.sh, build-node-pty.sh, download-termux-tools.sh, build-all.sh, apply-patches.sh, deploy.sh |
 | **VS Code patches**        | ~19 files    | 9 code-server patches + 10 VSCodroid patches (incl. ext-host-worker, pty-host-worker, android-fs)                                                                                                                            |
 | **Gradle configs**         | ~6 files     | root + app + 3 asset pack modules (Go, Ruby, Java) + settings                                                                                                                                                                |

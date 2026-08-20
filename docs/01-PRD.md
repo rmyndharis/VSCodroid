@@ -136,7 +136,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 |---------|-------------|-----------|
 | On-demand Toolchains | Ruby and Java 17, chosen in the Language Picker: Play Asset Delivery on Play installs, ZIPs from GitHub Releases otherwise | M3 |
 | Language Picker | First-run UI for selecting which toolchains to install | M3 |
-| Package Manager | `vscodroid pkg install <package>` | M3 |
+| Package Manager | `vscodroid pkg install <package>`, not built; on the post-release roadmap | Post-release |
 | Pre-bundled Extensions | Themes, icon packs, language basics offline | M3 |
 | First-Run Experience | Welcome screen, quick actions | M3 |
 | GitHub OAuth | Push/pull to GitHub from SCM panel | M4 |
@@ -226,7 +226,7 @@ flowchart TD
 
 | # | Question | Impact | Status |
 |---|----------|--------|--------|
-| 1 | Which VS Code source to build the server from? | Build timeline | **Resolved**: Code - OSS, built from the MIT `microsoft/vscode` source at the commit pinned in `VSCODE_VERSION` (see Architecture ADR-001) |
+| 1 | Which VS Code source to build the server from? | Build timeline | **Resolved**: Code - OSS, built from the MIT `microsoft/vscode` source at the tag in `VSCODE_VERSION` and the commit in `VSCODE_COMMIT` (see Architecture ADR-001) |
 | 2 | Node.js version to target? | Binary size, compatibility | **Resolved**: not a preference. `remote/.npmrc` `target` at the pinned VS Code tag names the Node the server ships and its native modules are built against, and Termux's `nodejs-lts` package supplies it (24.18.0 today) |
 | 3 | Python version? | Size, package compat | **Resolved**: not pinned here. `scripts/download-python.sh` reads the version from the Termux package index at build time, so the bundled `usr/lib/libpython*.so` is the authority (3.14 today) |
 | 4 | Monetization strategy? (Free, freemium, paid?) | Revenue, feature gating | **Resolved**: Free and Open Source (MIT license) |

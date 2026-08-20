@@ -497,8 +497,13 @@ Five of these are load-bearing in ways their titles understate:
 - **0009 depends on 0001.** The marketplace target selector tests `isLinux` before it tests Android,
   so without 0001 the CLI-bearing extensions are served the glibc build, which cannot start in an
   app process: glibc's `__tls_init_tp` calls `set_robust_list` and `rseq`, Android's app seccomp
-  filter rejects both, and the process dies with SIGSYS before `main()`. That coupling is read
-  from the selector, not measured: no tree has been built without 0001 to watch it happen.
+  filter rejects both, and the process dies with SIGSYS before `main()`. The coupling is read out
+  of the packaged bundle rather than inferred from the patch text: in `out/server-main.js` the
+  selector is `if(!qe)return!1;if(N1)return ...`, and the aliases resolve to
+  `qe = platform==="linux"||platform==="android"` and `N1 = platform==="android"`, so the android
+  branch is unreachable unless 0001 widens the first. What has not been done is building a tree
+  without 0001 to watch the CLI die; the row for 0001 in `patches/fingerprints.txt` now fingerprints
+  that widening specifically, so narrowing it fails the check instead.
 
 ### 6.2 Patch Application
 
@@ -671,6 +676,11 @@ fun onUserConfirmed(selected: List<ToolchainInfo>) {
 
 ## 8. Package Manager
 
+Not built. No `vscodroid pkg` command exists in the app or on the device, and nothing under
+`android/app/src/main` or `scripts/` implements one. It sits on the post-release roadmap in
+`MILESTONES.md`, and what follows is the design it would start from rather than a description of
+anything shipping. Additional packages are the user's own business through the terminal today.
+
 ### 8.1 CLI Interface
 
 ```bash
@@ -692,14 +702,15 @@ vscodroid pkg update
 
 ### 8.2 Package Format
 
-Compatible with Termux package repository format (deb packages, ARM64):
+The design reuses the Termux package repository rather than hosting one: `arm64` deb packages and
+a standard dpkg `Packages` index, which is already what `scripts/lib/termux-packages.sh` resolves
+and what `scripts/verify-termux-index.sh` anchors to Termux's signing key. No VSCodroid package
+host exists.
 
-```
-Repository: https://packages.vscodroid.dev/arm64/
-Index: Packages.gz (standard dpkg format)
-```
-
-> **Note**: The `vscodroid pkg` command with Termux repository access is only available in the sideloaded version (GitHub releases). The Play Store version delivers all binaries exclusively through Play Store asset packs to comply with Google Play policy.
+> **Constraint that shapes it**: on a Play install every binary has to arrive through Play, so a
+> command that downloads executables from a third-party repository could not run there. Any
+> implementation would be limited to installs that did not come from Play, which is the same split
+> `ToolchainManager.shouldUseHttpFallback()` already makes for toolchains.
 
 ---
 

@@ -4,10 +4,8 @@
 **Version**: 1.0-draft
 **Date**: 2026-02-10
 
-> **This records the risks as assessed on 2026-02-10.** Every score below is a probability and
-> impact judged before the app existed, and the decision log in §6 is dated to the day those
-> decisions were taken. For the risks the project carries today, read the code and
-> `CONTRIBUTING.md`.
+> Scores are a judgement, not a measurement. Where a risk touches something the build actually
+> does, the code is what settles it: `CONTRIBUTING.md` and the sources it names.
 
 ---
 
@@ -269,14 +267,13 @@ Legend:
 
 ## 6. Decision Log
 
-Decisions made based on risk analysis:
+The decisions these risks settled, and what each one buys:
 
-| Date | Decision | Risk Addressed | Rationale |
-|------|----------|---------------|-----------|
-| 2026-02-10 | Use Termux-style binary, not nodejs-mobile | T02, T06 | nodejs-mobile lacks critical APIs |
-| 2026-02-10 | Build Code - OSS from the MIT `microsoft/vscode` source | T03, R01 | The pre-built server on Microsoft's update CDN cannot be modified and redistributed |
-| 2026-02-10 | Extension Host as worker_thread (phased: fork M1-M3, worker_thread M4) | T01 | Critical for phantom process limit; phased to reduce M1 complexity |
-| 2026-02-10 | ptyHost as worker_thread, one bash per terminal | T01 | Keeps the terminal host off the phantom count |
-| 2026-02-10 | Open VSX, not Microsoft Marketplace | L01 | Legal requirement (ToS compliance) |
-| 2026-02-10 | .so bundling for all binaries | P01, P02 | Only officially supported method |
-| 2026-02-10 | M0 validates Node.js first | T02 | Fail fast on highest-risk item |
+| Decision | Risk Addressed | Rationale |
+|----------|---------------|-----------|
+| Node.js taken from Termux's `nodejs-lts` package, not nodejs-mobile | T02, T06 | nodejs-mobile has no `child_process.fork`, no worker threads and no node-pty, and the extension host and the terminal need them |
+| Build Code - OSS from the MIT `microsoft/vscode` source | T03, R01 | The pre-built server on Microsoft's update CDN is under terms that do not permit modifying it and redistributing it inside an APK |
+| Extension Host as a `worker_thread` (`patches/0004`) | T01 | A thread costs nothing against the phantom-process limit; a `child_process.fork` costs one |
+| ptyHost as a `worker_thread` (`patches/0003`), one bash per terminal | T01 | Keeps the terminal host off the phantom count while every terminal keeps a real PTY |
+| Core binaries shipped as `.so` in `jniLibs`, toolchains never in the APK | P01, P02 | Extraction with the execute bit is the only supported route, and SELinux refuses `execve` under the data directory |
+| Open VSX, not Microsoft Marketplace | L01 | Microsoft's Marketplace terms do not permit third-party clients |
