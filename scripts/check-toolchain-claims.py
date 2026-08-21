@@ -41,7 +41,46 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 MANAGER = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManager.kt"
-WELCOME = ROOT / "android/app/src/main/assets/extensions/vscodroid.vscodroid-welcome-1.2.2"
+EXTENSIONS = ROOT / "android/app/src/main/assets/extensions"
+
+
+def welcome_dir():
+    """The bundled welcome extension, whatever version it is at.
+
+    Resolved by prefix, the same way `check-welcome-claims.py` does it, because
+    the version in the directory name moves with the extension's manifest and
+    the name written out here does not follow. A spelled-out version turns the
+    next ordinary bump into a failure of this check for a reason that has
+    nothing to do with what it tests, while the other gate over the same two
+    files keeps reading the tree, so the pair disagree about which directory
+    exists.
+
+    Ordered by parsed version rather than by name, again matching that script:
+    lexically 1.10.0 sorts below 1.9.0, and a name sort would then read the
+    older directory and report on a file that is not shipping.
+
+    Absence is fatal rather than an empty answer. With no directory the
+    walkthrough and its illustration simply drop out of OFFER_FILES, and those
+    are the two files in the set that every new user is shown.
+    """
+    def version(path):
+        tail = path.name.rsplit("-", 1)[-1]
+        try:
+            return tuple(int(part) for part in tail.split("."))
+        except ValueError:
+            return ()
+
+    found = sorted(EXTENSIONS.glob("vscodroid.vscodroid-welcome-*"), key=version)
+    if not found:
+        sys.exit(
+            "FAIL no vscodroid.vscodroid-welcome-* directory under "
+            f"{EXTENSIONS.relative_to(ROOT)}; the Get Started walkthrough and "
+            "its illustration would be checked by nothing"
+        )
+    return found[-1]
+
+
+WELCOME = welcome_dir()
 
 # Files that describe what the product CONTAINS, whether a user or a maintainer
 # reads them. The split is what a file is for, not who opens it.

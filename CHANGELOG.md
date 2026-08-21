@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A build that packages the app without the checks deciding whether its bundled tree may ship now fails, instead of producing an unchecked APK.
 - The three deprecated edge-to-edge APIs Play reports are gone. Bar colours, the display cutout and bar contrast move to theme attributes; edge-to-edge and bar icons stay in code.
 - The licence check matches each copyleft component against the source offer's own entries. A deleted offer used to pass because a neighbouring entry mentioned the project by name.
+- The toolchain check finds the welcome extension by name rather than a pinned version, so the next ordinary bump of that extension no longer fails the build.
 
 ### Fixed
 
