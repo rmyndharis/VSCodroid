@@ -520,10 +520,16 @@ class SafStorageManager(private val context: Context) {
      * Gives up the grant on the folder [hash] mirrors, and drops it from the recent
      * list.
      *
-     * Called before a mirror is removed rather than after, so that the two records of
-     * the folder go with it. A recent-list entry that survives its mirror is an Open
-     * Recent row pointing at a directory that is not there, and a grant that survives
-     * it makes the launch pass treat the next mirror of that folder as live.
+     * Called as part of removing a mirror, so that the two records of the folder go
+     * with it. A recent-list entry that survives its mirror is an Open Recent row
+     * pointing at a directory that is not there, and a grant that survives it makes the
+     * launch pass treat the next mirror of that folder as live.
+     *
+     * It runs once the rename that commits the removal has succeeded, and not before
+     * it. A rename the filesystem refuses leaves the mirror exactly where it was, while
+     * nothing here can hand a released grant back: only the user re-picking the folder
+     * can. Releasing first therefore turned a removal that did not happen into a folder
+     * the app can no longer name, open or reclaim.
      *
      * A grant the system has already dropped is not an error here: the folder may have
      * been revoked in system settings, which is one of the ways a mirror becomes an

@@ -292,6 +292,24 @@
          next; the next step is already on screen. -->
     <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
 
+    <!-- A device folder that did not open. Said as one sentence per case, with the
+         cause as an argument, rather than as two resources joined in Kotlin: a
+         concatenation fixes cause before consequence in every language, and the
+         languages this would be translated into do not all put them that way.
+
+         Which consequence is true depends on whether the folder that was already open
+         is still being written back, so the two are separate resources rather than one
+         with a word swapped. Telling a user their work is not saving when it is has its
+         own cost.
+
+         The cause of the second one is the platform's own exception message, which is
+         not translatable and is carried through as it stands. It is there because the
+         alternative is a folder that failed to open for no stated reason. -->
+    <string name="saf_sync_denied">Permission denied.</string>
+    <string name="saf_sync_failed">Failed to open folder: %1$s.</string>
+    <string name="saf_sync_failed_other_folder_watched">%1$s The folder already open is unaffected.</string>
+    <string name="saf_sync_failed_no_write_back">%1$s Changes will not sync to this folder until you open it again.</string>
+
     <!-- Two ways a sign-in started in the browser fails to land back in the
          editor. Worded separately because the causes differ and neither is the
          user's doing: one is the editor having restarted underneath the browser,

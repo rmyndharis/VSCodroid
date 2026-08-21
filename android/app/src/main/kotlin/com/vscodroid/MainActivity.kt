@@ -826,13 +826,14 @@ class MainActivity : AppCompatActivity() {
                 dialog.dismiss()
                 Logger.e(tag, "SAF permission revoked during sync", e)
                 reportSyncFailure(
-                    "Permission denied.", restoreWatcherAfterFailure(previouslyWatched, uri)
+                    getString(R.string.saf_sync_denied),
+                    restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
             } catch (e: Exception) {
                 dialog.dismiss()
                 Logger.e(tag, "SAF sync failed", e)
                 reportSyncFailure(
-                    "Failed to open folder: ${e.message}.",
+                    getString(R.string.saf_sync_failed, e.message),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
             } finally {
@@ -997,14 +998,19 @@ class MainActivity : AppCompatActivity() {
      * It is also stated only when it is true. Telling a user their work is not
      * saving when it is has its own cost, and after a failed switch away from a
      * healthy folder that folder is still being watched.
+     *
+     * Each case is one resource holding the whole sentence, with [reason] as its
+     * argument, rather than a consequence appended to a cause in Kotlin. A
+     * concatenation puts the cause first in every language and no translation can
+     * move it.
      */
     private fun reportSyncFailure(reason: String, writeBackStillRunning: Boolean) {
-        val consequence = if (writeBackStillRunning) {
-            " The folder already open is unaffected."
+        val message = if (writeBackStillRunning) {
+            getString(R.string.saf_sync_failed_other_folder_watched, reason)
         } else {
-            " Changes will not sync to this folder until you open it again."
+            getString(R.string.saf_sync_failed_no_write_back, reason)
         }
-        Toast.makeText(this, reason + consequence, Toast.LENGTH_LONG).show()
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     /**

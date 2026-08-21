@@ -126,6 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The storage refusal on first run names the Retry button, so a screen reader user is told it is there.
 - A device folder list that fails to load says so, instead of reporting a failed removal the user never asked for.
 - Removing a device folder's local copy no longer reports success when the copy could not be set aside. The folder keeps its permission and its recent entry.
+- The notice shown when a device folder fails to open comes from a string resource, so it can be translated instead of staying English in every language.
 - The server log no longer rewrites itself on every output line once the lines it keeps are large, which stalled the thread draining the server's output.
 
 ### Security
