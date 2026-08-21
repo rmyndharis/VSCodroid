@@ -10,6 +10,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.vscodroid.R
 import com.vscodroid.ToolchainActivity
 import org.junit.runner.RunWith
 
@@ -350,6 +351,18 @@ class KeyRowAccessibilityInstrumentedTest {
     @Test
     fun theTrackpadOffersOneActionPerArrow() {
         inWindow({ ctx -> GestureTrackpad(ctx) }) { _, node ->
+            // The pad draws no text, so this description is the only thing a
+            // screen reader can say when focus lands on it. Without it the four
+            // actions below hang off a node announced as an unlabelled view, and
+            // a user has no reason to open the actions menu that holds the only
+            // route to the arrows.
+            assertEquals(
+                "the trackpad node carries no usable label, so the arrow actions below " +
+                    "belong to something the user cannot identify",
+                context.getString(R.string.trackpad_description),
+                node().contentDescription?.toString(),
+            )
+
             val offered = node().actionList.mapNotNull { it.label?.toString() }
             // Resolved here rather than compared as ids: what the node carries is
             // the text the platform will read out, so this is the one place the
