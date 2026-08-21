@@ -690,6 +690,13 @@ class ToolchainManager(private val context: Context) {
      * which is a question with an answer whether or not anyone was listening when it
      * became true.
      *
+     * The second job is the same repair for the other outcome. A pack Play still
+     * holds for a toolchain the record already calls installed is a delivery that
+     * was consumed and never handed back, because `removePack` is asynchronous and
+     * a process that goes away between the copy and the delete leaves it in place.
+     * Nothing here measures it: both space pre-flights read free bytes, and the
+     * pack is a whole toolchain of them. So it is released rather than passed over.
+     *
      * Play installs only. On the HTTP path there is no pack to ask about, and
      * `getPackLocation` on an install Play does not recognise is a question with no
      * meaning rather than a cheap no.
@@ -709,13 +716,39 @@ class ToolchainManager(private val context: Context) {
                 // correct and would cost a file parse per toolchain.
                 val installed = getInstalledToolchains()
                 ToolchainRegistry.available.forEach { info ->
-                    if (info.packName.removePrefix("toolchain_") in installed) return@forEach
-                    val assetsPath = try {
-                        assetPackManager.getPackLocation(info.packName)?.assetsPath()
+                    // Play is asked first, and the record second. The order is the
+                    // whole of the repair below: asking the record first meant an
+                    // installed toolchain was never asked about, so a delivered pack
+                    // whose removal did not happen was passed over on every launch
+                    // for the life of the install.
+                    val location = try {
+                        assetPackManager.getPackLocation(info.packName)
                     } catch (e: Exception) {
                         Logger.w(tag, "Could not ask Play about ${info.packName}: ${e.message}")
                         null
                     } ?: return@forEach
+                    if (info.packName.removePrefix("toolchain_") in installed) {
+                        // The toolchain is already in `usr/`, so this delivery has
+                        // nothing left to give and is pure duplicate storage. It
+                        // reaches here when the release that should have followed the
+                        // install did not complete: `removePack` is asynchronous, and
+                        // the process can go away between the copy and the delete.
+                        //
+                        // Skipped while an install holds the pack, for the reason
+                        // [installDeliveredPack] gives: `removePack` is a recursive
+                        // delete of the directory that install is reading. A record
+                        // written by an earlier install of the same toolchain makes
+                        // that pair reachable.
+                        if (info.packName in installsInFlight) return@forEach
+                        Logger.i(
+                            tag,
+                            "Reclaiming a delivered pack for an installed toolchain: " +
+                                info.packName,
+                        )
+                        releasePack(info.packName)
+                        return@forEach
+                    }
+                    val assetsPath = location.assetsPath() ?: return@forEach
                     Logger.i(
                         tag,
                         "Finishing a delivery nothing was listening for: ${info.packName}",
@@ -742,8 +775,25 @@ class ToolchainManager(private val context: Context) {
      */
     private fun releasePack(packName: String) {
         try {
+            // `removePack` posts the delete and returns; the Task is how Play says
+            // whether it happened. Logging success on the return alone said "freed"
+            // for a delete that failed or never ran, and the pack it left behind is
+            // a whole toolchain in `filesDir/assetpacks` -- 155 MB for Java 17 --
+            // that no space pre-flight here counts, because both of them measure
+            // free space rather than what Play is holding. So the one line that
+            // would have named the leak was the line asserting it had not happened.
             assetPackManager.removePack(packName)
-            Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
+                .addOnSuccessListener {
+                    Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
+                }
+                .addOnFailureListener { e ->
+                    Logger.w(
+                        tag,
+                        "Play did not remove asset pack $packName; it stays on disk " +
+                            "until the next launch reclaims it",
+                        e,
+                    )
+                }
         } catch (e: Exception) {
             Logger.w(tag, "Could not remove asset pack $packName: ${e.message}")
         }
