@@ -4,6 +4,12 @@
     <color name="colorPrimary">#007ACC</color>
     <color name="colorPrimaryDark">#005A9E</color>
     <color name="colorAccent">#007ACC</color>
+    <!-- The same brand blue is unreadable as TEXT on this app's dark grounds:
+         #007ACC measures 3.70:1 on the window and 3.40:1 on a card, and WCAG AA
+         asks 4.5:1 for text this size. It stays as a button GROUND, where white
+         sits on it; this lighter tone is for text buttons and links, and measures
+         5.43:1 and 4.99:1 on the same two grounds. -->
+    <color name="colorPrimaryText">#3794FF</color>
 
     <!-- Editor surface colors -->
     <color name="colorBackground">#1E1E1E</color>

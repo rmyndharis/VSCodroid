@@ -45,6 +45,7 @@
         android:layout_marginTop="32dp"
         android:text="@string/progress_cancel"
         android:textAllCaps="false"
+        android:textColor="@color/colorPrimaryText"
         android:textSize="14sp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"

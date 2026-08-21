@@ -6,6 +6,16 @@
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
+        <!-- Overriding colorPrimary without this left Material3 supplying its own
+             onPrimary, which in the dark palette is a dark violet. On this app's
+             blue that measured 2.92:1, so the label of the picker's Continue
+             button, the control the whole screen exists to reach, failed even the
+             3:1 floor for large text. White on the same blue is 4.51:1.
+             ⚠️ That margin is 0.01. It clears AA and nothing more. Moving the
+             button ground to colorPrimaryDark would give 7.10:1, but that is a
+             visual-design decision rather than an accessibility fix, so it is
+             raised rather than taken here. -->
+        <item name="colorOnPrimary">@android:color/white</item>
 
         <!-- Window background: VS Code dark editor -->
         <item name="android:windowBackground">@color/colorBackground</item>
