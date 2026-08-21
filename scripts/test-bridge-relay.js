@@ -32,7 +32,30 @@ const ROOT = path.join(__dirname, '..');
 const MAIN_ACTIVITY = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
 );
+const ANDROID_BRIDGE = path.join(
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt',
+);
 const EXTENSIONS_DIR = path.join(ROOT, 'android/app/src/main/assets/extensions');
+
+/**
+ * One of the user-facing decline reasons, read from where it now lives.
+ *
+ * The relay used to hold this sentence as a literal and the checks below read it
+ * from there. It moved to the bridge, which is the only side that knows which
+ * failure happened, so the checks follow it rather than being dropped: the
+ * question they ask is about the words a user is shown, and those words are the
+ * same words wherever they are declared.
+ */
+function bridgeReason(name) {
+    const src = fs.readFileSync(ANDROID_BRIDGE, 'utf8');
+    const m = src.match(new RegExp('const val ' + name + '\\s*=\\s*"([^"]*)"'));
+    assert.ok(
+        m,
+        name + ' is gone from AndroidBridge.kt, so this check has nothing to read. If the ' +
+        'reasons moved, point this at their new home rather than deleting the check.',
+    );
+    return m[1];
+}
 
 /** How a literal dollar is written inside a Kotlin raw string. */
 const DOLLAR_ESCAPE = "${'$'}";
@@ -72,22 +95,31 @@ function bridgeExtension() {
 }
 
 /**
- * The body of the raw string in `injectBridgeRelay()`, with the indentation
- * `trimIndent()` removes taken off, which is the text the WebView is given.
+ * The body of the raw string in one of MainActivity's injectors, with the
+ * indentation `trimIndent()` removes taken off, which is the text the WebView is
+ * given.
+ *
+ * Takes the function name because there are two scripts worth running here, not
+ * one. `injectWindowOpenOverride` calls the same bridge method as the relay and
+ * reads its answer differently, so a change to that answer can be right in one
+ * and inverted in the other.
+ *
+ * @param mustMention a token the extracted text has to contain, so that pulling
+ *   the wrong block fails here instead of passing as a scan of something else.
  */
-function extractRelay() {
+function extractInjected(fnName, mustMention) {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun injectBridgeRelay()'));
+    const fn = lines.findIndex((l) => l.includes('private fun ' + fnName + '()'));
     assert.notStrictEqual(
         fn, -1,
-        'injectBridgeRelay() is gone from MainActivity.kt, so this check has nothing to run. ' +
-        'If the relay moved, point this at its new home rather than deleting the check.',
+        fnName + '() is gone from MainActivity.kt, so this check has nothing to run. ' +
+        'If it moved, point this at its new home rather than deleting the check.',
     );
 
     const open = lines.findIndex((l, i) => i > fn && l.trim() === '"""');
     const close = lines.findIndex((l, i) => i > open && l.trim().startsWith('"""'));
     assert.ok(open !== -1 && close !== -1 && close > open + 1,
-        'could not find the raw string in injectBridgeRelay(); its shape changed');
+        'could not find the raw string in ' + fnName + '(); its shape changed');
 
     const body = lines.slice(open + 1, close);
     const indent = Math.min(
@@ -106,15 +138,17 @@ function extractRelay() {
         'the relay contains a bare $, which Kotlin interpolates into the raw string before the ' +
         'WebView sees it. Escape it, or the injected script is not what is written here.',
     );
-    assert.ok(js.includes('openExternalUrl'),
-        'the extracted text does not mention openExternalUrl, so the wrong block was extracted');
+    assert.ok(js.includes(mustMention),
+        'the extracted text does not mention ' + mustMention + ', so the wrong block was extracted');
 
     // Resolve the escapes the way Kotlin does, so what runs below is what runs there.
     return js.split(DOLLAR_ESCAPE).join('$');
 }
 
 // ---- the Android side, stubbed -------------------------------------------
-let bridgeAnswer = false;
+// The bridge answers with the reason it did not open, and the empty string when
+// it did. A boolean here would let a relay that inverted the test stay green.
+let bridgeAnswer = '';
 const bridgeCalls = [];
 const AndroidBridge = {
     openExternalUrl(url, token) {
@@ -229,7 +263,8 @@ function checkCommandCoverage(relay) {
 }
 
 async function main() {
-    const relay = extractRelay();
+    const relay = extractInjected('injectBridgeRelay', 'openExternalUrl');
+    const NO_HANDLER = bridgeReason('OPEN_URL_NO_HANDLER');
     const coverage = checkCommandCoverage(relay);
     vm.runInNewContext(relay, {
         AndroidBridge,
@@ -262,7 +297,7 @@ async function main() {
     // the relay used to post ok:true here, which resolved the extension's promise
     // and left its error handler unreachable.
     const LAN = 'http://192.168.1.5:3000';
-    const refused = await run(LAN, false);
+    const refused = await run(LAN, NO_HANDLER);
     assert.strictEqual(refused.calls.length, 1, 'the relay never reached the bridge');
 
     // What it passed, not just that it passed something. The relay calls
@@ -291,11 +326,21 @@ async function main() {
     // relay that answers nothing leaves the extension to reject on its own
     // five-second timeout, which is also exactly one message, and says the app
     // may not be running.
-    const declined = relay.match(/error: '([^']+)'/);
-    assert.ok(declined, 'no decline message found in the relay; its shape changed');
     assert.ok(
-        refused.error[0].includes(declined[1]),
-        'the message the user saw is not the one the relay sends. Saw: ' + refused.error[0],
+        refused.error[0].includes(NO_HANDLER),
+        'the message the user saw is not the reason the bridge gave. Saw: ' + refused.error[0],
+    );
+
+    // Forwarded, not re-stated. The relay posted one fixed sentence for every
+    // refusal and the check above would accept that again, since the sentence it
+    // posted is the one the bridge now returns for this case. A reason no source
+    // file contains can only arrive by being passed through.
+    const ONLY_HERE = 'a reason that exists only inside this check';
+    const passedThrough = await run('http://192.168.1.5:3000', ONLY_HERE);
+    assert.ok(
+        passedThrough.error.length === 1 && passedThrough.error[0].includes(ONLY_HERE),
+        'the relay did not forward the reason the bridge gave, so it is stating a cause it ' +
+        'cannot know. Saw: ' + JSON.stringify(passedThrough.error),
     );
 
     // The message must not describe a URL policy. This asked for the opposite
@@ -308,36 +353,34 @@ async function main() {
     // and the policy are in different files and only one of them fails a build.
     for (const stale of ['https, mailto', 'allow', 'localhost', 'scheme']) {
         assert.ok(
-            !declined[1].toLowerCase().includes(stale),
+            !NO_HANDLER.toLowerCase().includes(stale),
             `the decline message mentions "${stale}", which reads as a URL restriction. There ` +
             'is none: any URL is handed to the platform, and the only way to get here is that ' +
-            `no installed app took the intent. Message: ${declined[1]}`,
+            `no installed app took the intent. Message: ${NO_HANDLER}`,
         );
     }
     assert.ok(
-        /no app|handles that link/i.test(declined[1]),
+        /no app|handles that link/i.test(NO_HANDLER),
         'the decline message no longer names the one cause that can produce it -- that nothing ' +
-        'on the device handles the link: ' + declined[1],
+        'on the device handles the link: ' + NO_HANDLER,
     );
 
-    // An allowed scheme that still fails to open. NOT the ActivityNotFound case:
-    // the bridge is stubbed here and ignores the URL, so this run is identical to
-    // the one above and cannot fail independently of it. What it does pin is that
-    // the SAME message is surfaced for a scheme the message itself calls allowed,
-    // which is the wording property -- the cause it stands in for lives in Kotlin
-    // and is not reachable from this harness.
-    const allowedButUnopened = await run('mailto:someone@example.com', false);
+    // A different scheme, same handling. The bridge is stubbed here and ignores
+    // the URL, so this cannot fail independently of the run above; what it pins is
+    // that the relay does not branch on the scheme before deciding what to say.
+    // Which failure produced the reason is decided in Kotlin and is covered there.
+    const allowedButUnopened = await run('mailto:someone@example.com', NO_HANDLER);
     assert.strictEqual(allowedButUnopened.error.length, 1,
         'an allowed URL that failed to open must still reach the user');
     assert.ok(
-        allowedButUnopened.error[0].includes(declined[1]),
+        allowedButUnopened.error[0].includes(NO_HANDLER),
         'the mailto case surfaced a different message: ' + allowedButUnopened.error[0],
     );
 
     // The control. Without it, a relay that reported failure unconditionally
     // would satisfy the assertion above and put an error in front of every
     // successful open.
-    const opened = await run('http://localhost:3000', true);
+    const opened = await run('http://localhost:3000', '');
     assert.strictEqual(opened.calls.length, 1, 'the relay never reached the bridge');
     assert.strictEqual(
         opened.error.length, 0,
@@ -346,16 +389,58 @@ async function main() {
 
     // Cancelling the input box must not reach Android at all.
     for (const [label, value] of [['cancelled', undefined], ['whitespace', '   ']]) {
-        const inert = await run(value, false);
+        const inert = await run(value, '');
         assert.strictEqual(inert.calls.length, 0, `${label} input still called the bridge`);
         assert.strictEqual(inert.error.length, 0, `${label} input surfaced an error`);
     }
+
+    // The other reader of the same answer. `injectWindowOpenOverride` calls the
+    // same bridge method and decides from its answer whether the click was
+    // handled, it is injected JavaScript that nothing compiles, and it reads the
+    // answer the opposite way round from the relay: success is the empty string,
+    // so a bare truthiness test claims every click it FAILED to open and lets the
+    // one it did open fall through to the WebView as well. Both directions are
+    // asserted, because that inversion satisfies either one on its own.
+    const override = extractInjected('injectWindowOpenOverride', 'openExternalUrl');
+
+    function windowOpen(answer, url) {
+        const seen = { bridge: 0, orig: 0 };
+        const win = {
+            __vscodroid: { authToken: 'test-token' },
+            open() { seen.orig++; return 'fell through to the WebView'; },
+        };
+        vm.runInNewContext(override, {
+            window: win,
+            AndroidBridge: {
+                openExternalUrl() { seen.bridge++; return answer; },
+            },
+        });
+        return { ...seen, result: win.open(url), calls: seen };
+    }
+
+    const claimed = windowOpen('', 'https://example.com/docs');
+    assert.strictEqual(claimed.calls.bridge, 1, 'window.open never reached the bridge');
+    assert.strictEqual(
+        claimed.calls.orig, 0,
+        'the bridge opened the URL and window.open fell through as well, so the page opens ' +
+        'twice: once in a browser and once inside the WebView',
+    );
+    assert.strictEqual(claimed.result, null, 'a click that was handled must report that it was');
+
+    const fellThrough = windowOpen(NO_HANDLER, 'https://example.com/docs');
+    assert.strictEqual(fellThrough.calls.bridge, 1, 'window.open never reached the bridge');
+    assert.strictEqual(
+        fellThrough.calls.orig, 1,
+        'the bridge did not open the URL and window.open swallowed the click anyway, so it ' +
+        'did nothing and said nothing',
+    );
 
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
         : '';
     say(
-        `ok -- a declined URL surfaces "${refused.error[0]}", an opened one stays silent; ` +
+        `ok -- a declined URL surfaces "${refused.error[0]}", an opened one stays silent, ` +
+        'and window.open claims only the clicks the bridge opened; ' +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }

@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A link that fails to open now says why. Every refusal blamed a missing app, including a stale session and a URL Android refused outright.
+- The connection token no longer reaches logcat when a link fails to open. The URL was logged whole, twice, on a line that ships in release builds.
 - The system dark theme flipping no longer moves you out of your workspace, or restarts first-run extraction if it lands while setup is running.
 - Opening the app no longer discards what `npm config set` wrote. A private registry, its auth token, `cafile` and `strict-ssl` all survive a launch now.
 - The menubar no longer closes itself when the on-screen keyboard drops. The resize that follows the tap shut the menu 40ms after it opened, leaving no route to the File or Terminal menus.

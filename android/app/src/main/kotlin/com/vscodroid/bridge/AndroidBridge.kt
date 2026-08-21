@@ -1,6 +1,7 @@
 package com.vscodroid.bridge
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -151,6 +152,31 @@ internal fun authRequestIdsIn(url: String): List<String> =
  * reopens the window. No arithmetic happens here; the window is applied by
  * `authCallbackIsExpected`, which this object deliberately does not call.
  */
+/**
+ * Why [AndroidBridge.openExternalUrl] did not open anything.
+ *
+ * Named constants rather than literals at each exit so a test can pin which
+ * reason belongs to which failure without pinning the wording, which is not the
+ * contract. The wording is user facing: the extension's "Open in Browser" puts
+ * whichever of these comes back straight into a `showErrorMessage`.
+ */
+internal const val OPEN_URL_STALE_SESSION =
+    "VSCodroid did not accept the request. Reload the window and try again."
+
+/** The reason that is worth acting on, and the only one the relay used to give. */
+internal const val OPEN_URL_NO_HANDLER =
+    "VSCodroid did not open it. No app on this device handles that link."
+
+/**
+ * Everything else, with the exception's class name appended.
+ *
+ * The class name and not its message: `ActivityNotFoundException` quotes the
+ * whole Intent it could not match, and `FileUriExposedException` quotes the
+ * file, so a message here would hand the URL to the page that supplied it and,
+ * through the extension, to a notification a user may screenshot.
+ */
+internal const val OPEN_URL_FAILED_PREFIX = "VSCodroid could not open that link: "
+
 object AuthTabWindow {
 
     private val launches = object : LinkedHashMap<String, Long>() {
@@ -319,13 +345,17 @@ class AndroidBridge(
      * bundled extension's "Open in Browser" closed its input box with its own
      * error handler sitting unreachable behind a promise that always resolved.
      *
-     * @return true when the URL was handed to a browser, false when the token
-     *   was rejected or no activity took the intent -- which, with no filtering
-     *   left, is the only way a well-formed call fails.
+     * @return the empty string when the URL was handed to a browser, and
+     *   otherwise a sentence naming why it was not. Which sentence matters,
+     *   because the failures are not one failure: a stale session token and an
+     *   intent nothing claimed both came back as `false`, and the relay turned
+     *   every `false` into "no app handles that link". That is the right advice
+     *   for one of them and unfollowable for the rest, `file://` included, which
+     *   Android refuses outright rather than for want of an app.
      */
     @JavascriptInterface
-    fun openExternalUrl(url: String, authToken: String): Boolean {
-        if (!security.validateToken(authToken)) return false
+    fun openExternalUrl(url: String, authToken: String): String {
+        if (!security.validateToken(authToken)) return OPEN_URL_STALE_SESSION
         // Empty until the launch arms something, and then the ids to take back if
         // the launch that armed them throws. Arming has to precede the launch, so
         // without this a launch nothing accepted still left the callback relay
@@ -361,11 +391,24 @@ class AndroidBridge(
                 }
                 context.startActivity(intent)
             }
-            true
+            ""
         } catch (e: Exception) {
             AuthTabWindow.disarm(armed)
-            Logger.e(tag, "Failed to open URL: $url", e)
-            false
+            // The URL is page supplied and this line is not gated on a debuggable
+            // build, so it ships. That is the same reasoning [logToNative] gives,
+            // and it carries here for the same reason: the workbench holds the
+            // connection token and a URL it hands over can carry it.
+            //
+            // The throwable is deliberately not passed. It is printed with its
+            // message, and both exceptions this realistically catches put the
+            // whole URI there: ActivityNotFoundException names the Intent it
+            // could not match, FileUriExposedException names the file it refused.
+            // Redacting the interpolation while handing the same URL to logcat
+            // inside the trace would only look like redaction. The frames behind
+            // it are all framework, so the class name is what was being read for.
+            Logger.e(tag, "Failed to open URL: ${redactToken(url)} (${e.javaClass.simpleName})")
+            if (e is ActivityNotFoundException) OPEN_URL_NO_HANDLER
+            else OPEN_URL_FAILED_PREFIX + e.javaClass.simpleName
         }
     }
 

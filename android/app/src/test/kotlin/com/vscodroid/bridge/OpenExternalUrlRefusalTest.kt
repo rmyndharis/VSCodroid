@@ -1,5 +1,6 @@
 package com.vscodroid.bridge
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -16,7 +17,9 @@ import io.mockk.mockkStatic
 import io.mockk.verify
 import io.mockk.verifyOrder
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -98,6 +101,16 @@ class OpenExternalUrlRefusalTest {
                 "http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D808"
 
         const val REMOTE_HTTP_REQUEST_ID = "808"
+
+        /** The secret half of [TOKEN_BEARING], kept apart so the check names it. */
+        const val TOKEN_SECRET = "3f9a1c77-not-a-real-token"
+
+        /**
+         * The editor's own address, which is what the workbench hands over when a
+         * user asks to open the current page in a browser, and which carries the
+         * connection token as a query parameter.
+         */
+        const val TOKEN_BEARING = "http://127.0.0.1:41003/?folder=/home&tkn=" + TOKEN_SECRET
     }
 
     /**
@@ -141,14 +154,15 @@ class OpenExternalUrlRefusalTest {
     @Test
     fun `a URL with a good token reaches the launch, rather than being turned away`() {
         // The counterpart to the token case at the bottom, and the reason that
-        // one means anything. Both return false -- no browser can be launched
-        // from a JVM test -- so the load-bearing assertion in each is the verify,
-        // not the assertFalse: reaching Uri.parse is what separates "tried and
-        // could not" from "turned away at the door".
-        assertFalse(
+        // one means anything. Both fail, because no browser can be launched from
+        // a JVM test, but they no longer fail identically. While both answered
+        // `false` the verify was the only thing separating "tried and could not"
+        // from "turned away at the door"; the reason now says which happened, so
+        // the two assertions corroborate each other instead of one carrying both.
+        assertNotEquals(
+            OPEN_URL_STALE_SESSION,
             bridge.openExternalUrl(LOCAL, security.getSessionToken()),
-            "no browser can be launched from a JVM test, so this is false for a reason " +
-                "the verify below distinguishes from a refusal",
+            "a valid token was treated as a stale one, so the call never reached the launch",
         )
         verify(exactly = 1) {
             Uri.parse(LOCAL)
@@ -179,10 +193,11 @@ class OpenExternalUrlRefusalTest {
         mockkConstructor(Intent::class)
         every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
 
-        assertTrue(
-            bridge.openExternalUrl(LOCAL, security.getSessionToken()),
-            "a URL that was handed to an activity must report true; the relay posts ok:false " +
-                "on anything else, so a false here puts an error in front of every successful open",
+        assertEquals(
+            "", bridge.openExternalUrl(LOCAL, security.getSessionToken()),
+            "a URL that was handed to an activity must come back with no reason; the relay " +
+                "posts ok:false on anything else, so a reason here puts an error in front of " +
+                "every successful open",
         )
         verify(exactly = 1) { context.startActivity(any()) }
     }
@@ -234,9 +249,9 @@ class OpenExternalUrlRefusalTest {
         // is needed and neither failure mode returns. Real behaviour still runs.
         mockkObject(AuthTabWindow)
 
-        assertFalse(
-            bridge.openExternalUrl(REMOTE, security.getSessionToken()),
-            "no Custom Tab can be launched from a JVM test, so this must report failure",
+        assertNotEquals(
+            "", bridge.openExternalUrl(REMOTE, security.getSessionToken()),
+            "no Custom Tab can be launched from a JVM test, so this must report a reason",
         )
 
         verifyOrder {
@@ -350,8 +365,8 @@ class OpenExternalUrlRefusalTest {
         mockkConstructor(Intent::class)
         every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
 
-        assertTrue(
-            bridge.openExternalUrl(REMOTE_HTTP, security.getSessionToken()),
+        assertEquals(
+            "", bridge.openExternalUrl(REMOTE_HTTP, security.getSessionToken()),
             "the system browser branch must report the launch it made"
         )
         verify(exactly = 1) { context.startActivity(any()) }
@@ -362,11 +377,104 @@ class OpenExternalUrlRefusalTest {
         )
     }
 
+    /**
+     * The URL here is supplied by the page, and `Logger.e` is not gated on a
+     * debuggable build, so this line ships. logcat is readable by anything holding
+     * `READ_LOGS`, and the workbench that supplies the URL is also what holds the
+     * connection token, so a URL it hands over can carry it. That is the same
+     * reasoning `logToNative` states for redacting there.
+     *
+     * The throwable is asserted absent for the same reason the redaction is
+     * present. `ActivityNotFoundException` quotes the whole Intent it could not
+     * match, so passing it to `Logger.e` would print the unredacted URL inside the
+     * trace right under a message that had just been redacted, and the redaction
+     * would only look like one.
+     */
+    @Test
+    fun `the failure log carries neither the token nor the throwable that repeats it`() {
+        val logged = mutableListOf<String>()
+        every { Logger.e(any(), capture(logged), any()) } just Runs
+
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.host } returns "127.0.0.1"
+        every { uri.scheme } returns "http"
+        every { Uri.parse(TOKEN_BEARING) } returns uri
+        mockkConstructor(Intent::class)
+        every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
+        every { context.startActivity(any()) } throws
+            ActivityNotFoundException("No Activity found to handle Intent { dat=" + TOKEN_BEARING + " }")
+
+        bridge.openExternalUrl(TOKEN_BEARING, security.getSessionToken())
+
+        assertTrue(logged.isNotEmpty(), "the failure was not logged at all, so nothing was checked")
+        val line = logged.last()
+        assertFalse(
+            line.contains(TOKEN_SECRET),
+            "the connection token was written to logcat verbatim: " + line,
+        )
+        assertTrue(
+            line.contains("tkn=<redacted>"),
+            "the URL is not in the line at all, so this case would pass on a line that " +
+                "dropped it rather than one that redacted it: " + line,
+        )
+        // Asserted at the argument rather than by capturing it, because a captured
+        // null and an argument that was never recorded look the same in a list.
+        verify(exactly = 1) { Logger.e(any(), any(), null) }
+    }
+
+    /**
+     * The distinction a boolean could not carry, and the whole point of answering
+     * with a reason.
+     *
+     * Both halves below fail at the same line. While the answer was `false` the
+     * relay reported both as "no app on this device handles that link", which is
+     * the right advice for the first and unfollowable for the second: Android
+     * refused that launch itself, and installing an app does not change its mind.
+     *
+     * `SecurityException` stands in for that family because it is easy to throw
+     * here. The case met on a device is `FileUriExposedException`, which Android
+     * raises for a `file://` URL handed to another app, and which the extension's
+     * "Open in Browser" box will produce for anyone who types a path.
+     */
+    @Test
+    fun `the reason separates a missing app from a launch Android refused`() {
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.host } returns "localhost"
+        every { uri.scheme } returns "http"
+        every { Uri.parse(LOCAL) } returns uri
+        mockkConstructor(Intent::class)
+        every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
+
+        every { context.startActivity(any()) } throws ActivityNotFoundException("nothing handles it")
+
+        assertEquals(
+            OPEN_URL_NO_HANDLER,
+            bridge.openExternalUrl(LOCAL, security.getSessionToken()),
+            "nothing claimed the intent, which is the one cause the user can act on",
+        )
+
+        every { context.startActivity(any()) } throws SecurityException("refused by policy")
+        val refused = bridge.openExternalUrl(LOCAL, security.getSessionToken())
+
+        assertNotEquals(
+            OPEN_URL_NO_HANDLER, refused,
+            "a launch Android refused on its own terms was reported as a missing app, which " +
+                "sends the user to install something that cannot help",
+        )
+        assertTrue(
+            refused.startsWith(OPEN_URL_FAILED_PREFIX) && refused.endsWith("SecurityException"),
+            "the reason has to name what actually failed, got: " + refused,
+        )
+    }
+
     @Test
     fun `a rejected token is refused before the URL is even looked at`() {
-        assertFalse(
+        assertEquals(
+            OPEN_URL_STALE_SESSION,
             bridge.openExternalUrl(LOCAL, "not the session token"),
-            "a URL that would otherwise open must still be refused with a bad token",
+            "a URL that would otherwise open must still be refused with a bad token, and " +
+                "the reason has to say so: blaming a missing app sends the user to install " +
+                "something that cannot help",
         )
         verify(exactly = 0) {
             Uri.parse(any())

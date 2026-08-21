@@ -1720,10 +1720,17 @@ class MainActivity : AppCompatActivity() {
                         // stand. Reading this as a destination filter is the mistake to
                         // avoid, because it invites re-deriving the fall-through around
                         // a constraint that is gone.
-                        // Swallowing the false here meant the click did nothing and
+                        // Swallowing the refusal here meant the click did nothing and
                         // said nothing; falling through lets the WebView navigation
                         // path open it, which is where opening anything already lives.
-                        if (t && AndroidBridge.openExternalUrl(url, t)) { return null; }
+                        //
+                        // Compared against the empty string, never used as a bare
+                        // condition. The bridge answers with the reason it did not
+                        // open, so success is the falsy value and every failure is
+                        // truthy: a bare `if` reads backwards, claims every click it
+                        // failed to open, and lets the one it did open through to the
+                        // WebView as well.
+                        if (t && AndroidBridge.openExternalUrl(url, t) === '') { return null; }
                     }
                     return orig.apply(window, arguments);
                 };
@@ -1964,16 +1971,20 @@ class MainActivity : AppCompatActivity() {
                             // Posting ok:true for this one turned a blocked URL into a
                             // resolved promise, and the caller's error handler never ran.
                             //
-                            // Both conditions are named and neither is claimed as the
-                            // cause. With the URL allow-list gone there is only one
-                            // cause left worth naming: nothing on the device claimed the
-                            // link. Saying so points at the fix -- install an app that
-                            // handles the scheme -- instead of at a rule that no longer
-                            // exists.
+                            // The reason comes from the bridge, which is the only
+                            // side that knows it. This used to post one fixed sentence
+                            // for every refusal, blaming a missing app even when the
+                            // session token was stale or Android had refused the URL
+                            // outright, and a user following that advice installs
+                            // something that cannot help.
+                            //
+                            // Empty means opened. Anything else is the reason, so the
+                            // comparison is against the empty string rather than a
+                            // bare truthiness test, which would read backwards.
                             result = AndroidBridge.openExternalUrl(d.url, token);
-                            ch.postMessage(result
+                            ch.postMessage(result === ''
                                 ? {id: d.id, ok: true}
-                                : {id: d.id, ok: false, error: 'VSCodroid did not open it. No app on this device handles that link.'});
+                                : {id: d.id, ok: false, error: result});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
