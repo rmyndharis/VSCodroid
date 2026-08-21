@@ -76,18 +76,18 @@ class SafWatchWiringTest {
     }
 
     /**
-     * The queued jobs, read as an untyped collection.
+     * The queued jobs, as the strings a `SyncJob` prints.
      *
-     * `SyncJob` is `internal`, and whether that reaches an instrumented source set is a
-     * question this file does not need to answer: a data class prints its fields, and the
-     * local path is one of them.
+     * Asked of the session rather than of the engine. The queue used to be a field on
+     * `SafSyncEngine` and was read here by reflection; it moved onto [WatchSession], and
+     * a name that no longer exists fails at `getDeclaredField` rather than at an
+     * assertion, so three of these five tests could only throw. Nothing catches that
+     * outside a device run, and nothing runs these on one automatically.
+     *
+     * `SyncJob` is `internal` and is deliberately not named in this signature: a data
+     * class prints its fields, and the local path is one of them.
      */
-    private fun queued(): List<String> {
-        val queue = SafSyncEngine::class.java.getDeclaredField("writeBackQueue")
-            .apply { isAccessible = true }
-            .get(engine) as Collection<*>
-        return queue.map { it.toString() }
-    }
+    private fun queued(): List<String> = engine.session.queue.map { it.toString() }
 
     /**
      * Read under the engine's own monitor, not the map's. The observer thread mutates
