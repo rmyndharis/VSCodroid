@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The picker's checked state and the Toolchains back-arrow label are now pinned by tests. Both are invisible to a sighted reviewer, so either could be deleted without a symptom.
 - Editing a layout or a string no longer leaves the unit suite up to date. Two suites read those files, and both were skipped on exactly the edits they exist to catch.
+- A test no longer states that AGP builds no release unit test task. It does build one, and it has run; what is true is that no workflow invokes it.
 - The security document no longer calls the extension host a sandbox. It is a fault boundary, and an extension reaches app-private storage exactly as the app does.
 - The landing page quotes the storage figure the app computes and says extraction repeats after an update, which every other document already said.
 - The design documents now describe the build that ships: two on-demand toolchains, terminals that spawn bash on a real PTY, and how the server is actually patched and built.

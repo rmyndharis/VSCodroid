@@ -393,12 +393,24 @@ class LatestReleasePinningTest {
         // useless, since `removeSuffix` strips exactly that string, so the only
         // suffixes that survive to be asserted on are the ones it does not match.
         //
-        // The release variant has no unit test task to run this under: AGP builds
-        // test components for `testBuildType` only, which is debug. So this runs
-        // against the debug value, which is the release versionName plus "-debug",
-        // and the suffix stripping is the half it can prove. The release value
-        // differs from it only by that suffix. Not quoted here: the literal went
-        // stale at the first version bump, while the property it describes did not.
+        // What runs this is the debug variant, so the value read here is the
+        // release versionName plus "-debug" and suffix stripping is the half it
+        // proves. The un-suffixed form is proved beside it, by literal, in
+        // `an install reaches the release its own version names`.
+        //
+        // Not because a release unit test task does not exist. It does, and it
+        // runs: `testReleaseUnitTest` produced 192 result files, 1221 tests and
+        // zero failures on 2026-08-20. `testBuildType` selects the INSTRUMENTED
+        // component; unit test tasks are generated for every build type. What is
+        // true is narrower and is about CI rather than AGP: no workflow invokes
+        // it. Measured, and scoped away from this comment so it does not count
+        // itself: `git grep -c testReleaseUnitTest -- .github scripts '*.kts'`
+        // is 0, while the same search for the debug task is 5, of which two are
+        // the `./gradlew testDebugUnitTest` lines in build.yml and release.yml.
+        // So only a local run has ever exercised the release variant.
+        //
+        // Not quoted here: the literal went stale at the first version bump,
+        // while the property it describes did not.
         val tag = appReleaseTag(BuildConfig.VERSION_NAME)
 
         assertNotNull(
