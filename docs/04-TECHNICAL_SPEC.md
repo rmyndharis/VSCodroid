@@ -531,6 +531,8 @@ flowchart TD
   P --> P11["0011 brand the web walkthrough"]
   P --> P12["0012 serve /callback before the connection-token check"]
   P --> P13["0013 shorten the reconnection grace when a client is connected"]
+  P --> P14["0014 menus: dismiss a submenu only on a real scroll"]
+  P --> P15["0015 menubar: stay open when only the keyboard resized"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

@@ -1,0 +1,105 @@
+Keep the menubar open when only the keyboard resized the window.
+
+Tapping the menubar on a phone opened the menu and closed it again about 40ms
+later, so the button read as completely dead. Measured on an API 33 emulator
+with the menu container watched by a MutationObserver: added at t+8.7ms,
+removed at t+55.5ms, four times in a row. On a compact menubar that button is
+the only route to the File, Edit, Selection, View, Go, Run and Terminal menus,
+and the state it fails in is the state a phone is usually in.
+
+The chain is short. Focus normally sits in a text field, so the on-screen
+keyboard is up. Tapping the menubar moves focus to the menu, the field blurs,
+the keyboard comes down, and the viewport grows back. That fires a window
+resize, and this listener answers every resize by blurring the menubar, which
+returns focus to whatever held it before and disposes the open menu.
+
+Measured both directions before changing anything, with input dispatched two
+ways so the host's touch handling could be ruled in or out:
+
+  keyboard down, focus not in a text field  no resize, menu stays open
+  keyboard up, then tap the menubar         innerHeight 266 to 360, menu gone
+
+Dispatching the same tap inside the page rather than through the touchscreen
+reproduced it identically, so nothing outside the page is involved.
+
+iOS is already excused from this listener outright, for the same underlying
+reason. Excusing Android the same way also works, and was measured working,
+but it costs something: a rotation with a submenu open then leaves that
+submenu anchored where it no longer fits, clipped off the edge of a viewport
+that is now narrower than the submenu is wide (measured: submenu right edge at
+607px in a 412px viewport). So Android is excused only for the keyboard's
+signature, a resize that leaves the width alone. A rotation changes both
+dimensions and still blurs, exactly as before.
+
+Verified against the built bundle, all three cases: the keyboard resize no
+longer closes the menu, a rotation still closes it, and a rotation with a
+submenu open closes both rather than clipping. Tapping outside, Escape, and
+opening a submenu all still behave as they did.
+
+One note for whoever simplifies this later. The comparison is written as
+`mainWindow.innerWidth === lastWidth` and the assignment reads the property a
+second time, which looks like something to hoist into a local. Hoisting it
+removes the token `innerWidth===` from the built bundle, and that token is
+what patches/fingerprints.txt uses to prove this patch reached the package. If
+you hoist it, move that row to something the new shape introduces, and check
+the replacement occurs zero times in an unpatched bundle first.
+
+diff --git a/src/vs/workbench/browser/parts/titlebar/menubarControl.ts b/src/vs/workbench/browser/parts/titlebar/menubarControl.ts
+index 9d3f6af..4192504 100644
+--- a/src/vs/workbench/browser/parts/titlebar/menubarControl.ts
++++ b/src/vs/workbench/browser/parts/titlebar/menubarControl.ts
+@@ -11,7 +11,7 @@ import { IContextKeyService } from '../../../../platform/contextkey/common/conte
+ import { IAction, Action, SubmenuAction, Separator, IActionRunner, ActionRunner, WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification, toAction } from '../../../../base/common/actions.js';
+ import { addDisposableListener, Dimension, EventType } from '../../../../base/browser/dom.js';
+ import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+-import { isMacintosh, isWeb, isIOS, isNative } from '../../../../base/common/platform.js';
++import { isMacintosh, isWeb, isIOS, isAndroid, isNative } from '../../../../base/common/platform.js';
+ import { IConfigurationService, IConfigurationChangeEvent } from '../../../../platform/configuration/common/configuration.js';
+ import { Event, Emitter } from '../../../../base/common/event.js';
+ import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+@@ -735,10 +735,43 @@ export class CustomMenubarControl extends MenubarControl {
+ 	protected override registerListeners(): void {
+ 		super.registerListeners();
+ 
++		// A resize that leaves the width alone is the on-screen keyboard arriving
++		// or leaving, not a window anyone resized. On Android that is what tapping
++		// the menubar itself produces: the tap moves focus off whatever text field
++		// held it, the keyboard comes down, the viewport grows, and this listener
++		// closed the menu roughly 40ms after it opened. From the outside the button
++		// reads as dead, and on a phone the compact menubar is the only route to the
++		// File, Edit, View and Terminal menus.
++		//
++		// iOS is already excused from this listener outright for the same underlying
++		// reason. Android is excused only for the keyboard's signature, a
++		// height-only change, so a real resize still blurs: rotating with a menu open
++		// closes it rather than leaving a submenu anchored off the edge of a viewport
++		// that is now narrower than the submenu is wide.
++		//
++		// Testing the width alone is direction-blind, and that is deliberate rather
++		// than overlooked. It also covers the keyboard coming back while a menu is
++		// open, where the viewport shrinks instead of growing. That is the same class
++		// of event, and it is barely reachable anyway: with a menu open, focus is in
++		// the menu rather than in a text field, so nothing asks for the keyboard.
++		let lastWidth = mainWindow.innerWidth;
+ 		this._register(addDisposableListener(mainWindow, EventType.RESIZE, () => {
+-			if (this.menubar && !(isIOS && BrowserFeatures.pointerEvents)) {
+-				this.menubar.blur();
++			const widthUnchanged = mainWindow.innerWidth === lastWidth;
++			lastWidth = mainWindow.innerWidth;
++
++			if (!this.menubar) {
++				return;
++			}
++
++			if (isIOS && BrowserFeatures.pointerEvents) {
++				return;
+ 			}
++
++			if (isAndroid && BrowserFeatures.pointerEvents && widthUnchanged) {
++				return;
++			}
++
++			this.menubar.blur();
+ 		}));
+ 
+ 		// Mnemonics require fullscreen in web

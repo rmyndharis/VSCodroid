@@ -91,3 +91,15 @@
 # minify of the new handler emits `!n.scrollTopChanged&&!n.scrollLeftChanged`,
 # so the token survives and only this patch introduces it.
 0014 menu submenu scroll dismiss|out/vs/workbench/workbench.web.main.internal.js|scrollTopChanged&&!
+# 0015 gates on the width comparison the guard needs. Measured in the packaged
+# pre-patch bundles, `innerWidth===` occurs zero times in both workbench.js and
+# workbench.web.main.internal.js, while the positive control `innerWidth` occurs
+# 16 times in each, so the operator is what makes it unique and the row cannot
+# pass on surrounding code. A minifier mangles `lastWidth` but not the property
+# read or the operator, so the token survives.
+#
+# This row therefore constrains the patch's shape, which is not obvious from
+# either file alone: hoisting `mainWindow.innerWidth` into a local, the tidier
+# way to write that handler, deletes the token and the row starts failing on a
+# tree that is correct. The patch header says so at the call site too.
+0015 menubar keyboard resize|out/vs/code/browser/workbench/workbench.js|innerWidth===
