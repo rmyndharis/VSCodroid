@@ -659,6 +659,43 @@ def attributed_in(text):
     return names
 
 
+def normalised(name):
+    """A component name reduced to what two spellings of it have in common.
+
+    The keys in LIBRARIES and the bold names in the source offer are written by
+    hand in two different files, so they agree on the words without always
+    agreeing on the case or on a trailing full stop. Folding both sides through
+    here keeps a cosmetic difference from reading as a missing source offer,
+    which would be a false alarm nobody could act on. It deliberately stops
+    there: anything looser is a substring test again, and a substring test is
+    what let one component's bullet answer for another's.
+    """
+    return " ".join(name.split()).strip("*_ .,:;").casefold()
+
+
+def offered_in(section):
+    """The set of component names the source-offer section's bullets declare.
+
+    A set, tested for membership, rather than a search for the name inside the
+    section's text, and the difference is not academic. The libiconv bullet ends
+    "linked by Bash and by every Git executable", so with the substring test in
+    place both Bash's and Git's own bullets could be deleted and the section
+    still read as offering source for both: the two GPL tools with the widest
+    reach here were exactly the two whose loss the check could not see. Only
+    deleting libiconv as well, which nothing else in the section names, turned it
+    red.
+
+    A bullet is `- **Name** (LICENCE): where the source is`. The bold name is
+    what a reader of the document looks for, so it is what is matched, whole. A
+    component that cannot be matched by name is reported as unoffered rather than
+    waved through, so a bullet rewritten out of that shape fails loudly.
+    """
+    return {
+        normalised(m.group(1))
+        for m in re.finditer(r"^\s*[-*]\s+\*\*(.+?)\*\*\s*\(", section, re.MULTILINE)
+    }
+
+
 def main():
     names = shipped()
     nest = nested()
@@ -695,6 +732,10 @@ def main():
         print("FAIL no '## GPL Source Code Availability' section in LEGAL_NOTICES.md",
               file=sys.stderr)
         return 1
+    # Parsed into the set of names its bullets declare, because isolating the
+    # section only stops a mention elsewhere in the file from counting; it does
+    # nothing about one bullet mentioning another bullet's component.
+    offered = offered_in(offer)
 
     unknown, unattributed, unoffered, unlicensed = [], [], [], []
     # Toolchain payloads are checked alongside the base tree. They ship to fewer
@@ -788,7 +829,7 @@ def main():
         short = [doc for doc, known in docs.items() if component not in known]
         if short:
             unattributed.append(f"{name} ({component}), absent from {', '.join(short)}")
-        if any(c in licence.upper() for c in COPYLEFT) and component not in offer:
+        if any(c in licence.upper() for c in COPYLEFT) and normalised(component) not in offered:
             unoffered.append(f"{name} ({component}, {licence})")
 
     for label, items, hint in (
