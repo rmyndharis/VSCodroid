@@ -1714,8 +1714,8 @@ class MainActivity : AppCompatActivity() {
                     if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
                         var t = (window.__vscodroid || {}).authToken;
                         // Only claim the click if the bridge actually opened it.
-                        // `openExternalUrl` answers false when the launch itself fails,
-                        // not when it disapproves of the destination: SecurityManager
+                        // `openExternalUrl` answers with a reason when the launch itself
+                        // fails, not when it disapproves of the destination: SecurityManager
                         // has no URL allow-list and says so at the point one used to
                         // stand. Reading this as a destination filter is the mistake to
                         // avoid, because it invites re-deriving the fall-through around

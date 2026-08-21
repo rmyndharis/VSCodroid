@@ -182,22 +182,28 @@ fun hasClipboardText(authToken: String): Boolean
 
 ```kotlin
 @JavascriptInterface
-fun openExternalUrl(url: String, authToken: String): Boolean  // note: token LAST
+fun openExternalUrl(url: String, authToken: String): String  // note: token LAST
 // Hands the URL to a browser: a Chrome Custom Tab for https, and a plain VIEW
 // intent for the rest, which is what the localhost dev-server preview needs.
 // Used by: VS Code "Open in Browser" actions.
 //
-// Returns whether it was opened. TWO things return false and the caller cannot
-// tell them apart: the token was rejected, or no installed app took the intent.
-// The URL itself is never judged -- there is no scheme or host filter on this
-// path, so a LAN address, a custom scheme and a typo are all simply handed to
-// Android. `false` means nothing on the device handles that link.
+// Returns the empty string when it opened, and otherwise the reason it did not,
+// which the relay forwards to the user unchanged. Three reasons exist: the
+// session token was stale, no installed app took the intent, or Android refused
+// the launch outright, which is what a `file://` URL gets. The URL itself is
+// never judged: there is no scheme or host filter on this path, so a LAN address,
+// a custom scheme and a typo are all simply handed to Android.
 //
-// It returned Unit until the fix that gave it this signature, so a refusal was
+// CALLERS MUST COMPARE AGAINST THE EMPTY STRING. Success is the falsy value, so
+// a truthiness test reads backwards and claims every click it failed to open.
+//
+// It returned Unit until the fix that first gave it an answer, so a refusal was
 // indistinguishable from a launch. The relay reported ok:true because there was
 // nothing else it could report, and "Open in Browser" closed its input box and
 // did nothing for every LAN address pasted into it, with the extension's own
-// error handler unreachable behind a promise that always resolved.
+// error handler unreachable behind a promise that always resolved. It then
+// returned a boolean, which said that something had failed without saying what,
+// and the relay filled the gap with one fixed sentence blaming a missing app.
 
 @JavascriptInterface
 fun onBackPressed(authToken: String): Boolean
