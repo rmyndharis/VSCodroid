@@ -13,7 +13,35 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
- * That no text on the setup and toolchain screens is too faint to read.
+ * That no text a layout XML declares is too faint to read.
+ *
+ * ## Which surfaces this measures
+ *
+ * Exactly three files' worth, and naming them is the point: a title like "the setup
+ * screens are readable" would claim the app, and what is read here is resources.
+ *
+ * - `res/layout`, every XML file in the directory, for the text elements they declare.
+ * - `res/values/colors.xml`, for what each `@color/` reference resolves to.
+ * - `res/values/themes.xml`, for the one label colour a layout leaves to the theme.
+ *
+ * And, as plainly, the surfaces it does NOT reach. Each is real text a user reads, and
+ * none of it is covered by anything below:
+ *
+ * - Text coloured from Kotlin. `SplashActivity` builds the whole download row in code:
+ *   its terminal result is pinned by `DownloadStateWiringTest`, which asserts the colour
+ *   and the undimming as a pair, and the pack name and the running status label by
+ *   nothing at all. `ToolchainPickerAdapter` paints a card's status badge the same way,
+ *   and `ExtraKeyButton`, `KeyPageAdapter` and `LongPressPopup` paint the extra key row.
+ * - Everything drawn inside the WebView, which is the whole editor: the workbench's own
+ *   HTML and CSS, the themes an extension supplies, and anything an extension renders.
+ *   That is the majority of the text this app puts on a screen, and no test in this
+ *   repository measures a ratio in it.
+ * - Grounds that are drawables rather than colours, and any resource qualifier other than
+ *   the default: there is no `values-night` or `layout-*` in this module today, and a
+ *   variant added later would go unread until this walk is widened to it.
+ *
+ * Widening any of that is a larger job than this class, and is deliberately not attempted
+ * here. What this class must not do is read as though it had been.
  *
  * Six of them were. The brand blue was used as a text colour and measures 3.70:1 on the
  * window and 3.40:1 on a card; two labels were dimmed below the line with `alpha` rather
@@ -39,12 +67,10 @@ import kotlin.math.roundToInt
  * anyone remembering to add it to a list, and a colour changed in `colors.xml` reddens
  * every text that uses it.
  *
- * ⚠️ What this cannot see. It reads resources, so it proves the declared colours clear the
- * ratio, not that a device renders them that way and not that the layout puts the text on
- * the ground this believes it does. The API 33 emulator and
- * `docs/DEVICE_TEST_CHECKLIST.md` are the instrument for that half. It also measures only
- * what a layout declares: a colour applied from Kotlin is out of reach here, which is why
- * the download row's terminal result is pinned in `DownloadStateWiringTest` instead.
+ * ⚠️ What it cannot see even on the surfaces it does read. It reads resources, so it
+ * proves the declared colours clear the ratio, not that a device renders them that way
+ * and not that the layout puts the text on the ground this believes it does. The API 33
+ * emulator and `docs/DEVICE_TEST_CHECKLIST.md` are the instrument for that half.
  *
  * The XML is parsed as a document rather than scanned as text, so a commented-out
  * attribute is a comment node and can satisfy nothing. That is stricter than anchoring a
@@ -321,6 +347,14 @@ class TextContrastTest {
                 "wrong rather than the resources. Found: ${texts.map { it.where }}",
         )
 
+        // The surface, carried into the verdict below. Whoever reads that message is
+        // being told a text is unreadable, and the next thing they need is which texts
+        // this looked at, or they will read the failure as a statement about the app's
+        // text rather than about six layout files.
+        val surface = "measured: ${layouts().size} files in ${layoutDir.path} " +
+            "(${layouts().joinToString(", ") { it.name }}). Not measured: colours applied " +
+            "from Kotlin, and anything the WebView renders"
+
         val failures = texts.flatMap { text ->
             text.grounds.mapNotNull { (groundRef, ground) ->
                 val ratio = measure(text, ground)
@@ -338,7 +372,7 @@ class TextContrastTest {
             emptyList<String>(), failures,
             "these texts are too faint to read. A colour or an alpha here is a decision " +
                 "about whether a sighted user can read the screen at all, and nothing " +
-                "else in this project measures one.",
+                "else in this project measures one on this surface. $surface",
         )
     }
 

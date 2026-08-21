@@ -308,4 +308,74 @@ class KeyRowAccessibilityTest {
             )
         }
     }
+
+    /**
+     * That the label a screen reader speaks is put on the key.
+     *
+     * `KeyPageConfigTest` pins both halves of the data: every key names a string
+     * resource, and no resource resolves to the glyph painted on the key. Neither
+     * half says the label is ever applied. The only place it is applied is
+     * `KeyPageAdapter.onBindViewHolder`, and deleting that one line leaves every
+     * assertion in this repository green while a screen reader falls back to the
+     * button's text and reads "{}" and ";" aloud.
+     *
+     * Source-reading, and there is no stronger layer available here rather than none
+     * chosen. Measured: `ExtraKeyButton(context)` throws `RuntimeException: Method
+     * getContext in android.view.View not mocked` before its constructor finishes,
+     * because `AppCompatTextView` reaches through `View` on the way up, and the bind
+     * constructs one per key. `mockkConstructor` does not help -- it intercepts calls
+     * on the instance and still runs the real constructor, and it throws in the same
+     * place. This module has no Robolectric and does not set
+     * `unitTests.returnDefaultValues`, so nothing in this source set can drive that
+     * method. Running it needs a device, which is `androidTest`.
+     */
+    @Nested
+    inner class KeyLabels {
+
+        @Test
+        fun `the bind puts each key's description on the key`() {
+            val lines = code("KeyPageAdapter.kt")
+
+            val bind = lines.indexOfFirst { it.contains("override fun onBindViewHolder(") }
+            assertTrue(
+                bind >= 0,
+                "onBindViewHolder is no longer in KeyPageAdapter.kt, so this scan is not " +
+                    "reading the method that builds the row and its verdict is worth nothing",
+            )
+
+            // The method, delimited by its own braces rather than by a line count.
+            // The bind grows whenever a key gains a property, and a fixed window is a
+            // window that one day stops containing the line it is looking for -- at
+            // which point this reports a missing label that is sitting just below
+            // where it stopped reading.
+            var depth = 0
+            var entered = false
+            val body = mutableListOf<String>()
+            for (line in lines.drop(bind)) {
+                depth += line.count { it == '{' } - line.count { it == '}' }
+                if (depth > 0) entered = true
+                if (entered) body += line
+                if (entered && depth <= 0) break
+            }
+            val shown = body.joinToString("\n")
+
+            // The window control. If the braces ever run away, this scan would be
+            // reading the rest of the file and a hit below would mean nothing.
+            assertTrue(
+                body.any { it.contains("ExtraKeyButton(holder.container.context)") },
+                "the window found is not the branch that builds a key, so nothing it " +
+                    "reports about the label is about the bind. It reads:\n$shown",
+            )
+
+            assertTrue(
+                body.any {
+                    it.contains("contentDescription = context.getString(item.contentDescriptionRes)")
+                },
+                "the bind no longer labels the key it builds, so a screen reader falls " +
+                    "back to the button's own text and reads the glyph -- \"{}\" instead " +
+                    "of \"Curly braces\". Every accessibility string in KeyPageConfig " +
+                    "would still be declared, translated and unspoken. It reads:\n$shown",
+            )
+        }
+    }
 }
