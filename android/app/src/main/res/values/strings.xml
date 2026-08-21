@@ -217,6 +217,10 @@
          folder gets large by being worked in and working in one creates files the sync
          excludes by construction. -->
     <string name="saf_mirror_not_a_copy">Some files in that folder are not in the device folder. Removing the local copy would delete them.</string>
+    <!-- The rename that commits a removal was refused by the filesystem. Separate from
+         saf_mirror_unknown, which says there was nothing to remove: here the copy is
+         still there, whole, and trying again is worth something. -->
+    <string name="saf_mirror_not_removed">That folder\'s local copy could not be removed. Please try again.</string>
     <!-- Said after a removal, on the Android side rather than in the editor, because
          the recursive delete outlives the call the editor is waiting on. -->
     <string name="saf_mirror_removed">Removed a device folder\'s local copy, freeing %1$s.</string>

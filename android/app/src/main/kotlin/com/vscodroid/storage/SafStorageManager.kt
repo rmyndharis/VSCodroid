@@ -582,7 +582,8 @@ class SafStorageManager(private val context: Context) {
      * ⚠️ Walks the mirror to size it, so it must not run on the main thread.
      *
      * @return the bytes the removal frees, or [RECLAIM_UNKNOWN] when no such mirror
-     *   exists, or [RECLAIM_REFUSED] when the gate declined and [force] was not set.
+     *   exists, or [RECLAIM_REFUSED] when the gate declined and [force] was not set, or
+     *   [RECLAIM_FAILED] when the rename that commits the removal was refused.
      */
     fun reclaimMirror(hash: String, force: Boolean): Long {
         val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
@@ -598,8 +599,19 @@ class SafStorageManager(private val context: Context) {
         }
 
         val bytes = StorageManager.dirSize(dir)
+        // The directory's rename is the commit point of the removal, so the directory's
+        // rename is what decides whether one happened. Answering with the byte count
+        // whatever the rename did reported a folder that is still on disk as reclaimed,
+        // and by then the grant and the recent-list row were already gone, which is the
+        // one state nothing in the app can undo or even name afterwards.
+        //
+        // Only the directory may decide. [setAside] answers null for an entry that is
+        // not there as well as for a rename it could not make, and the record beside a
+        // mirror is legitimately absent: it is written at the end of a sync, so a sync
+        // that was interrupted leaves the directory without one.
+        if (setAside(root, hash) == null) return RECLAIM_FAILED
+        setAside(root, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX)
         releaseGrantFor(hash)
-        listOf(hash, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX).forEach { setAside(root, it) }
         Logger.i(tag, "Set a device folder's local copy aside at the user's request")
         return bytes
     }
@@ -804,9 +816,18 @@ class SafStorageManager(private val context: Context) {
             return strandedPaths.none { it.startsWith(prefix) }
         }
 
-        /** Answers of [reclaimMirror] that are not a byte count. */
+        /**
+         * Answers of [reclaimMirror] that are not a byte count.
+         *
+         * [RECLAIM_FAILED] is separate from the other two because the folder it names
+         * is untouched rather than gone: the gate passed, the mirror is where it was,
+         * and asking again is worth something. Folding it into either of the others
+         * would tell the user the copy is not there, or that it holds work the device
+         * does not, neither of which is true.
+         */
         internal const val RECLAIM_REFUSED = -1L
         internal const val RECLAIM_UNKNOWN = -2L
+        internal const val RECLAIM_FAILED = -3L
 
         /**
          * Why a mirror the user asked to remove must not be removed now, or null when

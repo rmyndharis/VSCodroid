@@ -956,6 +956,9 @@ class MainActivity : AppCompatActivity() {
         return when (freed) {
             SafStorageManager.RECLAIM_UNKNOWN -> getString(R.string.saf_mirror_unknown)
             SafStorageManager.RECLAIM_REFUSED -> getString(R.string.saf_mirror_not_a_copy)
+            // The copy is still there and still whole: nothing was released and
+            // nothing was deleted, so the sentence is the one that invites a retry.
+            SafStorageManager.RECLAIM_FAILED -> getString(R.string.saf_mirror_not_removed)
             else -> {
                 // The mirror is already unreachable at this point; what is left is
                 // the recursive delete, which takes as long as the tree is big.
