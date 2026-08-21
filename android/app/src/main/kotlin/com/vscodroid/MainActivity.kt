@@ -66,6 +66,8 @@ import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.RETRY_URL
 import com.vscodroid.webview.TlsFailure
 import com.vscodroid.webview.TlsFailureReason
+import com.vscodroid.webview.HandoffFailure
+import com.vscodroid.webview.handoffFailureToAnnounce
 import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.sensitiveLocations
@@ -101,6 +103,19 @@ class MainActivity : AppCompatActivity() {
      * a message was actually shown.
      */
     private val announcedTlsFailures = mutableSetOf<TlsFailure>()
+
+    /**
+     * The hand-off failures already put on screen, so a page driving many
+     * navigations to a scheme nothing answers is one message rather than a stream
+     * of them. See [handoffFailureToAnnounce], which owns the rule, explains why
+     * the key is the scheme and the exception type rather than the URL, and is
+     * tested without an Activity.
+     *
+     * Held here for the reason [announcedTlsFailures] is: the client has no mutable
+     * state and is worth keeping that way, and the presenter is what knows when a
+     * message was actually shown.
+     */
+    private val announcedHandoffFailures = mutableSetOf<HandoffFailure>()
 
     /**
      * Whether a workbench page is loaded and able to receive an auth callback.
@@ -1610,15 +1625,27 @@ class MainActivity : AppCompatActivity() {
             // nothing and said nothing. ActivityNotFoundException is separated
             // out because it is the one the user can act on by installing
             // something; everything else is quoted by type for a bug report.
+            //
+            // Said once per distinct failure, not once per navigation. The notice
+            // was unconditional, and a toast holds the screen for about three and
+            // a half seconds without replacing the one under it, so a page
+            // repeating a link the device cannot open covered the editor for as
+            // long as it liked. The record is consulted inside runOnUiThread, so
+            // the set has one owner thread whatever the platform guarantees about
+            // which thread the callback arrives on.
             onHandoffFailed = { uri, error ->
-                val scheme = uri.scheme ?: "external"
-                val message = if (error is android.content.ActivityNotFoundException) {
-                    getString(R.string.url_handoff_no_app, scheme)
-                } else {
-                    getString(R.string.url_handoff_failed, scheme, error.javaClass.simpleName)
-                }
+                val failure = HandoffFailure(
+                    uri.scheme ?: "external", error.javaClass.simpleName
+                )
                 runOnUiThread {
-                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                    handoffFailureToAnnounce(failure, announcedHandoffFailures)?.let {
+                        val message = if (error is android.content.ActivityNotFoundException) {
+                            getString(R.string.url_handoff_no_app, it.scheme)
+                        } else {
+                            getString(R.string.url_handoff_failed, it.scheme, it.failureType)
+                        }
+                        Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                    }
                 }
             },
             // A certificate the device does not trust used to produce an empty

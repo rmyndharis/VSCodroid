@@ -386,6 +386,64 @@ internal fun tlsFailureToAnnounce(
     return if (alreadySaid.add(failure)) failure else null
 }
 
+/**
+ * One hand-off this app could not complete, reduced to the two things a notice
+ * about it can say.
+ *
+ * The scheme, and never the address. `url_handoff_no_app` already names only a
+ * scheme, for the reason [TlsFailure] gives: the failing URL is whatever the open
+ * page asked for, and a sign-in or a dev server's address can carry an OAuth code
+ * or an API key in its query, so repeating it back would put a credential into a
+ * toast and into logcat.
+ *
+ * [failureType] is the exception's simple class name, which is the only other
+ * thing the two message forms print: `ActivityNotFoundException` is the one the
+ * user can act on by installing something, and every other type is quoted for a
+ * bug report.
+ *
+ * So the pair is exactly what determines the sentence, which is what makes it the
+ * right key for [handoffFailureToAnnounce].
+ */
+internal data class HandoffFailure(val scheme: String, val failureType: String)
+
+/**
+ * How many distinct hand-off failures are remembered before the record starts over.
+ *
+ * Same bound and same trade as [MAX_TLS_FAILURES_ANNOUNCED]: the schemes that end
+ * up in the record are chosen by whatever page is open, so an unbounded record is
+ * an allocation a page controls, and clearing at the cap costs a message that may
+ * repeat once past eight distinct failures.
+ */
+internal const val MAX_HANDOFF_FAILURES_ANNOUNCED = 8
+
+/**
+ * The hand-off failure worth putting on screen, or null when it has been said
+ * already.
+ *
+ * The same rule as [tlsFailureToAnnounce] and for the same measured reason: toasts
+ * stack rather than replace, each one holds the screen for about three and a half
+ * seconds, and one page can drive many navigations with nothing in between.
+ *
+ * Keyed on [HandoffFailure], which is to say on the scheme and the exception type
+ * and deliberately NOT on the URL. Two reasons, and the second is the load-bearing
+ * one. A second `ssh:` link that no app answers is the same fact and the same
+ * sentence, so it adds nothing to act on. And a URL-keyed record would be one the
+ * content can defeat at will: a page navigating to `ssh://a1`, `ssh://a2` and so on
+ * mints a fresh key per navigation while producing an identical message, which is
+ * a throttle that throttles nothing and a set that grows on strings a page chooses.
+ *
+ * [alreadySaid] belongs to the presenter, which keeps this class free of mutable
+ * state, and its lifetime falls out of that: it dies with the Activity, so a fresh
+ * launch says everything again.
+ */
+internal fun handoffFailureToAnnounce(
+    failure: HandoffFailure,
+    alreadySaid: MutableSet<HandoffFailure>,
+): HandoffFailure? {
+    if (alreadySaid.size >= MAX_HANDOFF_FAILURES_ANNOUNCED) alreadySaid.clear()
+    return if (alreadySaid.add(failure)) failure else null
+}
+
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
     private val resourceRoots: List<String>,
@@ -411,6 +469,10 @@ class VSCodroidWebViewClient(
      * `resolveActivity` would answer null for handlers that do exist under
      * package-visibility filtering, and enumerating schemes to make it work is a
      * destination allowlist under another name. The exception is the signal.
+     *
+     * Not told about every failure, and the call site says which ones it keeps to
+     * itself. The presenter still owes this a second filter: see
+     * [handoffFailureToAnnounce], which holds the record of what has been said.
      */
     private val onHandoffFailed: (Uri, Throwable) -> Unit = { _, _ -> },
     /**
@@ -512,7 +574,40 @@ class VSCodroidWebViewClient(
                 "Failed to open external URL: ${redactToken(url.toString())} " +
                     "(${e.javaClass.simpleName})"
             )
-            onHandoffFailed(url, e)
+            // The launch above is attempted for every frame, and that stays true:
+            // a link in a preview or in the simple browser still leaves for a
+            // browser. What is gated here is only the notice.
+            //
+            // It has to be, because this callback receives subframe navigations
+            // and the frames are not all ours. A script can navigate an iframe to
+            // a scheme nothing on the device answers, with no user gesture and as
+            // often as it likes, and each failure was an unconditional
+            // `Toast.LENGTH_LONG` -- about three and a half seconds of screen,
+            // stacking rather than replacing. That is a rendered page holding a
+            // sustained stream of notices over a live editor, and the content that
+            // reaches this client includes the bundled simple browser holding an
+            // arbitrary remote site plus previews and notebook output built from
+            // workspace files.
+            //
+            // `hasGesture()` is the request's own record of whether a user gesture
+            // was associated with the navigation, so it answers the question a
+            // notice depends on: did the user do this. It is a disjunction with the
+            // frame test rather than a conjunction, and the asymmetry is deliberate.
+            // The main frame is the workbench, the one document here this app
+            // serves, and it is also where both routes this channel backs up
+            // navigate: `injectWindowOpenOverride` falls through to a plain
+            // navigation, and the workbench's own opener assigns `location.href`
+            // for every scheme that is not http or https. Whether user activation
+            // survives those chains is not measured here, and losing the notice on
+            // them would silence exactly the case it was added for, a sign-in or an
+            // `ssh:` clone link that no app answers. So the main frame keeps its
+            // notice unconditionally, and the gesture is what still earns one for a
+            // link the user genuinely tapped inside a preview. Only a navigation
+            // that is neither our own page nor something the user did is silent,
+            // and it stays in the log line above.
+            if (request.isForMainFrame || request.hasGesture()) {
+                onHandoffFailed(url, e)
+            }
         }
         return true  // Don't navigate WebView to external URL
     }
