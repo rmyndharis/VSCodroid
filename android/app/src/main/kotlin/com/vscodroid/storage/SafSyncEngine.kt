@@ -1033,37 +1033,6 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Documents a write is streaming into right now, keyed by document URI.
-     *
-     * `openOutputStream(uri, "wt")` truncates at open, so two writers of one document
-     * produce a file that is neither of their inputs. Two writers are reachable: the
-     * mirror is named by a hash of the folder rather than by the session, so reopening
-     * a folder while the previous session's drain is still streaming puts [initialSync]
-     * on the IO dispatcher and that drain on the same document.
-     *
-     * A set rather than a lock, and that is the whole design. The obvious fix, a
-     * per-document lock the second writer waits on, was rejected for a measured reason:
-     * a `ContentResolver` stream to a network or MTP provider has no timeout, so
-     * waiting converts today's race into an unbounded stall of [initialSync], behind a
-     * dialog built with `setCancelable(false)`. A trade of corruption for a hang is not
-     * a fix. `add` returns false when someone already holds the document, and the loser
-     * declines instead of waiting.
-     *
-     * What the loser gives up is one write, and both writers copy the same local file,
-     * so the bytes it would have written are the bytes the winner is writing. If the
-     * mirror changed in between, the watcher raises MODIFY again and the queue carries
-     * it; [processWriteBack] already drops a job a newer one supersedes.
-     *
-     * Keyed by document rather than by local path deliberately, though the two coincide
-     * today: the mirror is one directory per folder, so one local path resolves to one
-     * document and nothing distinguishes the keys. Measured, and stated because it is a
-     * coincidence rather than a guarantee. The thing being protected is the document
-     * that `"wt"` truncates, so that is what the key names; a local path is a proxy that
-     * happens to agree.
-     */
-    private val documentWritesInFlight = ConcurrentHashMap.newKeySet<String>()
-
-    /**
      * Writes a local file's contents back to its corresponding SAF document.
      *
      * Declines outright when another write already holds the document, so two streams
@@ -2082,6 +2051,49 @@ class SafSyncEngine(private val context: Context) {
          * what the journal is for.
          */
         private val uploadWriters = mutableMapOf<String, Int>()
+
+        /**
+         * Documents a write is streaming into right now, keyed by document URI.
+         *
+         * `openOutputStream(uri, "wt")` truncates at open, so two writers of one
+         * document produce a file that is neither of their inputs. Two writers are
+         * reachable: the mirror is named by a hash of the folder rather than by the
+         * session, so reopening a folder while the previous session's drain is still
+         * streaming puts [SafSyncEngine.initialSync] on the IO dispatcher and that
+         * drain on the same document.
+         *
+         * In this object rather than on the engine, next to [uploadJournalLock] and
+         * [uploadWriters] and for the reason those give: the engine is one per
+         * [SafStorageManager] and the manager one per activity, while
+         * [SafSyncEngine.stopWatching] waits [DRAIN_GRACE_MS] and then deliberately
+         * leaves a drain it could not join to finish on its own. The two writers above
+         * are therefore routinely in two different engines, an activity recreated while
+         * a drain is still streaming being the ordinary way there, and a set held per
+         * instance is empty in exactly the engine that has to see the departing drain's
+         * claim. Process scope is what makes the claim mean anything at all.
+         *
+         * A set rather than a lock, and that is the whole design. The obvious fix, a
+         * per-document lock the second writer waits on, was rejected for a measured
+         * reason: a `ContentResolver` stream to a network or MTP provider has no
+         * timeout, so waiting converts today's race into an unbounded stall of
+         * [SafSyncEngine.initialSync], behind a dialog built with
+         * `setCancelable(false)`. A trade of corruption for a hang is not a fix. `add`
+         * returns false when someone already holds the document, and the loser declines
+         * instead of waiting.
+         *
+         * What the loser gives up is one write, and both writers copy the same local
+         * file, so the bytes it would have written are the bytes the winner is writing.
+         * If the mirror changed in between, the watcher raises MODIFY again and the
+         * queue carries it; the write-back already drops a job a newer one supersedes.
+         *
+         * Keyed by document rather than by local path deliberately, though the two
+         * coincide today: the mirror is one directory per folder, so one local path
+         * resolves to one document and nothing distinguishes the keys. Measured, and
+         * stated because it is a coincidence rather than a guarantee. The thing being
+         * protected is the document that `"wt"` truncates, so that is what the key
+         * names; a local path is a proxy that happens to agree.
+         */
+        private val documentWritesInFlight = ConcurrentHashMap.newKeySet<String>()
 
         /**
          * Suffix of the sibling file recording what the last complete sync found.
