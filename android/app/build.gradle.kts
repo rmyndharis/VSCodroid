@@ -1151,10 +1151,26 @@ gradle.taskGraph.whenReady {
                 "without ${missing.size} of the ${packagingGateNames.size} checks " +
                 "that decide whether the tree may ship:\n" +
                 missing.joinToString("\n") { "  $it" } +
-                "\n\nThe checks are attached by name shape to tasks called " +
-                "merge*Assets. A task above matched that shape and carries none of " +
-                "them, so the attachment is no longer reaching this variant. Fix " +
-                "the tasks.matching predicate that wires them, not this message."
+                "\n\nThe checks are attached by name shape to tasks called merge*Assets. " +
+                // Which advice is right depends on how many are missing, and saying
+                // the wrong one costs an afternoon in the common case. All of them
+                // absent means the attachment stopped reaching this variant. Some of
+                // them absent means it is reaching it, since the rest arrived, so the
+                // predicate is not the suspect: `-x checkPatchFingerprints` on an
+                // assembleDebug produces exactly this, measured, and sending that
+                // reader to rewrite a working predicate is misdirection. The total
+                // case is also nearly unproducible, because a genuine rename is
+                // caught by the MergeSourceSetFolders branch above before it ever
+                // reaches here.
+                if (missing.size == packagingGateNames.size) {
+                    "A task above matched that shape and carries none of them, so the " +
+                        "attachment is no longer reaching this variant. Fix the " +
+                        "tasks.matching predicate that wires them, not this message."
+                } else {
+                    "The rest of them are attached and present, so the wiring is intact. " +
+                        "A gate excluded with -x is the usual cause; re-run without the " +
+                        "exclusion, or restore the gate if it was deleted."
+                }
         )
     }
 }
