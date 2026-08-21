@@ -713,16 +713,57 @@ class StillOurRunTest {
  * text is blind to the difference between code and a comment describing code, and
  * every paragraph above mentions `retryOrGiveUp` by name. Without the filter this
  * test reads documentation and passes on it.
+ *
+ * The second case here is about the same latch and not about that call site: what
+ * makes a count worth keeping is that it survives the process, and the count has
+ * two writers rather than one. `ProcessManager.requestedHeapCeiling` writes the
+ * pair back on every start, so it is read alongside this file.
  */
 class HeapLatchCallSiteTest {
 
     private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+    private val processManager = File("src/main/kotlin/com/vscodroid/service/ProcessManager.kt")
 
     private fun codeLines(): List<IndexedValue<String>> =
         nodeService.readLines().withIndex().filterNot { (_, line) ->
             val t = line.trimStart()
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
+
+    /**
+     * Every `SharedPreferences` edit in [file], as the text running from `.edit()`
+     * to the call that ends it.
+     *
+     * A statement rather than a line, and that is the whole of the difference. The
+     * filter this replaced took the lines mentioning `PREF_HEAP_KILLS` and refused
+     * an `.apply()` on one of them, so it could only ever fire while the key and
+     * the call shared a line. Spreading the same statement over three lines, which
+     * is what a formatter does to it as soon as a second `putInt` is added, puts
+     * the key on one line and the terminating call on another and the guard sees
+     * neither.
+     *
+     * Comment lines go first, because both files explain in prose why `apply()` is
+     * wrong here and a scan over raw text reads those sentences as code.
+     *
+     * The KTX `edit { }` form is deliberately not matched. It carries no
+     * terminating call for this to read, so a switch to it leaves no statement to
+     * find and the count control below goes red rather than green -- which is the
+     * direction that wants to be loud, since `edit { }` defaults to `apply()`.
+     */
+    private fun editStatements(file: File): List<String> {
+        check(file.isFile) {
+            "${file.name} is not at ${file.absolutePath} -- this test would otherwise " +
+                "pass by reading nothing"
+        }
+        val code = file.readLines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }.joinToString("\n")
+        return Regex("""\.edit\(\).*?\.(?:commit|apply)\(\)""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(code)
+            .map { it.value }
+            .toList()
+    }
 
     @Test
     fun `one death spends at most one life`() {
@@ -776,13 +817,45 @@ class HeapLatchCallSiteTest {
         // often follows the one it is reacting to; apply()'s deferred write is
         // exactly what loses that race, and a count that does not survive is a
         // latch that never latches.
-        val charging = codeLines().filter { (_, l) -> l.contains("PREF_HEAP_KILLS") }
-        assertTrue(charging.isNotEmpty(), "nothing in NodeService writes the kill count")
+        //
+        // Both writers, not one. The count NodeService puts down is read straight
+        // back by ProcessManager.requestedHeapCeiling on the next start, and that
+        // method writes the pair itself -- so a deferred write there loses the same
+        // race in the same way, and guarding one file leaves half a latch.
+        val sites = listOf(nodeService, processManager).flatMap { file ->
+            editStatements(file).map { file.name to it }
+        }
+
+        // The scanner control. Everything below is a filter, and a filter over an
+        // empty list refuses nothing in exactly the voice of one that found nothing
+        // wrong.
         assertTrue(
-            charging.none { (_, l) -> l.contains(".apply()") },
-            "the kill count must be committed, not applied:\n" +
-                charging.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" },
+            sites.size >= 2,
+            "only ${sites.size} preference edits were found across the two files, so " +
+                "the scan is not reading them: $sites",
         )
+        // A statement that never reaches a commit or an apply of its own would run
+        // on into the next one, and then the terminator this reads belongs to some
+        // other edit.
+        assertTrue(
+            sites.none { (_, statement) -> statement.indexOf(".edit()", 1) > 0 },
+            "one edit runs into the next, so the call ending it is not its own: $sites",
+        )
+
+        val charging = sites.filter { (_, statement) -> statement.contains("PREF_HEAP_KILLS") }
+        assertEquals(
+            2, charging.size,
+            "the kill count has two writers, NodeService.chargeHeapOverride and " +
+                "ProcessManager.requestedHeapCeiling, and both have to survive the " +
+                "kill they are recording. Found:\n" +
+                charging.joinToString("\n") { (name, s) -> "  $name: $s" },
+        )
+        charging.forEach { (name, statement) ->
+            assertTrue(
+                statement.endsWith(".commit()"),
+                "the kill count must be committed, not applied, in $name: $statement",
+            )
+        }
     }
 }
 

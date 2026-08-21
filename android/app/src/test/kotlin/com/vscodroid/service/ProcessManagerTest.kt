@@ -523,6 +523,72 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `the value honoured and the kills against it are written down`() {
+        // The read side of the latch is covered above and by HeapOverrideLatchTest;
+        // nothing covered the WRITE, and the pair written here is the latch's whole
+        // memory. heapKillsForValue compares the value recorded as seen against the
+        // one asked for now, and NodeService counts kills onto the number stored
+        // beside it. Delete this one statement and both reads answer 0 for ever: a
+        // value that has killed the server ten times is honoured on the eleventh
+        // start, the notice telling the user why their ceiling stopped applying
+        // never appears, and nothing else in the suite goes red.
+        val totalMb = 6L * 1024
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = totalMb * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 4096,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+
+        // A preference file that remembers, rather than a relaxed mock that
+        // discards: what is being asserted is what a later read would find, and a
+        // mock that swallows every put would satisfy a `verify` on the put alone.
+        val stored = mutableMapOf<String, Int>()
+        var commits = 0
+        val editor = mockk<android.content.SharedPreferences.Editor>(relaxed = true)
+        every { editor.putInt(any(), any()) } answers {
+            stored[firstArg()] = secondArg()
+            editor
+        }
+        every { editor.commit() } answers { commits++; true }
+        val prefs = mockk<android.content.SharedPreferences>(relaxed = true) {
+            every { getInt(any(), any()) } answers { stored[firstArg<String>()] ?: secondArg() }
+            every { edit() } returns editor
+        }
+        every { contextMock.getSharedPreferences(HEAP_PREFS_NAME, any()) } returns prefs
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+
+        assertEquals(
+            4096, stored[PREF_HEAP_VALUE_SEEN],
+            "the value the user asked for was not recorded, so the next start cannot " +
+                "tell a value that has been killing this device from one they changed. " +
+                "Stored: $stored",
+        )
+        assertEquals(
+            0, stored[PREF_HEAP_KILLS],
+            "the count against this value was not recorded, so every kill charged to " +
+                "it lands on a number nothing keeps. Stored: $stored",
+        )
+        // PortFinder writes to this same preference file and ends with apply(), so
+        // counting commits rather than edits is what keeps this about the latch.
+        // One commit, because a switch to apply() here is the regression that
+        // records the pair and then loses it to the SIGKILL it is recording.
+        assertEquals(
+            1, commits,
+            "the pair must be committed, not applied: what it has to survive is the " +
+                "kill of this app's own process, and apply() is what loses that race",
+        )
+    }
+
+    @Test
     fun `a device that ignores the request is not charged for its kills`() {
         // The attribution bug this closes was in the obvious spelling: setting the
         // flag from "a request was present" rather than "a request was taken". On a
@@ -566,11 +632,17 @@ class ProcessManagerTest {
     }
 
     @Test
-    fun `a settings file that cannot be read leaves the derived ceiling alone`() {
-        // The fail-safe direction. A directory where the settings file belongs is
-        // the cheapest way to make readText throw; whatever the cause, the answer
-        // has to be the number the device ran before the key existed, and the start
-        // has to happen at all.
+    fun `a directory where the settings file belongs is read as no setting`() {
+        // The fail-safe direction, through the guard rather than through the catch.
+        // This comment used to say a directory was the cheapest way to make
+        // readText throw, and it is not: `takeIf { it.isFile }` answers false for a
+        // directory and the read never happens, so `asked` is null and
+        // requestedHeapCeiling returns before its catch is anywhere near. The catch
+        // is exercised by the case below instead.
+        //
+        // What is left is still worth pinning, and it is the branch a device
+        // actually meets: no readable setting means the number the device ran
+        // before the key existed, and the start happens at all.
         val am = mockk<ActivityManager>(relaxed = true) {
             every { isLowRamDevice } returns false
             every { getMemoryInfo(any()) } answers {
@@ -585,12 +657,61 @@ class ProcessManagerTest {
         val printed = CountDownLatch(1)
         manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
 
-        assertTrue(startAndAwaitWatchdog(), "an unreadable settings file must not stop a start")
+        assertTrue(startAndAwaitWatchdog(), "a settings path that is not a file must not stop a start")
         assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
 
         assertTrue(
             output.contains("--max-old-space-size=${heapCeilingMb(3L * 1024, isLowRam = false)}"),
-            "the derived ceiling must survive an unreadable settings file; got: $output",
+            "the derived ceiling must survive a settings path that is not a file; got: $output",
+        )
+        assertFalse(
+            manager.heapOverrideInEffect(),
+            "nothing was honoured, so nothing may be charged for the next kill",
+        )
+    }
+
+    @Test
+    fun `a throw while reading the setting leaves the derived ceiling alone`() {
+        // The catch inside requestedHeapCeiling, which nothing entered until this.
+        // The case above cannot reach it, and the two fall back to DIFFERENT
+        // numbers, which is what makes this worth a case of its own: without the
+        // inner catch the throw travels to heapCeilingForDevice's catch, and that
+        // one abandons the derivation entirely for the flat HEAP_CEILING_DEFAULT_MB.
+        // A 3 GB device would be handed 512 where it had been running 384.
+        //
+        // The throw comes from the mocked path lookup rather than from a file made
+        // unreadable, because file permissions are the property of the machine
+        // running the suite and not of the code under test: a run as root reads a
+        // mode 000 file happily and the case would pass by never throwing. Where
+        // inside the try it is raised does not matter; that the start survives it
+        // with the derived number does.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 3L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+        every { Environment.getMachineSettingsPath(any()) } throws
+            IllegalStateException("the settings path could not be resolved")
+
+        val derived = heapCeilingMb(3L * 1024, isLowRam = false)
+        assertNotEquals(
+            HEAP_CEILING_DEFAULT_MB, derived,
+            "the fixture must not pick a size the outer catch would also produce",
+        )
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "a throw while reading the setting must not stop a start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=$derived"),
+            "a throw while reading the setting must leave the DERIVED ceiling, not " +
+                "collapse the device onto the flat default; got: $output",
         )
         assertFalse(
             manager.heapOverrideInEffect(),
