@@ -115,9 +115,7 @@ class StartupDirGuardTest {
     @Test
     fun `a shell started in a folder stays in it`() {
         val workspace = File(filesDir, "workspace").apply { mkdirs() }
-        val recorded = File(filesDir, "recorded").apply { mkdirs() }
         createBashrc()
-        File(home, ".vscodroid_folder").writeText(recorded.path)
 
         assertEquals(
             workspace.canonicalPath, endsUpIn(workspace),
@@ -141,48 +139,32 @@ class StartupDirGuardTest {
         )
     }
 
+    /**
+     * A record an older release left behind must not steer a shell.
+     *
+     * `~/.vscodroid_folder` was written only when a device folder was opened
+     * through the picker, and nothing ever cleared it, so a device that opened one
+     * once sent every later empty-window shell into that mirror. A mirror with no
+     * live watcher takes writes that reach the user's device folder only when they
+     * open it again, which is the silent divergence the sync engine exists to
+     * prevent. The file is not produced any more, and this pins that a leftover one
+     * is inert.
+     *
+     * The recorded directory has to exist and has to differ from the projects
+     * directory, or the case cannot tell "ignored" from "fell back because it was
+     * missing".
+     */
     @Test
-    fun `a shell started in HOME prefers the recorded folder`() {
+    fun `a folder record left by an older release is ignored`() {
         val recorded = File(filesDir, "recorded").apply { mkdirs() }
         createBashrc()
         File(home, ".vscodroid_folder").writeText(recorded.path)
 
-        assertEquals(recorded.canonicalPath, endsUpIn(home), "the recorded folder was ignored")
-    }
-
-    @Test
-    fun `a recorded folder that no longer exists falls back to the projects directory`() {
-        createBashrc()
-        File(home, ".vscodroid_folder").writeText(File(filesDir, "deleted").path)
-
-        // endsUpIn asserts the output is exactly one line, which is the second half
-        // of this case: a failed cd that printed a diagnostic would corrupt the
-        // terminal's first prompt as surely as landing in the wrong place.
         assertEquals(
             projects.canonicalPath, endsUpIn(home),
-            "a stale recorded folder left the shell in HOME instead of falling back",
-        )
-    }
-
-    /**
-     * The case the `[ -d ]` test is actually for.
-     *
-     * Measured while checking that each clause earns its place: with the recorded
-     * folder merely deleted, dropping `[ -d ]` changes nothing, because `cd` to a
-     * missing path fails and the `||` already falls through to the projects
-     * directory. An EMPTY recorded file is different. `__folder` is then the empty
-     * string, `cd ""` succeeds in bash and moves nowhere, so without the test the
-     * shell simply stays in HOME and the fallback never runs.
-     */
-    @Test
-    fun `an empty recorded folder falls back rather than staying put`() {
-        createBashrc()
-        File(home, ".vscodroid_folder").writeText("")
-
-        assertEquals(
-            projects.canonicalPath, endsUpIn(home),
-            "an empty recorded folder left the shell in HOME: cd to the empty string " +
-                "succeeds, so only the -d test can send it to the fallback",
+            "a leftover record steered the shell into ${recorded.name}; that path is a " +
+                "mirror nothing is watching, so a write there reaches the device only " +
+                "when the folder is opened again",
         )
     }
 
@@ -233,6 +215,52 @@ class StartupDirGuardTest {
         }
         val prefix = String(before).substringBefore("# Start in the active folder")
         assertTrue(after.startsWith(prefix), "the bytes before the block did not survive unchanged")
+    }
+
+    /**
+     * A device on the previous guarded shape gets the new one.
+     *
+     * The v0 case above covers a release that never had a guard at all. This
+     * covers the one that had the guard and read the folder record, which is the
+     * shape every device carries between the guard landing and this change. It is
+     * a separate fixture rather than a parameter because the migration matches each
+     * frozen text exactly, and a test that composed the text from the constants
+     * would pass on a match that no device actually holds.
+     */
+    @Test
+    fun `a device on the v1 block is moved to v2`() {
+        val text = """
+            # VSCodroid bash configuration
+
+            export PROJECTS_DIR='${projects.path}'
+
+            # >>> vscodroid startup dir v1 >>>
+            # Start in the active folder ONLY when this shell was given no directory of
+            # its own. See FirstRunSetup.ensureStartupDirGuard for why the test is -ef.
+            if [ "${'$'}PWD" -ef "${'$'}HOME" ]; then
+                if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
+                    __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
+                    [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+                    unset __folder
+                else
+                    cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+                fi
+            fi
+            # <<< vscodroid startup dir v1 <<<
+
+            # the user's own alias
+        """.trimIndent() + "\n"
+        bashrc.writeText(text)
+
+        FirstRunSetup(context).ensureStartupDirGuard()
+
+        val after = bashrc.readText()
+        assertTrue(after.contains("startup dir v2"), "the v1 block was not replaced")
+        assertFalse(
+            after.contains(".vscodroid_folder"),
+            "the record branch survived the migration, so an empty window still reads it",
+        )
+        assertTrue(after.contains("# the user's own alias"), "the migration lost what followed")
     }
 
     @Test

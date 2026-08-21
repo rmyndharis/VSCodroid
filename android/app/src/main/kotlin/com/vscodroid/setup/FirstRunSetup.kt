@@ -1420,9 +1420,13 @@ class FirstRunSetup(
         val content = String(bytes, Charsets.ISO_8859_1)
         if (content.contains(STARTUP_DIR_MARKER_CURRENT)) return
 
-        val start = content.indexOf(LEGACY_STARTUP_DIR_BLOCK)
-        if (start < 0) return
-        val end = start + LEGACY_STARTUP_DIR_BLOCK.length
+        // Newest first. A v1 block contains none of the v0 text, so the order does
+        // not decide anything today, and it is fixed anyway so that adding a v3 is
+        // one more entry rather than a question about which match wins.
+        val previous = listOf(LEGACY_STARTUP_DIR_BLOCK_V1, LEGACY_STARTUP_DIR_BLOCK)
+        val block = previous.firstOrNull { content.contains(it) } ?: return
+        val start = content.indexOf(block)
+        val end = start + block.length
 
         val written = writeAtomically(bashrc) {
             it.write(bytes, 0, start)
@@ -2537,6 +2541,16 @@ private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE b
  * all three, so a terminal opened on a folder was moved somewhere else before
  * the user ever saw a prompt.
  *
+ * There is no remembered folder here, and that is the point rather than an
+ * omission. This block runs only when no workspace folder is open, so a folder
+ * remembered from an earlier session is by construction not the one the user was
+ * working in. The v1 shape read `~/.vscodroid_folder`, which was written only
+ * when a device folder was opened through the picker and was never cleared, so a
+ * device that had opened one once sent every later empty-window shell into that
+ * mirror, where a write reaches nothing until the folder is opened again.
+ * `~/projects` is where the welcome file already tells the user new terminals
+ * start.
+ *
  * `HOME` is the one directory the server never picks on purpose: it is the last
  * fallback in `getCwd`, reached only when no workspace folder is open. Landing
  * there is therefore the signal that nobody chose, and that this block still has
@@ -2553,23 +2567,17 @@ private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE b
  * edit to the lines around it. [ensureStartupDirGuard] matches this text byte
  * for byte on devices that already have a `.bashrc`.
  */
-private const val STARTUP_DIR_VERSION = "v1"
+private const val STARTUP_DIR_VERSION = "v2"
 private const val STARTUP_DIR_BEGIN = "# >>> vscodroid startup dir"
 private const val STARTUP_DIR_END = "# <<< vscodroid startup dir"
 private const val STARTUP_DIR_MARKER_CURRENT = "$STARTUP_DIR_BEGIN $STARTUP_DIR_VERSION >>>"
 
 private val STARTUP_DIR_BLOCK = """
     $STARTUP_DIR_MARKER_CURRENT
-    # Start in the active folder ONLY when this shell was given no directory of
-    # its own. See FirstRunSetup.ensureStartupDirGuard for why the test is -ef.
+    # Start in the projects directory ONLY when this shell was given no directory
+    # of its own. See FirstRunSetup.ensureStartupDirGuard for why the test is -ef.
     if [ "${'$'}PWD" -ef "${'$'}HOME" ]; then
-        if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
-            __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
-            [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
-            unset __folder
-        else
-            cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
-        fi
+        cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
     fi
     $STARTUP_DIR_END $STARTUP_DIR_VERSION <<<
 """.trimIndent()
@@ -2583,6 +2591,31 @@ private val STARTUP_DIR_BLOCK = """
  * nowhere and is left exactly as they wrote it. Deriving it from the new block
  * would disarm that on the first edit to the new one.
  */
+/**
+ * The v1 block, byte for byte, markers written out rather than composed.
+ *
+ * Frozen for the reason [LEGACY_STARTUP_DIR_BLOCK] gives, and the markers are
+ * literals here rather than `$STARTUP_DIR_BEGIN` and the version constant, so
+ * that bumping the version cannot quietly rewrite what this is supposed to
+ * match. An exact match is the whole mechanism: a block the user edited matches
+ * nothing here and is left as they wrote it.
+ */
+private val LEGACY_STARTUP_DIR_BLOCK_V1 = """
+    # >>> vscodroid startup dir v1 >>>
+    # Start in the active folder ONLY when this shell was given no directory of
+    # its own. See FirstRunSetup.ensureStartupDirGuard for why the test is -ef.
+    if [ "${'$'}PWD" -ef "${'$'}HOME" ]; then
+        if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
+            __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
+            [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+            unset __folder
+        else
+            cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+        fi
+    fi
+    # <<< vscodroid startup dir v1 <<<
+""".trimIndent()
+
 private val LEGACY_STARTUP_DIR_BLOCK = """
     # Start in the active folder (SAF or default projects dir)
     if [ -f "${'$'}HOME/.vscodroid_folder" ]; then

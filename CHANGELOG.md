@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A terminal in a window with no folder open now starts in your projects directory, not in the last device folder you ever opened.
 - A file you edited on the device is no longer overwritten by the app's copy after a write-back that failed once and later succeeded.
 - Cancelling a toolchain download while it installs no longer deletes the files being copied out of it, which left a part-written toolchain behind.
 - A selected toolchain in the first-run picker no longer draws two check marks in the same corner.

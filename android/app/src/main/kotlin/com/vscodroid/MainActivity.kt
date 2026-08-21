@@ -758,12 +758,6 @@ class MainActivity : AppCompatActivity() {
                 safManager.startFileWatcher(mirrorDir, uri)
                 watchedSafFolder = mirrorDir to uri
 
-                // Write active folder so new terminals cd to the right place.
-                // Off the main thread: lifecycleScope dispatches on
-                // Main.immediate, so this was a file write on the UI thread
-                // inside a modal dialog. withContext suspends until it returns,
-                // so the ordering the rest of this block depends on is unchanged.
-                withContext(Dispatchers.IO) { writeActiveFolder(mirrorDir.absolutePath) }
 
                 dialog.dismiss()
 
@@ -1610,20 +1604,6 @@ class MainActivity : AppCompatActivity() {
         // the same one the webview layer uses.
         Logger.i(tag, "Loading VS Code at ${redactToken(url)}")
         wv.loadUrl(url)
-    }
-
-    /**
-     * Writes the active folder path to ~/.vscodroid_folder so new terminals
-     * can cd to the correct directory. See bashrc in FirstRunSetup.
-     */
-    private fun writeActiveFolder(folderPath: String) {
-        try {
-            val homeDir = File(Environment.getHomeDir(this))
-            File(homeDir, ".vscodroid_folder").writeText(folderPath)
-            Logger.d(tag, "Active folder: $folderPath")
-        } catch (e: Exception) {
-            Logger.d(tag, "Failed to write active folder: ${e.message}")
-        }
     }
 
     private fun injectBridgeToken() {
