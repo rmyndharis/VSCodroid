@@ -57,7 +57,7 @@ class GestureTrackpad @JvmOverloads constructor(
             cornerRadius = dpToPx(6f)
             setStroke(dpToPx(1f).toInt(), 0xFF555555.toInt())
         }
-        contentDescription = "Arrow key trackpad. Drag to move cursor."
+        contentDescription = context.getString(R.string.trackpad_description)
 
         // A drag is the only way to earn an arrow from this view, and a screen
         // reader user cannot drag: touch exploration takes the gesture stream
@@ -74,7 +74,7 @@ class GestureTrackpad @JvmOverloads constructor(
         // the row clears it -- the same one-shot behaviour, reached a
         // different way.
         for ((label, direction) in ARROW_ACTIONS) {
-            ViewCompat.addAccessibilityAction(this, label) { _, _ ->
+            ViewCompat.addAccessibilityAction(this, context.getString(label)) { _, _ ->
                 onArrowKey?.invoke(direction)
                 onDragEnd?.invoke()
                 true
@@ -171,12 +171,16 @@ class GestureTrackpad @JvmOverloads constructor(
  * checked -- and the half worth checking, because a direction that [KeyMapping]
  * does not know is dropped by [KeyInjector] with nothing said.
  *
- * The strings are DOM key names, not Android key codes; the whole arrow path in
- * this app speaks the web client's language and never touches KEYCODE_DPAD.
+ * The two halves of each pair are different kinds of string and only one is
+ * language. The label is read out as an entry in the actions menu a screen
+ * reader offers, so it is a resource id; the direction is a DOM key name the
+ * page receives, so it is a literal and must stay one. Translating a direction
+ * would send "ArrowLeft" to [KeyMapping] under a name it does not hold, and
+ * [KeyInjector] drops what it cannot resolve without saying so.
  */
-internal val ARROW_ACTIONS: List<Pair<String, String>> = listOf(
-    "Move cursor left" to "ArrowLeft",
-    "Move cursor right" to "ArrowRight",
-    "Move cursor up" to "ArrowUp",
-    "Move cursor down" to "ArrowDown",
+internal val ARROW_ACTIONS: List<Pair<Int, String>> = listOf(
+    R.string.trackpad_action_left to "ArrowLeft",
+    R.string.trackpad_action_right to "ArrowRight",
+    R.string.trackpad_action_up to "ArrowUp",
+    R.string.trackpad_action_down to "ArrowDown",
 )

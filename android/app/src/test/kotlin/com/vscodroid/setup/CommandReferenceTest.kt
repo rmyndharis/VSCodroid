@@ -24,6 +24,7 @@ class CommandReferenceTest {
 
     private val extensionsDir = File("src/main/assets/extensions")
     private val kotlinDir = File("src/main/kotlin")
+    private val stringsFile = File("src/main/res/values")
 
     /** Every command title contributed by a bundled extension, e.g. "VSCodroid: About". */
     private fun contributedTitles(): Set<String> {
@@ -38,9 +39,21 @@ class CommandReferenceTest {
         }.toSet()
     }
 
-    /** Files whose strings reach a user: our Kotlin, and our bundled extensions' code. */
+    /**
+     * Files whose strings reach a user: string resources, our Kotlin, and our
+     * bundled extensions' code.
+     *
+     * strings.xml is where the Kotlin ones went. A message that names a palette
+     * entry is user-facing text by definition, so it belongs in a resource a
+     * translator can reach, and following it there is not optional for this
+     * check: leaving the scan on Kotlin alone would have kept it green while
+     * seeing nothing, which is the failure it exists to prevent. Kotlin stays in
+     * the list because nothing stops a new literal being written there, and this
+     * is one of the two things that would notice.
+     */
     private fun userFacingSources(): List<File> =
-        (kotlinDir.walkTopDown().filter { it.isFile && it.extension == "kt" } +
+        (stringsFile.walkTopDown().filter { it.isFile && it.extension == "xml" } +
+            kotlinDir.walkTopDown().filter { it.isFile && it.extension == "kt" } +
             extensionsDir.walkTopDown().filter { it.isFile && it.name == "extension.js" })
             .toList()
 
@@ -70,13 +83,20 @@ class CommandReferenceTest {
         // extensions"; neither covers "did the pattern match anything in them".
         //
         // Asserted per source kind rather than in total, because the two quote the
-        // name differently and only one of them is fragile: Kotlin escapes it as
-        // \"VSCodroid: ...\" while JavaScript writes it plainly. A pattern that
-        // quietly stopped handling the escaped form would still match the JS
-        // references and keep a total-count assertion green.
+        // name differently and only one of them is fragile: a string resource
+        // escapes it as \"VSCodroid: ...\" while JavaScript writes it plainly. A
+        // pattern that quietly stopped handling the escaped form would still match
+        // the JS references and keep a total-count assertion green.
+        //
+        // The escaped form is checked on xml rather than kt, which is where it
+        // used to be. Every message this app shows moved into strings.xml so that
+        // a translation could reach it, and Kotlin now carries no reference at
+        // all: an assertion still keyed on "kt" would fail on a correct tree, and
+        // deleting it rather than moving it would leave the escaped form
+        // unguarded. Kotlin is still scanned for dangling names above.
         assertTrue(
-            foundIn["kt"]?.isNotEmpty() == true,
-            "no command reference matched in any Kotlin source, so the escaped form " +
+            foundIn["xml"]?.isNotEmpty() == true,
+            "no command reference matched in any string resource, so the escaped form " +
                 "\\\"VSCodroid: ...\\\" is no longer being recognised and this test is " +
                 "checking nothing there. Found: $foundIn",
         )

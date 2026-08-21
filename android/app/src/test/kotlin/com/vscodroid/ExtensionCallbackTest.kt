@@ -377,6 +377,14 @@ class AuthCallbackCallSiteTest {
         /** What [skeleton] leaves behind where a string literal stood. */
         const val LITERAL = "STR"
 
+        /**
+         * A string resource read with no arguments, which is as fixed as a
+         * literal: nothing from the caller can reach what it resolves to.
+         * Deliberately refuses the form that takes format arguments, since that
+         * is exactly how a payload would get in.
+         */
+        val RESOURCE = Regex("""getString\(R\.string\.\w+\)""")
+
         const val TOAST = "Toast.makeText("
     }
 
@@ -610,14 +618,24 @@ class AuthCallbackCallSiteTest {
             "expected to read two message arguments, found ${messages.size}: $messages",
         )
         messages.forEach { message ->
+            // A resource lookup counts as fixed text, and only the argumentless
+            // form does. Both messages here are `getString(R.string.name)` now
+            // that they are translatable, and what that resolves to is decided by
+            // strings.xml and the device's locale, never by the intent. The
+            // moment one takes a second argument it stops being fixed: RESOURCE
+            // does not match `getString(R.string.name, x)`, so the `x` is left
+            // behind and this fails, which is the whole point of reading the
+            // shape of the expression rather than searching for one operator.
             val beyondLiterals = message
+                .replace(RESOURCE, "")
                 .replace(LITERAL, "")
                 .filterNot { it.isWhitespace() || it == '+' }
             assertEquals(
                 "", beyondLiterals,
                 "a message shown here must be fixed text, and this one is assembled from " +
                     "something else: `$message` ($LITERAL stands for a string literal, and a " +
-                    "trailing \$ for a template hole inside one). Whatever reaches it can be " +
+                    "trailing \$ for a template hole inside one; an argumentless " +
+                    "getString(R.string.…) is fixed text too). Whatever reaches it can be " +
                     "chosen by whoever fired the intent, and this app is the one the user " +
                     "trusts to be telling them about their sign-in.",
             )

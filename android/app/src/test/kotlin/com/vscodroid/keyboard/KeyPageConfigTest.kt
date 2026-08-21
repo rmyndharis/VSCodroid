@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.io.File
 
 /**
  * Tests for [KeyPages] — extra key row page configuration.
@@ -196,26 +197,74 @@ class KeyPageConfigTest {
         }
 
         @Test
-        fun `every button has a contentDescription of its own`() {
-            // This asserted the description was non-empty, which it cannot fail to
-            // be: contentDescription defaults to label, and the sibling test above
-            // already forbids an empty label. Every explicit accessibility string
-            // in KeyPageConfig could be deleted and this stayed green.
+        fun `every button is described by something other than its own label`() {
+            // What this guards has not changed: a screen reader that reads the
+            // symbol -- "{}" instead of "Curly braces" -- tells its user nothing,
+            // and that is the case every one of these strings exists for. How it
+            // is guarded had to, twice over.
             //
-            // What can fail is taking that default. A screen reader then reads the
-            // symbol -- "{}" instead of "Curly braces" -- which is exactly the case
-            // these strings exist for. All 39 buttons name themselves today, so a
-            // description equal to its label means one was dropped.
-            for ((pageIndex, page) in KeyPages.defaults.withIndex()) {
-                for (item in page.items) {
-                    if (item is KeyItem.Button) {
-                        assertNotEquals(
-                            item.label, item.contentDescription,
-                            "Button '${item.label}' on page ${pageIndex + 1} fell back to the " +
-                                "default contentDescription; a screen reader would read the symbol"
-                        )
-                    }
-                }
+            // It began as an assertion that the description was non-empty, which
+            // could not fail: the field defaulted to the label and a sibling test
+            // already forbids an empty label. Every accessibility string in
+            // KeyPageConfig could be deleted and this stayed green. Comparing
+            // against the label caught that, because taking the default made the
+            // two equal.
+            //
+            // The default is now gone -- contentDescriptionRes has none, so a key
+            // added without one does not compile -- and with it went the thing
+            // that comparison detected. What is left to check is the case the
+            // compiler cannot see: a description that resolves to the label's own
+            // text. So the pairing is read out of the source and resolved against
+            // strings.xml, which is the only place either half now lives.
+            val source = File("src/main/kotlin/com/vscodroid/keyboard/KeyPageConfig.kt")
+            assertTrue(
+                source.isFile,
+                "KeyPageConfig.kt is not at ${source.absolutePath}; this test would " +
+                    "otherwise pass by reading nothing",
+            )
+            val strings = File("src/main/res/values/strings.xml")
+            assertTrue(
+                strings.isFile,
+                "strings.xml is not at ${strings.absolutePath}; this test would " +
+                    "otherwise pass by resolving nothing",
+            )
+
+            val text = Regex("<string name=\"([^\"]+)\">(.*?)</string>", RegexOption.DOT_MATCHES_ALL)
+                .findAll(strings.readText())
+                .associate { it.groupValues[1] to it.groupValues[2] }
+
+            // The label may carry Kotlin escapes: the double-quote key's label is
+            // written "\"" and has to be compared as the one character it is.
+            val declared = Regex(
+                """KeyItem\.Button\("((?:[^"\\]|\\.)*)",\s*"(?:[^"\\]|\\.)*",\s*R\.string\.(\w+)"""
+            ).findAll(source.readText()).map { m ->
+                m.groupValues[1].replace("\\\"", "\"").replace("\\\\", "\\") to m.groupValues[2]
+            }.toList()
+
+            // The control. A scan that stopped matching would find no pairs and
+            // report every key described, which reads exactly like a clean tree.
+            val buttons = KeyPages.defaults.flatMap { it.items }.filterIsInstance<KeyItem.Button>()
+            assertEquals(
+                buttons.size, declared.size,
+                "the scan found ${declared.size} button declarations in KeyPageConfig.kt, " +
+                    "not the ${buttons.size} keys the pages hold, so it is not reading that " +
+                    "file and its verdict below is worth nothing",
+            )
+
+            for ((label, resource) in declared) {
+                val described = text[resource]
+                assertNotNull(
+                    described,
+                    "the key '$label' names R.string.$resource, which strings.xml does not " +
+                        "hold; a translator has nothing to translate and the build resolves " +
+                        "it to whatever else carries that name",
+                )
+                assertNotEquals(
+                    label, described,
+                    "the key '$label' is described as \"$described\", which is the label " +
+                        "itself; a screen reader would read the symbol out instead of " +
+                        "naming the key",
+                )
             }
         }
 

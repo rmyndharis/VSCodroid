@@ -153,7 +153,7 @@ class SplashActivity : AppCompatActivity() {
         val progressBar = findViewById<ProgressBar>(R.id.progressBar)
 
         if (setup.getPreviousVersionCode() > 0) {
-            statusText.text = "Updating VSCodroid..."
+            statusText.text = getString(R.string.status_updating_app)
         }
 
         setup.onProgress = { message, percent ->

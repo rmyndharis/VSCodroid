@@ -201,4 +201,167 @@
          unlabelled button: setSupportActionBar is never called, so the framework's
          own "Navigate up" default never applies. -->
     <string name="toolchain_navigate_up">Back to the editor</string>
+
+    <!-- What the toolchain picker's card says the toolchain is for. Held here
+         rather than in ToolchainRegistry.ToolchainInfo, which is where the rest
+         of an entry lives: the tool names inside are literal command names a
+         translator must leave alone, but the sentence around them is language,
+         and a Kotlin constant is the same sentence in every locale. The registry
+         carries the resource id instead. displayName and shortLabel stay plain
+         strings on purpose; "Ruby" and "Java 17" are the products' own names. -->
+    <string name="toolchain_ruby_description">Ruby with irb, gem, bundler</string>
+    <string name="toolchain_java_description">OpenJDK 17 (javac, jar, jshell)</string>
+
+    <!-- The checkmark on a selected toolchain card. It is an ImageView with no
+         text, so this is the whole of what a screen reader has to announce it. -->
+    <string name="toolchain_card_selected">Selected</string>
+
+    <!-- Shown on the splash screen when setup is re-running because the app was
+         updated, rather than because it is being installed for the first time.
+         Distinct from extracting_message so that a user who did not expect a
+         wait learns why there is one. -->
+    <string name="status_updating_app">Updating VSCodroid…</string>
+
+    <!-- Opening a device folder. The sync can take a while on a large folder and
+         the dialog is not cancellable, so it has to say what is happening.
+
+         The folder name is an argument rather than concatenated, because a
+         translation may need it somewhere other than the middle: the quoting
+         around it is part of the resource for the same reason. -->
+    <string name="saf_sync_title">Opening folder</string>
+    <string name="saf_sync_message">Syncing \"%1$s\"…</string>
+    <!-- The same dialog once the file count is known. Three arguments and all of
+         them positional, since a language that counts before it names would put
+         %2$d and %3$d first.
+
+         A plural rather than a string, on the total: "files" is a counted noun,
+         and the languages this would be translated into inflect it on a schedule
+         English does not share. The quantity is the total rather than the number
+         done, because the total is the noun's own count; the running figure is
+         just how far along it is. -->
+    <plurals name="saf_sync_progress">
+        <item quantity="one">Syncing \"%1$s\"\n%2$d / %3$d file…</item>
+        <item quantity="other">Syncing \"%1$s\"\n%2$d / %3$d files…</item>
+    </plurals>
+
+    <!-- A folder whose SAF grant no longer holds. The picker opens straight
+         after this, so the message says what happened rather than what to do
+         next; the next step is already on screen. -->
+    <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
+
+    <!-- Two ways a sign-in started in the browser fails to land back in the
+         editor. Worded separately because the causes differ and neither is the
+         user's doing: one is the editor having restarted underneath the browser,
+         the other the callback arriving after its window closed. Both end in the
+         same instruction because retrying is genuinely all there is to do. -->
+    <string name="sign_in_editor_restarted">Sign-in could not be completed because the editor restarted. Please sign in again.</string>
+    <string name="sign_in_timed_out">Sign-in took too long to complete. Please sign in again.</string>
+
+    <!-- The About dialog's body: the version line and the legal disclaimer, which
+         are separate resources because only one of them is a sentence. Joined
+         here rather than in Kotlin so a translation can change the separator. -->
+    <string name="about_body">%1$s\n\n%2$s</string>
+    <string name="about_privacy_policy">Privacy Policy</string>
+    <!-- The written offer of source that the bundled GPL and LGPL binaries
+         require, reached from the licences dialog. -->
+    <string name="licenses_source_code">Source Code</string>
+    <!-- The dismiss button on every dialog that only has something to say. One
+         resource for all of them: they are the same word doing the same job, and
+         three copies would be three chances for a translation to disagree with
+         itself. -->
+    <string name="dialog_ok">OK</string>
+
+    <!-- Shown once on the launch after a crash. The report is quoted into the
+         message because the audience is developers, and truncated by the caller
+         before it arrives. -->
+    <string name="crash_title">VSCodroid crashed</string>
+    <string name="crash_message">The app crashed in a previous session.\n\n%1$s</string>
+    <string name="crash_dismiss">Dismiss</string>
+    <string name="crash_copy_report">Copy Report</string>
+    <string name="crash_report_copied">Bug report copied to clipboard</string>
+
+    <!-- Storage running out, with the space left substituted. The command name is
+         quoted exactly as the palette lists it because the reader's next action
+         is to type it, and it is the one part of this sentence a translator must
+         leave in English. -->
+    <string name="storage_low_warning">Storage low (%1$s available). Run \"VSCodroid: Clear Caches\" from the Command Palette.</string>
+
+    <!-- An Android System WebView older than the one this app is tested against.
+         Both versions are arguments: the installed one is read off the device and
+         the floor is a constant in WebViewVersion, so neither can be written into
+         a translation without going stale.
+
+         The floor is substituted as %2$s rather than %2$d although it is an Int.
+         It is a version number, not a quantity: nothing about the sentence
+         changes when it does, and passing it as a number invites a translator to
+         treat "105 and newer" as something to inflect. -->
+    <string name="webview_below_minimum">Android System WebView is version %1$s. VSCodroid is tested against %2$s and newer, so parts of the editor may not work. Update it from the Play Store.</string>
+
+    <!-- The extra key row, all of it spoken rather than drawn.
+
+         Only the descriptions are here. A key's label and the value it types are
+         characters and key names, not language: "{" , ";" and "F1" mean the same
+         thing in every locale, and translating either would change what the
+         keyboard shows or what it types. The description is the only half a
+         screen reader reads, and the only half that is a sentence.
+
+         Every key names itself rather than falling back to its label, which is
+         the point of the whole set: a reader hearing "{}" learns nothing, and
+         "Curly braces" is what the key is. KeyPageConfig has no fallback left, so
+         a new key without one does not compile. -->
+    <string name="key_desc_tab">Tab key</string>
+    <string name="key_desc_escape">Escape key</string>
+    <string name="key_desc_ctrl">Control modifier</string>
+    <string name="key_desc_alt">Alt modifier</string>
+    <string name="key_desc_shift">Shift modifier</string>
+    <string name="key_desc_curly_braces">Curly braces</string>
+    <string name="key_desc_parentheses">Parentheses</string>
+    <string name="key_desc_semicolon">Semicolon</string>
+    <string name="key_desc_colon">Colon</string>
+    <string name="key_desc_double_quote">Double quote</string>
+    <string name="key_desc_forward_slash">Forward slash</string>
+    <string name="key_desc_pipe">Pipe</string>
+    <string name="key_desc_backtick">Backtick</string>
+    <string name="key_desc_ampersand">Ampersand</string>
+    <string name="key_desc_underscore">Underscore</string>
+    <string name="key_desc_left_bracket">Left bracket</string>
+    <string name="key_desc_right_bracket">Right bracket</string>
+    <string name="key_desc_less_than">Less than</string>
+    <string name="key_desc_greater_than">Greater than</string>
+    <string name="key_desc_equals">Equals</string>
+    <string name="key_desc_exclamation">Exclamation</string>
+    <string name="key_desc_hash">Hash</string>
+    <string name="key_desc_at_sign">At sign</string>
+    <string name="key_desc_f1">Function key F1</string>
+    <string name="key_desc_f2">Function key F2</string>
+    <string name="key_desc_f3">Function key F3</string>
+    <string name="key_desc_f4">Function key F4</string>
+    <string name="key_desc_f5">Function key F5</string>
+    <string name="key_desc_f6">Function key F6</string>
+    <string name="key_desc_f7">Function key F7</string>
+    <string name="key_desc_f8">Function key F8</string>
+    <string name="key_desc_f9">Function key F9</string>
+    <string name="key_desc_f10">Function key F10</string>
+    <string name="key_desc_f11">Function key F11</string>
+    <string name="key_desc_f12">Function key F12</string>
+    <string name="key_desc_home">Home key</string>
+    <string name="key_desc_end">End key</string>
+    <string name="key_desc_page_up">Page up</string>
+    <string name="key_desc_page_down">Page down</string>
+
+    <!-- What a screen reader says after the name of a latched modifier. Kept to
+         one word each because the platform reads them straight after the key's
+         own description, and anything longer turns every Ctrl into a sentence. -->
+    <string name="key_toggle_on">on</string>
+    <string name="key_toggle_off">off</string>
+
+    <!-- The trackpad, and the four arrows it offers to an assistive service.
+         A drag is the only other way to reach them and touch exploration takes
+         the gesture stream first, so these labels are the whole of that route:
+         they appear in the actions menu a screen reader shows for the view. -->
+    <string name="trackpad_description">Arrow key trackpad. Drag to move cursor.</string>
+    <string name="trackpad_action_left">Move cursor left</string>
+    <string name="trackpad_action_right">Move cursor right</string>
+    <string name="trackpad_action_up">Move cursor up</string>
+    <string name="trackpad_action_down">Move cursor down</string>
 </resources>

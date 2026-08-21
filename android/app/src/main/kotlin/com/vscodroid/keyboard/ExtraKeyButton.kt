@@ -11,6 +11,7 @@ import android.view.GestureDetector
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import androidx.annotation.StringRes
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.widget.TextViewCompat
 import com.vscodroid.R
@@ -226,7 +227,7 @@ class ExtraKeyButton @JvmOverloads constructor(
         // stateDescription rather than isSelected: the platform announces a
         // change to it on its own, and it says "on" instead of "selected",
         // which is what a latched modifier is.
-        stateDescription = toggleStateDescription(isToggle, isToggleActive)
+        stateDescription = toggleStateDescription(isToggle, isToggleActive)?.let(context::getString)
     }
 
     fun applyRoundedBackground(color: Int) {
@@ -279,6 +280,11 @@ internal fun pressedState(isToggle: Boolean, isActive: Boolean): Boolean =
  * whose initialiser reaches resources on its first line, so a JVM test cannot
  * construct one, and this is the half that is arithmetic.
  *
+ * A resource id rather than the words, so that this stays the half that is
+ * arithmetic. Resolving it needs a `Context`, which is exactly what a JVM test
+ * does not have; returning the id keeps the decision testable and leaves the
+ * lookup to the caller, which is a `View` and has one.
+ *
  * Null for a plain key states the contract rather than clearing anything today:
  * [KeyPageAdapter] builds a fresh button on every bind, after
  * `removeAllViews`, so no view carries a previous key's state into its next
@@ -286,11 +292,12 @@ internal fun pressedState(isToggle: Boolean, isActive: Boolean): Boolean =
  * `isToggleActive` to keys that are toggles. It is here so that a future caller
  * who does assign it to a plain key gets silence rather than a stray "off".
  */
-internal fun toggleStateDescription(isToggle: Boolean, isActive: Boolean): CharSequence? =
+@StringRes
+internal fun toggleStateDescription(isToggle: Boolean, isActive: Boolean): Int? =
     when {
         !isToggle -> null
-        isActive -> "on"
-        else -> "off"
+        isActive -> R.string.key_toggle_on
+        else -> R.string.key_toggle_off
     }
 
 /**

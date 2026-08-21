@@ -59,7 +59,7 @@ class ToolchainPickerAdapter(
         val ctx = holder.itemView.context
 
         holder.name.text = info.shortLabel
-        holder.description.text = info.description
+        holder.description.text = ctx.getString(info.descriptionRes)
         // Both, because they answer different questions and only one of them
         // used to be here. The single figure was the unpacked size, so a card
         // offered "179 MB" for a 59 MB download, and the person most likely to

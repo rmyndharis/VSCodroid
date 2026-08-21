@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -28,16 +29,22 @@ class ToolchainRegistryTest {
         @Test
         fun `all toolchains have valid fields`() {
             for (tc in ToolchainRegistry.available) {
-                // Not assertNotNull: these four are non-nullable String, so an
+                // Not assertNotNull: these three are non-nullable String, so an
                 // assertion that they are not null cannot fail and never could.
                 // It read as validation while checking nothing -- with every
-                // displayName and description set to "" the whole suite stayed
-                // green, measured. Blank is the failure that can actually reach
-                // a user, as an unnamed card in the toolchain picker.
+                // displayName set to "" the whole suite stayed green, measured.
+                // Blank is the failure that can actually reach a user, as an
+                // unnamed card in the toolchain picker.
                 assertTrue(tc.packName.isNotBlank(), "packName is blank")
                 assertTrue(tc.displayName.isNotBlank(), "displayName is blank: ${tc.packName}")
                 assertTrue(tc.shortLabel.isNotBlank(), "shortLabel is blank: ${tc.packName}")
-                assertTrue(tc.description.isNotBlank(), "description is blank: ${tc.packName}")
+                // The description is a resource id now, so blankness is not the
+                // shape the failure takes any more: an id that resolves to an
+                // empty string is a strings.xml defect, and one that resolves to
+                // nothing at all does not compile. What is left to catch here is
+                // the id never being set, which leaves the card's second line
+                // empty exactly as a blank string did.
+                assertNotEquals(0, tc.descriptionRes, "descriptionRes unset: ${tc.packName}")
                 assert(tc.estimatedSize > 0) { "estimatedSize must be positive: ${tc.packName}" }
                 assert(tc.packName.startsWith("toolchain_")) { "packName must start with 'toolchain_': ${tc.packName}" }
             }

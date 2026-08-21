@@ -216,8 +216,8 @@ M6 (Release)   → Play Store release
    - [x] Configuration changes handled without recreating activity
 
 7. **Accessibility baseline**
-   - [x] `contentDescription` set on every `ExtraKeyButton` with descriptive labels (e.g., "Control modifier", "Escape key")
-   - [x] `GestureTrackpad` has `contentDescription = "Arrow key trackpad. Drag to move cursor."`
+   - [x] `contentDescription` set on every `ExtraKeyButton` with descriptive labels (e.g., "Control modifier", "Escape key"). Carried as `KeyItem.Button.contentDescriptionRes` and resolved by `KeyPageAdapter`, not as a literal: the field has no default, so a key added without a description does not compile. The words are in `strings.xml`
+   - [x] `GestureTrackpad` has a `contentDescription`, `R.string.trackpad_description` ("Arrow key trackpad. Drag to move cursor.")
    - [x] Button min height enforced by ExtraKeyRow layout
 
 8. **Android Intent: "Open with VSCodroid"** (`AndroidManifest.xml`) **- withdrawn, see below**

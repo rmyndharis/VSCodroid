@@ -351,7 +351,10 @@ class KeyRowAccessibilityInstrumentedTest {
     fun theTrackpadOffersOneActionPerArrow() {
         inWindow({ ctx -> GestureTrackpad(ctx) }) { _, node ->
             val offered = node().actionList.mapNotNull { it.label?.toString() }
-            for ((label, _) in ARROW_ACTIONS) {
+            // Resolved here rather than compared as ids: what the node carries is
+            // the text the platform will read out, so this is the one place the
+            // resource and the spoken label are checked against each other.
+            for ((label, _) in ARROW_ACTIONS.map { context.getString(it.first) to it.second }) {
                 assertTrue(
                     "no accessibility action is labelled \"$label\"; the node offers $offered",
                     offered.contains(label),
@@ -370,7 +373,7 @@ class KeyRowAccessibilityInstrumentedTest {
                 onDragEnd = { dragsEnded++ }
             }
         }) { trackpad, node ->
-            for ((label, direction) in ARROW_ACTIONS) {
+            for ((label, direction) in ARROW_ACTIONS.map { context.getString(it.first) to it.second }) {
                 val action = node().actionList.firstOrNull { it.label?.toString() == label }
                 assertNotNull("no action labelled \"$label\"", action)
 

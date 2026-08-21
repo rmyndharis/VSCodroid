@@ -1,5 +1,8 @@
 package com.vscodroid.setup
 
+import androidx.annotation.StringRes
+import com.vscodroid.R
+
 /**
  * Catalog of available on-demand toolchains.
  *
@@ -13,7 +16,17 @@ object ToolchainRegistry {
         val displayName: String,
         /** Short label for the toolchain card (e.g. "Ruby", "Java 17"). */
         val shortLabel: String,
-        val description: String,
+        /**
+         * The sentence under the name on the toolchain card, as a resource id.
+         *
+         * A resource rather than a string because this is the only field here a
+         * user reads as language: [displayName] and [shortLabel] are the
+         * products' own names and stay the same in every locale, while this is a
+         * sentence that has to change with one. Holding it as a `String` made it
+         * unreachable to a translator, since nothing between here and the card
+         * goes near a resource.
+         */
+        @StringRes val descriptionRes: Int,
         /**
          * Approximate size on disk once unpacked, in bytes.
          *
@@ -61,7 +74,7 @@ object ToolchainRegistry {
             packName = "toolchain_ruby",
             displayName = "Ruby",
             shortLabel = "Ruby",
-            description = "Ruby with irb, gem, bundler",
+            descriptionRes = R.string.toolchain_ruby_description,
             estimatedSize = 34_000_000,
             downloadSize = 9_900_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
@@ -70,7 +83,7 @@ object ToolchainRegistry {
             packName = "toolchain_java",
             displayName = "Java 17",
             shortLabel = "Java 17",
-            description = "OpenJDK 17 (javac, jar, jshell)",
+            descriptionRes = R.string.toolchain_java_description,
             estimatedSize = 146_000_000,
             downloadSize = 55_400_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",

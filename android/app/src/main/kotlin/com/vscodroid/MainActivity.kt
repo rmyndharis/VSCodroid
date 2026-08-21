@@ -539,8 +539,7 @@ class MainActivity : AppCompatActivity() {
             Logger.w(tag, "Extension callback arrived with no workbench page left to receive it")
             Toast.makeText(
                 this,
-                "Sign-in could not be completed because the editor restarted. " +
-                    "Please sign in again.",
+                getString(R.string.sign_in_editor_restarted),
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -585,7 +584,7 @@ class MainActivity : AppCompatActivity() {
             Logger.w(tag, "A sign-in callback arrived after its window had closed")
             Toast.makeText(
                 this,
-                "Sign-in took too long to complete. Please sign in again.",
+                getString(R.string.sign_in_timed_out),
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -715,8 +714,8 @@ class MainActivity : AppCompatActivity() {
 
         // Show progress dialog during sync
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Opening folder")
-            .setMessage("Syncing \"$displayName\"...")
+            .setTitle(getString(R.string.saf_sync_title))
+            .setMessage(getString(R.string.saf_sync_message, displayName))
             .setCancelable(false)
             .create()
         dialog.show()
@@ -749,7 +748,9 @@ class MainActivity : AppCompatActivity() {
                     safManager.syncToLocal(uri) { done, total ->
                         runOnUiThread {
                             dialog.setMessage(
-                                "Syncing \"$displayName\"\n$done / $total files..."
+                                resources.getQuantityString(
+                                    R.plurals.saf_sync_progress, total, displayName, done, total
+                                )
                             )
                         }
                     }
@@ -873,7 +874,7 @@ class MainActivity : AppCompatActivity() {
         if (!safManager.hasPersistedPermission(uri)) {
             Toast.makeText(
                 this,
-                "Permission expired. Please select the folder again.",
+                getString(R.string.saf_permission_expired),
                 Toast.LENGTH_LONG
             ).show()
             // Open the picker as a fallback
@@ -2105,10 +2106,10 @@ class MainActivity : AppCompatActivity() {
         // raises.
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.about_title))
-            .setMessage("$version\n\n$disclaimer")
-            .setPositiveButton("OK", null)
+            .setMessage(getString(R.string.about_body, version, disclaimer))
+            .setPositiveButton(getString(R.string.dialog_ok), null)
             .setNeutralButton(getString(R.string.about_licenses)) { _, _ -> showLicensesDialog() }
-            .setNegativeButton("Privacy Policy") { _, _ ->
+            .setNegativeButton(getString(R.string.about_privacy_policy)) { _, _ ->
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")))
             }
             .show()
@@ -2134,11 +2135,11 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.licenses_title))
             .setView(scrollableNotice(Notices.read { assets.open(it) }))
-            .setPositiveButton("OK", null)
+            .setPositiveButton(getString(R.string.dialog_ok), null)
             .setNegativeButton(getString(R.string.licenses_full_texts)) { _, _ ->
                 showLicenseTextsDialog()
             }
-            .setNeutralButton("Source Code") { _, _ ->
+            .setNeutralButton(getString(R.string.licenses_source_code)) { _, _ ->
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
             }
             .show()
@@ -2171,7 +2172,7 @@ class MainActivity : AppCompatActivity() {
                             Notices.readOne(Notices.LICENSE_TEXTS.getValue(name)) { assets.open(it) }
                         )
                     )
-                    .setPositiveButton("OK", null)
+                    .setPositiveButton(getString(R.string.dialog_ok), null)
                     .show()
             }
             .show()
@@ -2283,14 +2284,14 @@ class MainActivity : AppCompatActivity() {
         // Truncate for display
         val preview = if (lastCrash.length > 500) lastCrash.take(500) + "\n..." else lastCrash
         AlertDialog.Builder(this)
-            .setTitle("VSCodroid crashed")
-            .setMessage("The app crashed in a previous session.\n\n$preview")
-            .setPositiveButton("Dismiss") { _, _ -> CrashReporter.clearCrashLogs() }
-            .setNeutralButton("Copy Report") { _, _ ->
+            .setTitle(getString(R.string.crash_title))
+            .setMessage(getString(R.string.crash_message, preview))
+            .setPositiveButton(getString(R.string.crash_dismiss)) { _, _ -> CrashReporter.clearCrashLogs() }
+            .setNeutralButton(getString(R.string.crash_copy_report)) { _, _ ->
                 val report = CrashReporter.generateBugReport(this)
                 val clipboard = getSystemService(android.content.ClipboardManager::class.java)
                 clipboard.setPrimaryClip(android.content.ClipData.newPlainText("VSCodroid Bug Report", report))
-                Toast.makeText(this, "Bug report copied to clipboard", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
                 CrashReporter.clearCrashLogs()
             }
             .setCancelable(true)
@@ -2313,8 +2314,7 @@ class MainActivity : AppCompatActivity() {
         val available = StorageManager.formatSize(StorageManager.getAvailableStorage(this))
         Toast.makeText(
             this,
-            "Storage low ($available available). Run \"VSCodroid: Clear Caches\" " +
-                "from the Command Palette.",
+            getString(R.string.storage_low_warning, available),
             Toast.LENGTH_LONG
         ).show()
         Logger.w(tag, "Storage low: $available available")
@@ -2348,9 +2348,11 @@ class MainActivity : AppCompatActivity() {
         }
         Toast.makeText(
             this,
-            "Android System WebView is version $version. VSCodroid is tested against " +
-                "${WebViewVersion.MINIMUM_CHROME_MAJOR} and newer, so parts of the editor " +
-                "may not work. Update it from the Play Store.",
+            getString(
+                R.string.webview_below_minimum,
+                version,
+                WebViewVersion.MINIMUM_CHROME_MAJOR.toString(),
+            ),
             Toast.LENGTH_LONG
         ).show()
         Logger.w(tag, "WebView $version is below the tested minimum ${WebViewVersion.MINIMUM_CHROME_MAJOR}")

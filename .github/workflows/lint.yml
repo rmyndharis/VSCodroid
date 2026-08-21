@@ -112,6 +112,13 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # Beside `Run lint` rather than inside it, and the pairing is the point:
+      # lint's own HardcodedText detector reads layouts and nothing else, so a
+      # message raised from Kotlin has never been anyone's to catch. Reads the
+      # Kotlin sources only, so it costs nothing and needs no assets.
+      - name: Check no user-facing text is stranded in Kotlin
+        run: python3 scripts/check-translatable-strings.py
+
       # Here rather than after `Run lint` below, because it reads the committed
       # baseline and not the report. The count lint prints is a property of the
       # machine: the same regenerated file filtered all 91 of its entries in the

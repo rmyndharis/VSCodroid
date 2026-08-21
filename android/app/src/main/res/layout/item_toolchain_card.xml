@@ -35,7 +35,7 @@
             android:id="@+id/checkmark"
             android:layout_width="20dp"
             android:layout_height="20dp"
-            android:contentDescription="Selected"
+            android:contentDescription="@string/toolchain_card_selected"
             android:src="@android:drawable/checkbox_on_background"
             android:visibility="gone"
             app:layout_constraintEnd_toEndOf="parent"

@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import com.vscodroid.R
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -63,8 +64,8 @@ class KeyRowAccessibilityTest {
             assertEquals(
                 4,
                 ARROW_ACTIONS.map { it.first }.toSet().size,
-                "two actions share a label, so a screen reader would read the same " +
-                    "entry twice: $ARROW_ACTIONS",
+                "two actions share a label resource, so a screen reader would read the " +
+                    "same entry twice: $ARROW_ACTIONS",
             )
         }
 
@@ -162,8 +163,18 @@ class KeyRowAccessibilityTest {
 
         @Test
         fun `a toggle says on or off, and a plain key says nothing`() {
-            assertEquals("on", toggleStateDescription(isToggle = true, isActive = true))
-            assertEquals("off", toggleStateDescription(isToggle = true, isActive = false))
+            // Resource ids rather than the words. What this decides is which of
+            // the two states a latch is in, and that is the half worth pinning
+            // here; the words themselves are in strings.xml, where a translation
+            // can reach them, and resolving one needs a Context no JVM test has.
+            assertEquals(
+                R.string.key_toggle_on,
+                toggleStateDescription(isToggle = true, isActive = true),
+            )
+            assertEquals(
+                R.string.key_toggle_off,
+                toggleStateDescription(isToggle = true, isActive = false),
+            )
             assertNull(
                 toggleStateDescription(isToggle = false, isActive = false),
                 "a plain key has no state, and a stray \"off\" would be read out on every key",

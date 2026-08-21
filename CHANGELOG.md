@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every dialog, toast and spoken description now comes from a string resource, so the app can be translated. No translation ships yet; sixty-nine texts were unreachable to one.
 - A build that packages the app now fails loudly if the checks guarding its bundled tree have come unattached, instead of going quiet and shipping an unchecked tree.
 - Two accessibility guards stopped passing on code that is commented out, and one no longer loses its scope to a brace inside a comment.
 - The user guide no longer promises that certificate errors should not happen. It says which roots the bundle carries, that a private CA is not among them, and that npm does not use it.

@@ -65,7 +65,7 @@ class KeyPageAdapter(
                         text = item.label
                         keyValue = item.value
                         isToggle = item.isToggle
-                        contentDescription = item.contentDescription
+                        contentDescription = context.getString(item.contentDescriptionRes)
                         alternates = item.alternates
                         applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
                         setTextColor(context.getColor(R.color.colorExtraKeyText))

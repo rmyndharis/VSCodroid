@@ -800,7 +800,11 @@ class AndroidBridge(
                 put(JSONObject().apply {
                     put("packName", tc.packName)
                     put("displayName", tc.displayName)
-                    put("description", tc.description)
+                    // Resolved here rather than passed as an id. The caller is a
+                    // web page that renders this straight into the DOM, so it
+                    // needs the words; an id would reach it as an integer no
+                    // page can turn back into text.
+                    put("description", context.getString(tc.descriptionRes))
                     put("estimatedSize", tc.estimatedSize)
                     put("installed", installed.contains(tc.packName.removePrefix("toolchain_")))
                 })

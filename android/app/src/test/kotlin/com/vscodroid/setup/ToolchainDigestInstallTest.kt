@@ -270,7 +270,7 @@ class ToolchainDigestInstallTest {
             packName = "toolchain_test",
             displayName = "Test",
             shortLabel = "Test",
-            description = "loopback fixture",
+            descriptionRes = com.vscodroid.R.string.toolchain_ruby_description,
             // The fixture serves the ZIP itself, so the two figures coincide
             // here in a way they never do for a real toolchain: nothing unpacks
             // it. The space gate reads estimatedSize, which is what this test
