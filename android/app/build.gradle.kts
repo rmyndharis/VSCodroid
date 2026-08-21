@@ -471,8 +471,9 @@ tasks.withType<Test> {
     // reader red. Renaming a resource is NOT a control for this: it changes the
     // id, so `processDebugResources` fails first and never reaches the test.
     //
-    //   res/layout    PickerAccessibilityWiringTest
-    //   res/values    PickerAccessibilityWiringTest, ThemeEdgeToEdgeTest
+    //   res/layout    PickerAccessibilityWiringTest, TextContrastTest
+    //   res/values    PickerAccessibilityWiringTest, ThemeEdgeToEdgeTest,
+    //                 TextContrastTest
     //
     // layout/ and values/ only. Nothing reads drawable/, mipmap-*/ or xml/, and
     // the mipmaps are images whose hashes would be paid for on every run and

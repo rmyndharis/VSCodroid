@@ -421,9 +421,11 @@ class SplashActivity : AppCompatActivity() {
         val statusText = TextView(ctx).apply {
             text = getString(R.string.progress_waiting)
             setTextColor(getColor(R.color.colorOnSurface))
-            // 0.7 rather than 0.6: this text is 12sp, so WCAG AA asks 4.5:1 and
-            // dimming #CCCCCC to 0.6 on this window measures 3.62:1. At 0.7 it is
-            // 5.78:1 and still reads as secondary beside the pack name.
+            // 0.7 rather than 0.6: this text is 12sp, so WCAG AA asks 4.5:1, and
+            // dimming #CCCCCC to 0.6 on this window measures 4.58:1, clearing that
+            // line by 0.08. At 0.7 it is 5.78:1 and still reads as secondary beside
+            // the pack name. The 3.62:1 this comment used to quote is the figure for
+            // 0.5, which is what the picker's dimmed labels carried, not for 0.6.
             alpha = 0.7f
             textSize = 12f
         }
