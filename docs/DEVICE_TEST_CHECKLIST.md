@@ -75,7 +75,7 @@
 | ED-6 | Copy/Paste (system) | Copy from external app, paste in editor | Text pastes correctly | | |
 | ED-7 | Undo/Redo | Make edits, Ctrl+Z, Ctrl+Shift+Z | Undo and redo work correctly | | |
 | ED-8 | Format document | Open JS file, run Format Document (Prettier) | File formatted, no errors | | |
-| ED-9 | Application Menu with the keyboard up | Tap a text field so the keyboard rises, then tap the menubar button. Watch it for a few seconds rather than glancing: the failure this catches lasted about 40ms and left the button looking dead | The menu opens and stays open, listing File, Edit, Selection, View, Go and Run. Tapping outside and pressing Esc still close it, and tapping File still opens its submenu | | |
+| ED-9 | Application Menu with the keyboard up | Tap a text field so the keyboard rises, then tap the menubar button. Watch it for a few seconds rather than glancing: the failure this catches lasted about 40ms and left the button looking dead | The menu opens and stays open, listing File, Edit, Selection, View, Go and Run. Tapping outside still closes it, and tapping File still opens its submenu. Do not look for Esc here: the key row that carries it is hidden the moment the keyboard drops, which is the very event under test | | |
 | ED-10 | Application Menu across a rotation | Open the Application Menu, tap File so its submenu opens, then rotate the device | Both menus close. They must not stay open: the submenu would be anchored where it no longer fits and would be clipped off the edge | | |
 
 ## 6. Extensions

@@ -1653,16 +1653,17 @@ class MainActivity : AppCompatActivity() {
      * mouse or a DeX-style desktop reports `fine` and correctly gets none of this.
      *
      * Height would have been the wrong axis for the same reason it looks tempting:
-     * `windowSoftInputMode="adjustResize"` (AndroidManifest.xml:49) shrinks the
+     * `windowSoftInputMode="adjustResize"` on MainActivity in the manifest shrinks the
      * window when the soft keyboard opens, and the WebView takes what is left
      * (`layout_weight="1"`), so a height threshold would switch the sizing on and off
      * while the user types.
      *
      * It has to be a media query rather than anything sampled in Kotlin: this runs
-     * once per page load, and MainActivity declares `configChanges` for `orientation`,
-     * `screenSize` and `screenLayout` (AndroidManifest.xml:48) with no
+     * once per page load, and MainActivity's `configChanges` in the manifest absorbs
+     * `orientation`, `screenSize` and `screenLayout` among others, with no
      * `onConfigurationChanged`, so nothing re-invokes the injection when the window
-     * changes. Letting the browser hold the condition costs nothing and never goes
+     * changes. Line numbers are left off deliberately: both citations here named
+     * the right attribute and the wrong line within a day of being written. Letting the browser hold the condition costs nothing and never goes
      * stale.
      */
     private fun injectTouchTargetCSS() {

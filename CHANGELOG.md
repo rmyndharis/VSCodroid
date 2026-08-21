@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Two accessibility guards stopped passing on code that is commented out, and one no longer loses its scope to a brace inside a comment.
 - The user guide no longer promises that certificate errors should not happen. It says which roots the bundle carries, that a private CA is not among them, and that npm does not use it.
 - The picker's checked state and the Toolchains back-arrow label are now pinned by tests. Both are invisible to a sighted reviewer, so either could be deleted without a symptom.
 - Editing a layout or a string no longer leaves the unit suite up to date. Two suites read those files, and both were skipped on exactly the edits they exist to catch.

@@ -55,14 +55,51 @@ class PickerAccessibilityWiringTest {
         // sentence written for them below.
         assertTrue(i >= 0, "no body follows `$signature` in ${source.name}")
         val open = i
+        // Braces inside comments do not count. A single `{` in a comment anywhere
+        // in the function makes the depth never return to zero at the real closing
+        // brace, so the body runs on into whatever follows. Measured on this file:
+        // one `{` in a comment beside the checkable call widened the body from
+        // 1877 characters to 5295, swallowing the next function whole. Scoping to
+        // the owning function is the entire reason this helper exists rather than
+        // a file-wide search, so a comment that silently unscopes it defeats the
+        // guard exactly as a file-wide search would.
         while (i < text.length) {
-            when (text[i]) {
-                '{' -> depth++
-                '}' -> if (--depth == 0) return text.substring(open, i + 1)
+            when {
+                text.startsWith("//", i) -> while (i < text.length && text[i] != '\n') i++
+                text.startsWith("/*", i) -> {
+                    i += 2
+                    while (i < text.length && !text.startsWith("*/", i)) i++
+                    i += 2
+                }
+                text[i] == '{' -> { depth++; i++ }
+                text[i] == '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(open, i + 1)
+                    i++
+                }
+                else -> i++
             }
-            i++
         }
         error("unbalanced braces after `$signature` in ${source.name}")
+    }
+
+    /**
+     * The control for [bodyOf], because a body that quietly ran past its function
+     * would satisfy every assertion above by finding the token somewhere else.
+     *
+     * `bindManagerMode` is the declaration immediately after `bindPickerMode`, so
+     * its name appearing inside the extracted body is precisely the failure this
+     * guards, and its absence is what says the scope held.
+     */
+    @Test
+    fun `the extracted body stops at the function it names`() {
+        val body = bodyOf(adapter, "private fun bindPickerMode(")
+
+        assertTrue(
+            "bindManagerMode" !in body,
+            "bodyOf ran past bindPickerMode and swallowed the next declaration, so " +
+                "every assertion here is really a file-wide search: ${body.length} chars",
+        )
     }
 
     /**
@@ -75,13 +112,21 @@ class PickerAccessibilityWiringTest {
     fun `picker binding sets both halves of the checked state`() {
         val body = bodyOf(adapter, "private fun bindPickerMode(")
 
+        // Anchored to the start of a line, with only whitespace allowed in front.
+        // A substring search finds the call inside `// card.isCheckable = true`
+        // just as readily as the call itself, and commenting a line out is how a
+        // developer disables something while debugging. Measured: with all three
+        // of the calls below commented rather than deleted, every case here stayed
+        // green while the wiring was entirely dead. The anchor also drops the
+        // whitespace-exact literal this used to be, so `isCheckable=true` no
+        // longer reddens it for a reformat that changed nothing.
         assertTrue(
-            body.contains("isCheckable = true"),
+            Regex("""(?m)^\s*card\.isCheckable\s*=\s*true""").containsMatchIn(body),
             "bindPickerMode does not make the card checkable, so it reports " +
                 "checkable=false and a screen reader offers no state at all",
         )
         assertTrue(
-            Regex("""isChecked\s*=\s*isSelected""").containsMatchIn(body),
+            Regex("""(?m)^\s*card\.isChecked\s*=\s*isSelected""").containsMatchIn(body),
             "bindPickerMode does not tie isChecked to the selection, so the state " +
                 "it reports is fixed and the card sounds the same either way",
         )
@@ -96,7 +141,11 @@ class PickerAccessibilityWiringTest {
     @Test
     fun `the selection rebind carries a payload`() {
         val body = bodyOf(adapter, "private fun bindPickerMode(")
-        val calls = Regex("""notifyItemChanged\([^)]*\)""").findAll(body).map { it.value }.toList()
+        // Line-anchored for the same reason as the checked-state case above: a
+        // commented-out call is still a call to a substring search, and this one
+        // counts calls, so a commented one would also inflate the count.
+        val calls = Regex("""(?m)^\s*(notifyItemChanged\([^)]*\))""")
+            .findAll(body).map { it.groupValues[1] }.toList()
 
         assertEquals(
             1, calls.size,

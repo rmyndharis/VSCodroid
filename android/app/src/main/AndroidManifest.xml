@@ -41,16 +41,29 @@
              opaque URI, and loadVSCode falls through to the default projects
              directory, so the user is silently moved out of their workspace.
 
-             This is safe to declare because neither activity has anything that
-             resolves differently by night: the module has no values-night
-             directory at all, and every layout these two inflate names its
-             colours as fixed @color resources rather than ?attr, picker card
-             included. That is the condition, not a coincidence. If anyone adds
-             a values-night qualifier, or switches one of these layouts to
-             ?attr/colorSurface, this declaration becomes a bug: the framework
-             stops relaunching and nothing re-resolves, leaving the screen in the
-             previous appearance. Handle onConfigurationChanged then, or take
-             uiMode back out.
+             Safe to declare because almost nothing on these two screens resolves
+             by night. The module has no values-night directory at all, and every
+             colour these layouts render is a fixed @color: backgroundTint,
+             textColor, progressTint, indeterminateTint, and the card's
+             cardBackgroundColor. The one thing not pinned, stated because an
+             earlier version of this comment claimed there was nothing: the two
+             ProgressBars carry style="?android:attr/progressBarStyleHorizontal",
+             whose TRACK colour comes from the theme. Their fill is pinned by
+             progressTint, so what can go stale after a night flip is the shade of
+             a progress track, against the alternative of restarting an 875 MB
+             extraction. Sweep for it with '?[a-zA-Z:]*attr/', not '?attr/': the
+             narrower pattern cannot see ?android:attr and is what missed these.
+
+             uiMode is also wider than night. CONFIG_UI_MODE covers the whole
+             uiMode field, so this suppresses relaunch for car, desk, television,
+             appliance and vr-headset modes too. There are no ui-mode-qualified
+             resources here either, so that costs nothing today.
+
+             If anyone adds a values-night or values-television qualifier, or
+             switches one of these layouts to ?attr/colorSurface, this declaration
+             becomes a bug: the framework stops relaunching and nothing
+             re-resolves, leaving the screen in the previous appearance. Handle
+             onConfigurationChanged then, or take uiMode back out.
 
              The other ten stay undeclared deliberately. locale, layoutDirection,
              fontScale, density, colorMode and fontWeightAdjustment all need the

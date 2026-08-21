@@ -165,10 +165,11 @@ class HardwareKeyboardTest {
         // extraction, because runSetup() lives in lifecycleScope and the relaunch
         // cancels it before markSetupComplete() runs.
         //
-        // Declaring it is only safe while neither activity has anything that
-        // resolves by night. The manifest comment states that condition; this
-        // list is what fails if the declaration is removed, not if the condition
-        // stops holding, and no test can see the second half.
+        // Declaring it is only safe while almost nothing on those two screens
+        // resolves by night, and the manifest comment states that condition
+        // precisely, including the one exception it originally missed. This list
+        // is what fails if the declaration is removed, not if the condition stops
+        // holding, and no test can see the second half.
         val required = listOf("keyboard", "keyboardHidden", "orientation", "screenSize", "uiMode")
         val unguarded = guarded.filterNot { name ->
             declared[name].orEmpty().split("|").containsAll(required)

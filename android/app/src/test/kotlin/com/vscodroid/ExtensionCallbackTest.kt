@@ -1339,9 +1339,11 @@ class RestoreWatcherTest {
  *
  * [RestoreWatcherTest] pins which folder a failure leaves watched; this pins what
  * counts as a failure in the first place. The sync runs in `lifecycleScope`, so
- * destroying the Activity cancels it, a scheduled dark-mode switch, a font-size
- * or language change, or "Don't keep activities" while the user is in another
- * app, none of which the manifest's `configChanges` absorbs. Kotlin's
+ * destroying the Activity cancels it: a font-size or display-size change, a
+ * language change, the accessibility Bold Text switch, or "Don't keep
+ * activities" while the user is in another app, none of which the manifest's
+ * `configChanges` absorbs. A scheduled dark-mode switch used to belong on that
+ * list and no longer does, because `uiMode` is declared now. Kotlin's
  * `CancellationException` is a plain `Exception`, so the catch-all sees it and
  * every statement in that handler runs.
  *
