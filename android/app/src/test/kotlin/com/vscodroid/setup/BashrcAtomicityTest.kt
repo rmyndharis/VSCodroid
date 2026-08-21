@@ -324,6 +324,90 @@ class BashrcAtomicityTest {
         )
     }
 
+    /**
+     * `.npmrc` is npm's file too, and the app is a guest in it.
+     *
+     * `npm config set` writes here: the registry for a private mirror, the auth
+     * token that reaches it, `cafile`, `strict-ssl`. The launch-time update used
+     * to replace the whole file with the three lines this app owns, so every one
+     * of those was discarded the next time the app was opened, silently, with
+     * nothing in the log naming the app as the cause. A token lost twice gives a
+     * user no way to reach the right conclusion.
+     */
+    @Test
+    fun `the launch-time update keeps the keys npm itself wrote`() {
+        bundleNpm()
+        val npmrc = File(filesDir, "home/.npmrc").apply {
+            writeText(
+                "script-shell=/old/bash\n" +
+                    "registry=https://registry.internal.example/\n" +
+                    "//registry.internal.example/:_authToken=abc123\n" +
+                    "strict-ssl=false\n" +
+                    "os[]=linux\n",
+            )
+        }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val after = npmrc.readText()
+        for (line in listOf(
+            "registry=https://registry.internal.example/",
+            "//registry.internal.example/:_authToken=abc123",
+            "strict-ssl=false",
+        )) {
+            assertTrue(line in after, "the launch-time update discarded `$line`:\n$after")
+        }
+    }
+
+    /**
+     * The other half, and it is not implied by the one above: carrying user lines
+     * through is worthless if the owned keys stop being maintained, because
+     * `script-shell` has to follow nativeLibraryDir across every reinstall.
+     */
+    @Test
+    fun `the owned keys are still corrected, exactly once each`() {
+        bundleNpm()
+        File(filesDir, "home/.npmrc").apply {
+            writeText("script-shell=/old/bash\nregistry=https://x.example/\nos[]=linux\n")
+        }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val lines = File(filesDir, "home/.npmrc").readText().lines().filter { it.isNotBlank() }
+        assertEquals(
+            1, lines.count { it.startsWith("script-shell=") },
+            "script-shell is duplicated or missing: $lines",
+        )
+        assertTrue(
+            lines.none { it == "script-shell=/old/bash" },
+            "the stale script-shell survived, so npm would still reach a bash that moved: $lines",
+        )
+        assertEquals(
+            1, lines.count { it == "os[]=linux" }, "os[]=linux is duplicated or missing: $lines",
+        )
+        assertEquals(
+            1, lines.count { it == "os[]=android" }, "os[]=android is missing: $lines",
+        )
+    }
+
+    /**
+     * A file the app has never seen has to come out in the shape it always had.
+     * Anything else means every existing install takes one rewrite on the launch
+     * after this ships, for no reason a user could see.
+     */
+    @Test
+    fun `a fresh npmrc is byte for byte the shape it was before`() {
+        bundleNpm()
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val after = File(filesDir, "home/.npmrc").readText()
+        assertTrue(
+            Regex("""^script-shell=\S*libbash\.so\nos\[]=linux\nos\[]=android\n$""").matches(after),
+            "a fresh .npmrc is no longer the three owned lines and nothing else: $after",
+        )
+    }
+
     /** Blocks only `.npmrc`, so the `.bashrc` append ahead of it still succeeds. */
     private fun blockTheNpmrcWrite(): File =
         File(filesDir, "home/.npmrc.tmp~").also {

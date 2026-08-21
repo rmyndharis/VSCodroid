@@ -1070,7 +1070,35 @@ class FirstRunSetup(
         // npm's fallback is a POSIX shell and this app's scripts assume bash
         // os[]: install optional deps for both linux and android so tools like
         // @rollup/rollup-android-arm64 get installed alongside linux fallbacks
-        val expectedContent = "script-shell=$bashPath\nos[]=linux\nos[]=android\n"
+        //
+        // Reconciled rather than rewritten, and that is the whole point of the
+        // shape below. This used to build the three lines and write them over
+        // whatever was there, on every launch. `.npmrc` is also where npm itself
+        // writes: `npm config set registry`, an auth token for a private
+        // registry, `cafile`, `strict-ssl`. All of it worked until the app was
+        // next opened, and then it was gone, with nothing on screen and nothing
+        // in the log to say the app had done it. A user who lost a token twice
+        // would have no way to reach that conclusion.
+        //
+        // So only the two keys this app owns are replaced. `script-shell` is
+        // owned because it has to track nativeLibraryDir, which Android moves on
+        // every reinstall, and because npm's fallback is a POSIX shell while this
+        // app's scripts assume bash. `os[]=linux` and `os[]=android` are owned so
+        // optional dependencies resolve for both, which is what gets
+        // @rollup/rollup-android-arm64 installed beside the linux fallback. Every
+        // other line is carried through untouched, in the order it was written.
+        //
+        // The owned lines go first so the file still reads exactly as it did when
+        // nothing else is present, which keeps existing installs from seeing a
+        // rewrite on the launch after this ships.
+        val ownedLine = Regex("""^\s*(script-shell\s*=|os\[]\s*=\s*(linux|android)\s*$)""")
+        val carriedOver = (if (npmrc.exists()) npmrc.readText() else "")
+            .lines()
+            .filterNot { ownedLine.containsMatchIn(it) }
+            .dropLastWhile { it.isBlank() }
+        val expectedContent =
+            (listOf("script-shell=$bashPath", "os[]=linux", "os[]=android") + carriedOver)
+                .joinToString("\n", postfix = "\n")
         if (!npmrc.exists() || npmrc.readText() != expectedContent) {
             // Atomically, like every other setup file this class writes. This one
             // was the exception, and it is a bad one to be: `writeText` truncates
