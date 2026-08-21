@@ -127,13 +127,31 @@ int main(int argc, char **argv) {
     }
 
     char line[MAX_LINE];
-    while (fgets(line, sizeof(line), f)) {
+    for (;;) {
+        // Planted before every read, and gone only when fgets filled the
+        // buffer: fgets writes its terminator after the last character it read,
+        // so the very last byte is written by no read except one that used every
+        // byte there is. That is the question the drain below has to ask, and
+        // strlen cannot answer it. strlen stops at the first NUL, so a short
+        // record carrying one in the middle is indistinguishable from a record
+        // too long to fit, and draining for it swallows the record after it as
+        // well: fgets has already consumed this record's newline, so the drain
+        // runs to the end of the NEXT one, and a perfectly good entry
+        // disappears without a word.
+        //
+        // Planted here rather than re-armed after the read, because on a full
+        // buffer the byte it sits in holds fgets's terminator, and writing over
+        // that would leave strlen below walking off the end of the array.
+        line[sizeof(line) - 1] = '\n';
+        if (!fgets(line, sizeof(line), f)) break;
+        int filled = line[sizeof(line) - 1] == '\0';
         size_t len = strlen(line);
         if (len == 0) continue;
-        if (line[len - 1] != '\n' && !feof(f)) {
-            // The line did not fit. Drain the rest of it so the next fgets
-            // starts on a real line rather than on this one's tail, which would
-            // otherwise be read as a record of its own.
+        // The line did not fit: every byte of the buffer was used and the last
+        // of them does not end a line. Drain the rest of it so the next fgets
+        // starts on a real line rather than on this one's tail, which would
+        // otherwise be read as a record of its own.
+        if (filled && line[sizeof(line) - 2] != '\n' && !feof(f)) {
             int c;
             while ((c = fgetc(f)) != EOF && c != '\n') { }
             continue;
