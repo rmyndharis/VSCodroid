@@ -98,13 +98,28 @@ These methods are called from Kotlin via `evaluateJavascript()`:
 
 There is no `window.__vscodroid.injectKey`, and this block described one until it
 was checked. The page is not asked to inject anything: `KeyInjector.injectKey` is
-Kotlin, and it evaluates a script that builds a `KeyboardEvent` and dispatches it
-straight at the focused element. Nothing needs to be defined on the page for that
-to work, and defining a hook by that name — which is what following the old text
-led to — leaves a function nothing ever calls.
+Kotlin, and it delivers the press itself, by one of two routes.
+
+A printable ASCII character pressed with no Ctrl, Alt or Meta is **typed**, as
+real Android `KeyEvent`s dispatched through `webView.dispatchKeyEvent`. A
+`KeyboardEvent` built in the page is untrusted, so the browser runs the listeners
+and performs no default action: that is why `{` announced as a DOM event inserted
+nothing at all. Text has to enter through the browser's own input path, and a real
+key press is the only way into it from Kotlin.
+
+Everything else is **announced**: a key spelled out rather than typed (`Tab`,
+`Escape`, `PageDown`), and any key held with Ctrl, Alt or Meta, becomes the
+`KeyboardEvent` below, because that is what the workbench resolves its bindings
+from. `isTextEntry` decides which route a press takes and `typeCharacter` is the
+first of them; both live in the `keyboard` package beside `KeyInjector`.
+
+Nothing needs to be defined on the page for either route to work, and defining a
+hook by that name — which is what following the old text led to — leaves a function
+nothing ever calls.
 
 ```javascript
-// What Kotlin evaluates, in outline. KeyInjector.kt is the source of truth.
+// What Kotlin evaluates on the announce route, in outline. A typed character
+// never reaches this. KeyInjector.kt is the source of truth.
 var target = document.activeElement || document.body;
 target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
@@ -459,11 +474,13 @@ fun generateBugReport(authToken: String): String
 // - Device info (model, Android version, app version)
 // - Memory usage
 // - How many crash logs exist, plus the text of the three most recent
-// Node.js server output is not in it, despite the section the code still
-// builds for it: ProcessManager reads the server's stdout and logs it in
-// debug builds, and no file is written for this to read.
+// - The last 200 lines of the Node server's output, read from `server.log`
+//   under Environment.getLogsDir. ProcessManager.startOutputReader mirrors
+//   every line the server prints into that file through ServerLog, in every
+//   build, so the section is present rather than silently empty.
 // Everything read off disk has the connection token replaced wherever it
-// appears as a `tkn=` parameter.
+// appears as a `tkn=` parameter, and the server log is redacted a second
+// time on the way in so the token never lands in the file at all.
 
 @JavascriptInterface
 fun clearCrashLogs(authToken: String)

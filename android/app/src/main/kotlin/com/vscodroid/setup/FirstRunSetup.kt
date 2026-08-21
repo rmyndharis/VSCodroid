@@ -2390,8 +2390,11 @@ claude() {
         /**
          * What the pre-flight requires, in whole MB, for messages shown to the
          * user. Asking [FirstRunSetup] rather than repeating a literal in the UI:
-         * a screen telling someone to free 500 MB when 875 is needed sends them
-         * to clear space, come back, and fail again in the same place.
+         * a screen telling someone to free 500 MB when 873 is needed sends them
+         * to clear space, come back, and fail again in the same place. (873 is
+         * the gate on a fresh install today: 809.5 MiB of assets plus the 64 MiB
+         * of [EXTRACTION_SLACK_BYTES]. It moves with the asset tree, which is
+         * the reason this function exists rather than a literal in the UI.)
          *
          * The refusal that has just happened is the honest answer, and the
          * whole-tree figure is the fallback for a caller asking before any

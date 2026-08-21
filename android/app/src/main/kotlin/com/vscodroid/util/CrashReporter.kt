@@ -69,10 +69,13 @@ object CrashReporter {
      * - Device info (model, Android version, app version)
      * - Memory usage
      * - How many crash logs exist, plus the text of the three most recent
+     * - The last 200 lines of the Node server's output, from the `server.log`
+     *   that [ServerLog] writes off `ProcessManager.startOutputReader`
      *
-     * Not the server's output: the block below reads a `server.log` that
-     * nothing writes, so that section never appears. `docs/05-API_SPEC.md`
-     * and the logging table in `docs/03-ARCHITECTURE.md` say the same.
+     * That last section used to be dead: nothing wrote the file, so the block
+     * below found nothing and every report shipped without a line of server
+     * output. It is written now, in every build, which is the only reason the
+     * block is worth keeping.
      *
      * The report is copied to the clipboard and handed back across the JS
      * bridge, so everything read off disk goes through [redactToken] first: the

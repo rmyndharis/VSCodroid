@@ -231,7 +231,7 @@ VSCodroid/
 | `keyboard/ExtraKeyRow.kt` | Multi-page key bar with ViewPager2 and dot indicators |
 | `keyboard/GestureTrackpad.kt` | 3-speed drag-to-cursor-navigate widget: touch plumbing and drawing |
 | `keyboard/TrackpadGesture.kt` | The gears and the arrows a drag earns, with no Android types, so it can be tested on the JVM |
-| `keyboard/KeyInjector.kt` | Injects KeyboardEvent into WebView via JS |
+| `keyboard/KeyInjector.kt` | Types characters as real key presses; sends non-text keys and chords as KeyboardEvents via JS |
 | `service/NodeService.kt` | Foreground Service (specialUse) to keep Node.js alive |
 | `service/ProcessManager.kt` | Node.js process lifecycle, health check, auto-restart |
 | `setup/FirstRunSetup.kt` | Asset extraction, symlink creation, settings, .bashrc |
@@ -631,12 +631,14 @@ adb shell dumpsys meminfo com.vscodroid.debug
 adb shell ps -A | grep libnode
 ```
 
-There is no `server.log`; nothing here writes one. The Node process's stdout and stderr are
-merged and forwarded line by line to logcat by `ProcessManager`, under
-`VSCodroid.ProcessManager` with a `[node]` prefix. That goes through `Logger.d`, which emits
-only when the package is debuggable, so the lines are in a debug build and not in a release
-one. The editor server keeps its own logs on device, in the directory `ProcessManager` hands
-it as `--logsPath` (`Environment.getLogsDir`):
+The Node process's stdout and stderr are merged and forwarded line by line to logcat by
+`ProcessManager`, under `VSCodroid.ProcessManager` with a `[node]` prefix. That goes through
+`Logger.d`, which emits only when the package is debuggable, so the lines are in a debug
+build and not in a release one. The same reader also appends every line to `server.log`
+through `ServerLog`, in every build, which is what `CrashReporter.generateBugReport` reads
+its last 200 lines from. That file sits beside `remoteagent.log`, which the editor server
+writes itself, in the directory `ProcessManager` hands it as `--logsPath`
+(`Environment.getLogsDir`):
 
 ```bash
 adb shell run-as com.vscodroid.debug ls files/home/.vscodroid/data/logs

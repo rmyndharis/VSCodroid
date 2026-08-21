@@ -319,7 +319,7 @@ flowchart TD
 - Additional languages can be added later by long-pressing the launcher icon and choosing **Manage
   toolchains**. There is no Settings entry: `ToolchainActivity` is not exported and the launcher
   shortcut `SplashActivity.publishToolchainShortcut()` pushes is the only route to it
-- Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything other than `com.android.vending` sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`
+- Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything other than `com.android.vending` sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`. `ToolchainManager.pinLatest` resolves that URL before the transfer: this build's own `releases/download/v<versionName>/` asset when the release publishes it, otherwise the tag `releases/latest` currently redirects to, and the unpinned `latest` URL if neither can be resolved. Pinning is what keeps a ZIP and the `toolchains.sha256` it is checked against from coming out of two different releases
 
 **Trade-off**: Requires internet for toolchain download after initial install. Core functionality (Node.js, Python, Git) works fully offline.
 
@@ -460,7 +460,7 @@ flowchart TD
   B1 --> B1a[".vscodroid/ (VS Code data folder)"]
   B1a --> B1a1["extensions/ (installed extensions)"]
   B1a --> B1a2["data/Machine/settings.json (default settings the server reads)"]
-  B1a --> B1a3["data/logs/remoteagent.log (server log)"]
+  B1a --> B1a3["data/logs/ (remoteagent.log, written by the server;<br/>server.log, the process output mirrored by ServerLog)"]
   B1a --> B1a4["data/token (connection token, mode 0600)"]
   B1 --> B1b[".gitconfig"]
   B1 --> B1c[".ssh/ (SSH keys)"]
@@ -508,15 +508,21 @@ under the bare `VSCodroid`. Filter on a full tag, for example
 | Component | Log Destination | Level |
 |-----------|----------------|-------|
 | Kotlin | Logcat, tag `VSCodroid.<class>` (`VSCodroid.MainActivity`, `VSCodroid.ProcessManager`, and so on) | INFO (release), DEBUG (debug) |
-| Node.js server | stdout with stderr merged into it, read by `ProcessManager.startOutputReader` and re-logged line by line as `[node] ...` under `VSCodroid.ProcessManager` | DEBUG, so debug builds only |
+| Node.js server | stdout with stderr merged into it, read by `ProcessManager.startOutputReader`, which both re-logs each line as `[node] ...` under `VSCodroid.ProcessManager` and appends it to `server.log` through `ServerLog` | the Logcat copy is DEBUG, so debug builds only; the `server.log` copy is written in every build |
 | Extension Host | worker_thread inside the server process (patch `0004`); `ExtensionHostConnection` pipes the worker's stdout and stderr into the server's log service, which writes them to `remoteagent.log` and prints them on the server console, from where the row above carries them into Logcat | INFO into `remoteagent.log` in every build; the Logcat copy is DEBUG, arriving as `[node]` lines |
 | WebView | `VSCodroidWebChromeClient.onConsoleMessage` mirrors every console message into Logcat under `VSCodroid.WebChromeClient`; Chrome DevTools additionally attaches on debug builds | ERROR and WARNING in every build, everything else DEBUG |
 
-Nothing writes `server.log` or `exthost.log`. `CrashReporter.generateBugReport` looks for
-the first under `Environment.getLogsDir` (`filesDir/home/.vscodroid/data/logs`) and never
-finds it, so a bug report carries no server-log section. That directory is not empty,
-though: `ProcessManager.startServer` points the server's `--logsPath` at it, and the
-server's own log service writes `remoteagent.log` there, Extension Host output included.
+`server.log` is written, `exthost.log` is not. `ProcessManager` holds a `ServerLog` over
+`Environment.getLogsDir` (`filesDir/home/.vscodroid/data/logs`) and appends every line
+`startOutputReader` receives to it, in every build rather than only in a debug one: the
+Logcat copy above is `Logger.d` and therefore nowhere in a release build, which is why the
+same line is also kept on disk. The token is replaced on the way in, and the file is
+rotated to its last lines once it outgrows a byte cap, so it cannot grow without bound.
+`CrashReporter.generateBugReport` appends the last 200 lines of it to every report.
+
+That directory holds more than this app writes: `ProcessManager.startServer` points the
+server's `--logsPath` at it, and the server's own log service writes `remoteagent.log`
+there, Extension Host output included. Nothing writes `exthost.log` under any name.
 
 ### 8.3 Configuration
 

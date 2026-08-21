@@ -107,8 +107,10 @@ That accounted for 21 tests and roughly 52 s of test time. This paragraph claime
 three minutes for a long time; the recorded run says otherwise, which is what
 reading the XML is for.
 
-**At HEAD there are 26 tests across seven classes**, counted from the sources rather
-than from any run: `SafWatchWiringTest` arrived with the per-directory watch work
+**At HEAD there are 37 tests across eight classes**, counted from the sources rather
+than from any run, with `grep -cE '^\s*@Test'` over this directory:
+`KeyRowAccessibilityInstrumentedTest` arrived with the extra key row's accessibility
+work and adds eleven, `SafWatchWiringTest` arrived with the per-directory watch work
 and adds five, `ExtractionOnDeviceTest` arrived with the first-run setup work and
 adds four, and the classes have moved since besides. No recorded run covers
 this set, so there is no honest wall-clock figure to quote for it — the 52 s above
@@ -126,6 +128,7 @@ minutes". Read the times out of your own run's XML.
 | `SafWatchWiringTest` | That those semantics are wired up: a save two directories down and a `.vscode/` settings file are both queued for write-back, a scratch file beside an ordinary one is not, deleting a watched directory releases its watch, and a skipped directory is never watched at all. The layer above `FileObserverTreeSemanticsTest` — that one proves the platform behaves as assumed, this one proves the assumption was used. |
 | `ToolchainInsetsTest` | With edge-to-edge enforced, the Toolchains screen stays out of both system bars: toolbar below the status bar, grid above the navigation bar. The screen shipped drawing its title under the clock, so this is the regression the padding exists to prevent. |
 | `ExtractionOnDeviceTest` | The parts of bundled-extension extraction a JVM cannot answer: that `AssetManager.list()` returns an empty array for a leaf, which is the basis on which `extractAssetDir` decides file-or-directory and which every unit test stubs; that `deleteRecursively()` succeeds on app-private storage, which the retry after a failed unpack depends on; and the abort-and-retry itself, driven by a real out-of-space condition. Redirects `getFilesDir()` through a `ContextWrapper` so the real AssetManager stays in play, so it needs no server tree and no first-run setup. |
+| `KeyRowAccessibilityInstrumentedTest` | The extra key row and the trackpad as an accessibility service would find them: every key carries a content description, a latched modifier and the open alternates layer say so in their node state, a key with no alternates advertises no long click, each key clears 48dp on a mainstream phone, and the trackpad offers one action per arrow. It reads the `AccessibilityNodeInfo` and performs the actions it advertises by id rather than tapping. A `View` initialiser touches resources on its first line, so none of this is reachable from the JVM suite; the unit tests next door assert the wiring by reading the source instead. The view has to be inside a real window, because a detached one reports almost nothing. |
 
 ## A green run is not necessarily a run
 

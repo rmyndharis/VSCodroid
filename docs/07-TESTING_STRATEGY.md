@@ -22,8 +22,8 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 
 ```mermaid
 flowchart TD
-  E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>26 tests, run by hand on a device"]
-  INT --> UNIT["Unit Tests<br/>1296 Kotlin tests in 203 classes (JVM)<br/>8 node:assert scripts for the bundled JavaScript"]
+  E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>37 tests, run by hand on a device"]
+  INT --> UNIT["Unit Tests<br/>1307 Kotlin tests in 205 classes (JVM)<br/>8 node:assert scripts for the bundled JavaScript"]
 ```
 
 ---
@@ -46,7 +46,9 @@ flowchart TD
 | SafSyncEngine | Mirror reconciliation, write-back filtering, rename pairing | `SafSyncEngineTest`, `SafWriteBackFilterTest`, `SafRenamePairingTest` |
 | VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceResolutionTest`, `DownloadCoordinatorTest` |
 
-The suite is **1296 tests in 203 classes**, and it is green. A test that needs a
+The suite is **1307 tests in 205 classes**, and it is green. Both figures come from
+the XML a run writes under `app/build/test-results/testDebugUnitTest/`, one file per
+class, rather than from a figure carried forward. A test that needs a
 filesystem builds its tree under a JUnit `@TempDir` rather than touching the
 checkout.
 
@@ -79,8 +81,10 @@ coverage task, no threshold, and nothing in any workflow that reads one.
 
 ### 3.2 Instrumented Tests
 
-Twenty-six tests across seven classes, in `android/app/src/androidTest/`. They
+Thirty-seven tests across eight classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
+Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
+run covers the whole set and none of it is scheduled.
 
 | Test | Description | Setup |
 |------|-------------|-------|
@@ -91,6 +95,7 @@ need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 | **ToolchainInsetsTest** | With edge-to-edge enforced, the Toolchains screen stays clear of the status and navigation bars | arm64 device |
 | **FileObserverTreeSemanticsTest** | The platform behaviour SAF write-back rests on: a watch covers a directory and not a tree, and an event reports the bare entry name | arm64 device |
 | **SafWatchWiringTest** | That those semantics are wired up: a save two directories down is queued for write-back, a scratch file beside it is not, and a skipped directory is never watched | arm64 device |
+| **KeyRowAccessibilityInstrumentedTest** | The extra key row's screen-reader surface: content descriptions, the state a latched modifier and the alternates layer announce, per-key touch targets, and the trackpad's one action per arrow | arm64 device |
 
 **Framework**: AndroidJUnit4 + Espresso + UI Automator (JUnit 4, on device)
 
@@ -179,6 +184,14 @@ Manual test scenarios that verify the full user experience:
 | Color contrast | Native UI elements meet WCAG AA contrast ratio (4.5:1) | Accessibility Scanner app |
 
 > **Note**: WebView accessibility (VS Code UI) is managed by VS Code itself and the Chromium WebView engine. Native accessibility testing focuses on the Android shell: Extra Key Row, splash screen, dialogs, notifications, and Toolchain Manager UI.
+
+**Manual is not the same as unguarded** for the extra key row. The rows above are the
+whole-app sweep; `KeyRowAccessibilityInstrumentedTest` (§3.2) already pins that one
+surface, including the content descriptions, what a latched modifier and the alternates
+layer announce, and the 48dp touch targets. It takes the route a screen reader takes,
+reading the `AccessibilityNodeInfo` off a view held in a real window and performing the
+actions it advertises by id, rather than tapping coordinates: an injected tap arrives
+below the layer being tested, so its silence would prove nothing.
 
 **Run**: Before each major release, on reference device with TalkBack
 

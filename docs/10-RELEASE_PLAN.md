@@ -100,7 +100,7 @@ jobs:
 
 | Workflow | Schedule | Purpose | Failure Action |
 |----------|----------|---------|----------------|
-| `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies `patches/` against an upstream VS Code tag with `git apply --check` | Rebase the patch set before the next version bump |
+| `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies every patch in `patches/` to an upstream VS Code tag, cumulatively and in glob order, the way the build does. Not `git apply --check`: two patches touch the same server source, so checking them independently would judge the second against a tree the first was supposed to have changed | Rebase the patch set before the next version bump |
 | `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. The three event triggers are filtered to the files that configure the shrinkers, so a change to Kotlin alone still waits for the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
 
 ### 2.3 Caching Strategy
@@ -456,11 +456,15 @@ holds whatever was compiled last.
 - Each GitHub Release includes: APK, AAB, the toolchain ZIPs, `toolchains.sha256`,
   `checksums.sha256`, a build manifest, and generated release notes (`release.yml`)
 - **The toolchain ZIPs are a delivery channel, not a convenience artifact.**
-  `ToolchainRegistry` points every non-Play install at `releases/latest/download/`, so a release
-  that omits them, or that publishes them without the matching `toolchains.sha256`, breaks
-  toolchain installation for those users, including ones who already have the app. The packs in
-  the AAB and the ZIPs on the release are built from the same download in the same job, so the
-  two channels cannot ship different toolchain versions for one app version.
+  `ToolchainRegistry` points every non-Play install at `releases/latest/download/`, and
+  `ToolchainManager.pinLatest` then prefers `releases/download/v<versionName>/` when that
+  release publishes the asset, falling back to `latest` when it does not. A release that omits
+  the ZIPs, or that publishes them without the matching `toolchains.sha256`, therefore breaks
+  toolchain installation for every install that resolves through it. Both halves have to hold:
+  an app version's own release is asked first, and `latest` still has to carry the ZIPs for
+  every install that falls back to it. The packs in the AAB and the ZIPs on the release are
+  built from the same download in the same job, so the two channels cannot ship different
+  toolchain versions for one app version.
 
 ### 8.3 Future: F-Droid
 

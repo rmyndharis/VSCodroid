@@ -37,12 +37,22 @@ class ToolchainInstallSpaceTest {
     }
 
     /**
-     * The Play path holds one copy, not two, and the difference is where the first sits.
+     * The Play path is charged for one copy, not two, and the difference is when the
+     * first one is written rather than where.
      *
-     * Play writes the pack outside `filesDir` before this app hears about it, so the
-     * only allocation the install makes is the copy into `usr/`, and `removePack` frees
-     * Play's copy afterwards. Charging for both would refuse devices for room they never
-     * need at once, which is the mirror of the mistake the HTTP figure was corrected for.
+     * Play delivers into `filesDir/assetpacks`, so by the time this figure is asked for,
+     * the delivered tree is already sitting on the filesystem `StatFs(filesDir)` measures
+     * and is already counted against it. The only NEW allocation the install makes is the
+     * copy into `usr/`, which is what this charges for; `removePack` frees Play's copy
+     * afterwards. Charging for both would double-count a tree already on disk.
+     *
+     * Peak usage is still two trees, which is why the reason matters more than the
+     * figure: it decides what to do when an install is refused for space. See
+     * `packInstallBytes`' KDoc for the bytecode this was verified from, and for the
+     * consequence, which is that deleting Play's copy on a refusal buys the retry
+     * nothing. The reason recorded here used to be that Play writes the pack outside
+     * `filesDir`, which is not what it does; the assertions below are the same either
+     * way, so nothing failed when that was disproved.
      */
     @Test
     fun `the Play reservation charges for the copy it makes and not for Play's own`() {

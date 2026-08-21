@@ -253,7 +253,8 @@ flowchart TD
   APP --> KEY["keyboard/"]
   KEY --> KEY1["ExtraKeyRow.kt (Custom View for extra keys)"]
   KEY --> KEY2["ExtraKeyButton.kt (Individual key button)"]
-  KEY --> KEY3["KeyInjector.kt (evaluateJavascript key injection)"]
+  KEY --> KEY3["KeyInjector.kt (real key presses for characters, JS KeyboardEvents for chords)"]
+  KEY --> KEY4["TextEntry.kt (isTextEntry: which of the two routes a press takes)"]
   APP --> SETUP["setup/"]
   SETUP --> SET1["FirstRunSetup.kt (Binary extraction, initialization)"]
   SETUP --> SET2["ToolchainManager.kt (On-demand toolchain install)"]
@@ -473,28 +474,30 @@ modifier clears exactly as it does on an ordinary key.
 
 ### 5.2 Key Injection
 
-Keys are injected into the WebView via JavaScript evaluation:
+`KeyInjector.injectKey` has two routes, and `isTextEntry` (`TextEntry.kt`) chooses
+between them. No snippet is reproduced here: this section carried one for a long time,
+it drifted from the signature, the event pair and the quoting all at once, and a stale
+copy of the code is worse than a pointer to it. `KeyInjector.kt` is the source of truth.
 
-```kotlin
-fun injectKey(key: String, ctrl: Boolean, alt: Boolean, shift: Boolean) {
-    val js = """
-        (function() {
-            var event = new KeyboardEvent('keydown', {
-                key: '$key',
-                code: '${keyToCode(key)}',
-                keyCode: ${keyToKeyCode(key)},
-                ctrlKey: $ctrl,
-                altKey: $alt,
-                shiftKey: $shift,
-                bubbles: true,
-                cancelable: true
-            });
-            document.activeElement.dispatchEvent(event);
-        })();
-    """.trimIndent()
-    webView.evaluateJavascript(js, null)
-}
-```
+**Characters are typed.** A single ASCII character in `0x20..0x7E` pressed with no Ctrl,
+Alt or Meta goes through `typeCharacter`, which asks `KeyCharacterMap.VIRTUAL_KEYBOARD`
+for the presses that produce it and dispatches them at the WebView as real Android
+`KeyEvent`s. The map supplies Shift itself where the character needs it, so no table of
+shifted forms is written by hand. This route exists because a `KeyboardEvent` constructed
+in the page is untrusted: listeners run, no default action is performed, and the
+character is never inserted. That is what made `{`, `;` and `"` do nothing at all.
+
+**Everything else is announced.** A key that names a command rather than a character
+(`Tab`, `Escape`, `F7`, `PageDown`), and any key held with Ctrl, Alt or Meta, is sent as
+a `keydown`/`keyup` pair built by `evaluateJavascript` at `document.activeElement`, since
+that is what the workbench resolves its key bindings from. Values going into that script
+are escaped by `KeyMapping.jsQuote`.
+
+A latched Shift is resolved before the split, by `KeyMapping.shiftedForm`, because it
+changes which character is typed rather than whether it is typed. If `typeCharacter`
+cannot produce a press on the layout in force it returns false and the announce route
+runs instead; that preserves the keystroke but still inserts nothing, and it logs a
+warning rather than a debug line so the case is visible in a release build.
 
 ### 5.3 Visibility Control
 
@@ -648,7 +651,7 @@ is absent.
 flowchart TD
   A["1. User selects a toolchain<br/>(first-run picker, or the launcher icon's Manage toolchains shortcut)"] --> B{"2. Install source is com.android.vending?"}
   B -- "Yes" --> C["3a. assetPackManager.fetch(packName)"]
-  B -- "No" --> D["3b. downloadViaHttp(): toolchain_<name>.zip from releases/latest, sha256 checked"]
+  B -- "No" --> D["3b. downloadViaHttp(): toolchain_<name>.zip, sha256 checked<br/>pinLatest resolves the URL first: this version's own release if it<br/>publishes the asset, else the tag releases/latest points at, else releases/latest"]
   C --> E["4. installFromDirectory(): copy into filesDir/usr"]
   D --> E
   E --> F["5. chmod +x binaries, create symlinks in usr/bin/"]

@@ -50,7 +50,7 @@
              ProgressBars carry style="?android:attr/progressBarStyleHorizontal",
              whose TRACK colour comes from the theme. Their fill is pinned by
              progressTint, so what can go stale after a night flip is the shade of
-             a progress track, against the alternative of restarting an 875 MB
+             a progress track, against the alternative of restarting an 810 MB
              extraction. Sweep for it with '?[a-zA-Z:]*attr/', not '?attr/': the
              narrower pattern cannot see ?android:attr and is what missed these.
 
