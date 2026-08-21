@@ -92,6 +92,7 @@ class SplashActivity : AppCompatActivity() {
         repair("the npm wrappers") { setup.createNpmWrappers() }
         repair("the toolchain env sourcing") { setup.ensureToolchainEnvSourcing() }
         repair("the prompt block") { setup.ensurePromptFix() }
+        repair("the startup directory guard") { setup.ensureStartupDirGuard() }
         // The same commands for shells that never read .bashrc. Outside the
         // three above rather than inside them: it writes its own file whole, so
         // it neither needs a .bashrc to exist nor leaves anything behind in one.

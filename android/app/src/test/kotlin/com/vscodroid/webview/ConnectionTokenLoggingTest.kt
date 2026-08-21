@@ -1,6 +1,10 @@
 package com.vscodroid.webview
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.webkit.ConsoleMessage
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -12,6 +16,7 @@ import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -265,6 +270,78 @@ class ConnectionTokenLoggingTest {
         client.onPageFinished(view, url)
 
         assertNothingLeaked()
+    }
+
+    /**
+     * A hand-off that no app took, which is the one line here that redacted its
+     * message and then handed the same address to logcat anyway.
+     *
+     * `Log.e(tag, msg, tr)` prints the throwable with its message, and the two
+     * exceptions this catch realistically sees both quote the address:
+     * `ActivityNotFoundException` names the Intent it could not match, `dat=` and
+     * all, and `FileUriExposedException` names the file it refused. So the URL that
+     * [redactToken] had just taken out of the message arrived two lines below it,
+     * on a statement at `Logger.e`, which is not gated on a debuggable build and
+     * therefore ships.
+     *
+     * The absence of the throwable is asserted at the argument rather than by
+     * capturing it, because a captured null and an argument that was never recorded
+     * look identical in a list. The message assertions above it are what make that
+     * verify a measurement: without them a call that logged nothing useful would
+     * satisfy it.
+     */
+    @Test
+    fun `a failed hand-off logs neither the token nor the throwable that repeats it`() {
+        mockkConstructor(Intent::class)
+        every { anyConstructed<Intent>().addFlags(any()) } returns mockk(relaxed = true)
+        // The hand-off reads the clock to record the sign-in it carries. The stub
+        // android.jar throws for it, and that throw would land in the very catch
+        // under test, so the line would be reached by the wrong route.
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 1_700_111L
+
+        val address = "https://dev.example.com/preview?tkn=$token"
+        val context = mockk<Context>(relaxed = true)
+        every { context.startActivity(any()) } throws ActivityNotFoundException(
+            "No Activity found to handle Intent { act=android.intent.action.VIEW dat=$address }"
+        )
+        val view = mockk<WebView>(relaxed = true)
+        every { view.context } returns context
+
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.scheme } returns "https"
+        every { uri.host } returns "dev.example.com"
+        every { uri.port } returns -1
+        every { uri.toString() } returns address
+        val request = mockk<WebResourceRequest>(relaxed = true)
+        every { request.url } returns uri
+        every { request.isForMainFrame } returns true
+
+        val client = VSCodroidWebViewClient(
+            allowedPort = 41234,
+            resourceRoots = emptyList(),
+            sensitiveLocations = emptyList(),
+            openFolder = { null },
+            connectionToken = { token },
+            onCrash = {},
+            onPageLoaded = {},
+            onRetryServer = {},
+        )
+
+        client.shouldOverrideUrlLoading(view, request)
+
+        assertNothingLeaked()
+        assertTrue(
+            logged.last().contains("tkn=<redacted>"),
+            "the URL is not in the line at all, so this case would pass on a statement that " +
+                "dropped it rather than one that redacted it: " + logged.last(),
+        )
+        assertTrue(
+            logged.last().contains("ActivityNotFoundException"),
+            "the exception type is the part of the trace worth having, and dropping the " +
+                "throwable has to keep it: " + logged.last(),
+        )
+        verify(exactly = 1) { Logger.e(any(), any(), null) }
     }
 
     /**

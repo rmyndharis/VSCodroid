@@ -427,10 +427,12 @@ class ExternalUrlHandoffTest {
     }
 
     /**
-     * The three exception types the audit named land in one catch, and the user
-     * cannot tell them apart from the outside. Each still has to produce a
-     * notice, because a channel that only covers the easy one leaves the same
-     * silence for the other two.
+     * Three different exceptions land in one catch, and from outside the app they
+     * are indistinguishable: `ActivityNotFoundException` for a scheme nothing
+     * claims, `FileUriExposedException` for a `file://` URI, and
+     * `SecurityException` for a `content://` URI with no grant. Each still has to
+     * produce a notice, because a channel that covers only the easy one leaves
+     * the same silence behind for the other two.
      */
     @Test
     fun `a file URI Android refuses to expose is announced`() {

@@ -68,7 +68,22 @@ if [ ! -d "$JDK_SRC" ]; then
 fi
 
 mkdir -p "$PACK_ASSETS/usr/lib/jvm"
-cp -r "$JDK_SRC" "$PACK_ASSETS/usr/lib/jvm/java-17-openjdk"
+# -RL, not a bare -r. legal/ is the only subtree of this JDK carrying symbolic
+# links: measured on openjdk-17, bin, conf, lib, man, jmods and include carry
+# none between them while legal carries 208, and every one of those points at
+# another module's copy of the same notice.
+#
+# Neither delivery path can carry a link. An Android asset pack cannot hold one,
+# which is why this pack's sonames are created at install time from the
+# manifest, and ToolchainManager.extractZip writes every non-directory entry
+# with a FileOutputStream, so a link entry in the ZIP would arrive on a device
+# as a text file whose contents are "../java.base/LICENSE". Dereferencing here
+# is what keeps the tree in the AAB and the tree in the release ZIP the same
+# tree.
+#
+# A dangling link upstream makes this fail rather than pass silently, which is
+# the right direction and not a reason to go back to -r.
+cp -RL "$JDK_SRC" "$PACK_ASSETS/usr/lib/jvm/java-17-openjdk"
 
 # Copy shared library dependencies
 echo ""
@@ -178,10 +193,13 @@ echo "Stripping unnecessary files..."
 JDK_DIR="$PACK_ASSETS/usr/lib/jvm/java-17-openjdk"
 BEFORE_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 
-# Strip demo, man, legal docs (keep src.zip for IDE source navigation)
+# Strip the sample programs and the man pages. NOT legal/, which was filed here
+# with two directories whose removal takes their subject matter away with them.
+# Removing legal/ takes only the notices for everything that stays: lib/modules
+# still carries all 70 modules, and legal/ is their attribution. Step 5b below
+# refuses to build a pack without it.
 rm -rf "$JDK_DIR/demo" 2>/dev/null || true
 rm -rf "$JDK_DIR/man" 2>/dev/null || true
-rm -rf "$JDK_DIR/legal" 2>/dev/null || true
 # Strip jmods (module files, large, not needed at runtime)
 rm -rf "$JDK_DIR/jmods" 2>/dev/null || true
 # Strip header files (not needed without JNI compilation)
@@ -203,6 +221,55 @@ rm -f "$JDK_DIR/lib/libjavajpeg.so" "$JDK_DIR/lib/libjsound.so" "$JDK_DIR/lib/li
 
 AFTER_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 echo "  Java: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SIZE))K)"
+
+# --- Step 5b: the notices have to have survived, as real files ---
+#
+# Two separate failures, and the second is the one a present-file check misses.
+# `[ -f ]` follows a link, so a tree copied without -L passes a check for
+# presence while every notice on the device is a one-line text file naming a
+# path that is not there. The counts are printed either way so that a run which
+# examined nothing cannot read as a clean one.
+echo ""
+echo "Checking the OpenJDK notices..."
+NOTICES_MISSING=0
+NOTICES_LINKED=0
+NOTICES_PRESENT=0
+if [ ! -d "$JDK_DIR/legal" ]; then
+    echo "ERROR: $JDK_DIR/legal is absent. It is the only copy of OpenJDK's"
+    echo "       third-party notices that reaches a device, and the pack must not"
+    echo "       ship without it."
+    exit 1
+fi
+while IFS= read -r entry; do
+    # An empty legal/ makes find print nothing, and a heredoc holding nothing
+    # still feeds read one empty line, which would be counted as a missing
+    # notice and report the wrong cause. Skipping it is what lets the
+    # examined-nothing check below be reached at all.
+    [ -n "$entry" ] || continue
+    if [ -L "$entry" ]; then
+        echo "  SYMLINK ${entry#"$JDK_DIR/"}"
+        NOTICES_LINKED=$((NOTICES_LINKED + 1))
+    elif [ -f "$entry" ]; then
+        NOTICES_PRESENT=$((NOTICES_PRESENT + 1))
+    else
+        echo "  MISSING ${entry#"$JDK_DIR/"}"
+        NOTICES_MISSING=$((NOTICES_MISSING + 1))
+    fi
+done <<EOF
+$(find "$JDK_DIR/legal" \( -type f -o -type l \))
+EOF
+if [ "$NOTICES_MISSING" -ne 0 ] || [ "$NOTICES_LINKED" -ne 0 ]; then
+    echo "ERROR: $NOTICES_MISSING notice(s) absent, $NOTICES_LINKED left as symlinks."
+    echo "       Neither an asset pack nor the release ZIP can carry a symbolic"
+    echo "       link, so a link here becomes a text file naming a missing path."
+    echo "       Copy the JDK with 'cp -RL' and do not delete legal/."
+    exit 1
+fi
+if [ "$NOTICES_PRESENT" -eq 0 ]; then
+    echo "ERROR: legal/ holds no files at all, so this check examined nothing."
+    exit 1
+fi
+echo "  $NOTICES_PRESENT notice files present, none a symlink"
 
 # --- Step 6: Write manifest.json ---
 echo ""

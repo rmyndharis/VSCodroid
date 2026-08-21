@@ -1250,8 +1250,9 @@ class FirstRunSetup(
      * `. "$HOME/.bashrc"`. Measured: `bash -lc` runs both, `bash -c` runs only
      * this one. So under `-lc` the wrappers are defined twice,
      * `toolchain-env.sh` is sourced twice and every installed toolchain lands on
-     * PATH twice, and `.bashrc`'s closing `cd` moves the shell out of the
-     * directory it was started in. Redefining a function and re-prepending a PATH
+     * PATH twice. The closing `cd` in `.bashrc` runs twice as well, and no longer
+     * moves a shell out of the directory it was started in: it fires only when
+     * `PWD` is `HOME`. Redefining a function and re-prepending a PATH
      * entry are both harmless, which is why the overlap is left alone rather than
      * guarded. Anything added to this file that is NOT safe to run twice has to
      * bring its own guard.
@@ -1387,6 +1388,52 @@ class FirstRunSetup(
             return
         }
         Logger.i(tag, "Rewrote the .bashrc prompt block ($PROMPT_VERSION)")
+    }
+
+    /**
+     * Guards the closing `cd` in `.bashrc` so it fires only for a shell that was
+     * given no directory of its own, rewriting the unguarded shape every earlier
+     * release wrote.
+     *
+     * [createBashrc] writes the guarded block now, but its own guard is whether
+     * the file exists, and `isFirstRun` gates on the version rather than on the
+     * contents, so an install that already has a `.bashrc` would keep the
+     * unguarded `cd` for ever. This is the half that reaches those devices, and
+     * it is why it runs at every launch rather than at setup.
+     *
+     * Safe to call every launch: it returns as soon as the current marker is
+     * there, and a block the user edited matches [LEGACY_STARTUP_DIR_BLOCK]
+     * nowhere, so it is left exactly as they wrote it.
+     *
+     * Latin-1 and atomic for the two reasons [ensurePromptFix] documents at
+     * length: the mapping is lossless for any byte the user's file holds and
+     * makes the offsets below byte offsets, so the halves either side of the
+     * block go out as the bytes they came in as; and the marker is the first
+     * thing in the block, so a rewrite cut short would otherwise leave a file
+     * that certifies itself and is never repaired again.
+     */
+    fun ensureStartupDirGuard() {
+        val bashrc = File(context.filesDir, "home/.bashrc")
+        if (!bashrc.exists()) return
+
+        val bytes = bashrc.readBytes()
+        val content = String(bytes, Charsets.ISO_8859_1)
+        if (content.contains(STARTUP_DIR_MARKER_CURRENT)) return
+
+        val start = content.indexOf(LEGACY_STARTUP_DIR_BLOCK)
+        if (start < 0) return
+        val end = start + LEGACY_STARTUP_DIR_BLOCK.length
+
+        val written = writeAtomically(bashrc) {
+            it.write(bytes, 0, start)
+            it.write(STARTUP_DIR_BLOCK.toByteArray())
+            it.write(bytes, end, bytes.size - end)
+        }
+        if (!written) {
+            Logger.w(tag, "Could not guard the startup cd in .bashrc; it keeps the shape it had")
+            return
+        }
+        Logger.i(tag, "Guarded the startup cd in .bashrc ($STARTUP_DIR_VERSION)")
     }
 
     private fun npmBashFunctions(): String = """
@@ -1563,16 +1610,7 @@ claude() {
 
                 # On-demand toolchain env vars (Go, Ruby, Java, etc.)
                 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
-
-                # Start in the active folder (SAF or default projects dir)
-                if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
-                    __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
-                    [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
-                    unset __folder
-                else
-                    cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
-                fi
-            """.trimIndent() + "\n"
+            """.trimIndent() + "\n\n" + STARTUP_DIR_BLOCK + "\n"
             // Thrown, not logged. This runs only from runSetupLocked, whose
             // markSetupComplete() is the last statement of the same try block --
             // so swallowing the failure certifies an install that has no
@@ -2485,6 +2523,74 @@ private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE b
 """
 
 /** Bumped whenever [PROMPT_BLOCK] changes, so an older block is recognised and replaced. */
+/**
+ * Where an interactive shell starts when, and only when, nobody chose for it.
+ *
+ * bash runs `.bashrc` for every interactive shell, including the ones VS Code
+ * started in a directory it picked. The server's `getCwd` takes the launch
+ * config's `cwd` first, which is the folder right-clicked in the explorer or the
+ * one an extension passed to `createTerminal`, then `terminal.integrated.cwd`,
+ * and only then the active workspace folder. An unconditional `cd` here overrode
+ * all three, so a terminal opened on a folder was moved somewhere else before
+ * the user ever saw a prompt.
+ *
+ * `HOME` is the one directory the server never picks on purpose: it is the last
+ * fallback in `getCwd`, reached only when no workspace folder is open. Landing
+ * there is therefore the signal that nobody chose, and that this block still has
+ * a job to do.
+ *
+ * `-ef` rather than `=`, because it compares device and inode instead of text.
+ * `${'$'}PWD` comes from `getcwd()` in the child while `${'$'}HOME` is the string this app
+ * exported, and the guard must not turn on whether the two spell one directory
+ * the same way. It is a bash builtin, so it costs no process, and `.bashrc` is
+ * already bash-only.
+ *
+ * Concatenated after `trimIndent()` rather than written inside the raw string
+ * above, so its indentation is fixed here and cannot be re-flowed by a later
+ * edit to the lines around it. [ensureStartupDirGuard] matches this text byte
+ * for byte on devices that already have a `.bashrc`.
+ */
+private const val STARTUP_DIR_VERSION = "v1"
+private const val STARTUP_DIR_BEGIN = "# >>> vscodroid startup dir"
+private const val STARTUP_DIR_END = "# <<< vscodroid startup dir"
+private const val STARTUP_DIR_MARKER_CURRENT = "$STARTUP_DIR_BEGIN $STARTUP_DIR_VERSION >>>"
+
+private val STARTUP_DIR_BLOCK = """
+    $STARTUP_DIR_MARKER_CURRENT
+    # Start in the active folder ONLY when this shell was given no directory of
+    # its own. See FirstRunSetup.ensureStartupDirGuard for why the test is -ef.
+    if [ "${'$'}PWD" -ef "${'$'}HOME" ]; then
+        if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
+            __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
+            [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+            unset __folder
+        else
+            cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+        fi
+    fi
+    $STARTUP_DIR_END $STARTUP_DIR_VERSION <<<
+""".trimIndent()
+
+/**
+ * The block as every release before this one wrote it, byte for byte.
+ *
+ * Frozen, and never to be regenerated from [STARTUP_DIR_BLOCK]. It is what sits
+ * on every device that already has the app, and matching it exactly is what
+ * makes the migration safe: a `.bashrc` whose block the user edited matches this
+ * nowhere and is left exactly as they wrote it. Deriving it from the new block
+ * would disarm that on the first edit to the new one.
+ */
+private val LEGACY_STARTUP_DIR_BLOCK = """
+    # Start in the active folder (SAF or default projects dir)
+    if [ -f "${'$'}HOME/.vscodroid_folder" ]; then
+        __folder="${'$'}(cat "${'$'}HOME/.vscodroid_folder" 2>/dev/null)"
+        [ -d "${'$'}__folder" ] && cd "${'$'}__folder" 2>/dev/null || cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+        unset __folder
+    else
+        cd "${'$'}PROJECTS_DIR" 2>/dev/null || true
+    fi
+""".trimIndent()
+
 private const val PROMPT_VERSION = "v2"
 private const val PROMPT_BEGIN = "# >>> vscodroid prompt"
 private const val PROMPT_END = "# <<< vscodroid prompt"

@@ -4,10 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.http.SslError
 import android.os.SystemClock
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
+import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -23,6 +25,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URISyntaxException
 import java.net.URL
 
 /**
@@ -250,6 +254,138 @@ internal fun redactToken(text: String?): String =
  */
 internal const val RETRY_URL = "vscodroid://retry-server"
 
+/**
+ * Why the WebView refused a certificate, in the shape a sentence can be built from.
+ *
+ * [HANDSHAKE] is not one of `SslError`'s codes and never arrives as one. It
+ * stands for the other half of TLS failure: the javadoc on
+ * `WebViewClient.onReceivedSslError` says that callback is reached only for
+ * recoverable certificate errors, and that a non-recoverable one is delivered to
+ * `onReceivedError` with `ERROR_FAILED_SSL_HANDSHAKE` instead. Both halves are
+ * reported as this one type so that the presenter has one thing to branch on
+ * rather than two channels that can drift apart.
+ */
+enum class TlsFailureReason { UNTRUSTED, HOSTNAME, DATE, INVALID, HANDSHAKE }
+
+/**
+ * One refusal, carrying as much of it as is safe to repeat back to the user.
+ *
+ * The host, and never the address. The failing URL here is whatever the open page
+ * asked for, and a dev server's address can carry an OAuth code or an API key in
+ * its query, so quoting it would put a credential into a toast and into logcat.
+ * `url_handoff_no_app` names a scheme rather than a whole address for the same
+ * reason, and keeping to the host is also why [redactToken] needs no widening for
+ * this path.
+ *
+ * The host is null when [tlsHostLabel] could not read one. The presenter has a
+ * phrase for that case; interpolating an empty string would leave a sentence with
+ * a hole in it.
+ *
+ * Public, unlike the helpers around it, and not by preference: it is the type the
+ * public constructor's `onTlsFailure` parameter carries, and Kotlin refuses an
+ * internal type in a public signature.
+ */
+data class TlsFailure(val host: String?, val reason: TlsFailureReason)
+
+/**
+ * The reason behind an `SslError`'s primary code.
+ *
+ * Only four of the six codes can reach this from a WebView.
+ * `SslError.SslErrorFromChromiumErrorCode` builds every error the platform
+ * produces here with `SSL_IDMISMATCH`, `SSL_DATE_INVALID`, `SSL_UNTRUSTED` or
+ * `SSL_INVALID`, so `SSL_EXPIRED` and `SSL_NOTYETVALID` are legacy values on this
+ * path. They are still listed, because they mean exactly what the DATE branch
+ * says and letting them fall to the `else` would tell a user with an expired
+ * certificate that it could not be validated, which sends them looking at the
+ * wrong thing.
+ *
+ * An unrecognised code becomes INVALID rather than throwing. This runs inside a
+ * callback whose contract is that the request gets an answer, and a slightly
+ * vague word in a message costs far less than a load that never resolves.
+ */
+internal fun tlsReasonOf(primaryError: Int): TlsFailureReason = when (primaryError) {
+    SslError.SSL_UNTRUSTED -> TlsFailureReason.UNTRUSTED
+    SslError.SSL_IDMISMATCH -> TlsFailureReason.HOSTNAME
+    SslError.SSL_DATE_INVALID, SslError.SSL_EXPIRED, SslError.SSL_NOTYETVALID ->
+        TlsFailureReason.DATE
+    else -> TlsFailureReason.INVALID
+}
+
+/**
+ * The `host:port` a failing URL names, or null when it does not yield one.
+ *
+ * Parsed with `java.net.URI` and deliberately not `android.net.Uri`: the second is
+ * a stub in the unit-test `android.jar`, so a case written against it would
+ * measure the mock rather than the parse. `UrlAllowlistWiringTest` already
+ * records that trade in the same words.
+ *
+ * The price of that choice, accepted rather than overlooked: `java.net.URI`
+ * answers a null host for a name containing an underscore, where `android.net.Uri`
+ * would answer one. It degrades to the presenter's generic phrase and decides
+ * nothing, because this label is only ever printed and never compared.
+ *
+ * Everything unreadable has to reach null rather than an empty label, and it gets
+ * there by two routes rather than three. `URI("nonsense")` returns a null host
+ * without throwing, while `URI("not a url")` throws on the space, so the null host
+ * and the exception both have to answer null. The empty string that two of
+ * `SslError`'s four constructors set the url to is deliberately NOT a third route:
+ * it parses to a null host like any other address with nothing in it, and a guard
+ * in front of it would be a line no test could ever redden. The null check that
+ * remains is not optional, because `URI` has no constructor taking null.
+ *
+ * The port is left off when there is none, because `URI.getPort()` answers -1 and
+ * a message reading `host:-1` looks like a bug in the app rather than a fact about
+ * the server.
+ */
+internal fun tlsHostLabel(url: String?): String? {
+    if (url == null) return null
+    return try {
+        val parsed = URI(url)
+        val host = parsed.host ?: return null
+        if (parsed.port > 0) "$host:${parsed.port}" else host
+    } catch (e: URISyntaxException) {
+        null
+    }
+}
+
+/**
+ * How many distinct refusals are remembered before the record starts over.
+ *
+ * The hosts that end up in it are chosen by whatever page is open, and one of
+ * those pages is the bundled simple browser holding an arbitrary remote site. So
+ * an unbounded record is an allocation a remote page controls. Clearing at the cap
+ * trades a message that may repeat once past eight distinct failures for a set
+ * that cannot grow.
+ */
+internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
+
+/**
+ * The refusal worth putting on screen, or null when it has been said already.
+ *
+ * The same rule `reasonToAnnounce` applies to a failed toolchain download, for the
+ * same reason: toasts stack rather than replace, each one holds the screen for
+ * about three and a half seconds, and one page can fail many requests to one host
+ * with nothing in between. A markdown preview pulling a dozen images from a host
+ * with a self-signed certificate would otherwise hold the bottom of the editor for
+ * the better part of a minute, over an editor the user has gone back to working in.
+ *
+ * Keyed on the host and the reason together. A second image from the same host is
+ * the same fact and adds nothing to act on; a second host, or the same host
+ * failing a different way, is a new fact and still gets through.
+ *
+ * [alreadySaid] belongs to the presenter, which keeps this class free of mutable
+ * state, and its lifetime falls out of that: it survives a renderer crash, because
+ * the certificate has not changed, and it dies with the Activity, so a fresh
+ * launch says everything again.
+ */
+internal fun tlsFailureToAnnounce(
+    failure: TlsFailure,
+    alreadySaid: MutableSet<TlsFailure>,
+): TlsFailure? {
+    if (alreadySaid.size >= MAX_TLS_FAILURES_ANNOUNCED) alreadySaid.clear()
+    return if (alreadySaid.add(failure)) failure else null
+}
+
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
     private val resourceRoots: List<String>,
@@ -277,6 +413,19 @@ class VSCodroidWebViewClient(
      * destination allowlist under another name. The exception is the signal.
      */
     private val onHandoffFailed: (Uri, Throwable) -> Unit = { _, _ -> },
+    /**
+     * Told when the WebView refused a certificate, or could not negotiate TLS at all.
+     *
+     * A constructor parameter for the reason [onHandoffFailed] is one: this class
+     * has no screen and no context of its own beyond the one the request carries,
+     * so the caller decides how a refusal is said.
+     *
+     * Nothing was told before this existed. The platform default for
+     * `onReceivedSslError` cancels the request and reports to no channel at all,
+     * and the handshake half of the same failure was dropped by the main-frame
+     * gate in [onReceivedError]. What the user saw was an empty tab.
+     */
+    private val onTlsFailure: (TlsFailure) -> Unit = { },
 ) : WebViewClient() {
 
     private val tag = "WebViewClient"
@@ -346,7 +495,23 @@ class VSCodroidWebViewClient(
             Logger.i(tag, "Opened external URL: ${redactToken(url.toString())}")
         } catch (e: Exception) {
             AuthTabWindow.disarm(armed)
-            Logger.e(tag, "Failed to open external URL: ${redactToken(url.toString())}", e)
+            // The throwable is deliberately not passed, and leaving it in was a
+            // redaction that only looked like one. `Log.e(tag, msg, tr)` prints
+            // the throwable with its message, and both exceptions this
+            // realistically catches put the whole address there:
+            // ActivityNotFoundException quotes the Intent it could not match,
+            // `dat=` and all, and FileUriExposedException names the file it
+            // refused. So the URL [redactToken] had just taken out of the message
+            // arrived in logcat two lines below it, on a statement that is not
+            // gated on a debuggable build and therefore ships. The frames behind
+            // it are all framework, so the class name is what the trace was being
+            // read for anyway. Same shape and same reasoning as
+            // `AndroidBridge.openExternalUrl`.
+            Logger.e(
+                tag,
+                "Failed to open external URL: ${redactToken(url.toString())} " +
+                    "(${e.javaClass.simpleName})"
+            )
             onHandoffFailed(url, e)
         }
         return true  // Don't navigate WebView to external URL
@@ -402,11 +567,80 @@ class VSCodroidWebViewClient(
         onPageLoaded(url)
     }
 
+    /**
+     * Refuses the certificate, and says so.
+     *
+     * Without this override the platform default runs, and its entire behaviour
+     * is to cancel: the javadoc on `WebViewClient.onReceivedSslError` states that
+     * in those words. So the request was already being refused before this
+     * existed. What is added here is that the refusal is now audible, and that
+     * matters because nothing downstream turns a failed load into anything on
+     * screen: `MainActivity.showServerGaveUp` is driven by the server's startup
+     * state and never by a load error, so what the user got was an empty simple
+     * browser tab or an empty preview pane and no way to tell why.
+     *
+     * It reports and never proceeds. `proceed()` would trust a certificate that
+     * nothing validated; the same javadoc says to always cancel and never proceed
+     * past errors, and Google Play's insecure-SSL-error-handler policy refuses
+     * applications that do. Cancelling and
+     * reporting is not that decision and does not approach it.
+     *
+     * It is a notice and not a prompt, which is the platform's other instruction
+     * in the same block: do not prompt the user about SSL errors, because they
+     * cannot make an informed decision and the WebView shows no certificate
+     * detail to base one on. There is no control here that could continue, and
+     * adding one is the change this comment exists to refuse.
+     *
+     * The callback carries no `WebResourceRequest` and no `isForMainFrame`, so it
+     * answers for the main frame, subframes and subresources alike. The first of
+     * those cannot arise in this app: the workbench is loaded over plain http on
+     * loopback. What is left is the realistic case, a page the user pointed the
+     * editor at.
+     *
+     * It does not make a private CA work, and the message must not suggest it
+     * might. This app trusts the Android system store only, because
+     * `network_security_config.xml` declares no trust anchors and `targetSdk` is
+     * 36, for which the platform default is system roots. A CA installed through
+     * Android Settings is therefore not read. Changing that means declaring a user
+     * certificate source, which widens every https connection the app makes and is
+     * a separate decision from this one.
+     */
+    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+        // First, and on every path through this method, with nothing above it
+        // that can throw. The contract is that exactly one of cancel() and
+        // proceed() is called, so an override that returns having called neither
+        // leaves that request's certificate decision outstanding for ever, which
+        // is a worse silence than the one being closed here.
+        handler.cancel()
+        val failure = TlsFailure(tlsHostLabel(error.url), tlsReasonOf(error.primaryError))
+        Logger.w(
+            tag, "TLS refused for ${failure.host ?: "an unreadable address"}: ${failure.reason}"
+        )
+        onTlsFailure(failure)
+    }
+
     override fun onReceivedError(
         view: WebView,
         request: WebResourceRequest,
         error: WebResourceError
     ) {
+        // The other half of TLS failure, and the half that reached no channel at
+        // all. onReceivedSslError is called only for recoverable certificate
+        // errors; its javadoc says a non-recoverable one, such as the server
+        // rejecting the client, arrives here with ERROR_FAILED_SSL_HANDSHAKE
+        // instead. The main-frame gate below then swallowed it outright for a
+        // subframe or a subresource, which is where every https load in this app
+        // happens: the workbench itself is plain http on loopback.
+        //
+        // The int comparison comes first so an ordinary load error costs one
+        // comparison, as this callback's javadoc asks. There is deliberately no
+        // early return, so a handshake failure in the main frame still reaches
+        // the line below; two log lines for that one case is the cheaper trade.
+        if (error.errorCode == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE) {
+            onTlsFailure(
+                TlsFailure(tlsHostLabel(request.url.toString()), TlsFailureReason.HANDSHAKE)
+            )
+        }
         if (request.isForMainFrame) {
             Logger.e(tag, "Page load error: ${error.errorCode} - ${error.description}")
         }

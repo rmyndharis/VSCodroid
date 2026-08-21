@@ -408,6 +408,18 @@ save, tap reload — without leaving the app.
 
 Any loopback port works, whatever port your dev server picked.
 
+#### If your dev server is on https
+
+A preview served over https with a self-signed or private certificate is refused, and
+the editor now names the host it blocked and says why. Before, the tab simply came up
+empty and there was nothing to tell that apart from a server that was not running.
+
+Plain `http://` is the answer for a local preview: cleartext is permitted here precisely
+because that is what dev servers speak. Installing your own CA through Android Settings
+does not help either. The app trusts the device's system roots only, which is the same
+wall described for git above, so a certificate you issued yourself is not trusted no
+matter where you install it.
+
 #### Opening in the device's browser instead
 
 If you would rather use the device browser, the terminal route still works:

@@ -77,6 +77,7 @@
 | ED-8 | Format document | Open JS file, run Format Document (Prettier) | File formatted, no errors | | |
 | ED-9 | Application Menu with the keyboard up | Tap a text field so the keyboard rises, then tap the menubar button. Watch it for a few seconds rather than glancing: the failure this catches lasted about 40ms and left the button looking dead | The menu opens and stays open, listing File, Edit, Selection, View, Go and Run. Tapping outside still closes it, and tapping File still opens its submenu. Do not look for Esc here: the key row that carries it is hidden the moment the keyboard drops, which is the very event under test | | |
 | ED-10 | Application Menu across a rotation | Open the Application Menu, tap File so its submenu opens, then rotate the device | Both menus close. They must not stay open: the submenu would be anchored where it no longer fits and would be clipped off the edge | | |
+| ED-11 | An https preview with a bad certificate | Run `Simple Browser: Show` and enter `https://self-signed.badssl.com/`, then `https://expired.badssl.com/`, then the first one again. Offline variant: a local https server with a self-signed certificate, reached at `https://127.0.0.1:8443` | Each of the first two shows an empty tab plus a toast naming the host, the first saying the certificate is not trusted and the second that it is expired or not yet valid. The third shows no second toast: a repeat of a fact already said is suppressed. No dialog and no way to continue appears at any point | | |
 
 ## 6. Extensions
 
@@ -214,7 +215,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Android Versions | 4 | | | |
 | Keyboard Input | 13 | | | |
 | Screen & Orientation | 6 | | | |
-| Editor Operations | 10 | | | |
+| Editor Operations | 11 | | | |
 | Extensions | 6 | | | |
 | Background/Foreground | 8 | | | |
 | Low Memory & Stress | 4 | | | |
@@ -222,7 +223,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Toolchains | 6 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **90** | | | |
+| **Total** | **91** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

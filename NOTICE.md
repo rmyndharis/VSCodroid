@@ -146,6 +146,8 @@ GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest.
 | Ruby | BSD 2-Clause | https://www.ruby-lang.org |
 | OpenJDK | GPL v2 + Classpath | https://openjdk.org |
 
+OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-17-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack.
+
 ## Extension Marketplace
 
 | Service | License | URL |

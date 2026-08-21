@@ -61,6 +61,31 @@
          worth putting in a bug report. -->
     <string name="url_handoff_failed">Could not open that %1$s link (%2$s).</string>
 
+    <!-- A page inside the editor asked for an https address the WebView would not
+         load: a dev server previewed in the Simple Browser, an image in a preview,
+         a fetch from an extension's webview. The request was already refused
+         before these strings existed; what was missing was any word about it, so
+         the frame simply came up empty.
+
+         Each cause gets its own wording because each needs a different next step
+         from the reader, and a single "certificate problem" would send a developer
+         with an expired certificate looking at trust settings.
+
+         The host and never the address: a dev server URL can carry an OAuth code
+         or an API key in its query. `tls_unknown_host` stands in when the address
+         yields no host at all, so the sentence still reads as one.
+
+         None of these offers to continue, and none should be given a button that
+         does. The WebView documentation asks that SSL errors are not put to the
+         user as a choice, and Google Play's insecure-SSL-error-handler policy
+         refuses an app whose override proceeds past them. -->
+    <string name="tls_blocked_untrusted">Blocked %1$s: its certificate is not trusted by this device. Use http, or a certificate from a system-trusted CA.</string>
+    <string name="tls_blocked_hostname">Blocked %1$s: its certificate is issued for a different host name.</string>
+    <string name="tls_blocked_date">Blocked %1$s: its certificate is expired or not yet valid.</string>
+    <string name="tls_blocked_invalid">Blocked %1$s: its certificate could not be validated.</string>
+    <string name="tls_blocked_handshake">Blocked %1$s: the secure connection could not be negotiated.</string>
+    <string name="tls_unknown_host">that address</string>
+
     <!-- Shown on the page itself, not in a toast, when the restart budget is
          spent. The screen behind it read "Starting server..." and went on
          reading that for ever, so the only thing it said was the only thing

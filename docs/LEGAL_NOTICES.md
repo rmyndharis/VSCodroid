@@ -527,6 +527,7 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **xz / liblzma** (LGPL-2.1 / GPL-2.0 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `liblzma`) — linked by Python's `lzma` module
 - **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`) — linked by Python's `zstd` module
 - **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`) — shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
+- **OpenJDK 17** (GPL-2.0 with the Classpath Exception): Source available at https://github.com/termux/termux-packages (package: `openjdk-17`), built from https://github.com/openjdk/jdk17u. Shipped inside the Java toolchain pack, not the base app, so it reaches only devices where Java was installed. The Classpath Exception grants an additional permission and removes none of the obligations above.
 
 Every entry after readline reaches the app as a dependency of something else
 rather than as a tool of its own, and each is dynamically linked and shipped as
@@ -552,6 +553,8 @@ These are the Free Software Foundation's texts as shipped in Termux's `liblzma` 
 They reach the device through the same `bundleNotices` task as this document, and are read straight out of the APK at **About > Licenses > License Texts**. They sit behind that chooser rather than inside the notices body because 78 KB of licence in front of the attribution and the source offer would bury the part a reader opened that screen for.
 
 Java is the one component above that arrives in an on-demand pack rather than in the base app, and the text covering it ships in the base app, which every device installing that pack already holds. Its licence is GPL-2.0 with the Classpath Exception, an additional permission that grants rights rather than requiring a copy of anything to travel; the exception is stated at https://openjdk.org/legal/gplv2+ce.html.
+
+OpenJDK's own notice set travels inside the Java pack, at `usr/lib/jvm/java-17-openjdk/legal`, beside the binaries it describes: the GPLv2 text it ships, the Assembly Exception, the Classpath Exception statement, and the third-party notices for the Apache, MPL, W3C, Unicode, ICU, BSD and MIT components inside it. Those components are not listed individually here, for the same reason the toolchain trees are not: the notices upstream wrote are what discharge their terms, and they ship. `scripts/download-java.sh` refuses to build the pack without them, and refuses one in which they arrived as symbolic links, because neither an asset pack nor the release ZIP can carry a link.
 
 GMP, in the Ruby toolchain pack, is LGPL-3.0 and is the one copyleft component with no text here; its licence is named and its source offered above.
 

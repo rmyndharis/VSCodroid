@@ -419,6 +419,53 @@ def unlisted_toolchain_libs():
     return out
 
 
+def toolchain_notices():
+    """Packs on disk whose tree carries no upstream notice file at all.
+
+    A backstop, and deliberately a coarse one. The per-file question this module
+    asks of the base tree cannot be asked of a toolchain: `unlisted_toolchain_libs`
+    explains why, and widening either check to reach inside a JDK would demand a
+    row per object. What can be asked instead is whether the notices upstream
+    shipped are still in the pack, because a download script that strips them
+    redistributes the binaries with none of their attribution and nothing else
+    here would notice.
+
+    That is not hypothetical. `download-java.sh` deleted the JDK's `legal/`
+    directory, filed with `demo/` and `man/` under one comment about stripping
+    documentation, and `legal/` is not documentation: it is the notice set for the
+    seventy modules the pack still ships.
+
+    Coarse in both directions, stated so nobody reads more into a pass than is
+    there. It cannot tell a complete notice set from a partial one, and it cannot
+    see a pack that was never downloaded, since there is no tree to read.
+
+    Where it actually fires, measured rather than assumed: `build.yml` never runs
+    a toolchain download, so the pull-request run has no pack to read and this
+    passes over nothing. `release.yml` runs `download-java.sh` before its second
+    call to this script, so that is the run that answers. A developer who has
+    built a pack locally gets the answer too, and a pack built before the download
+    script stopped stripping notices reddens until it is rebuilt, which is correct
+    rather than a false alarm: that tree really would ship without attribution.
+    """
+    out = []
+    for module in sorted(TOOLCHAINS.glob("toolchain_*")):
+        usr = module / "src/main/assets/usr"
+        if not usr.is_dir():
+            continue
+        found = False
+        for path in usr.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            name = path.name.lower()
+            if name.startswith(("license", "licence", "copying", "notice")) or \
+                    name.endswith((".md", ".txt")) and "licen" in name:
+                found = True
+                break
+        if not found:
+            out.append(module.name)
+    return out
+
+
 def shipped():
     """The redistributed binaries at the top level of the two flat directories,
     by file name.
@@ -706,6 +753,23 @@ def main():
               " attributing it. Add it to the `libs` array the download script"
               " writes, and give it a row in TOOLCHAIN_LIBRARIES and in both"
               " attribution documents", file=sys.stderr)
+        return 1
+
+    # After the two above, and for the same reason they are ordered: a pack with
+    # no manifest is already reported, and a pack whose payload was never
+    # downloaded has no tree for either check to read.
+    stripped = toolchain_notices()
+    if stripped:
+        print(f"FAIL {len(stripped)} toolchain pack(s) carry no upstream notice file:",
+              file=sys.stderr)
+        for module in stripped:
+            print(f"  {module}", file=sys.stderr)
+        print("  -> the pack redistributes upstream binaries with none of their"
+              " attribution. The notices ship inside the tree, beside what they"
+              " describe; check that the download script is not stripping them,"
+              " and that it copies with -L so none of them arrives as a symlink,"
+              " which neither an asset pack nor a release ZIP can carry",
+              file=sys.stderr)
         return 1
 
     for name, entry in for_check:

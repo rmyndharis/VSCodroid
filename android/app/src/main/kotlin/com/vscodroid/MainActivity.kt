@@ -55,6 +55,7 @@ import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
+import com.vscodroid.util.MainThreadWatch
 import com.vscodroid.util.Notices
 import com.vscodroid.webview.DownloadCoordinator
 import com.vscodroid.webview.DownloadHost
@@ -63,9 +64,12 @@ import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.RETRY_URL
+import com.vscodroid.webview.TlsFailure
+import com.vscodroid.webview.TlsFailureReason
 import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.sensitiveLocations
+import com.vscodroid.webview.tlsFailureToAnnounce
 import org.json.JSONException
 import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
@@ -83,6 +87,18 @@ class MainActivity : AppCompatActivity() {
     private var serverPort = 0
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
+
+    /**
+     * The TLS refusals already put on screen, so a page failing many requests to
+     * one host is one message rather than a minute of them. See
+     * [tlsFailureToAnnounce], which owns the rule and is tested without an
+     * Activity.
+     *
+     * Held here rather than in the client because that class has no mutable state
+     * and is worth keeping that way, and because the presenter is what knows when
+     * a message was actually shown.
+     */
+    private val announcedTlsFailures = mutableSetOf<TlsFailure>()
 
     /**
      * Whether a workbench page is loaded and able to receive an auth callback.
@@ -122,8 +138,9 @@ class MainActivity : AppCompatActivity() {
      * The directories this app publishes into the WebView, resolved once.
      *
      * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
-     * external storage and canonicalises four paths, so it is disk I/O and a
-     * debug build with StrictMode on will say so. It is also the allowlist that
+     * external storage and canonicalises four paths, so it is disk I/O, and
+     * [MainThreadWatch] makes a debug build say so: it is the first violation
+     * logged on every launch, and it is expected. It is also the allowlist that
      * `shouldInterceptRequest` compares every resource request against, and
      * [initBridge] installs the client immediately before [navigateToFolder]
      * starts the page loading — so resolved on another thread, the first requests
@@ -444,6 +461,13 @@ class MainActivity : AppCompatActivity() {
         // survive the app being killed while the browser had the screen. See
         // receiveCallbackIntent.
         receiveCallbackIntent(intent)
+
+        // Last, and the position is the whole of it. Everything above runs once
+        // per launch and touches the filesystem on purpose; what comes after is
+        // the editor session, which is where an unexpected main-thread read is
+        // worth knowing about. Debug builds only, log only. See MainThreadWatch,
+        // which lists what is expected to fire.
+        MainThreadWatch.install()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -734,8 +758,12 @@ class MainActivity : AppCompatActivity() {
                 safManager.startFileWatcher(mirrorDir, uri)
                 watchedSafFolder = mirrorDir to uri
 
-                // Write active folder so new terminals cd to the right place
-                writeActiveFolder(mirrorDir.absolutePath)
+                // Write active folder so new terminals cd to the right place.
+                // Off the main thread: lifecycleScope dispatches on
+                // Main.immediate, so this was a file write on the UI thread
+                // inside a modal dialog. withContext suspends until it returns,
+                // so the ordering the rest of this block depends on is unchanged.
+                withContext(Dispatchers.IO) { writeActiveFolder(mirrorDir.absolutePath) }
 
                 dialog.dismiss()
 
@@ -1216,8 +1244,9 @@ class MainActivity : AppCompatActivity() {
         // which is true from the moment the process is spawned and stays true for
         // the seconds the editor server takes to bind its port, and for the whole
         // of a restart after a crash. Navigating on it points the WebView at a
-        // port with nothing listening, and onReceivedError only logs, so what the
-        // user gets is a connection-refused page that nothing clears.
+        // port with nothing listening, and onReceivedError only logs a refused
+        // connection, so what the user gets is a connection-refused page that
+        // nothing clears.
         //
         // The real probe is HTTP and cannot run here — NetworkOnMainThreadException
         // — which is what made the wrong question attractive. isServerReady()
@@ -1467,6 +1496,17 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
             },
+            // A certificate the device does not trust used to produce an empty
+            // frame and nothing else: the platform default cancels the request
+            // and tells nobody, and no load error reaches a page-level state
+            // here. The record of what has been said is consulted inside
+            // runOnUiThread, so the set has one owner thread whatever the
+            // platform guarantees about which thread the callback arrives on.
+            onTlsFailure = { failure ->
+                runOnUiThread {
+                    tlsFailureToAnnounce(failure, announcedTlsFailures)?.let { reportTlsFailure(it) }
+                }
+            },
             onPageLoaded = { url ->
                 folderFromUrl(url)?.let {
                     openWorkspaceFolder = it
@@ -1504,6 +1544,31 @@ class MainActivity : AppCompatActivity() {
 
         val keyInjector = KeyInjector(wv)
         extraKeyRow?.keyInjector = keyInjector
+    }
+
+    /**
+     * Puts one TLS refusal on screen.
+     *
+     * A notice and not a prompt. It offers no way to continue and there is no path
+     * from here to `SslErrorHandler.proceed`, which is what the WebView javadoc
+     * asks for and what Google Play's insecure-SSL-error-handler policy requires.
+     * The wording differs per
+     * reason because the four causes need four different next steps from the
+     * reader, and a single "certificate problem" would leave a developer with an
+     * expired certificate reading about trust.
+     *
+     * The host is named and the address never is; see [TlsFailure].
+     */
+    private fun reportTlsFailure(failure: TlsFailure) {
+        val host = failure.host ?: getString(R.string.tls_unknown_host)
+        val message = when (failure.reason) {
+            TlsFailureReason.UNTRUSTED -> getString(R.string.tls_blocked_untrusted, host)
+            TlsFailureReason.HOSTNAME -> getString(R.string.tls_blocked_hostname, host)
+            TlsFailureReason.DATE -> getString(R.string.tls_blocked_date, host)
+            TlsFailureReason.INVALID -> getString(R.string.tls_blocked_invalid, host)
+            TlsFailureReason.HANDSHAKE -> getString(R.string.tls_blocked_handshake, host)
+        }
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     /**
@@ -2286,8 +2351,8 @@ class MainActivity : AppCompatActivity() {
      * OS does not, and emulators or custom ROMs carrying an older WebView than
      * their API level implies. On those the workbench loads against something it
      * was never tested on, and the failure is missing CSS or a blank editor
-     * rather than a clean refusal. `onReceivedError` only logs, so nothing else
-     * would reach the user.
+     * rather than a clean refusal. `onReceivedError` announces a TLS handshake
+     * failure and otherwise only logs, so nothing else would reach the user.
      *
      * It warns and continues rather than refusing to start. The floor is a
      * tested one, not a hard incompatibility, and an editor that degrades is
@@ -2555,8 +2620,8 @@ internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
  * [ready] is the health probe's own finding, never process liveness. A process is
  * alive from the instant it is spawned and stays alive through the seconds before
  * its port is bound and through a whole post-crash restart; navigating on that
- * points the WebView at nothing, and `onReceivedError` only logs, so the
- * connection-refused page it produces is never cleared.
+ * points the WebView at nothing, and `onReceivedError` only logs a refused
+ * connection, so the connection-refused page it produces is never cleared.
  */
 internal fun bindDecision(notice: StartupNotice?, port: Int, ready: Boolean): BindDecision = when {
     notice != null && notice.terminal -> BindDecision.ShowGaveUp(notice.message)

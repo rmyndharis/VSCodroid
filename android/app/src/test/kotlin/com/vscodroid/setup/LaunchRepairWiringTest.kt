@@ -78,6 +78,7 @@ class LaunchRepairWiringTest {
         "createNpmWrappers",
         "ensureToolchainEnvSourcing",
         "ensurePromptFix",
+        "ensureStartupDirGuard",
         "createBashEnvFile",
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
