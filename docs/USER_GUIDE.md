@@ -783,7 +783,7 @@ If `npm install` fails with errors:
 ### Git Push/Pull Fails
 
 - **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519` in the terminal and add it to your GitHub/GitLab account.
-- **SSL certificate error** -- this should not occur with bundled certificates. If it does, check that you are using `git@` (SSH) URLs instead of `https://`.
+- **SSL certificate error** -- the CA bundle git uses is built from your device's own system roots, so a public certificate authority is already trusted and a private or corporate one is not. Installing that CA through Android Settings does not change it either: user-installed certificates live in a separate store this app does not read. The practical answer for an internal host is an SSH remote (`git@`) instead of `https://`. Note that npm does not use that bundle at all, so a private registry behind its own CA is a different wall rather than the same one.
 
 ### App Uses Too Much Storage
 
