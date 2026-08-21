@@ -69,6 +69,73 @@ class WriteBackNoticeWiringTest {
     }
 
     /**
+     * The same silence a folder at a time, and a seam of its own because it says
+     * something else: a folder created in the editor that reached the device short of
+     * some of its files, or that stopped at the cap this app imposes rather than at
+     * anything the device refused. Unwired, a folder that arrived incomplete is
+     * indistinguishable from one that arrived whole, and the user finds out when they
+     * open it somewhere else.
+     *
+     * Both wordings are named, and separately: the capped one exists because telling a
+     * person the device refused their folder, when the limit is ours, sends them looking
+     * at the wrong machine.
+     *
+     * Same ceiling and same anchoring as the case above.
+     */
+    @Test
+    fun `MainActivity asks to be told when a folder did not arrive whole`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onUploadIncomplete\s*\{""").containsMatchIn(source),
+            "nothing wires the upload notice, so a folder that reached the device with " +
+                "files missing looks exactly like one that arrived whole",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_upload_incomplete""").containsMatchIn(source),
+            "the notice does not name the string that says how much did not arrive",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_upload_capped""").containsMatchIn(source),
+            "the cap this app imposes is not named, so it is announced in the wording " +
+                "for a device that refused and the user goes looking at their device",
+        )
+    }
+
+    /**
+     * The inbound direction, which is the one where the wording matters most and the
+     * one a shared seam would have got wrong: these documents are on the device and did
+     * not reach the editor, so "the only copy is inside VSCodroid" is the opposite of
+     * true for them. Running out of room is its own wording again, because that one the
+     * user can act on.
+     *
+     * The two string names are matched on separate lines rather than twice over one:
+     * `\b` refuses the longer name, so the ordinary plural cannot be satisfied by the
+     * out-of-room one and the pair stays two checks rather than one counted twice.
+     */
+    @Test
+    fun `MainActivity asks to be told when documents did not reach the editor`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onDocumentsNotCopied\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for documents that never arrived, so a folder " +
+                "opens missing files and says nothing about it",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_documents_not_copied\b""").containsMatchIn(source),
+            "the notice does not name the string that says which way the copy failed",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_documents_not_copied_no_room""").containsMatchIn(source),
+            "running out of room is announced in the wording for a provider that " +
+                "refused, so the one cause the user can fix is not the one they are told",
+        )
+    }
+
+    /**
      * The throttle belongs to the manager, so one refusing provider is one notice.
      *
      * Asserted as a rule rather than as a constant: the number is a product decision and
