@@ -7,6 +7,11 @@ signing.properties
 /android/.idea/
 /android/build/
 /android/app/build/
+# The Kotlin Gradle plugin's own project directory, holding compiler session
+# markers and error dumps. Written by every build, so leaving it untracked but
+# unignored means `git status` is never clean and `git add -A` sweeps compiler
+# scratch into a commit.
+/android/.kotlin/
 /android/app/release/
 /android/captures/
 .externalNativeBuild/

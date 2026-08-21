@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The toolchain check finds the welcome extension by name rather than a pinned version, so the next ordinary bump of that extension no longer fails the build.
 - The translatable-text check reports the test it actually applied instead of claiming no user-facing text sits outside the string resources.
 - Two tests pinning the write-back notice no longer pass when its wiring is commented out rather than deleted.
+- The Kotlin plugin's own build directory is ignored, so a build no longer leaves compiler scratch sitting in the working tree.
 
 ### Fixed
 
