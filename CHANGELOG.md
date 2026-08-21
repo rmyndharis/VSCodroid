@@ -110,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file being written back to a device folder can no longer be truncated by a second writer after the editor screen is rebuilt.
 - Removing a device folder copy stays refused for the whole session the folder was open in, rather than becoming allowed as soon as the editor screen is rebuilt.
 - A directory holding exactly the copy limit is no longer reported as partly copied when every file in it arrived.
+- Keys on the extra row keep the space above and below their labels, which the rounded background had been replacing with none.
 - Installing a toolchain already being installed is declined rather than copying the tree twice, which could run a device out of space and leave a partial install.
 - A page can no longer bury the editor under notices about links it could not open. Only navigations you started are announced, and repeats of the same one are dropped.
 

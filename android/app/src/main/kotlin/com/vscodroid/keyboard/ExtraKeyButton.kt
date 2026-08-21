@@ -175,10 +175,6 @@ class ExtraKeyButton @JvmOverloads constructor(
         maxLines = 1
         minWidth = dpToPx(48)
         minimumHeight = dpToPx(56)
-        // Horizontal padding carries the inset as well as the old padding, so
-        // the distance from the text to the edge of the drawn key is what it
-        // was before the gap moved off the layout params.
-        setPadding(dpToPx(4 + KEY_GAP_DP), dpToPx(6), dpToPx(4 + KEY_GAP_DP), dpToPx(6))
         isClickable = true
         isFocusable = false
 
@@ -194,7 +190,9 @@ class ExtraKeyButton @JvmOverloads constructor(
             this, 8, 13, 1, TypedValue.COMPLEX_UNIT_SP
         )
 
-        // Rounded corner background
+        // Rounded corner background. This is also what applies the key's
+        // padding, and the comment in applyRoundedBackground says why the two
+        // cannot be separated.
         applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
 
         setOnTouchListener { _, event ->
@@ -249,6 +247,28 @@ class ExtraKeyButton @JvmOverloads constructor(
             },
             dpToPx(KEY_GAP_DP), 0, dpToPx(KEY_GAP_DP), 0,
         )
+        // After the assignment, never before it, and that order is the whole
+        // reason the padding lives in a method rather than in one line of init.
+        // setBackground asks the drawable for its padding and writes whatever
+        // it reports onto the view, and an InsetDrawable reports its insets, so
+        // the assignment above replaces the key's padding with the two insets
+        // horizontally and zero vertically. That silently dropped the 6dp that
+        // keeps the label off the top and bottom edges for as long as the
+        // background was assigned last. It has to run on every repaint, not
+        // only the first: updateToggleAppearance repaints on every latch and
+        // KeyPageAdapter calls in here on every bind.
+        applyKeyPadding()
+    }
+
+    /**
+     * The distance from the label to the edge of the key.
+     *
+     * Horizontal padding carries the inset as well as the old padding, so the
+     * distance from the text to the edge of the drawn key is what it was before
+     * the gap moved off the layout params.
+     */
+    private fun applyKeyPadding() {
+        setPadding(dpToPx(4 + KEY_GAP_DP), dpToPx(6), dpToPx(4 + KEY_GAP_DP), dpToPx(6))
     }
 
     private fun dpToPx(dp: Int): Int =
