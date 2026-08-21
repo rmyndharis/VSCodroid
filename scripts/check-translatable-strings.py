@@ -106,7 +106,15 @@ SINK_RE = re.compile(r"\b(" + "|".join(SINKS) + r")\s*\(")
 # Not preceded by a word character, so `statusText.text` matches on `text` while
 # `contentText` and `statusText` do not. A preceding dot is allowed on purpose:
 # `row.statusText.text = "..."` is the shape this app actually writes.
-PROPERTY_RE = re.compile(r"(?<![\w])(" + "|".join(PROPERTY_SINKS) + r")\s*=(?!=)")
+#
+# `val`/`var` in front of the name is a declaration and not a sink at all:
+# `val text = "Some sentence"` names a local whose value reaches no widget, and
+# reading it as one made the check fail a line that no translator needs. The
+# keyword is matched into a group and the match dropped, rather than excluded by
+# a lookbehind, because a lookbehind has to be fixed width here and `val  text`
+# would walk straight back in.
+PROPERTY_RE = re.compile(
+    r"(?<![\w])(?:(val|var)\s+)?(" + "|".join(PROPERTY_SINKS) + r")\s*=(?!=)")
 
 # `${ ... }` first, so a `$` inside an expression is not read as a simple one.
 INTERPOLATION_RE = re.compile(r"\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
@@ -268,7 +276,9 @@ def scan(path, src):
     for m in SINK_RE.finditer(masked):
         windows.append((m.group(1), *call_window(masked, m.end() - 1)))
     for m in PROPERTY_RE.finditer(masked):
-        windows.append((m.group(1), *assignment_window(masked, m.end() - 1)))
+        if m.group(1):
+            continue
+        windows.append((m.group(2), *assignment_window(masked, m.end() - 1)))
 
     findings = []
     for name, lo, hi in windows:
