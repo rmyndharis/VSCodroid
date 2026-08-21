@@ -128,6 +128,90 @@ class ServerLogTest {
     }
 
     /**
+     * A rotation has to leave the file under the cap, or it has not rotated.
+     *
+     * Bounding what is kept by lines alone says nothing about their size, so a
+     * stream of fat lines, which is what one stack trace or one JSON blob is,
+     * leaves the file over the threshold the instant it was rotated. The next
+     * line then rotates again, and so does every line after it, each one a full
+     * read plus a full write on the thread draining the server's stdout.
+     *
+     * The observable for that is the file growing between appends. A file that
+     * rotates on every line cannot grow: it is cut back to the same tail each
+     * time and hovers at its rotated size, or drifts down as the oldest fat line
+     * falls off the end.
+     */
+    @Test
+    fun `fat lines leave the file under the cap and stop rotating`() {
+        val file = logFile()
+        file.parentFile.mkdirs()
+        // Wide enough that the 400 lines the line bound keeps are themselves
+        // over the 256 KiB cap, which is the whole of the defect.
+        val filler = "x".repeat(700)
+        file.writeText((0 until 500).joinToString("\n", postfix = "\n") { "line-$it $filler" })
+
+        val log = ServerLog(file)
+        val sizes = (0 until 5).map {
+            log.append("tick-$it")
+            file.length()
+        }
+
+        assertTrue(
+            sizes.last() <= 256L * 1024,
+            "the file is still over the cap after rotating, so the next line " +
+                "rotates too, and so does every line after it: $sizes",
+        )
+        assertEquals(
+            sizes.sorted(),
+            sizes,
+            "the file did not grow from one line to the next, so each of them " +
+                "rewrote the whole file instead of appending to it: $sizes",
+        )
+        assertTrue(
+            sizes.last() > sizes.first(),
+            "five lines left the file no larger, so rotation is running on " +
+                "every one of them: $sizes",
+        )
+        assertEquals(
+            "tick-4",
+            file.readLines().last(),
+            "the newest line is not the last one in the file",
+        )
+    }
+
+    /**
+     * One line can be wider than the whole byte budget, and it is kept anyway.
+     *
+     * It is the newest thing the server said and therefore the most useful line
+     * in the file, so a size bound is the wrong reason to lose it. The cost is
+     * one further rotation rather than a permanent one: once it is no longer the
+     * newest line the budget drops it, which is what the second half asserts.
+     */
+    @Test
+    fun `a line wider than the budget survives its own rotation`() {
+        val file = logFile()
+        file.parentFile.mkdirs()
+        file.writeText("giant " + "y".repeat(300 * 1024) + "\n")
+
+        val log = ServerLog(file)
+        log.append("right after the giant line")
+
+        assertTrue(
+            file.readLines().any { it.startsWith("giant ") },
+            "the newest output was dropped to satisfy a size bound",
+        )
+
+        log.append("one line later")
+
+        assertEquals(
+            listOf("right after the giant line", "one line later"),
+            file.readLines(),
+            "the oversized line is still being carried, so the file never " +
+                "returns under the cap",
+        )
+    }
+
+    /**
      * The wiring, read from the source because the only behavioural route to it
      * needs a live server process.
      *

@@ -52,16 +52,40 @@ internal class ServerLog(private val file: File) {
     }
 
     /**
-     * Rewrites the file with its last [KEEP_LINES] lines.
+     * Rewrites the file with its newest lines, at most [KEEP_LINES] of them and
+     * at most [KEEP_BYTES] worth.
      *
      * Truncating to empty would be shorter and wrong: a report taken shortly
      * after a rotation would carry almost nothing, which is the failure this
      * class exists to remove. Keeping more than the 200 lines the reader takes
      * leaves a margin, so a rotation just before a report still fills it.
+     *
+     * The byte bound is what makes rotation terminate. A line bound alone says
+     * nothing about the size of what it keeps, so [KEEP_LINES] fat lines can
+     * still exceed [MAX_BYTES], leaving the file over the threshold the moment
+     * it was rotated. Every following line then rotates again, and each of those
+     * is a full read plus a full write on the thread draining the server's
+     * stdout, which is the thread that must not fall behind.
+     *
+     * The newest line is kept even when it alone is over budget. It is the most
+     * useful line in the file, and dropping it to satisfy a size bound would
+     * throw away exactly what a report is read for. That costs one extra
+     * rotation, not a permanent one: on the next line the oversized one is no
+     * longer newest, so the budget drops it then.
      */
     private fun rotate() {
-        val keep = file.readLines().takeLast(KEEP_LINES)
-        file.writeText(keep.joinToString("\n", postfix = "\n"))
+        val newestFirst = file.readLines().takeLast(KEEP_LINES).asReversed()
+        var bytes = 0L
+        var keep = 0
+        for (line in newestFirst) {
+            // Counted the way it is written back, the line's UTF-8 bytes plus
+            // the newline it is joined with, or the budget is short by one byte
+            // per line and by however much any non-ASCII output weighs.
+            bytes += line.toByteArray().size + 1
+            if (keep > 0 && bytes > KEEP_BYTES) break
+            keep++
+        }
+        file.writeText(newestFirst.take(keep).asReversed().joinToString("\n", postfix = "\n"))
     }
 
     private companion object {
@@ -73,5 +97,17 @@ internal class ServerLog(private val file: File) {
          */
         const val MAX_BYTES = 256L * 1024
         const val KEEP_LINES = 400
+
+        /**
+         * What a rotation may retain, half the cap: enough that the 200 lines
+         * the reader takes still survive a rotation at well over 600 bytes a
+         * line, while the other half is left as room to fill, so the appends
+         * that follow a rotation are appends rather than rotations of their own.
+         *
+         * No budget can promise both a line count and a size, so where they
+         * conflict this one wins and the retained line count falls. Lines fat
+         * enough for that to bite are the case this bound exists for.
+         */
+        const val KEEP_BYTES = MAX_BYTES / 2
     }
 }

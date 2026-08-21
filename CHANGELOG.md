@@ -125,6 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bug reports now name the memory ceiling the server actually started with. The line existed but never reached the file the report carries.
 - The storage refusal on first run names the Retry button, so a screen reader user is told it is there.
 - A device folder list that fails to load says so, instead of reporting a failed removal the user never asked for.
+- The server log no longer rewrites itself on every output line once the lines it keeps are large, which stalled the thread draining the server's output.
 
 ### Security
 
