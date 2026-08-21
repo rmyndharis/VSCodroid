@@ -22,10 +22,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Module = require('module');
+const { newestExtensionDir } = require('./lib/bundled-extension');
 
-const EXTENSION = path.resolve(
-    __dirname,
-    '../android/app/src/main/assets/extensions/vscodroid.vscodroid-process-monitor-1.0.0/extension.js',
+// Resolved by prefix rather than pinned to a version. A bundled extension's
+// version must move whenever its contents do, so a pinned path breaks on the
+// next correct change, which is how this check came to fail on a branch whose
+// only fault was bumping the extension it tests.
+const EXTENSION = path.join(
+    newestExtensionDir('vscodroid.vscodroid-process-monitor-'), 'extension.js',
 );
 
 // The extension requires 'vscode', which exists only inside the workbench.

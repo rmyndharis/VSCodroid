@@ -27,6 +27,7 @@ const fs = require('fs');
 const path = require('path');
 const Module = require('module');
 const vm = require('vm');
+const { EXTENSIONS_DIR, newestExtensionDir } = require('./lib/bundled-extension');
 
 const ROOT = path.join(__dirname, '..');
 const MAIN_ACTIVITY = path.join(
@@ -35,7 +36,6 @@ const MAIN_ACTIVITY = path.join(
 const ANDROID_BRIDGE = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt',
 );
-const EXTENSIONS_DIR = path.join(ROOT, 'android/app/src/main/assets/extensions');
 
 /**
  * One of the user-facing decline reasons, read from where it now lives.
@@ -76,22 +76,9 @@ const DOLLAR_ESCAPE = "${'$'}";
  * which only shows up between 1.2 and 1.2.0 and does not arise in this tree.
  */
 function bridgeExtension() {
-    const version = (name) => {
-        const tail = name.slice(name.lastIndexOf('-') + 1);
-        const parts = tail.split('.').map(Number);
-        return parts.some(Number.isNaN) ? [] : parts;
-    };
-    const dirs = fs.readdirSync(EXTENSIONS_DIR)
-        .filter((d) => d.startsWith('vscodroid.vscodroid-saf-bridge-'))
-        .sort((a, b) => {
-            const x = version(a), y = version(b);
-            for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
-                if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
-            }
-            return 0;
-        });
-    assert.ok(dirs.length, `no vscodroid.vscodroid-saf-bridge-* under ${EXTENSIONS_DIR}`);
-    return path.join(EXTENSIONS_DIR, dirs[dirs.length - 1], 'extension.js');
+    return path.join(
+        newestExtensionDir('vscodroid.vscodroid-saf-bridge-'), 'extension.js',
+    );
 }
 
 /**
