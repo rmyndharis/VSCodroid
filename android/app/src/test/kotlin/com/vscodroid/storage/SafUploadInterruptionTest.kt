@@ -153,6 +153,92 @@ class SafUploadInterruptionTest {
         assertFalse(journal.isFile, "a finished upload must not distrust its own document")
     }
 
+    /**
+     * The claim a failed write-back takes has to be given back, or the journal line
+     * outlives the failure that wrote it.
+     *
+     * The count is per path and process-wide, and the failure exits used to return
+     * without releasing it. From then on a landed write-back saw a writer that no
+     * longer existed and kept the line, and the case below shows what that costs.
+     * Neither existing case reaches it: each drives one outcome on a fresh path,
+     * and the defect needs both outcomes on the same one.
+     */
+    @Test
+    fun `a write-back that fails and then lands stops distrusting the document`() {
+        deviceHolding("notes.txt")
+        val local = File(mirror, "notes.txt").apply { writeText("the whole edit") }
+        every { resolver.openOutputStream(any(), any()) } throws java.io.IOException("cut short")
+
+        deliver(android.os.FileObserver.MODIFY, "notes.txt")
+        assertEquals(
+            listOf(local.absolutePath), journal.readLines(),
+            "the failed write-back must record the edit that never reached the device",
+        )
+
+        every { resolver.openOutputStream(any(), any()) } returns java.io.ByteArrayOutputStream()
+        deliver(android.os.FileObserver.MODIFY, "notes.txt")
+
+        val listed = if (journal.isFile) journal.readLines() else emptyList()
+        assertFalse(
+            listed.contains(local.absolutePath),
+            "the document is current now and the journal still distrusts it, so every " +
+                "later sync will force the mirror over whatever the device holds",
+        )
+    }
+
+    /**
+     * What the leak above costs, driven all the way to the file.
+     *
+     * With the claim stranded, the sync takes the branch that exists to rescue a
+     * truncated upload and applies it to a document that was edited on the device
+     * after the upload had already landed. The device's edit is overwritten with
+     * the mirror, silently, and it happens again on every reopen because the line
+     * that triggers it can no longer be consumed.
+     */
+    @Test
+    fun `a device edit survives a write-back that failed once and then landed`() {
+        deviceHolding("notes.txt")
+        val local = File(mirror, "notes.txt").apply { writeText("the whole edit") }
+        local.setLastModified(1_000_000_000_000L)
+        every { resolver.openOutputStream(any(), any()) } throws java.io.IOException("cut short")
+        deliver(android.os.FileObserver.MODIFY, "notes.txt")
+        every { resolver.openOutputStream(any(), any()) } returns java.io.ByteArrayOutputStream()
+        deliver(android.os.FileObserver.MODIFY, "notes.txt")
+
+        // Now the device copy moves ahead: newer, and holding text the mirror does
+        // not. Nothing about it is a truncation, and nothing should overwrite it.
+        val cursor = mockk<Cursor>(relaxed = true)
+        var row = -1
+        every { cursor.moveToNext() } answers { ++row == 0 }
+        every { cursor.getColumnIndexOrThrow(any()) } answers {
+            when (firstArg<String>()) {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                else -> 3
+            }
+        }
+        every { cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+        every { cursor.isNull(any()) } returns false
+        every { cursor.getString(0) } returns "doc:notes.txt"
+        every { cursor.getString(1) } returns "notes.txt"
+        every { cursor.getString(2) } returns "text/plain"
+        every { cursor.getLong(3) } returns 11L
+        every { cursor.getLong(4) } returns 2_000_000_000_000L
+        every { resolver.query(any(), any(), any(), any(), any()) } returns cursor
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream("DEVICE EDIT".toByteArray())
+        }
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(
+            "DEVICE EDIT", local.readText(),
+            "the sync treated a landed upload as an unfinished one and forced the " +
+                "mirror over an edit made on the device, which existed only there",
+        )
+    }
+
     @Test
     fun `a sync prefers the mirror of a file whose upload was cut short`() {
         // The device's copy is newer and shorter: exactly what a truncation looks

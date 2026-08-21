@@ -130,6 +130,17 @@ class PickerAccessibilityWiringTest {
             "bindPickerMode does not tie isChecked to the selection, so the state " +
                 "it reports is fixed and the card sounds the same either way",
         )
+
+        // The state is wanted for what it says, not for what it draws.
+        // MaterialCardView answers isCheckable by switching on a checked icon in the
+        // top right, and this layout already constrains R.id.checkmark to that exact
+        // corner, so the two assertions above put a second tick on top of the first
+        // one until this line removed the drawable.
+        assertTrue(
+            Regex("""(?m)^\s*card\.checkedIcon\s*=\s*null""").containsMatchIn(body),
+            "bindPickerMode leaves MaterialCardView's own checked icon on, so a " +
+                "selected card draws two check marks in the same corner",
+        )
     }
 
     /**

@@ -1105,37 +1105,57 @@ class SafSyncEngine(private val context: Context) {
     /** The copy itself, with the document already claimed by the caller. */
     private fun writeLocalToSafHoldingDocument(localFile: File, safDocUri: Uri) {
         markUploadInFlight(localFile.absolutePath)
-        var attempts = 0
-        while (true) {
-            try {
-                val copied = context.contentResolver.openOutputStream(safDocUri, "wt")
-                    ?.use { output ->
-                        localFile.inputStream().use { input ->
-                            input.copyTo(output, COPY_BUFFER_SIZE)
-                        }
-                        true
-                    } ?: false
-                if (copied) {
-                    clearUploadInFlight(localFile.absolutePath)
+        // Released in a finally rather than at each exit, and this is not style.
+        // The claim taken above was originally dropped at the one exit its author
+        // had in mind, and the failure exits added later each returned without it,
+        // so the count never came back to zero for the life of the process. From
+        // then on [clearUploadInFlight] saw a writer that no longer existed and
+        // kept the journal line after a write-back that had landed, and
+        // [consumeStaleUploadRecord] refused to consume it, so every later
+        // initialSync force-pushed the mirror over whatever the device held. A
+        // device edit made in between was destroyed, silently, on every reopen.
+        //
+        // The distinction the two paths draw is what the journal means, and it is
+        // the reason there are two calls rather than one. The line records an edit
+        // that has not reached the device, so a landed write retires it and a
+        // failed one must leave it standing for the next sync to retry.
+        var landed = false
+        try {
+            var attempts = 0
+            while (true) {
+                try {
+                    val copied = context.contentResolver.openOutputStream(safDocUri, "wt")
+                        ?.use { output ->
+                            localFile.inputStream().use { input ->
+                                input.copyTo(output, COPY_BUFFER_SIZE)
+                            }
+                            true
+                        } ?: false
+                    if (copied) {
+                        landed = true
+                        return
+                    }
+                    attempts++
+                } catch (e: SecurityException) {
+                    Logger.e(tag, "Permission revoked while writing back: ${localFile.name}")
+                    onWriteBackFailed(localFile)
+                    return
+                } catch (e: Exception) {
+                    attempts++
+                }
+                if (attempts >= 2) {
+                    Logger.e(
+                        tag,
+                        "Write-back of ${localFile.name} did not finish; its device copy " +
+                            "is recorded as not to be trusted"
+                    )
+                    onWriteBackFailed(localFile)
                     return
                 }
-                attempts++
-            } catch (e: SecurityException) {
-                Logger.e(tag, "Permission revoked while writing back: ${localFile.name}")
-                onWriteBackFailed(localFile)
-                return
-            } catch (e: Exception) {
-                attempts++
             }
-            if (attempts >= 2) {
-                Logger.e(
-                    tag,
-                    "Write-back of ${localFile.name} did not finish; its device copy " +
-                        "is recorded as not to be trusted"
-                )
-                onWriteBackFailed(localFile)
-                return
-            }
+        } finally {
+            if (landed) clearUploadInFlight(localFile.absolutePath)
+            else releaseUploadClaim(localFile.absolutePath)
         }
     }
 
@@ -1269,6 +1289,21 @@ class SafSyncEngine(private val context: Context) {
      * so both writers address one file, and before the count the first to finish removed
      * the line the other was still inside.
      */
+    /**
+     * Drops this writer's claim while leaving standing whatever its failure recorded.
+     *
+     * The counterpart to [clearUploadInFlight], and deliberately not the same
+     * function. Both say "this writer is finished"; only one of them says "and the
+     * device copy is current now". A failed write-back has to say the first without
+     * the second, or the mirror edit it could not deliver is forgotten and the next
+     * sync has no reason to retry it.
+     */
+    private fun releaseUploadClaim(absolutePath: String) = synchronized(uploadJournalLock) {
+        val stillWriting = (uploadWriters[absolutePath] ?: 0) - 1
+        if (stillWriting > 0) uploadWriters[absolutePath] = stillWriting
+        else uploadWriters.remove(absolutePath)
+    }
+
     private fun clearUploadInFlight(absolutePath: String) = synchronized(uploadJournalLock) {
         val stillWriting = (uploadWriters[absolutePath] ?: 0) - 1
         if (stillWriting > 0) {

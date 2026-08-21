@@ -98,6 +98,12 @@ class ToolchainPickerAdapter(
         // to say only in the visual channel.
         card.isCheckable = true
         card.isChecked = isSelected
+        // Checkable is wanted for what it tells a screen reader, and not for what it
+        // draws. MaterialCardView answers isCheckable by switching on its own checked
+        // icon, in the top right, which is where this layout already constrains
+        // R.id.checkmark, so turning the state on put a second tick on top of the
+        // first one. Null removes the drawable without touching the state.
+        card.checkedIcon = null
 
         // Hide MANAGER-only views
         holder.statusBadge.visibility = View.GONE

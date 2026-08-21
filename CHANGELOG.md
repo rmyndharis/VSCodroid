@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A file you edited on the device is no longer overwritten by the app's copy after a write-back that failed once and later succeeded.
+- Cancelling a toolchain download while it installs no longer deletes the files being copied out of it, which left a part-written toolchain behind.
+- A selected toolchain in the first-run picker no longer draws two check marks in the same corner.
 - Values the editor page hands the app no longer reach logcat in the clear: a download's name and failure detail, a folder URI, and a toolchain name.
 - A link that fails to open now says why. Every refusal blamed a missing app, including a stale session and a URL Android refused outright.
 - The connection token no longer reaches logcat when a link fails to open. The URL was logged whole, twice, on a line that ships in release builds.

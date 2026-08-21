@@ -787,9 +787,11 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
                     "fetch-vscode-oss.sh for libripgrep.so -- and let it fail there,\n" +
                     "where the message says which upstream package it came from.\n" +
                     "\n" +
-                    "In CI this most likely means a cached jniLibs restored a binary\n" +
-                    "that predates a change to scripts/verify-android-elf.py, which is\n" +
-                    "in neither cache key: bust the assets cache rather than refetching."
+                    "In CI a cached jniLibs is restored whole with every download step\n" +
+                    "skipped, so a binary here can be older than the tree. It cannot be\n" +
+                    "older than this checker: scripts/verify-android-elf.py is hashed\n" +
+                    "into all three cache keys, so tightening it misses the cache and\n" +
+                    "refetches. Re-run the owning script above; do not bust a cache."
             )
         }
     }

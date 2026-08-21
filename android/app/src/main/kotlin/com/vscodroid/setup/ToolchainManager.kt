@@ -308,7 +308,24 @@ class ToolchainManager(private val context: Context) {
         // what the user just asked for. Releasing it here is what makes "cancelled"
         // and "not delivered" the same state, which is the only reading of Play's
         // records that reconcile can make.
-        releasePack(info.packName)
+        //
+        // Queued on [ioExecutor] rather than run here, because Play's removePack is
+        // a real recursive delete of the delivered directory, and the COMPLETED
+        // branch copies out of that same directory on this executor. The card goes
+        // on offering CANCEL throughout that copy, since handleStateUpdate does not
+        // report COMPLETED and the last status the UI holds is TRANSFERRING, so a
+        // tap in those seconds deleted the source under the reader and left a part
+        // written `usr/` tree behind. A single-thread executor puts the removal
+        // behind the copy instead.
+        //
+        // Bounded to this instance, and that is the whole of it: `ioExecutor` is an
+        // instance field, and every construction site makes its own manager. The two
+        // callers that can reach a live download, ToolchainActivity and the first-run
+        // queue in SplashActivity, each hold one manager for the download and the
+        // cancel alike, so both are covered. `AndroidBridge.cancelToolchainInstall`
+        // builds a fresh manager per call and would not be, but nothing in this tree
+        // sends that command.
+        ioExecutor.execute { releasePack(info.packName) }
         Logger.i(tag, "Cancelled download of ${info.packName}")
     }
 
