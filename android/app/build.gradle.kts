@@ -452,6 +452,38 @@ tasks.withType<Test> {
     )
         .withPropertyName("statedRequirements")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // Resources, for the same reason and with one difference that makes them
+    // easier to miss than everything above: they DO have a tool standing behind
+    // them, and it is not enough. aapt turns res/ into R, so an edit that adds or
+    // removes a resource id recompiles and the tests re-run. An edit that changes
+    // only an attribute VALUE, or deletes an attribute, produces the same ids and
+    // the same R, so the compiled classpath this task depends on is byte for byte
+    // what it was and Gradle answers UP-TO-DATE. That is precisely the shape of
+    // edit these suites exist to catch.
+    //
+    // Measured on this module, both directions, with the task made UP-TO-DATE
+    // first: deleting `app:navigationContentDescription` from
+    // activity_toolchain.xml left `> Task :app:testDebugUnitTest UP-TO-DATE`,
+    // BUILD SUCCESSFUL in 1s, and the previous run's results XML served back
+    // green; flipping `android:enforceStatusBarContrast` to true in themes.xml
+    // did the same. With this declaration each re-runs the suite and turns its
+    // reader red. Renaming a resource is NOT a control for this: it changes the
+    // id, so `processDebugResources` fails first and never reaches the test.
+    //
+    //   res/layout    PickerAccessibilityWiringTest
+    //   res/values    PickerAccessibilityWiringTest, ThemeEdgeToEdgeTest
+    //
+    // layout/ and values/ only. Nothing reads drawable/, mipmap-*/ or xml/, and
+    // the mipmaps are images whose hashes would be paid for on every run and
+    // never asked about. Widen this the moment a suite reads one of them:
+    //   grep -rn 'File("src/main/res' android/app/src/test/kotlin
+    inputs.files(
+        fileTree("src/main/res/layout"),
+        fileTree("src/main/res/values"),
+    )
+        .withPropertyName("readableResources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // The server tree in assets/ has to carry this checkout's patches, and nothing
