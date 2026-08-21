@@ -149,32 +149,6 @@ class MainActivity : AppCompatActivity() {
     private var syncingFolder: Uri? = null
 
     /**
-     * Every mirror this process has put a watcher on, whether or not one is on it
-     * now.
-     *
-     * Never cleared, and that is the point rather than an omission.
-     * [SafStorageManager.stopFileWatcher] stops the observers, but the engine
-     * waits only two seconds for the write-back worker to drain and then leaves
-     * it running rather than discarding writes the user expects on the device.
-     * So a folder the app considers closed can still have a thread streaming
-     * bytes out of its mirror, and every such write opens the device document
-     * with `"wt"`, which truncates at open: deleting the mirror underneath one
-     * empties the user's file rather than leaving it alone.
-     *
-     * A drain only ever touches the mirror it was started for, so refusing every
-     * mirror this process has watched is what puts it out of reach without
-     * needing to know whether a particular drain is still alive. The cost is that
-     * removing a folder opened this session needs a restart, which is a sentence
-     * the user can act on.
-     *
-     * Concurrent because it is written on the UI thread and read on the bridge
-     * thread, and a set that answers the guard cannot be one the guard may see
-     * mid-write.
-     */
-    private val mirrorsWatchedThisProcess: MutableSet<String> =
-        java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-    /**
      * The directories this app publishes into the WebView, resolved once.
      *
      * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
@@ -2553,6 +2527,45 @@ class MainActivity : AppCompatActivity() {
                display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
                <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
                <p>Starting server...</p></div></body></html>"""
+
+        /**
+         * Every mirror this process has put a watcher on, whether or not one is
+         * on it now.
+         *
+         * Never cleared, and that is the point rather than an omission.
+         * [SafStorageManager.stopFileWatcher] stops the observers, but the
+         * engine waits only two seconds for the write-back worker to drain and
+         * then leaves it running rather than discarding writes the user expects
+         * on the device. So a folder the app considers closed can still have a
+         * thread streaming bytes out of its mirror, and every such write opens
+         * the device document with `"wt"`, which truncates at open: deleting the
+         * mirror underneath one empties the user's file rather than leaving it
+         * alone.
+         *
+         * A drain only ever touches the mirror it was started for, so refusing
+         * every mirror this process has watched is what puts it out of reach
+         * without needing to know whether a particular drain is still alive. The
+         * cost is that removing a folder opened this session needs a restart,
+         * which is a sentence the user can act on.
+         *
+         * In the companion, and that scope is load-bearing rather than a
+         * placement preference. The drain this guards belongs to the process,
+         * not to the Activity that started it: a rotation, a WebView recreation,
+         * or any other Activity restart hands the replacement a fresh instance
+         * while the worker is still streaming bytes out of the same mirror. Held
+         * as an instance field, the set would be empty in that replacement and
+         * would answer "never watched" for exactly the mirror it exists to put
+         * out of reach, so an Activity restart would grant the removal that
+         * [SafStorageManager.reclaimRefusal] tells the user needs a restart of
+         * VSCodroid. That refusal is also the one `force` cannot bypass, so
+         * nothing further down would catch it.
+         *
+         * Concurrent because it is written on the UI thread and read on the
+         * bridge thread, and a set that answers the guard cannot be one the
+         * guard may see mid-write.
+         */
+        private val mirrorsWatchedThisProcess: MutableSet<String> =
+            java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     }
 }

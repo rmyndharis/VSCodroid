@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A save that cannot reach the device folder now says so, once per burst, instead of failing silently and looking like a save that worked.
 - A device folder's local copy is no longer deleted when it falls off the recent list. Anything written there but never sent, a cloned repository included, was the only copy.
 - A file being written back to a device folder can no longer be truncated by a second writer after the editor screen is rebuilt.
+- Removing a device folder copy stays refused for the whole session the folder was open in, rather than becoming allowed as soon as the editor screen is rebuilt.
 
 ### Security
 
