@@ -557,12 +557,19 @@ class ProcessManager(private val context: Context) {
             startWatchdog()
             // The source is named, not only the number. A ceiling in a bug report
             // that could be either a derived value or a user's is a number nobody
-            // can act on, and this line is what carries it into `server.log`.
-            Logger.i(
-                tag,
+            // can act on.
+            val summary =
                 "Server process started with PID ${getServerPid()}, heap ceiling ${heapMb}MB " +
-                    "(${if (heapOverrideActive) "user override, clamped" else "derived from device RAM"})",
-            )
+                    "(${if (heapOverrideActive) "user override, clamped" else "derived from device RAM"})"
+            Logger.i(tag, summary)
+            // And said twice on purpose. A bug report carries `server.log`, which
+            // only [ServerLog] writes, while `Logger.i` reaches logcat and in a
+            // release build stops there. Mirroring the one line makes the figure
+            // reachable from the report, next to the server output it explains.
+            // The output reader is already appending on its own thread by now;
+            // each append is a separate open in append mode, so the line lands
+            // whole either side of whatever the server has printed.
+            serverLog.append(summary)
             true
         } catch (e: Exception) {
             Logger.e(tag, "Failed to start server", e)

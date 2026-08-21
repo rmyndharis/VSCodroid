@@ -122,6 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A page can no longer bury the editor under notices about links it could not open. Only navigations you started are announced, and repeats of the same one are dropped.
 - Re-adding a device folder while its previous copy is still being removed no longer discards the new copy's record of which files have not reached the device.
 - A registry token or proxy password in `.npmrc` survives the launch-time repair. Any byte that was not valid UTF-8 was replaced when the file was rewritten.
+- Bug reports now name the memory ceiling the server actually started with. The line existed but never reached the file the report carries.
 
 ### Security
 
