@@ -138,6 +138,34 @@ internal const val OPEN_URL_NO_HANDLER =
 internal const val OPEN_URL_FAILED_PREFIX = "VSCodroid could not open that link: "
 
 /**
+ * Why [AndroidBridge.reclaimSafMirror] did not remove a mirror.
+ *
+ * The convention is [AndroidBridge.openExternalUrl]'s, and it is worth stating
+ * because it reads backwards: the EMPTY STRING means it was removed, and anything
+ * else is the sentence to show. A caller testing truthiness reports every refusal
+ * as a success, which for this method means telling the user their disk was freed
+ * while it was not.
+ *
+ * A refusal here is never a suggestion to retry harder. Each one names something
+ * that has to change first, and the two below are the ones this file can decide
+ * on its own; the rest come from the Activity, which is the only place that knows
+ * what the editor currently has open.
+ */
+internal const val RECLAIM_STALE_SESSION =
+    "VSCodroid did not accept the request. Reload the window and try again."
+
+/**
+ * No Activity wired the callback, so nothing could have been removed.
+ *
+ * Distinct from a refusal with a reason, because a bridge built without the
+ * wiring is a mistake in this app rather than a state the user can act on, and
+ * reporting it as "that folder is in use" would send them looking for a folder to
+ * close.
+ */
+internal const val RECLAIM_UNAVAILABLE =
+    "VSCodroid cannot manage device folder storage right now."
+
+/**
  * The sign-in requests this app launched a browser for, and when.
  *
  * Keyed by request id rather than being a single reading, and that is the whole
@@ -299,6 +327,9 @@ class AndroidBridge(
     private val onDownloadNamed: (url: String, fileName: String) -> Unit = { _, _ -> },
     private val onDownloadChunk: (requestId: String, base64: String) -> Boolean = { _, _ -> false },
     private val onDownloadComplete: (requestId: String, error: String?) -> Unit = { _, _ -> },
+    private val onListMirrors: () -> String = { "[]" },
+    private val onReclaimMirror: (hash: String, force: Boolean) -> String =
+        { _, _ -> RECLAIM_UNAVAILABLE },
 ) {
     private val tag = "AndroidBridge"
 
@@ -605,6 +636,46 @@ class AndroidBridge(
     fun getAvailableStorage(authToken: String): Long {
         if (!security.validateToken(authToken)) return 0
         return StorageManager.getAvailableStorage(context)
+    }
+
+    /**
+     * Returns the local copies of device folders, as a JSON array.
+     *
+     * [getStorageBreakdown] reports all of them as one number under `saf_mirrors`,
+     * which is honest and unactionable: the row is correctly marked unclearable, and
+     * choosing it is a dead end. This is the row's contents, so that the user can see
+     * which folder is holding the disk and decide about that folder rather than about
+     * a total.
+     *
+     * Answers `[]` when refused and also when no SAF manager is wired up, which are
+     * indistinguishable here, as they are in [getRecentFolders].
+     */
+    @JavascriptInterface
+    fun listSafMirrors(authToken: String): String {
+        if (!security.validateToken(authToken)) return "[]"
+        return onListMirrors()
+    }
+
+    /**
+     * Removes the local copy of one device folder and says whether it went.
+     *
+     * ⚠️ **This deletes files, and with [force] it deletes files that exist nowhere
+     * else.** A mirror the app can vouch for is a copy of the device folder and
+     * removing it loses nothing. A mirror it cannot vouch for holds work the app never
+     * delivered to the device: anything under `node_modules`, `.git`, `__pycache__` or
+     * `.gradle`, which the sync excludes by construction, and anything written while no
+     * watcher was running. [force] is the user's own decision to remove it anyway, and
+     * the caller must have said what is at stake in a modal the user had to accept. It
+     * is not a retry flag.
+     *
+     * @return the empty string when the mirror was removed, and otherwise the sentence
+     *   naming why it was not. Success is the falsy value, so a truthiness test reads
+     *   backwards and claims every refusal as a removal.
+     */
+    @JavascriptInterface
+    fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String {
+        if (!security.validateToken(authToken)) return RECLAIM_STALE_SESSION
+        return onReclaimMirror(hash, force)
     }
 
     // -- Crash Reporting --

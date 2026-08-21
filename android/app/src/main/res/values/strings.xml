@@ -182,6 +182,21 @@
         <item quantity="other">Not enough free space: %1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
     </plurals>
 
+    <!-- Removing the local copy of a device folder, from the storage screen. The
+         mirror named by a hash the screen holds no longer exists: the user picked it
+         from a list this app built a moment earlier, so this means the folder was
+         removed or re-synced in between rather than that they typed something wrong. -->
+    <string name="saf_mirror_unknown">There is no local copy of that folder to remove.</string>
+    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
+         refusal, because the user's next step is to confirm and remove it anyway: the
+         mirrors that hold unsynced files are exactly the ones worth the disk, since a
+         folder gets large by being worked in and working in one creates files the sync
+         excludes by construction. -->
+    <string name="saf_mirror_not_a_copy">Some files in that folder are not in the device folder. Removing the local copy would delete them.</string>
+    <!-- Said after a removal, on the Android side rather than in the editor, because
+         the recursive delete outlives the call the editor is waiting on. -->
+    <string name="saf_mirror_removed">Removed a device folder\'s local copy, freeing %1$s.</string>
+
     <!-- A folder copied out to the device that did not arrive whole. Counts entries
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not
@@ -284,7 +299,7 @@
          quoted exactly as the palette lists it because the reader's next action
          is to type it, and it is the one part of this sentence a translator must
          leave in English. -->
-    <string name="storage_low_warning">Storage low (%1$s available). Run \"VSCodroid: Clear Caches\" from the Command Palette.</string>
+    <string name="storage_low_warning">Storage low (%1$s available). Run \"VSCodroid: Manage Device Folder Storage\" from the Command Palette.</string>
 
     <!-- An Android System WebView older than the one this app is tested against.
          Both versions are arguments: the installed one is read off the device and

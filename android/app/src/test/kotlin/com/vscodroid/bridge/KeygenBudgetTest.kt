@@ -21,9 +21,19 @@ import java.io.File
 class KeygenBudgetTest {
 
     private val bridge = File("src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt")
-    private val relay = File(
-        "src/main/assets/extensions/vscodroid.vscodroid-saf-bridge-1.3.0/extension.js"
-    )
+
+    /**
+     * Found by prefix rather than named with its version, because the version is in the
+     * directory name and moves whenever the extension is edited. A pinned path made an
+     * unrelated bump fail here with "not found", which reads as the check being broken
+     * rather than as the path being stale, and the tempting repair is to delete the
+     * check.
+     */
+    private val relay = File("src/main/assets/extensions")
+        .listFiles { f -> f.isDirectory && f.name.startsWith("vscodroid.vscodroid-saf-bridge-") }
+        ?.singleOrNull()
+        ?.let { File(it, "extension.js") }
+        ?: File("src/main/assets/extensions/vscodroid.vscodroid-saf-bridge/extension.js")
 
     private fun read(f: File): String {
         check(f.isFile) {

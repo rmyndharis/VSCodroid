@@ -36,7 +36,7 @@ wv.addJavascriptInterface(bridge, "AndroidBridge")
 ```
 
 The injected name is `AndroidBridge` and that part was always right. The construction
-was not: `AndroidBridge(this)` does not compile. The real constructor takes nine
+was not: `AndroidBridge(this)` does not compile. The real constructor takes fourteen
 parameters, five of them required —
 
 ```kotlin
@@ -45,6 +45,9 @@ AndroidBridge(
     onBackPressed, onMinimize,             // required callbacks
     onOpenFolderPicker = {}, onOpenRecentFolder = {},
     onShowAbout = {}, safManager = null,   // defaulted
+    onDownloadNamed = { _, _ -> }, onDownloadChunk = { _, _ -> false },
+    onDownloadComplete = { _, _ -> },
+    onListMirrors = { "[]" }, onReclaimMirror = { _, _ -> "..." },
 )
 ```
 
@@ -64,9 +67,9 @@ compare.
    (`SecurityManager.generateToken`, in `bridge/`, not a `security/` package).
    `MainActivity.injectBridgeToken()` writes it to `window.__vscodroid.authToken`
    after the page loads.
-2. **Every method, not a chosen subset**: all 31 `@JavascriptInterface` methods take the
+2. **Every method, not a chosen subset**: all 33 `@JavascriptInterface` methods take the
    token and validate it before doing anything, returning without acting on refusal
-   (§2.4 records the one method whose refusal value is not an empty one).
+   (§2.4 records the three whose refusal value is not an empty one).
    `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
    if one is added without the check, and a second test asserts a refused call touches
    nothing -- so the rule holds for the class, not for a list that was correct when it was
@@ -150,25 +153,29 @@ Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
 with a token that does not match is refused before the method acts. Thirty of
-the thirty-one then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
-`0`, or nothing. **`generateSshKey` is the exception**: it returns
-`{"success":false,"error":"unauthorized"}`, a truthy string, so a caller testing
-`if (!result)` reads a refusal as success. Test its `success` field. Read the token from
+the thirty-three then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
+`0`, or nothing. **Three do not, and each is truthy on refusal.**
+`generateSshKey` returns `{"success":false,"error":"unauthorized"}`, so a caller
+testing `if (!result)` reads a refusal as success; test its `success` field.
+`openExternalUrl` and `reclaimSafMirror` return the refusal sentence itself,
+because for those two the EMPTY string is the success value, so the polarity is
+reversed and a truthiness test reads backwards in the other direction. Read the token from
 `window.__vscodroid.authToken`, which MainActivity sets once the bridge is installed.
 `BridgeTokenUniformityTest` enumerates the methods by reflection and fails if one is
 added without the check, so this holds for the class rather than for the list below.
 
 **Registered is not the same as reachable, and the difference decides what an extension
-can do.** All 31 methods below live on the `AndroidBridge` object injected into the
+can do.** All 33 methods below live on the `AndroidBridge` object injected into the
 workbench page, so anything running in that page's own realm can call them directly. An
 extension cannot: it runs in the web extension host, which does not see objects added by
 `addJavascriptInterface`. Extensions reach the bridge over the BroadcastChannel relay
 that `MainActivity.injectBridgeRelay` opens, and that relay dispatches a hand-written
-list of **12** command names — grep `d.cmd ===` in `MainActivity.kt` for the current set:
+list of **14** command names — grep `d.cmd ===` in `MainActivity.kt` for the current set:
 
 > `clearCaches`, `generateBugReport`, `generateSshKey`, `getRecentFolders`,
-> `getSshPublicKey`, `getStorageBreakdown`, `listSshKeys`, `openExternalUrl`,
-> `openFolderPicker`, `openRecentFolder`, `openToolchainSettings`, `showAboutDialog`
+> `getSshPublicKey`, `getStorageBreakdown`, `listSafMirrors`, `listSshKeys`,
+> `openExternalUrl`, `openFolderPicker`, `openRecentFolder`,
+> `openToolchainSettings`, `reclaimSafMirror`, `showAboutDialog`
 
 A method absent from that list is unreachable from any extension however correctly it is
 registered — which is the whole of why the toolchain management calls have no callers.
@@ -325,6 +332,45 @@ fun clearCaches(authToken: String): Long
 @JavascriptInterface
 fun getAvailableStorage(authToken: String): Long
 // Returns: available disk space in bytes
+
+@JavascriptInterface
+fun listSafMirrors(authToken: String): String
+// JSON array of the local copies of device folders, largest first. This is the
+// contents of the `saf_mirrors` row that getStorageBreakdown reports as one
+// number, and there is no other listing of them anywhere in the app.
+// Format: [{"hash": "abc123def456", "name": "MyProject", "bytes": N,
+//           "lastOpened": 1700000000, "granted": true, "reclaimable": false}]
+// "name" and a non-zero "lastOpened" are ABSENT for a copy whose folder fell off
+// the recent list: the grant and the list entry are released together, so the
+// copy that survives has no name left. Do not substitute the hash; it reads like
+// a folder name and is not one.
+// "reclaimable" false means the copy holds files the device folder does not, so
+// removing it destroys the only copy of them. That is the ordinary state of any
+// folder something has been built or cloned in.
+// "[]" if refused, and also "[]" when no SAF manager is wired up.
+
+@JavascriptInterface
+fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String
+// Removes the local copy of one device folder. `hash` comes from listSafMirrors.
+//
+// `force` removes a copy whose "reclaimable" is false, which DELETES FILES THAT
+// EXIST NOWHERE ELSE. Only set it after the user has confirmed a modal that says
+// so. It is not a retry flag, and nothing else in this API deletes user data.
+//
+// Returns the empty string when the copy was removed, and otherwise the reason it
+// was not. CALLERS MUST COMPARE AGAINST THE EMPTY STRING: success is the falsy
+// value here, exactly as in openExternalUrl, so a truthiness test reads backwards
+// and reports every refusal as freed disk.
+//
+// The refusals name something that has to change first: the folder is open, it is
+// still opening, or it was open in this session and VSCodroid must be restarted.
+// The last one is not caution. Closing a folder stops its watchers but leaves a
+// write-back drain running rather than discarding writes, and that drain opens
+// each device document with "wt", which truncates at open, so deleting the copy
+// underneath it empties the user's file on the device.
+//
+// The call returns as soon as the copy is unreachable; the recursive delete
+// continues afterwards and is finished by the next launch if the process dies.
 ```
 
 #### Device Info
@@ -853,7 +899,7 @@ flowchart TD
   T --> T3["ms-python.python"]
   T --> T4["dbaeumer.vscode-eslint"]
   T --> T5["bradlc.vscode-tailwindcss"]
-  O --> O1["vscodroid.vscodroid-saf-bridge (the 8 VSCodroid: commands)"]
+  O --> O1["vscodroid.vscodroid-saf-bridge (the 9 VSCodroid: commands)"]
   O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
   O --> O3["vscodroid.vscodroid-process-monitor"]
   O --> O4["vscodroid.vscodroid-serve-network (dev-server preview)"]

@@ -103,7 +103,16 @@ object StorageManager {
         return getAvailableStorage(context) < 100 * 1_048_576L
     }
 
-    private fun dirSize(dir: File): Long {
+    /**
+     * The bytes [dir] occupies, links excluded.
+     *
+     * Shared rather than private because the device-folder screen sizes each mirror
+     * with it, and a second implementation is how the mirrors would be mis-sized: a
+     * mirror is routinely a checked-out repository, so a link inside one is ordinary,
+     * and the rule below is what keeps a link's target from being charged to a
+     * directory that does not hold it.
+     */
+    internal fun dirSize(dir: File): Long {
         if (!dir.exists()) return 0
         var size = 0L
         val stack = ArrayDeque<File>()
@@ -126,7 +135,20 @@ object StorageManager {
         return size
     }
 
-    private fun deleteRecursive(dir: File): Long {
+    /**
+     * Deletes [dir] and everything under it, unlinking links rather than following
+     * them, and reports the bytes freed.
+     *
+     * Shared rather than private for the reason [dirSize] is, and here the cost of a
+     * second implementation is the user's files rather than a wrong number. The mirror
+     * reclaim in [com.vscodroid.storage.SafStorageManager] used `File.deleteRecursively`,
+     * which asks `isDirectory` and `listFiles` and so descends through a link out of the
+     * mirror. That was harmless only because the gate in front of it refuses any mirror
+     * containing a link at all; a reclaim the user confirms has no such gate, so the
+     * link-aware rule below is what stands between a forced removal and a directory
+     * somewhere else on the device.
+     */
+    internal fun deleteRecursive(dir: File): Long {
         if (!dir.exists()) return 0
         var freed = 0L
         val stack = ArrayDeque<File>()

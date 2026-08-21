@@ -17,6 +17,7 @@
  * - vscodroid.generateSshKey       : Creates ~/.ssh/id_ed25519
  * - vscodroid.copySshPublicKey     : Copies the public key to the clipboard
  * - vscodroid.showStorageUsage     : Per-component storage breakdown
+ * - vscodroid.manageDeviceFolders  : Lists the local copies of device folders and removes one
  * - vscodroid.clearCaches          : Deletes cached data, reports bytes freed
  * - vscodroid.about                : Opens the Android About dialog
  */
@@ -276,6 +277,16 @@ function activate(context) {
                 // with.
                 if (picked.key && clearable.has(picked.key)) {
                     vscode.commands.executeCommand('vscodroid.clearCaches');
+                } else if (picked.key === 'saf_mirrors') {
+                    // The one unclearable row that has somewhere to go. It is
+                    // usually the largest, it is never freed automatically once
+                    // anything has been built inside it, and until this branch
+                    // existed choosing it produced a sentence and a dead end.
+                    // The key is compared rather than a new flag added to the
+                    // breakdown: `clearable` means "keys clearCaches empties",
+                    // and widening it to mean "keys that do something" is how
+                    // that set would come to include one this action cannot free.
+                    vscode.commands.executeCommand('vscodroid.manageDeviceFolders');
                 } else if (picked.key) {
                     vscode.window.showInformationMessage(
                         `${STORAGE_LABELS[picked.key] || picked.key} is not cached data ` +
@@ -285,6 +296,95 @@ function activate(context) {
             } catch (/** @type {*} */ err) {
                 vscode.window.showErrorMessage(
                     `Could not read storage usage: ${err.message}`
+                );
+            }
+        }
+    );
+
+    // -- Device folder storage --
+
+    /**
+     * Lists the local copy of every device folder and offers to remove one.
+     *
+     * This is the only place in the app that can name them. Opening a device
+     * folder copies it under the app's own storage, and the app keeps a grant for
+     * the ten most recently opened folders; the eleventh releases its grant, and
+     * with it the entry that carried the folder's name. The copy stays on disk.
+     * The automatic cleanup then declines to remove it whenever it holds a file
+     * the device folder does not, which is the ordinary state of any folder
+     * somebody has run a build or a clone in, so the largest copies are exactly
+     * the ones that are never reclaimed and never named anywhere else.
+     */
+    const manageDeviceFoldersCmd = vscode.commands.registerCommand(
+        'vscodroid.manageDeviceFolders',
+        async () => {
+            try {
+                const json = /** @type {string} */ (
+                    await sendBridgeCommand('listSafMirrors')
+                );
+                const mirrors = JSON.parse(json || '[]');
+
+                if (mirrors.length === 0) {
+                    vscode.window.showInformationMessage(
+                        'No device folders have been copied into VSCodroid yet.'
+                    );
+                    return;
+                }
+
+                /** @type {(vscode.QuickPickItem & { mirror?: * })[]} */
+                const items = mirrors.map((/** @type {*} */ m) => ({
+                    mirror: m,
+                    // A copy whose folder fell off the recent list has no name
+                    // left anywhere, so say that rather than showing the hash,
+                    // which reads like a folder name and is not one.
+                    label: `$(folder) ${m.name || 'Unnamed folder'}`,
+                    description:
+                        formatBytes(Number(m.bytes) || 0) +
+                        (m.granted ? '' : ' · no longer accessible'),
+                    detail: m.reclaimable
+                        ? 'Every file here is also in the device folder'
+                        : 'Holds files that are NOT in the device folder'
+                }));
+
+                const picked = await vscode.window.showQuickPick(items, {
+                    placeHolder: 'Local copies of device folders; select one to remove'
+                });
+                if (!picked || !picked.mirror) return;
+
+                const m = picked.mirror;
+                const name = m.name || 'this folder';
+                const size = formatBytes(Number(m.bytes) || 0);
+                // Two different warnings, because the two cases cost the user
+                // different things and a single wording would have to be wrong
+                // about one of them. Modal in both, since neither is undoable.
+                const message = m.reclaimable
+                    ? `Remove VSCodroid's local copy of ${name} and free ${size}? ` +
+                      'The device folder itself is not touched, and every file in ' +
+                      'the copy is already there.'
+                    : `Remove VSCodroid's local copy of ${name} and free ${size}? ` +
+                      'THIS DELETES FILES. Some files in the copy are not in the ' +
+                      'device folder, including anything under node_modules, .git, ' +
+                      '__pycache__ or .gradle, and they exist nowhere else. This ' +
+                      'cannot be undone.';
+                const confirm = await vscode.window.showWarningMessage(
+                    message, { modal: true }, 'Remove'
+                );
+                if (confirm !== 'Remove') return;
+
+                await sendBridgeCommand('reclaimSafMirror', {
+                    hash: m.hash,
+                    force: !m.reclaimable
+                });
+                // Straight back to the list: the usual reason for opening this is
+                // to free space, and one folder is rarely the whole answer.
+                vscode.commands.executeCommand('vscodroid.manageDeviceFolders');
+            } catch (/** @type {*} */ err) {
+                // The refusal reasons arrive here, and each names something that
+                // has to change before the removal can happen: a folder that is
+                // open, one still syncing, or one this session has had open,
+                // which needs a restart before its copy can be removed safely.
+                vscode.window.showErrorMessage(
+                    `Could not remove that folder's local copy: ${err.message}`
                 );
             }
         }
@@ -326,6 +426,7 @@ function activate(context) {
         generateSshKeyCmd,
         copySshPublicKeyCmd,
         storageUsageCmd,
+        manageDeviceFoldersCmd,
         clearCachesCmd,
         aboutCmd
     );

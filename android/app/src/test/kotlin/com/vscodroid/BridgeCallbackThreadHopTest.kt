@@ -66,6 +66,11 @@ class BridgeCallbackThreadHopTest {
         "onDownloadComplete" to
             "ordered against onDownloadChunk, which cannot be posted; posting only this one " +
             "would end the download before its last pieces were written",
+        "onListMirrors" to "returns a String the caller reads synchronously",
+        "onReclaimMirror" to
+            "returns a String the caller reads synchronously; the one UI call in its body " +
+            "is a Toast that hops on its own, and the filesystem work it does belongs off " +
+            "the UI thread rather than on it",
     )
 
     /**

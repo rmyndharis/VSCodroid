@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -352,38 +353,253 @@ class SafStorageManager(private val context: Context) {
                 return@forEach
             }
 
-            // The journal keys its entries on the mirror's real path, which is
-            // the name before this pass renames it. `removePrefix` is a no-op on
-            // the branch that has not been renamed yet, so one expression serves
-            // both. Passing the `discarded-` path instead matched no entry at
-            // all, so the records outlived the mirror they distrust, and a later
-            // re-grant of the same folder read the device's own document as this
-            // app's interrupted upload and wrote the stale mirror back over it.
-            val originalPath = File(root, name.removePrefix(DISCARD_PREFIX))
-
-            val discarded: File
-            if (alreadySetAside) {
-                discarded = entry
-            } else {
-                val target = File(root, DISCARD_PREFIX + name)
-                if (!entry.renameTo(target)) {
-                    Logger.w(tag, "Could not set $name aside; leaving it in place")
-                    return@forEach
-                }
-                discarded = target
-            }
-            if (discarded.deleteRecursively()) {
-                removed++
-                // The mirror's distrust of its own device copies goes with it; see
-                // [SafSyncEngine.clearUploadsUnder] for what an entry that outlives
-                // its mirror costs a later re-grant.
-                syncEngine.clearUploadsUnder(originalPath)
-            }
+            if (discardEntry(root, name)) removed++
         }
         if (removed > 0) {
             Logger.i(tag, "Reclaimed $removed mirror entr(ies) without a live permission")
         }
         return removed
+    }
+
+    /**
+     * Renames one entry out of the way, and answers with where it went.
+     *
+     * The rename is the commit point of every removal in this file, and the reason is
+     * in [reclaimRevokedMirrorsSync]: a delete in place rests on nothing else touching
+     * the directory while the walk is inside it, and a mirror the size of a project
+     * takes long enough for the user to re-grant the same folder and re-sync it there.
+     * The walk's remaining deletes then land on the new copy under a running watcher
+     * and go out to the device as deletions of the user's real documents. A rename is
+     * atomic and instant, so the re-granted folder gets a fresh directory this removal
+     * cannot reach.
+     *
+     * It is also what makes an interrupted removal safe to abandon. Everything after
+     * the rename is idempotent and is finished off unconditionally by the next launch
+     * pass, so a return added between here and the delete costs disk until the next
+     * launch rather than correctness. That is the property to preserve when editing
+     * either caller.
+     *
+     * @return the set-aside entry, or null when there was nothing to move or the
+     *   rename failed. An entry already carrying [DISCARD_PREFIX] is returned as it
+     *   stands: an earlier pass reached this same point and its verdict still holds.
+     */
+    private fun setAside(root: File, name: String): File? {
+        if (name.startsWith(DISCARD_PREFIX)) return File(root, name).takeIf { it.exists() }
+        val entry = File(root, name)
+        if (!entry.exists()) return null
+        val target = File(root, DISCARD_PREFIX + name)
+        if (!entry.renameTo(target)) {
+            Logger.w(tag, "Could not set $name aside; leaving it in place")
+            return null
+        }
+        return target
+    }
+
+    /**
+     * Deletes an entry [setAside] has already moved, and retires the upload records
+     * that named it.
+     *
+     * [originalPath] is the path before the rename, and passing the `discarded-` one
+     * instead matched no journal entry at all, so records outlived the mirror they
+     * distrust: a later re-grant of the same folder hashes back to the same path, and
+     * the next sync then read the device's own document as this app's interrupted
+     * upload and wrote the stale mirror back over it.
+     *
+     * The delete is [com.vscodroid.util.StorageManager.deleteRecursive] rather than
+     * `File.deleteRecursively`, which asks `isDirectory` and `listFiles` and therefore
+     * descends through a symlink pointing out of the mirror. On the launch pass that
+     * was masked by [SafSyncEngine.holdsOnlyVouchedCopies] refusing any mirror holding
+     * a link; a removal the user confirms has no such gate, and a mirror is routinely
+     * a checked-out repository, so a link inside one is ordinary.
+     *
+     * Success is read off the filesystem rather than from a return value, because the
+     * two callers need the same answer and one of them counts it.
+     */
+    private fun finishOff(discarded: File, originalPath: File): Boolean {
+        StorageManager.deleteRecursive(discarded)
+        if (discarded.exists()) {
+            Logger.w(tag, "Could not finish removing ${discarded.name}; the next launch retries")
+            return false
+        }
+        syncEngine.clearUploadsUnder(originalPath)
+        return true
+    }
+
+    /** [setAside] then [finishOff], for a caller removing one entry on its own. */
+    private fun discardEntry(root: File, name: String): Boolean {
+        val originalPath = File(root, name.removePrefix(DISCARD_PREFIX))
+        val discarded = setAside(root, name) ?: return false
+        return finishOff(discarded, originalPath)
+    }
+
+    // -- Device folder storage, as the user sees it --
+
+    /**
+     * Every mirror on disk, with its size and whether the launch pass would remove it.
+     *
+     * This exists because the count budget the app already has produces a result
+     * nobody can see. [addToRecentFolders] keeps [MAX_RECENT] folders and releases the
+     * grant of the one that falls off, which is what makes its mirror a candidate for
+     * [reclaimRevokedMirrorsSync]. But that pass then almost always declines, and it
+     * declines hardest on the mirrors worth the most disk: a mirror gets large by being
+     * worked in, and working in one creates files the sync record cannot vouch for.
+     * [SafSyncEngine.SKIP_DIRECTORIES] keeps `node_modules`, `.git`, `__pycache__` and
+     * `.gradle` out of that record by construction, so a single `npm install` inside a
+     * device folder makes its mirror permanently unreclaimable. Its recent-list entry
+     * went with its grant, so it also has no name anywhere in the app, only a hash.
+     *
+     * So the missing authority is the user's, not the app's, and this is the listing
+     * that lets them exercise it.
+     *
+     * Only entries of the shape [getMirrorDir] produces are reported, for the reason
+     * the launch pass gives: `saf-mirrors` is exported into every terminal as
+     * `SAF_MIRRORS_DIR` and published as a WebView resource root, so a person can leave
+     * a file there and some will. [isMirrorDirectoryName] is the predicate, and it is
+     * narrower than [MIRROR_ENTRY]: that pattern matches the `<hash>.synced` record
+     * too, because the launch pass has to recognise both halves of a mirror, and here
+     * the record is not a row. A `discarded-` entry fails it outright, which is what
+     * keeps a removal already in progress from being offered as a folder to remove.
+     *
+     * ⚠️ **Two full walks of every mirror**, one to size it and one to vouch for it, so
+     * this must not run on the main thread. The count is bounded by what is on disk
+     * rather than by [MAX_RECENT]: an orphan outlives its grant, which is the whole
+     * reason this method exists.
+     *
+     * The upload journal is read once for the listing rather than per mirror, as the
+     * launch pass does, so that every row is judged against one reading of it.
+     */
+    fun listMirrors(): List<MirrorInfo> {
+        val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
+        val entries = root.listFiles()?.filter {
+            it.isDirectory && isMirrorDirectoryName(it.name)
+        } ?: return emptyList()
+
+        val granted = context.contentResolver.persistedUriPermissions
+            .map { getMirrorDir(it.uri).name }
+            .toSet()
+        val named = getPersistedFolders().associateBy { getMirrorDir(it.uri).name }
+        val stranded = syncEngine.uploadsInFlight()
+
+        return entries.map { dir ->
+            MirrorInfo(
+                hash = dir.name,
+                displayName = named[dir.name]?.displayName,
+                bytes = StorageManager.dirSize(dir),
+                lastOpened = named[dir.name]?.lastOpened ?: 0L,
+                granted = dir.name in granted,
+                reclaimable = mayReclaim(dir.name, stranded, root.absolutePath) &&
+                    syncEngine.holdsOnlyVouchedCopies(dir),
+            )
+        }.sortedByDescending { it.bytes }
+    }
+
+    /**
+     * Gives up the grant on the folder [hash] mirrors, and drops it from the recent
+     * list.
+     *
+     * Called before a mirror is removed rather than after, so that the two records of
+     * the folder go with it. A recent-list entry that survives its mirror is an Open
+     * Recent row pointing at a directory that is not there, and a grant that survives
+     * it makes the launch pass treat the next mirror of that folder as live.
+     *
+     * A grant the system has already dropped is not an error here: the folder may have
+     * been revoked in system settings, which is one of the ways a mirror becomes an
+     * orphan in the first place.
+     */
+    fun releaseGrantFor(hash: String) {
+        context.contentResolver.persistedUriPermissions
+            .filter { getMirrorDir(it.uri).name == hash }
+            .forEach { held ->
+                try {
+                    context.contentResolver.releasePersistableUriPermission(
+                        held.uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                } catch (e: SecurityException) {
+                    Logger.d(tag, "Grant for $hash was already gone")
+                }
+            }
+        saveRecentFolders(getPersistedFolders().filterNot { getMirrorDir(it.uri).name == hash })
+    }
+
+    /**
+     * Removes one mirror the user has asked to remove, and reports what that freed.
+     *
+     * The gate is the same one [reclaimRevokedMirrorsSync] applies and is re-asked
+     * here rather than taken from [listMirrors]: the listing is rendered, read and
+     * confirmed by a person, and a write-back can strand a file in between.
+     *
+     * [force] is what the user's confirmation buys, and it is the only thing that ever
+     * passes a mirror the gate refuses. Refusing outright was the alternative and it is
+     * not one: the mirrors the gate refuses are exactly the large ones, so an
+     * unforceable removal leaves the user looking at the disk they cannot reclaim. What
+     * [force] must never become is a default, because the files it removes are the ones
+     * this app never delivered to the device. The caller is responsible for saying so
+     * in as many words before setting it, and for refusing outright when the mirror is
+     * in use, which nothing here can see.
+     *
+     * **This method only sets the mirror aside; [sweepDiscardedMirrors] does the
+     * deleting.** The split is not tidiness, it is what makes the answer honest. Both
+     * entries are renamed first, which is atomic and instant, and from that moment the
+     * mirror is unreachable: nothing can open it, a re-grant of the folder gets a fresh
+     * directory, and the next launch pass finishes the deletion whatever happens to
+     * this process. The recursive delete of a project tree is not instant, and the
+     * caller reaching this is a bridge call whose promise in the extension host times
+     * out after five seconds, so doing it here would report a failure for a removal
+     * that had in fact succeeded.
+     *
+     * Both entries go together, and it matters which way an interruption falls. A
+     * directory left behind with its record deleted can never be vouched for again; a
+     * record left behind without its directory makes a later re-grant of the same
+     * folder read the device's own document as this app's interrupted upload. Renaming
+     * both before deleting either means an exit added between the phases leaves a pair
+     * of `discarded-` entries, which is a state the existing pass already resolves.
+     *
+     * ⚠️ Walks the mirror to size it, so it must not run on the main thread.
+     *
+     * @return the bytes the removal frees, or [RECLAIM_UNKNOWN] when no such mirror
+     *   exists, or [RECLAIM_REFUSED] when the gate declined and [force] was not set.
+     */
+    fun reclaimMirror(hash: String, force: Boolean): Long {
+        val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
+        val dir = File(root, hash)
+        // [hash] arrives from the page, so it is judged rather than trusted, and by the
+        // same predicate that produced the listing it came from.
+        if (!isMirrorDirectoryName(hash) || !dir.isDirectory) return RECLAIM_UNKNOWN
+        if (!force &&
+            !(mayReclaim(hash, syncEngine.uploadsInFlight(), root.absolutePath) &&
+                syncEngine.holdsOnlyVouchedCopies(dir))
+        ) {
+            return RECLAIM_REFUSED
+        }
+
+        val bytes = StorageManager.dirSize(dir)
+        releaseGrantFor(hash)
+        listOf(hash, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX).forEach { setAside(root, it) }
+        Logger.i(tag, "Set a device folder's local copy aside at the user's request")
+        return bytes
+    }
+
+    /**
+     * Deletes everything an earlier removal renamed out of the way, and reports how
+     * many entries went.
+     *
+     * The second half of [reclaimMirror], and safe to call at any time from any
+     * thread: a `discarded-` entry is this app's own leftover, already unreachable and
+     * already judged, so there is no gate left to apply and nothing to race with. Only
+     * names this app produces are touched, for the reason [reclaimRevokedMirrorsSync]
+     * gives about `saf-mirrors` not being private scratch space.
+     *
+     * Failing part way costs disk until the next launch rather than correctness, which
+     * is why the caller is free to run it on a thread it does not wait for.
+     */
+    fun sweepDiscardedMirrors(): Int {
+        val root = File(com.vscodroid.util.Environment.getSafMirrorsDir(context))
+        val leftovers = root.listFiles()?.map { it.name }?.filter {
+            it.startsWith(DISCARD_PREFIX) && MIRROR_ENTRY.matches(it.removePrefix(DISCARD_PREFIX))
+        } ?: return 0
+        return leftovers.count { discardEntry(root, it) }
     }
 
     // -- Sync Coordination --
@@ -565,6 +781,77 @@ class SafStorageManager(private val context: Context) {
             return strandedPaths.none { it.startsWith(prefix) }
         }
 
+        /** Answers of [reclaimMirror] that are not a byte count. */
+        internal const val RECLAIM_REFUSED = -1L
+        internal const val RECLAIM_UNKNOWN = -2L
+
+        /**
+         * Why a mirror the user asked to remove must not be removed now, or null when
+         * nothing this side knows about stands in the way.
+         *
+         * The question is "is anything still using this mirror", and it is separate
+         * from the question [mayReclaim] and [SafSyncEngine.holdsOnlyVouchedCopies]
+         * answer, which is "would removing it lose anything". Both have to be asked,
+         * and only this one needs state that lives in the Activity, which is why it
+         * takes its inputs rather than reading them.
+         *
+         * A mirror the editor still has open is not an inconvenience to delete, it is
+         * device data loss. The observers are live: a `FileObserver.DELETE` reaches
+         * `handleMirrorEvent`, becomes a DELETE write-back job and calls `deleteFromSaf`
+         * on the matching document, so a recursive delete of a watched mirror is
+         * replayed onto the user's real files through the provider. Nothing about the
+         * delete looks unusual from the watcher's side; a person deleting files is
+         * exactly what it exists to carry across.
+         *
+         * [watchedThisProcess] is the wide one and the others are narrower cases of it
+         * that produce a better sentence. It is deliberately never cleared. Closing a
+         * folder stops its observers, but `SafSyncEngine.stopWatching` waits only
+         * `DRAIN_GRACE_MS` for the write-back worker and then leaves it running rather
+         * than throwing away writes the user is expecting on the device, so a drain can
+         * still be streaming out of a mirror the app considers closed, and every write
+         * it performs opens the device document with `"wt"`, which truncates at open. A
+         * drain only ever touches the mirror it was started for, so refusing every
+         * mirror this process has watched is what puts it out of reach, and a restart
+         * is what makes the folder removable. Removing any of the three narrower checks
+         * degrades the message rather than opening the hole; removing this one opens
+         * it.
+         */
+        internal fun reclaimRefusal(
+            hash: String,
+            watchedMirror: String?,
+            syncingMirror: String?,
+            openWorkspaceMirror: String?,
+            watchedThisProcess: Set<String>,
+        ): String? = when (hash) {
+            watchedMirror -> RECLAIM_FOLDER_OPEN
+            syncingMirror -> RECLAIM_FOLDER_OPENING
+            openWorkspaceMirror -> RECLAIM_FOLDER_OPEN
+            in watchedThisProcess -> RECLAIM_FOLDER_THIS_SESSION
+            else -> null
+        }
+
+        internal const val RECLAIM_FOLDER_OPEN =
+            "That folder is open in the editor. Open a different folder first."
+        internal const val RECLAIM_FOLDER_OPENING = "That folder is still opening."
+        internal const val RECLAIM_FOLDER_THIS_SESSION =
+            "That folder was open in this session. Restart VSCodroid, then remove it."
+
+        /**
+         * The mirror [path] sits in, or null when it is not under [mirrorsRoot].
+         *
+         * The separator rule is [folderForOpenedPath]'s and is load-bearing for the
+         * same reason: mirror names are a hash prefix, so one being a prefix of another
+         * is ordinary, and a bare `startsWith` would name the wrong folder. Here the
+         * cost of naming the wrong one is refusing to remove a mirror that is free
+         * while allowing one that is open.
+         */
+        internal fun mirrorNameFor(path: String?, mirrorsRoot: String): String? {
+            val prefix = mirrorsRoot + File.separator
+            if (path == null || !path.startsWith(prefix)) return null
+            return path.removePrefix(prefix).substringBefore(File.separatorChar)
+                .takeIf { it.isNotEmpty() }
+        }
+
         /**
          * Splits the recent list into what is kept and what falls off the end.
          *
@@ -620,6 +907,26 @@ class SafStorageManager(private val context: Context) {
          */
         internal const val DISCARD_PREFIX = "discarded-"
 
+        /**
+         * Whether [name] is a mirror directory rather than anything else in
+         * `saf-mirrors`.
+         *
+         * Narrower than [MIRROR_ENTRY] by exactly one case, and the difference is why
+         * this is a predicate rather than a use of that pattern. The pattern matches
+         * both `<hash>` and `<hash>.synced`, because the reclaim pass has to recognise
+         * both halves of a mirror and remove them together. The user-facing side has
+         * the opposite need: the record is not a folder anybody opened, so listing it
+         * claims two folders where there is one, and accepting it as a removal target
+         * would set aside a record while leaving its mirror.
+         *
+         * Not covered by an `isDirectory` test at the call sites, which is the tempting
+         * simplification and was measured to be wrong: `saf-mirrors` is exported into
+         * every terminal as `SAF_MIRRORS_DIR`, so a directory can be created there
+         * under any name at all, this one included.
+         */
+        internal fun isMirrorDirectoryName(name: String): Boolean =
+            MIRROR_ENTRY.matches(name) && !name.endsWith(SafSyncEngine.SYNCED_RECORD_SUFFIX)
+
         /** How long one write-back failure notice suppresses the next. */
         internal const val FAILURE_NOTICE_INTERVAL_MS = 10_000L
 
@@ -644,4 +951,27 @@ data class SafFolderInfo(
     val displayName: String,
     val lastOpened: Long,
     val mirrorPath: String
+)
+
+/**
+ * One device folder's local copy, as the storage screen has to describe it.
+ *
+ * [displayName] and [lastOpened] come from the recent list and are therefore absent
+ * for an orphan: the grant and the list entry are released together when a folder
+ * falls off the end of [SafStorageManager.MAX_RECENT], so the mirror that survives
+ * has no name anywhere in the app. That is precisely the mirror worth showing, so
+ * the absence is carried rather than filled in with the hash.
+ *
+ * [reclaimable] is the launch pass's own verdict, not a prediction of what a removal
+ * will do. False means the mirror holds files the device folder does not, so removing
+ * it destroys the only copy of them; it is the ordinary state of any folder somebody
+ * has run a build or a clone in.
+ */
+data class MirrorInfo(
+    val hash: String,
+    val displayName: String?,
+    val bytes: Long,
+    val lastOpened: Long,
+    val granted: Boolean,
+    val reclaimable: Boolean,
 )

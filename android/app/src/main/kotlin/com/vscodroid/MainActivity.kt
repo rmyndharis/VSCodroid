@@ -70,8 +70,10 @@ import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.sensitiveLocations
 import com.vscodroid.webview.tlsFailureToAnnounce
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -122,7 +124,13 @@ class MainActivity : AppCompatActivity() {
      * A pair because [SafStorageManager.startFileWatcher] needs both and one is
      * useless without the other. Kept so that a failed folder switch can put the
      * previous folder's watcher back — see [restoreWatcherAfterFailure].
+     *
+     * Volatile because the removal guard reads it, and that read arrives on the
+     * WebView's "JavaBridge" thread while every write here is on the UI thread.
+     * The guard has to answer synchronously, so it cannot hop; a stale read of
+     * this field is a mirror the editor has open being reported as free.
      */
+    @Volatile
     private var watchedSafFolder: Pair<File, Uri>? = null
 
     /**
@@ -131,8 +139,40 @@ class MainActivity : AppCompatActivity() {
      * `navigateToFolder` loads `/?folder=..&tkn=..` and the server redirects, so
      * two page-finished callbacks arrive per switch. Without this, the second one
      * sees a watcher that is not yet installed and starts the same sync again.
+     *
+     * Volatile for the reason [watchedSafFolder] is: the removal guard reads it
+     * off the WebView's bridge thread and cannot hop to ask. A mirror read as not
+     * being synced while a sync is half way through it is one whose removal
+     * leaves the folder part written under a watcher that starts afterwards.
      */
+    @Volatile
     private var syncingFolder: Uri? = null
+
+    /**
+     * Every mirror this process has put a watcher on, whether or not one is on it
+     * now.
+     *
+     * Never cleared, and that is the point rather than an omission.
+     * [SafStorageManager.stopFileWatcher] stops the observers, but the engine
+     * waits only two seconds for the write-back worker to drain and then leaves
+     * it running rather than discarding writes the user expects on the device.
+     * So a folder the app considers closed can still have a thread streaming
+     * bytes out of its mirror, and every such write opens the device document
+     * with `"wt"`, which truncates at open: deleting the mirror underneath one
+     * empties the user's file rather than leaving it alone.
+     *
+     * A drain only ever touches the mirror it was started for, so refusing every
+     * mirror this process has watched is what puts it out of reach without
+     * needing to know whether a particular drain is still alive. The cost is that
+     * removing a folder opened this session needs a restart, which is a sentence
+     * the user can act on.
+     *
+     * Concurrent because it is written on the UI thread and read on the bridge
+     * thread, and a set that answers the guard cannot be one the guard may see
+     * mid-write.
+     */
+    private val mirrorsWatchedThisProcess: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /**
      * The directories this app publishes into the WebView, resolved once.
@@ -757,7 +797,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 safManager.startFileWatcher(mirrorDir, uri)
-                watchedSafFolder = mirrorDir to uri
+                beginWatching(mirrorDir, uri)
 
 
                 dialog.dismiss()
@@ -840,9 +880,118 @@ class MainActivity : AppCompatActivity() {
         val (mirrorDir, uri) = previous ?: return false
         if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString())) return false
         safManager.startFileWatcher(mirrorDir, uri)
-        watchedSafFolder = previous
+        beginWatching(mirrorDir, uri)
         Logger.i(tag, "Restored the previous folder's watcher after a failed switch")
         return true
+    }
+
+    /**
+     * Records that a watcher is on [mirrorDir], both for now and for the rest of
+     * the process.
+     *
+     * One method rather than two assignments at each site, because the two
+     * records answer different questions and only one of them is ever cleared.
+     * [watchedSafFolder] says what is watched now and goes null on every folder
+     * switch; [mirrorsWatchedThisProcess] says what a write-back drain could
+     * still be inside, and a drain outlives the switch that stopped it. A site
+     * that set the first without the second would leave the removal guard
+     * believing a mirror was untouched while a thread was still writing out of
+     * it, and nothing about that site would look wrong.
+     */
+    private fun beginWatching(mirrorDir: File, uri: Uri) {
+        watchedSafFolder = mirrorDir to uri
+        mirrorsWatchedThisProcess.add(mirrorDir.name)
+    }
+
+    /**
+     * The local copies of device folders, as the JSON the storage screen renders.
+     *
+     * Runs on the WebView's bridge thread and walks every mirror twice, once to
+     * size it and once to ask whether the device folder holds everything in it.
+     * That is slow enough to be worth naming, and the alternative is worse: a
+     * screen that offers a removal without saying what it costs is the shape this
+     * whole feature exists to replace.
+     */
+    private fun deviceFolderCopiesAsJson(): String =
+        JSONArray().apply {
+            safManager.listMirrors().forEach { mirror ->
+                put(JSONObject().apply {
+                    put("hash", mirror.hash)
+                    // Absent rather than filled in with the hash: the extension
+                    // decides how to name a folder the app can no longer name,
+                    // and a hash rendered as a folder name reads as a real one.
+                    if (mirror.displayName != null) put("name", mirror.displayName)
+                    put("bytes", mirror.bytes)
+                    put("lastOpened", mirror.lastOpened)
+                    put("granted", mirror.granted)
+                    put("reclaimable", mirror.reclaimable)
+                })
+            }
+        }.toString()
+
+    /**
+     * Removes the local copy of one device folder, or says why it cannot be.
+     *
+     * Two refusals, in two places, because they answer different questions and
+     * only one of them can be answered here. Whether anything is still using the
+     * mirror is this Activity's to know, and
+     * [SafStorageManager.reclaimRefusal] is the rule; whether removing it would
+     * lose the user's only copy of something is the storage manager's, and
+     * [SafStorageManager.reclaimMirror] re-asks it at the moment of the removal
+     * rather than trusting the listing the user was shown, because a write-back
+     * can strand a file while a confirmation dialog is on screen.
+     *
+     * The open workspace is read from [openWorkspaceFolder] and not from
+     * `webView?.url`. This runs on the bridge thread, and `WebView.getUrl` is a
+     * View call that belongs to the UI thread; that field exists precisely
+     * because the resource interceptor has the same problem.
+     *
+     * @return the empty string when the copy was removed, and otherwise the
+     *   sentence to show. Success is the falsy value; see
+     *   [com.vscodroid.bridge.AndroidBridge.reclaimSafMirror].
+     */
+    private fun removeDeviceFolderCopy(hash: String, force: Boolean): String {
+        val mirrorsRoot = Environment.getSafMirrorsDir(this)
+        val inUse = SafStorageManager.reclaimRefusal(
+            hash = hash,
+            watchedMirror = watchedSafFolder?.first?.name,
+            syncingMirror = syncingFolder?.let { safManager.getMirrorDir(it).name },
+            openWorkspaceMirror = SafStorageManager.mirrorNameFor(
+                openWorkspaceFolder, mirrorsRoot
+            ),
+            watchedThisProcess = mirrorsWatchedThisProcess,
+        )
+        if (inUse != null) return inUse
+
+        val freed = safManager.reclaimMirror(hash, force)
+        return when (freed) {
+            SafStorageManager.RECLAIM_UNKNOWN -> getString(R.string.saf_mirror_unknown)
+            SafStorageManager.RECLAIM_REFUSED -> getString(R.string.saf_mirror_not_a_copy)
+            else -> {
+                // The mirror is already unreachable at this point; what is left is
+                // the recursive delete, which takes as long as the tree is big.
+                // Detached because nothing waits for it: the next launch pass
+                // finishes any leftover, so the worst a killed process costs is
+                // disk that is already spent.
+                thread(name = "saf-sweep", isDaemon = true) {
+                    try {
+                        safManager.sweepDiscardedMirrors()
+                    } catch (e: Exception) {
+                        Logger.w(tag, "Sweeping the removed copies failed: ${e.message}")
+                    }
+                }
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        getString(
+                            R.string.saf_mirror_removed, StorageManager.formatSize(freed)
+                        ),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                ""
+            }
+        }
     }
 
     /**
@@ -1426,6 +1575,13 @@ class MainActivity : AppCompatActivity() {
             onDownloadNamed = { url, fileName -> downloads.onDownloadNamed(url, fileName) },
             onDownloadChunk = { requestId, base64 -> downloads.onBytes(requestId, base64) },
             onDownloadComplete = { requestId, error -> downloads.onComplete(requestId, error) },
+            // Not hopped either, and for the reason the download three are not:
+            // each returns a String the caller reads synchronously, and
+            // runOnUiThread returns Unit. Both walk the filesystem, which is
+            // correct on this thread and would not be on the UI one; the caller
+            // is a promise in the extension host with a five-second timeout.
+            onListMirrors = { deviceFolderCopiesAsJson() },
+            onReclaimMirror = { hash, force -> removeDeviceFolderCopy(hash, force) },
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
@@ -2041,6 +2197,21 @@ class MainActivity : AppCompatActivity() {
                             ch.postMessage(result === ''
                                 ? {id: d.id, ok: true}
                                 : {id: d.id, ok: false, error: result});
+                        } else if (d.cmd === 'listSafMirrors') {
+                            result = AndroidBridge.listSafMirrors(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'reclaimSafMirror') {
+                            // The second branch that can decline, and it follows
+                            // openExternalUrl's convention exactly: empty means it
+                            // was removed, anything else is the sentence to show.
+                            // Posting ok:true flatly here would tell the user their
+                            // disk had been freed when the removal was refused
+                            // because the folder is still open.
+                            result = AndroidBridge.reclaimSafMirror(
+                                token, d.hash, d.force === true);
+                            ch.postMessage(result === ''
+                                ? {id: d.id, ok: true}
+                                : {id: d.id, ok: false, error: result});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
@@ -2302,12 +2473,20 @@ class MainActivity : AppCompatActivity() {
      * Warns the user if available storage is critically low (<100 MB).
      *
      * The command name is quoted exactly as the palette lists it
-     * (`VSCodroid: Clear Caches`, contributed by the bundled Android bridge
-     * extension), because the reader's next action is to type it. This said
-     * "Clear caches in Settings" until 2026-08-14, and there is no Settings
-     * screen: the manifest declares Splash, Main and Toolchain activities and
-     * nothing else, so the sentence sent a user who was out of space looking
-     * for a place that does not exist.
+     * (`VSCodroid: Manage Device Folder Storage`, contributed by the bundled
+     * Android bridge extension), because the reader's next action is to type it.
+     * This said "Clear caches in Settings" until 2026-08-14, and there is no
+     * Settings screen: the manifest declares Splash, Main and Toolchain
+     * activities and nothing else, so the sentence sent a user who was out of
+     * space looking for a place that does not exist.
+     *
+     * It then named `VSCodroid: Clear Caches`, which exists but cannot free the
+     * directory that is usually the largest. `clearCaches` empties the npm cache,
+     * the temporary directory, the crash logs and the editor's logs, and none of
+     * those is `saf-mirrors`, where a copy of every device folder the user has
+     * opened accumulates and is never removed automatically once anything in it
+     * has been built or cloned. So the one moment the advice was given was the
+     * one moment it was wrong.
      */
     private fun checkStorageHealth() {
         if (!StorageManager.isStorageLow(this)) return
