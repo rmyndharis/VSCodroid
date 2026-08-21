@@ -25,6 +25,19 @@
 -keep class com.vscodroid.VSCodroidApp { *; }
 
 # ----------------------------------------------------------------------------
+# Exception type names that reach the user
+# ----------------------------------------------------------------------------
+# FirstRunSetup.describeFailure builds the setup-failure text the splash screen
+# shows out of error.javaClass.simpleName, so any app exception R8 renames is
+# read by the user as the obfuscated token instead of a type: a failed manifest
+# rewrite reported itself as "oo: could not write ...". The rule is written over
+# the shape rather than over the class that surfaced it, so an exception type
+# added later is legible without anyone remembering this file. -keepnames, so
+# unused classes are still removed and only the name is pinned; members stay
+# renameable because none of them is ever printed.
+-keepnames class com.vscodroid.** extends java.lang.Throwable
+
+# ----------------------------------------------------------------------------
 # WebKit
 # ----------------------------------------------------------------------------
 # Suppress warnings for optional WebKit APIs that may not be present on all
