@@ -1048,7 +1048,55 @@ class SafSyncEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Documents a write is streaming into right now, keyed by document URI.
+     *
+     * `openOutputStream(uri, "wt")` truncates at open, so two writers of one document
+     * produce a file that is neither of their inputs. Two writers are reachable: the
+     * mirror is named by a hash of the folder rather than by the session, so reopening
+     * a folder while the previous session's drain is still streaming puts [initialSync]
+     * on the IO dispatcher and that drain on the same document.
+     *
+     * A set rather than a lock, and that is the whole design. The obvious fix, a
+     * per-document lock the second writer waits on, was rejected for a measured reason:
+     * a `ContentResolver` stream to a network or MTP provider has no timeout, so
+     * waiting converts today's race into an unbounded stall of [initialSync], behind a
+     * dialog built with `setCancelable(false)`. A trade of corruption for a hang is not
+     * a fix. `add` returns false when someone already holds the document, and the loser
+     * declines instead of waiting.
+     *
+     * What the loser gives up is one write, and both writers copy the same local file,
+     * so the bytes it would have written are the bytes the winner is writing. If the
+     * mirror changed in between, the watcher raises MODIFY again and the queue carries
+     * it; [processWriteBack] already drops a job a newer one supersedes.
+     *
+     * Keyed by document rather than by local path deliberately, though the two coincide
+     * today: the mirror is one directory per folder, so one local path resolves to one
+     * document and nothing distinguishes the keys. Measured, and stated because it is a
+     * coincidence rather than a guarantee. The thing being protected is the document
+     * that `"wt"` truncates, so that is what the key names; a local path is a proxy that
+     * happens to agree.
+     */
+    private val documentWritesInFlight = ConcurrentHashMap.newKeySet<String>()
+
     private fun writeLocalToSaf(localFile: File, safDocUri: Uri) {
+        val document = safDocUri.toString()
+        if (!documentWritesInFlight.add(document)) {
+            // Someone is streaming into this document now. Declining is what keeps the
+            // two from interleaving, and it costs nothing the winner is not already
+            // writing.
+            Logger.d(tag, "Another write holds ${localFile.name}; leaving it to that one")
+            return
+        }
+        try {
+            writeLocalToSafHoldingDocument(localFile, safDocUri)
+        } finally {
+            documentWritesInFlight.remove(document)
+        }
+    }
+
+    /** The copy itself, with the document already claimed by the caller. */
+    private fun writeLocalToSafHoldingDocument(localFile: File, safDocUri: Uri) {
         markUploadInFlight(localFile.absolutePath)
         var attempts = 0
         while (true) {
