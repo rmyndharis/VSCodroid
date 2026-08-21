@@ -14,6 +14,7 @@
         android:layout_height="?attr/actionBarSize"
         android:background="@color/colorSurface"
         app:navigationIcon="?attr/homeAsUpIndicator"
+        app:navigationContentDescription="@string/toolchain_navigate_up"
         app:navigationIconTint="@color/colorOnSurface"
         app:title="@string/toolchain_settings_title"
         app:titleTextColor="@color/colorOnSurface" />

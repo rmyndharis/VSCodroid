@@ -230,6 +230,17 @@ class SplashActivity : AppCompatActivity() {
         runOnUiThread {
             statusText.text = message
             progressBar.visibility = View.GONE
+            // Spoken, because the screen alone cannot say it. Setup writes into one
+            // label for minutes; a user not touching the screen hears nothing between
+            // the window opening and MainActivity arriving, so "still extracting" and
+            // "gave up" sound identical and they wait on a screen that is finished.
+            //
+            // announceForAccessibility rather than a live region on the label: a live
+            // region would speak every progress update too, and a percentage read
+            // aloud every few hundred milliseconds is a way of saying nothing while
+            // making noise. What has to be spoken is the transition, and this is the
+            // only place a failure passes through.
+            statusText.announceForAccessibility(message)
             // Show retry button dynamically
             val parent = statusText.parent as? android.view.ViewGroup ?: return@runOnUiThread
             val retryButton = Button(this).apply {
@@ -261,6 +272,14 @@ class SplashActivity : AppCompatActivity() {
             } else {
                 parent.addView(retryButton)
             }
+            // Deliberately NOT moving accessibility focus to the Retry button, and
+            // that is a reversal: the first attempt did, and lint's AccessibilityFocus
+            // check refused it. It is right. Stealing focus contradicts what a screen
+            // reader user expects of every other app, and it drops them somewhere they
+            // did not navigate to. What they need instead is to know the screen has
+            // changed and what to do about it, and both failure strings already end in
+            // "Tap Retry", so the announcement above carries the instruction and
+            // ordinary swiping reaches the control.
         }
     }
 
@@ -441,9 +460,22 @@ class SplashActivity : AppCompatActivity() {
      * result colour without the opacity is the defect, and the next result added
      * here should not be able to reintroduce it by copying one half.
      */
-    private fun showResult(view: android.widget.TextView, colorRes: Int) {
+    private fun showResult(view: android.widget.TextView, colorRes: Int, packLabel: String) {
         view.setTextColor(getColor(colorRes))
         view.alpha = 1f
+        // And spoken. The queue holds the user until every pack finishes, and rows
+        // moved Waiting -> percent -> Done or Failed with nothing said, so a stalled
+        // download and a progressing one sounded the same and there was no way to
+        // tell whether to wait or press Cancel.
+        //
+        // Terminal states only, deliberately. A live region on this label would
+        // announce every percentage tick, which is noise rather than information;
+        // the framework already emits a progress event for the bar beside it, and a
+        // user can swipe to a row and hear the current value on demand. What could
+        // not be reached at all was the end of the story.
+        // Named, because a queue speaks several of these and "Done" on its own says
+        // which of them only to someone watching the rows move.
+        view.announceForAccessibility("$packLabel: ${view.text}")
     }
 
     private fun handleDownloadState(packName: String, status: Int, percent: Int) {
@@ -477,7 +509,7 @@ class SplashActivity : AppCompatActivity() {
             AssetPackStatus.COMPLETED -> {
                 row.progressBar.progress = 100
                 row.statusText.text = getString(R.string.progress_done)
-                showResult(row.statusText, R.color.colorSuccess)
+                showResult(row.statusText, R.color.colorSuccess, row.nameText.text.toString())
             }
             AssetPackStatus.PENDING, AssetPackStatus.WAITING_FOR_WIFI -> {
                 row.statusText.text = getString(R.string.progress_waiting)
@@ -498,7 +530,7 @@ class SplashActivity : AppCompatActivity() {
                     Logger.w(tag, "Pack $packName ended at status $status")
                 }
                 row.statusText.text = getString(R.string.progress_failed)
-                showResult(row.statusText, R.color.colorError)
+                showResult(row.statusText, R.color.colorError, row.nameText.text.toString())
             }
         }
 

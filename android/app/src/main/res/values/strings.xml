@@ -162,4 +162,10 @@
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s is too large to copy out whole. The rest of it stayed inside VSCodroid.</string>
+
+    <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
+         way back out of that screen. Without it a screen reader announces an
+         unlabelled button: setSupportActionBar is never called, so the framework's
+         own "Navigate up" default never applies. -->
+    <string name="toolchain_navigate_up">Back to the editor</string>
 </resources>

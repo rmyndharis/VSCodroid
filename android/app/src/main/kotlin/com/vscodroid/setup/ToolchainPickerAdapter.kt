@@ -90,6 +90,15 @@ class ToolchainPickerAdapter(
         )
         holder.checkmark.visibility = if (isSelected) View.VISIBLE else View.GONE
 
+        // The state a screen reader can read. MaterialCardView implements Checkable
+        // and already forwards these into the node and into the change event, but
+        // nothing ever turned it on, so every card reported checkable=false and
+        // checked=false in both states. Selection existed only as a stroke, a
+        // background colour and a checkmark that vanishes when deselected, which is
+        // to say only in the visual channel.
+        card.isCheckable = true
+        card.isChecked = isSelected
+
         // Hide MANAGER-only views
         holder.statusBadge.visibility = View.GONE
         holder.actionButton.visibility = View.GONE
@@ -97,7 +106,12 @@ class ToolchainPickerAdapter(
 
         card.setOnClickListener {
             cards.toggleSelection(info.packName)
-            notifyItemChanged(holder.bindingAdapterPosition)
+            // With a payload rather than without: a plain notifyItemChanged runs the
+            // default change animation, which swaps the item view and takes
+            // accessibility focus with it, so the user who just double-tapped a card
+            // is returned to the top of the list. RecyclerView skips that animation
+            // when a payload is supplied, and the rebind below is the same work.
+            notifyItemChanged(holder.bindingAdapterPosition, PAYLOAD_SELECTION)
             onSelectionChanged?.invoke(cards.selectedPackNames())
         }
     }
@@ -163,6 +177,14 @@ class ToolchainPickerAdapter(
     }
 
     companion object {
+        /**
+         * Marks a rebind that only changes selection.
+         *
+         * Its value is never read; supplying any payload is what makes RecyclerView
+         * skip the change animation, and skipping it is what keeps accessibility
+         * focus on the card the user just tapped.
+         */
+        private const val PAYLOAD_SELECTION = "selection"
         private fun labelFor(action: ToolchainAction): Int = when (action) {
             ToolchainAction.INSTALL -> R.string.toolchain_install
             ToolchainAction.REMOVE -> R.string.toolchain_remove

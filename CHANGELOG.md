@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A screen reader now hears the Toolchains back arrow, which toolchain is selected in the picker, that setup failed, and that a download finished.
 - Six texts on the setup and toolchain screens were too faint to read, including the Continue button and the word that says a download failed.
 - Two write-backs of one device file can no longer interleave. Each opened the document with truncation, so the copy on the device could end up neither version.
 - A file the device folder refuses to create now says so. It stayed inside the app looking synced, and the difference only showed after an uninstall.
