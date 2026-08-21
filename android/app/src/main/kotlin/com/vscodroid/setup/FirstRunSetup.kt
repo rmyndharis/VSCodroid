@@ -183,7 +183,13 @@ class FirstRunSetup(
             // with a Retry button that measures the same thing for ever and a
             // MainActivity that never runs, so nothing the app offers can free a byte.
             val available = context.filesDir.usableSpace
-            val installed = installedExtractionBytes(File(context.filesDir, "server")) +
+            // Kept on its own because two different questions read it. It counts
+            // toward what is already on disk, and it is also the only honest
+            // answer to "is the extracted tree here at all", which is what
+            // decides the rewrite headroom. `usr/` cannot answer the second: the
+            // per-launch repair block writes into it before this gate ever runs.
+            val extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
+            val installed = extractedTreeBytes +
                 sharedTreeCredit(
                     installedBytes = installedExtractionBytes(File(context.filesDir, "usr")),
                     bundledBytes = BuildConfig.BUNDLED_USR_BYTES,
@@ -196,7 +202,8 @@ class FirstRunSetup(
                     bundledBytes = BuildConfig.BUNDLED_EXTENSION_BYTES,
                     foreignBytes = 0,
                 )
-            val required = requiredExtractionBytes(assetBytes, largestAssetBytes, installed)
+            val required =
+                requiredExtractionBytes(assetBytes, largestAssetBytes, installed, extractedTreeBytes)
             if (available < required) {
                 lastRefusedBytes = required
                 Logger.e(
@@ -2497,12 +2504,24 @@ claude() {
          *    install already holding the tree is not about to write it again from
          *    nothing. Clamped at zero: `installedBytes` can exceed the asset total
          *    when a pin drops files that extraction never removes.
-         *  - the room to rewrite one file, charged only when something is already
-         *    there. [writeAtomically] writes `<dest>.tmp~` and renames, so while
-         *    the biggest file is being replaced both copies exist, 113 MiB of
+         *  - the room to rewrite one file, charged only when the extracted tree is
+         *    already there. [writeAtomically] writes `<dest>.tmp~` and renames, so
+         *    while the biggest file is being replaced both copies exist, 113 MiB of
          *    Copilot runtime, currently. On an install with nothing on disk there
          *    is no second copy to hold, and charging for one would refuse fresh
          *    installs that fit.
+         *
+         *    [extractedTreeBytes] and not [installedBytes] decides that, and the
+         *    two are not interchangeable. `installedBytes` also carries the credit
+         *    for `usr/` and the extensions directory, and SplashActivity's
+         *    per-launch repair block writes into `usr/` before this gate is ever
+         *    reached: `setupGitCaBundle` alone leaves `usr/etc/tls/cert.pem`
+         *    there. So on a genuinely fresh install `installedBytes` is already
+         *    above zero, the headroom fired, and the gate asked a device with
+         *    nothing unpacked for 986 MB where 873 is what the unpack needs.
+         *    Only `server/` answers the question honestly, because nothing but
+         *    extraction writes there, and it is also where the biggest file lands
+         *    (`vscode-reh` extracts to `server/vscode-reh`).
          *  - [EXTRACTION_SLACK_BYTES], for what neither of those counts.
          *
          * Takes its figures rather than reading `BuildConfig`, so the decision can
@@ -2513,9 +2532,10 @@ claude() {
             assetBytes: Long,
             largestAssetBytes: Long,
             installedBytes: Long,
+            extractedTreeBytes: Long,
         ): Long {
             val missing = (assetBytes - installedBytes).coerceAtLeast(0)
-            val rewriteHeadroom = if (installedBytes > 0) largestAssetBytes else 0L
+            val rewriteHeadroom = if (extractedTreeBytes > 0) largestAssetBytes else 0L
             return missing + rewriteHeadroom + EXTRACTION_SLACK_BYTES
         }
 
@@ -2581,6 +2601,7 @@ claude() {
                         BuildConfig.EXTRACTED_ASSET_BYTES,
                         BuildConfig.LARGEST_ASSET_BYTES,
                         installedBytes = 0,
+                        extractedTreeBytes = 0,
                     )
                 ) / 1_048_576L
 

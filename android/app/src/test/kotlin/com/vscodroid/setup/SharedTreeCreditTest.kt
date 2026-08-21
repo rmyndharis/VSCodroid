@@ -154,10 +154,10 @@ class SharedTreeCreditTest {
         val assetBytes = server + usr + extensions
         val largest = 113 * mb
 
-        val before = FirstRunSetup.requiredExtractionBytes(assetBytes, largest, server)
+        val before = FirstRunSetup.requiredExtractionBytes(assetBytes, largest, server, server)
         val credit = FirstRunSetup.sharedTreeCredit(usr, usr, 0) +
             FirstRunSetup.sharedTreeCredit(extensions, extensions, 0)
-        val after = FirstRunSetup.requiredExtractionBytes(assetBytes, largest, server + credit)
+        val after = FirstRunSetup.requiredExtractionBytes(assetBytes, largest, server + credit, server)
 
         assertTrue(after < before, "crediting the shared trees must lower the demand")
         assertEquals(

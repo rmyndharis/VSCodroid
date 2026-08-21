@@ -77,7 +77,7 @@ class StoragePreflightTest {
      * here: it is private, and a copy of it would go stale the moment it moved.
      * With nothing on disk and nothing in the APK it is the whole answer.
      */
-    private val slack = FirstRunSetup.requiredExtractionBytes(0, 0, 0)
+    private val slack = FirstRunSetup.requiredExtractionBytes(0, 0, 0, 0)
 
     /**
      * A `filesDir` that reports a fixed amount of free space.
@@ -173,17 +173,57 @@ class StoragePreflightTest {
     fun `a fresh install has to fit the whole tree`() {
         assertEquals(
             assetBytes + slack,
-            FirstRunSetup.requiredExtractionBytes(assetBytes, largestAssetBytes, installedBytes = 0),
+            FirstRunSetup.requiredExtractionBytes(
+                assetBytes,
+                largestAssetBytes,
+                installedBytes = 0,
+                extractedTreeBytes = 0,
+            ),
             "an install with nothing on disk must still be asked for the whole tree; the room " +
                 "to hold a second copy of one file is not part of it, because there is no " +
                 "first copy to hold",
         )
     }
 
+    /**
+     * The case the gate got wrong, and the reason the headroom reads a tree of its
+     * own rather than the total.
+     *
+     * A fresh install is not a device with an empty `filesDir`. SplashActivity's
+     * per-launch repair block runs before this gate, and `setupGitCaBundle` writes
+     * `usr/etc/tls/cert.pem` on the way through, so `installedBytes` already
+     * carries a few hundred KB of credit by the time the gate is asked. Charged
+     * off that, the rewrite headroom fired on an install with nothing unpacked and
+     * the gate demanded 986 MB where the unpack needs 873, refusing devices that
+     * fit on a screen whose only other control is a Retry that measures the same
+     * thing again.
+     */
+    @Test
+    fun `a repair file under usr does not make a fresh install pay the rewrite headroom`() {
+        val repairBytes = 320L * 1024
+
+        assertEquals(
+            assetBytes - repairBytes + slack,
+            FirstRunSetup.requiredExtractionBytes(
+                assetBytes,
+                largestAssetBytes,
+                installedBytes = repairBytes,
+                extractedTreeBytes = 0,
+            ),
+            "a launch-time repair writing into usr/ must not be read as an extracted tree; " +
+                "charging the headroom for it refuses fresh installs that fit",
+        )
+    }
+
     @Test
     fun `an install that already holds the tree asks only for the room to rewrite one file`() {
         val required =
-            FirstRunSetup.requiredExtractionBytes(assetBytes, largestAssetBytes, installedBytes = assetBytes)
+            FirstRunSetup.requiredExtractionBytes(
+                assetBytes,
+                largestAssetBytes,
+                installedBytes = assetBytes,
+                extractedTreeBytes = assetBytes,
+            )
 
         assertEquals(largestAssetBytes + slack, required)
         assertTrue(
@@ -199,11 +239,14 @@ class StoragePreflightTest {
             assetBytes,
             largestAssetBytes,
             installedBytes = assetBytes / 2,
+            extractedTreeBytes = assetBytes / 2,
         )
 
         assertEquals(assetBytes / 2 + largestAssetBytes + slack, required)
         assertTrue(
-            required > FirstRunSetup.requiredExtractionBytes(assetBytes, largestAssetBytes, assetBytes),
+            required > FirstRunSetup.requiredExtractionBytes(
+                assetBytes, largestAssetBytes, assetBytes, assetBytes,
+            ),
             "a damaged tree is treated like a complete one, so the gate waves through a device " +
                 "that then runs out of disk mid-unpack",
         )
@@ -217,6 +260,7 @@ class StoragePreflightTest {
                 assetBytes,
                 largestAssetBytes,
                 installedBytes = assetBytes * 2,
+                extractedTreeBytes = assetBytes * 2,
             ),
             "a pin that drops files leaves more on disk than it ships, and the surplus must " +
                 "not be subtracted from the headroom the rewrite needs",
