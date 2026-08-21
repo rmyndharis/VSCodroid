@@ -95,10 +95,19 @@ object KeyMapping {
      * the same reason [virtualKeyboardEvents] asks the layout rather than
      * carrying a table of its own.
      *
-     * This matters because the row has no `?`, `+`, `*`, `%`, `^`, `$`, `}` or
-     * `)` on any page, so a latched Shift is the only route the row offers to
+     * This matters for exactly three characters: `?`, `+` and `}`. None of them
+     * is on any page of the row, and each has an unshifted mate that is, so a
+     * latched Shift over `/`, `=` and `]` is the only route the row offers to
      * them. Dropping it types the base character, which is worse than typing
      * nothing: it is confidently wrong output.
+     *
+     * Shift is NOT a route to `*`, `%`, `^`, `$` or `)`. Those five sit on
+     * Digit8, Digit5, Digit6, Digit4 and Digit0, and the table carries no
+     * unshifted digit row at all, so the search below has nothing to match and
+     * returns null; the row carries no digits either, so there is no key to hold
+     * Shift over. Reaching one of them means putting the character itself on a
+     * page. Every other shifted character in the table is already on a page, so
+     * nothing beyond those three depends on this.
      */
     fun shiftedForm(key: String): String? {
         if (key.length == 1 && key[0].isLetter()) return key.uppercase()

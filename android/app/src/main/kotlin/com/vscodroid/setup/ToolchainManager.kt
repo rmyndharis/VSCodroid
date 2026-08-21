@@ -364,12 +364,19 @@ class ToolchainManager(private val context: Context) {
         // behind the copy instead.
         //
         // Bounded to this instance, and that is the whole of it: `ioExecutor` is an
-        // instance field, and every construction site makes its own manager. The two
-        // callers that can reach a live download, ToolchainActivity and the first-run
-        // queue in SplashActivity, each hold one manager for the download and the
-        // cancel alike, so both are covered. `AndroidBridge.cancelToolchainInstall`
-        // builds a fresh manager per call and would not be, but nothing in this tree
-        // sends that command.
+        // instance field, and every construction site makes its own manager, so the
+        // ordering holds only between a cancel and a copy running on the SAME manager.
+        // All three callers that can reach a live download do hold one: ToolchainActivity
+        // and the first-run queue in SplashActivity each keep a manager for the download
+        // and the cancel alike, and `AndroidBridge` builds exactly one, lazily, that
+        // `installToolchain` and `cancelToolchainInstall` both go through.
+        //
+        // What stays unordered is a cancel through one manager against a copy running on
+        // another's executor, an extension cancelling what the first-run queue started
+        // being the reachable case. [installsInFlight] is process-wide and
+        // [installFromDirectory] holds a claim on it for the length of the copy, but
+        // [releasePack] does not consult it, so nothing puts the removal behind a copy
+        // that a different manager began.
         ioExecutor.execute { releasePack(info.packName) }
         Logger.i(tag, "Cancelled download of ${info.packName}")
     }

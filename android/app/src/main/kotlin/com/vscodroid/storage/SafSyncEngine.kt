@@ -1249,16 +1249,6 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Releases this writer's claim on [absolutePath], and removes the journal line only
-     * when it was the last claim.
-     *
-     * Paired with [markUploadInFlight] and called by writers alone. A second writer of
-     * the same path is reachable whenever a folder is reopened while a drain of the
-     * previous session is still streaming: the mirror is named by a hash of the folder,
-     * so both writers address one file, and before the count the first to finish removed
-     * the line the other was still inside.
-     */
-    /**
      * Drops this writer's claim while leaving standing whatever its failure recorded.
      *
      * The counterpart to [clearUploadInFlight], and deliberately not the same
@@ -1273,6 +1263,16 @@ class SafSyncEngine(private val context: Context) {
         else uploadWriters.remove(absolutePath)
     }
 
+    /**
+     * Releases this writer's claim on [absolutePath], and removes the journal line only
+     * when it was the last claim.
+     *
+     * Paired with [markUploadInFlight] and called by writers alone. A second writer of
+     * the same path is reachable whenever a folder is reopened while a drain of the
+     * previous session is still streaming: the mirror is named by a hash of the folder,
+     * so both writers address one file, and before the count the first to finish removed
+     * the line the other was still inside.
+     */
     private fun clearUploadInFlight(absolutePath: String) = synchronized(uploadJournalLock) {
         val stillWriting = (uploadWriters[absolutePath] ?: 0) - 1
         if (stillWriting > 0) {
