@@ -124,9 +124,10 @@ object CrashReporter {
         }
         sb.appendLine()
 
-        // Node.js server log (last 200 lines). Nothing in this repository writes
-        // that file, so the block never fires today; it is redacted with the
-        // rest so it is not the one raw path left if something starts to.
+        // Node.js server log (last 200 lines), written by [ServerLog] from the
+        // output reader in `ProcessManager`. Redacted here as well as on the way
+        // in: this reader is where the rule belongs, and keeping it means the
+        // report stays clean whatever else ever writes to that file.
         val serverLog = File(Environment.getLogsDir(context), "server.log")
         if (serverLog.exists()) {
             sb.appendLine("--- Server Log (last 200 lines) ---")

@@ -5,6 +5,7 @@ import android.content.Context
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import com.vscodroid.util.PortFinder
+import com.vscodroid.util.ServerLog
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -31,6 +32,16 @@ import kotlin.concurrent.thread
 class ProcessManager(private val context: Context) {
 
     private val tag = "ProcessManager"
+
+    /**
+     * Where the server's own output is kept for a bug report to pick up.
+     *
+     * Fed directly from [startOutputReader] rather than through [onServerOutput].
+     * That seam is public and documented as one, so a consumer assigning it would
+     * silently replace this writer, and the symptom would be a report that is
+     * empty again with nothing to say why.
+     */
+    private val serverLog = ServerLog(File(Environment.getLogsDir(context), "server.log"))
 
     private var serverProcess: Process? = null
     private var watchdogThread: Thread? = null
@@ -389,10 +400,10 @@ class ProcessManager(private val context: Context) {
         // nothing and cannot see the one whose death would take the editor away.
         //
         // Worth knowing before designing the fix: the app already SEES this
-        // happen. `startOutputReader` receives that EADDRINUSE line, and
-        // [onServerOutput] is a seam it is forwarded to -- with no production
-        // consumer, so the line reaches `Logger.d` and stops, which in a release
-        // build is nowhere at all.
+        // happen. `startOutputReader` receives that EADDRINUSE line and now
+        // writes it to `server.log`, so a bug report carries it. The same line
+        // also goes to `Logger.d`, which in a release build is nowhere, and to
+        // [onServerOutput], which still has no production consumer.
         //
         // What the spawn below now does NOT do is last forever. A pair that
         // cannot bind stays alive indefinitely, the measurement above is the
@@ -1094,6 +1105,7 @@ class ProcessManager(private val context: Context) {
                 BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                     reader.lineSequence().forEach { line ->
                         Logger.d(tag, "[node] $line")
+                        serverLog.append(line)
                         onServerOutput?.invoke(line)
                     }
                 }

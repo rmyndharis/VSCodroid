@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bug reports now carry the server's own output. The report always had a section for it, and nothing ever wrote the file it reads, so it was always empty.
 - The gesture trackpad now offers four accessibility actions to move the cursor. A drag was the only way to send an arrow, and a screen reader cannot drag.
 - Long pressing a key through a screen reader now opens its alternate characters. The layer needed a finger held on the key, so `'` and `\` were unreachable.
 
