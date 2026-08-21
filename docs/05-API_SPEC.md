@@ -117,7 +117,7 @@ from. `isTextEntry` decides which route a press takes and `typeCharacter` is the
 first of them; both live in the `keyboard` package beside `KeyInjector`.
 
 Nothing needs to be defined on the page for either route to work, and defining a
-hook by that name — which is what following the old text led to — leaves a function
+hook by that name (which is what following the old text led to) leaves a function
 nothing ever calls.
 
 ```javascript
@@ -170,7 +170,7 @@ workbench page, so anything running in that page's own realm can call them direc
 extension cannot: it runs in the web extension host, which does not see objects added by
 `addJavascriptInterface`. Extensions reach the bridge over the BroadcastChannel relay
 that `MainActivity.injectBridgeRelay` opens, and that relay dispatches a hand-written
-list of **14** command names — grep `d.cmd ===` in `MainActivity.kt` for the current set:
+list of **14** command names. Grep `d.cmd ===` in `MainActivity.kt` for the current set:
 
 > `clearCaches`, `generateBugReport`, `generateSshKey`, `getRecentFolders`,
 > `getSshPublicKey`, `getStorageBreakdown`, `listSafMirrors`, `listSshKeys`,

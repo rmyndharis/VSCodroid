@@ -3437,7 +3437,7 @@ internal fun bundledIdsToRelist(
  *
  * Bundled extensions are extracted to `publisher.name-version` directories, so
  * bumping a version extracts a new directory beside the old one. The scanner
- * shows only what `extensions.json` — the default profile's manifest — lists,
+ * shows only what `extensions.json` (the default profile's manifest) lists,
  * not what sits on disk, so the deletion here is half of the swap: it is what
  * lets reconcileExtensionsManifest drop the old entry and list the new version
  * in its place. The other stake is disk, which never comes back on its own:
@@ -3446,7 +3446,7 @@ internal fun bundledIdsToRelist(
  * extensions by listing directories; the manifest is what it reads.)
  *
  * Only strictly older copies are named. A user who installed a newer build of the
- * same extension from the marketplace keeps it — that is their copy, and the
+ * same extension from the marketplace keeps it: that is their copy, and the
  * scanner already prefers it. A version that is not purely numeric is left alone
  * rather than guessed at.
  */
@@ -3487,7 +3487,7 @@ internal fun supersededExtensionDirs(present: List<String>, bundled: List<String
  * Two of the jobs are about paths. `git.path` still embeds `nativeLibraryDir`,
  * which a reinstall moves, so it is re-pointed whenever it has gone stale. The
  * terminal profile is instead migrated *off* it and onto `usr/bin/bash`, which
- * `setupToolSymlinks()` already repairs on every launch — after that move the
+ * `setupToolSymlinks()` already repairs on every launch, and after that move the
  * pattern no longer matches and the profile never goes stale again.
  *
  * The move carries the other two halves of the shell-integration fix with it,

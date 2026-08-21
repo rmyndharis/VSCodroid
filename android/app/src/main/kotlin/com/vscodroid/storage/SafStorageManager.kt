@@ -152,7 +152,7 @@ class SafStorageManager(private val context: Context) {
      *
      * Pruning the list is all this does. Deleting the mirror of a pruned folder used to
      * happen here too, which put a recursive delete of the user's files inside a method
-     * the workbench calls whenever it wants the recent list — and made a permission that
+     * the workbench calls whenever it wants the recent list, and made a permission that
      * read as absent for a moment enough to take the mirror of the folder currently open
      * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
      * alone now.
@@ -895,7 +895,7 @@ class SafStorageManager(private val context: Context) {
          * six bytes of a digest, so twelve hex characters. Pinned by
          * `SafMirrorReclamationTest`, because the length lives there and the consequence
          * of the two drifting apart is a reclamation pass that stops recognising its own
-         * mirrors — or starts recognising files it did not write.
+         * mirrors, or starts recognising files it did not write.
          */
         internal val MIRROR_ENTRY =
             Regex("^[0-9a-f]{12}(${Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX)})?$")
