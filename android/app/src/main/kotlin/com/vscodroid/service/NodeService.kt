@@ -25,26 +25,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Foreground Service that owns the Node.js server process.
- *
- * Responsibilities:
- * - Promoting itself to a foreground service with a persistent notification
- *   (specialUse FGS type for local dev server)
- * - Delegating process lifecycle to [ProcessManager]
- * - Automatically restarting the server on unexpected crashes (up to [MAX_RESTARTS])
- * - Exposing server state to bound clients (typically [MainActivity])
- *
- * Binding pattern: Activities bind to this service to receive the port number
- * and server readiness callbacks. The service remains alive independently of
- * any bound clients because it is started as a foreground service.
- *
- * Threading: [restartCount], [isServiceRunning] and [launchJob] are touched only
- * from [serviceScope]'s dispatcher, which is the main thread. Service lifecycle
- * callbacks already arrive there; the one caller that does not is the watchdog,
- * and [setupProcessCallbacks] hands its report to the scope rather than acting on
- * the watchdog thread.
- */
-/**
  * What a client that binds after a start attempt has to be told, and whether
  * that attempt was the last one.
  *
@@ -58,6 +38,27 @@ import kotlinx.coroutines.withContext
  */
 data class StartupNotice(val message: String, val terminal: Boolean)
 
+/**
+ * Foreground Service that owns the Node.js server process.
+ *
+ * Responsibilities:
+ * - Promoting itself to a foreground service with a persistent notification
+ *   (specialUse FGS type for local dev server)
+ * - Delegating process lifecycle to [ProcessManager]
+ * - Automatically restarting the server on unexpected crashes (up to [MAX_RESTARTS])
+ * - Exposing server state to bound clients (typically [MainActivity])
+ *
+ * Binding pattern: Activities bind to this service to receive the port number
+ * and server readiness callbacks. The service remains alive independently of
+ * any bound clients because it is started as a foreground service.
+ *
+ * Threading: the state this service keeps for itself, namely [restartCount],
+ * [isServiceRunning], [launchJob], [runId], [failureRaised] and
+ * [startupNotice], is touched only from [serviceScope]'s dispatcher, which is
+ * the main thread. Service lifecycle callbacks already arrive there; the one
+ * caller that does not is the watchdog, and [setupProcessCallbacks] hands its
+ * report to the scope rather than acting on the watchdog thread.
+ */
 class NodeService : Service() {
 
     private val tag = "NodeService"

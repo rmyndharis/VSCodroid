@@ -627,12 +627,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Handles a SAF folder selection result:
-     * 1. Persists the URI permission
-     * 2. Syncs folder contents to a local mirror (with progress dialog)
-     * 3. Reloads VS Code with the mirror path
-     */
-    /**
      * Starts watching a mirror the workbench opened without going through Kotlin.
      *
      * VS Code switches folders by navigating its own WebView: Open Recent, the
@@ -661,6 +655,12 @@ class MainActivity : AppCompatActivity() {
         openSafFolder(folder.uri, navigate = false)
     }
 
+    /**
+     * Handles a SAF folder selection result:
+     * 1. Persists the URI permission
+     * 2. Syncs folder contents to a local mirror (with progress dialog)
+     * 3. Reloads VS Code with the mirror path
+     */
     private fun handleSafFolderSelected(uri: Uri) = openSafFolder(uri, navigate = true)
 
     /**
@@ -2497,17 +2497,6 @@ internal sealed interface BindDecision {
 }
 
 /**
- * The notice is read first, and that ordering is load-bearing: it may be terminal
- * or it may be a slow start still coming up, and in both cases the server is not
- * serving, so it must not be shadowed by a port that happens to look plausible.
- *
- * [ready] is the health probe's own finding, never process liveness. A process is
- * alive from the instant it is spawned and stays alive through the seconds before
- * its port is bound and through a whole post-crash restart; navigating on that
- * points the WebView at nothing, and `onReceivedError` only logs, so the
- * connection-refused page it produces is never cleared.
- */
-/**
  * Whether [url] is a page the local server served, as opposed to one this app
  * drew itself.
  *
@@ -2543,6 +2532,22 @@ internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
     return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port
 }
 
+/**
+ * The notice is read first, and that ordering is load-bearing: it may be terminal
+ * or it may be a slow start still coming up, and in both cases the server is not
+ * serving, so it must not be shadowed by a port that happens to look plausible.
+ *
+ * Which of the two it is then decides the answer: a terminal notice gives
+ * [BindDecision.ShowGaveUp] and any other gives [BindDecision.ShowNotice],
+ * because a server that has stopped trying needs the loading page replaced,
+ * while a slow start may still come up under a toast.
+ *
+ * [ready] is the health probe's own finding, never process liveness. A process is
+ * alive from the instant it is spawned and stays alive through the seconds before
+ * its port is bound and through a whole post-crash restart; navigating on that
+ * points the WebView at nothing, and `onReceivedError` only logs, so the
+ * connection-refused page it produces is never cleared.
+ */
 internal fun bindDecision(notice: StartupNotice?, port: Int, ready: Boolean): BindDecision = when {
     notice != null && notice.terminal -> BindDecision.ShowGaveUp(notice.message)
     notice != null -> BindDecision.ShowNotice(notice.message)

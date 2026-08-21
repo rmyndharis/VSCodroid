@@ -62,23 +62,6 @@ internal fun publishedResourceRoots(context: Context): List<String> = listOf(
 ).mapNotNull(::canonicalOrNull)
 
 /**
- * The file a resource request names, or null if it is not a published resource.
- *
- * The published roots are named individually rather than described by a prefix
- * because everything this app owns -- the SSH private key written without a
- * passphrase, the server's connection token -- shares a prefix with everything
- * it serves. A prefix test over app-private storage admits all of it, so it can
- * only ever stop a traversal out of the sandbox, never a read within it.
- *
- * Symbolic links are resolved rather than normalised away lexically. A
- * workspace is a published root and a workspace is routinely a checked-out
- * repository, so a link inside one is attacker-supplied in the ordinary case;
- * `..` handling alone would follow it out.
- *
- * The canonical path is what comes back, not the path as asked for, so that the
- * file opened is the file that was checked.
- */
-/**
  * What the interceptor decided about one webview resource request.
  *
  * Separated from building the response because a `WebResourceResponse` cannot be
@@ -115,6 +98,12 @@ internal fun resourceOutcome(path: String, resourceRoots: List<String>): Resourc
 /**
  * The file a webview resource request names, if it resolves inside a published
  * root, and null otherwise.
+ *
+ * The published roots are named individually rather than described by a prefix
+ * because everything this app owns -- the SSH private key written without a
+ * passphrase, the server's connection token -- shares a prefix with everything
+ * it serves. A prefix test over app-private storage admits all of it, so it can
+ * only ever stop a traversal out of the sandbox, never a read within it.
  *
  * Symbolic links are resolved rather than normalised away lexically. A workspace
  * is a published root and a workspace is routinely a checked-out repository, so a

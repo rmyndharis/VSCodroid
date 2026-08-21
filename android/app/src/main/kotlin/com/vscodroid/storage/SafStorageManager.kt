@@ -119,17 +119,6 @@ class SafStorageManager(private val context: Context) {
     // -- Recent Folders --
 
     /**
-     * Returns the list of recently opened SAF folders with persisted permissions.
-     * Folders whose permissions have been externally revoked are pruned from the list.
-     *
-     * Pruning the list is all this does. Deleting the mirror of a pruned folder used to
-     * happen here too, which put a recursive delete of the user's files inside a method
-     * the workbench calls whenever it wants the recent list — and made a permission that
-     * read as absent for a moment enough to take the mirror of the folder currently open
-     * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
-     * alone now.
-     */
-    /**
      * The device folder whose mirror the workbench has opened, if it opened one.
      *
      * VS Code switches folders by navigating its own WebView, so a folder reached
@@ -141,6 +130,17 @@ class SafStorageManager(private val context: Context) {
     fun folderForOpenedPath(opened: String): SafFolderInfo? =
         folderForOpenedPath(getPersistedFolders(), opened)
 
+    /**
+     * Returns the list of recently opened SAF folders with persisted permissions.
+     * Folders whose permissions have been externally revoked are pruned from the list.
+     *
+     * Pruning the list is all this does. Deleting the mirror of a pruned folder used to
+     * happen here too, which put a recursive delete of the user's files inside a method
+     * the workbench calls whenever it wants the recent list — and made a permission that
+     * read as absent for a moment enough to take the mirror of the folder currently open
+     * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
+     * alone now.
+     */
     fun getPersistedFolders(): List<SafFolderInfo> {
         val json = prefs.getString(KEY_RECENT_FOLDERS, "[]") ?: "[]"
         val array = JSONArray(json)
@@ -529,16 +529,6 @@ class SafStorageManager(private val context: Context) {
         private const val MAX_RECENT = 10
 
         /**
-         * An entry in `saf-mirrors` that this app created: a mirror directory, or the
-         * sync record beside it.
-         *
-         * [com.vscodroid.util.Environment.getSafMirrorDir] names a mirror after the first
-         * six bytes of a digest, so twelve hex characters. Pinned by
-         * `SafMirrorReclamationTest`, because the length lives there and the consequence
-         * of the two drifting apart is a reclamation pass that stops recognising its own
-         * mirrors — or starts recognising files it did not write.
-         */
-        /**
          * Whether a mirror with no live permission may be deleted, given the writes
          * this app records as never having reached the device.
          *
@@ -561,18 +551,6 @@ class SafStorageManager(private val context: Context) {
         }
 
         /**
-         * The persisted folder whose mirror contains [opened], if any.
-         *
-         * The subdirectory case is not a nicety. Open Folder can point at a
-         * directory *inside* a mirror, and the watcher's root has to be the
-         * mirror root or every relative path the sync computes is resolved
-         * against the wrong base.
-         *
-         * The separator matters for the same reason it does in the reclaim gate:
-         * mirror names are a hash prefix, so one being a prefix of another is
-         * ordinary, and a bare `startsWith` would match the wrong folder.
-         */
-        /**
          * Splits the recent list into what is kept and what falls off the end.
          *
          * Returned as a pair rather than trimmed in place because the tail is not
@@ -587,6 +565,19 @@ class SafStorageManager(private val context: Context) {
         ): Pair<List<SafFolderInfo>, List<SafFolderInfo>> =
             folders.take(max) to folders.drop(max)
 
+        /**
+         * The folder in [folders] whose mirror contains [opened], if any. The one
+         * production caller passes the persisted list.
+         *
+         * The subdirectory case is not a nicety. Open Folder can point at a
+         * directory *inside* a mirror, and the watcher's root has to be the
+         * mirror root or every relative path the sync computes is resolved
+         * against the wrong base.
+         *
+         * The separator matters for the same reason it does in the reclaim gate:
+         * mirror names are a hash prefix, so one being a prefix of another is
+         * ordinary, and a bare `startsWith` would match the wrong folder.
+         */
         internal fun folderForOpenedPath(
             folders: List<SafFolderInfo>,
             opened: String,
@@ -594,6 +585,16 @@ class SafStorageManager(private val context: Context) {
             opened == it.mirrorPath || opened.startsWith(it.mirrorPath + File.separator)
         }
 
+        /**
+         * An entry in `saf-mirrors` that this app created: a mirror directory, or the
+         * sync record beside it.
+         *
+         * [com.vscodroid.util.Environment.getSafMirrorDir] names a mirror after the first
+         * six bytes of a digest, so twelve hex characters. Pinned by
+         * `SafMirrorReclamationTest`, because the length lives there and the consequence
+         * of the two drifting apart is a reclamation pass that stops recognising its own
+         * mirrors — or starts recognising files it did not write.
+         */
         internal val MIRROR_ENTRY =
             Regex("^[0-9a-f]{12}(${Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX)})?$")
 

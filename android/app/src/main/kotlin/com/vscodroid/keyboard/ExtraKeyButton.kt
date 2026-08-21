@@ -120,6 +120,26 @@ class ExtraKeyButton @JvmOverloads constructor(
     }
 
     /**
+     * Opens the alternates layer when a service long presses this key.
+     *
+     * The same gap as [performClick], one gesture over: the popup's only entry
+     * was [GestureDetector]'s `onLongPress`, which needs a finger held on the
+     * view, and touch exploration never delivers one. Five of the eight
+     * alternates are top-level keys on other pages and one is Shift plus
+     * backtick, but `'` and `\` are on no page at all, so without this they
+     * exist on the row for sighted users only.
+     *
+     * A key with no alternates falls through to `super`, which is what keeps
+     * the row honest: those keys advertise no long click, so nothing offers an
+     * action that would open an empty popup.
+     */
+    override fun performLongClick(): Boolean {
+        if (alternates.isEmpty()) return super.performLongClick()
+        onLongPressAction?.invoke(this, alternates)
+        return true
+    }
+
+    /**
      * Delivers one press when an accessibility service activates this key.
      *
      * `isClickable` has been true on these buttons all along, so a screen
@@ -141,26 +161,6 @@ class ExtraKeyButton @JvmOverloads constructor(
      * service listens for; the return is `true` because this handled the click
      * regardless of what `super` reports with no listener attached.
      */
-    /**
-     * Opens the alternates layer when a service long presses this key.
-     *
-     * The same gap as [performClick], one gesture over: the popup's only entry
-     * was [GestureDetector]'s `onLongPress`, which needs a finger held on the
-     * view, and touch exploration never delivers one. Five of the eight
-     * alternates are top-level keys on other pages and one is Shift plus
-     * backtick, but `'` and `\` are on no page at all, so without this they
-     * exist on the row for sighted users only.
-     *
-     * A key with no alternates falls through to `super`, which is what keeps
-     * the row honest: those keys advertise no long click, so nothing offers an
-     * action that would open an empty popup.
-     */
-    override fun performLongClick(): Boolean {
-        if (alternates.isEmpty()) return super.performLongClick()
-        onLongPressAction?.invoke(this, alternates)
-        return true
-    }
-
     override fun performClick(): Boolean {
         emitPress()
         super.performClick()

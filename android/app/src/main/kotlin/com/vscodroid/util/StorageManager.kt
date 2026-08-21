@@ -49,10 +49,6 @@ object StorageManager {
     }
 
     /**
-     * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs.
-     * Returns the number of bytes freed.
-     */
-    /**
      * The breakdown keys [clearCaches] can actually free.
      *
      * Declared here because this is the only place that knows. The storage
@@ -64,6 +60,10 @@ object StorageManager {
      */
     internal val CLEARABLE_KEYS = setOf("logs", "cache")
 
+    /**
+     * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs.
+     * Returns the number of bytes freed.
+     */
     fun clearCaches(context: Context): Long {
         var freed = 0L
 

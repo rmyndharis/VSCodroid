@@ -55,10 +55,11 @@ class ToolchainManager(private val context: Context) {
         Thread(r, "toolchain-io").apply { isDaemon = true }
     }
 
-    /** Callback for progress/state updates: (packName, status, percentDone) */
     /**
      * Progress and outcome for one pack.
      *
+     * The first three arguments are the pack name, an `AssetPackStatus` value,
+     * and how far along it is as a percentage.
      * The fourth argument is why it failed, and it is null for every status that
      * is not a failure. It exists because "Failed" on its own is the same word
      * for a full disk, a dropped connection and a release that never published
@@ -1832,32 +1833,6 @@ class ToolchainManager(private val context: Context) {
 }
 
 /**
- * Whether these opening bytes are an ELF object's.
- *
- * The same four bytes the packaging gates read. Separated so the repair pass can
- * be checked against real files rather than a mock that would only agree with
- * the implementation it was written from.
- */
-/**
- * Gives the execute bit to every ELF object under [root], returning how many
- * needed it.
- *
- * At file scope and taking its symlink predicate as a parameter so a test can
- * reach it. [isSymlink] uses `Os.lstat`, which cannot run in a JVM unit test --
- * it throws, the catch turns that into "not a link", and every entry then looks
- * like a regular file. Injecting the predicate is what lets the skip-links
- * behaviour be asserted rather than assumed; production still passes
- * [isSymlink].
- *
- * Links are stepped over rather than followed: a toolchain's `usr/lib` is shared
- * with the base install, so a link there can point at a file this pass has no
- * business changing the permissions of.
- *
- * Only ELF objects. Scripts are deliberately excluded -- they are wrapped in
- * shell functions that route them through their interpreter, because nothing
- * under `filesDir` can be executed directly whatever its mode.
- */
-/**
  * A staging directory belonging to one download rather than to the class.
  *
  * The path used to be a constant, and the `finally` that cleans up deletes the
@@ -1981,6 +1956,25 @@ internal fun copyDirectoryTree(
     }
 }
 
+/**
+ * Gives the execute bit to every ELF object under [root], returning how many
+ * needed it.
+ *
+ * At file scope and taking its symlink predicate as a parameter so a test can
+ * reach it. [isSymlink] uses `Os.lstat`, which cannot run in a JVM unit test --
+ * it throws, the catch turns that into "not a link", and every entry then looks
+ * like a regular file. Injecting the predicate is what lets the skip-links
+ * behaviour be asserted rather than assumed; production still passes
+ * [isSymlink].
+ *
+ * Links are stepped over rather than followed: a toolchain's `usr/lib` is shared
+ * with the base install, so a link there can point at a file this pass has no
+ * business changing the permissions of.
+ *
+ * Only ELF objects. Scripts are deliberately excluded -- they are wrapped in
+ * shell functions that route them through their interpreter, because nothing
+ * under `filesDir` can be executed directly whatever its mode.
+ */
 internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymlink): Int {
     var fixed = 0
     root.walkTopDown()
@@ -2159,22 +2153,6 @@ internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (error
     else -> ToolchainFailure.INTERNAL
 }
 
-/** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
-/**
- * Toolchains this build removes from any install that still has one.
- *
- * Short names, the form `toolchains.json` records. An entry belongs here when it
- * has left [ToolchainRegistry.available]: see [ToolchainManager.removeRetiredToolchainsSync]
- * for why leaving it alone is the one option that helps nobody.
- *
- * `go` is here because it could not compile. Android refuses to execute a file
- * under the app's data directory, and `go build` and `go run` fork the compiler,
- * assembler and linker themselves, so those forks are refused however the `go`
- * command itself is reached. Measured in the app's own SELinux domain, with a
- * control: a plain shell script placed there and marked executable is refused
- * too. It ran, it printed a version, and it could not build a program, for
- * 179 MB.
- */
 /**
  * Toolchains no longer offered, against the space each still occupies on a
  * device that installed one before it was withdrawn.
@@ -2188,9 +2166,22 @@ internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (error
  *
  * Keyed by short name, the form [toolchainShortName] produces, so a record
  * written as either `go` or `toolchain_go` resolves.
+ *
+ * An entry belongs here when it has left [ToolchainRegistry.available]: see
+ * [ToolchainManager.removeRetiredToolchainsSync] for why leaving it alone is the
+ * one option that helps nobody.
+ *
+ * `go` is here because it could not compile. Android refuses to execute a file
+ * under the app's data directory, and `go build` and `go run` fork the compiler,
+ * assembler and linker themselves, so those forks are refused however the `go`
+ * command itself is reached. Measured in the app's own SELinux domain, with a
+ * control: a plain shell script placed there and marked executable is refused
+ * too. It ran, it printed a version, and it could not build a program, for
+ * 179 MB.
  */
 internal val RETIRED_TOOLCHAINS = mapOf("go" to 179_000_000L)
 
+/** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
 private const val MANIFEST_NAME = "toolchains.sha256"
 
 /**

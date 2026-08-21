@@ -113,6 +113,31 @@ internal fun authRequestIdsIn(url: String): List<String> =
     AUTH_REQUEST_ID.findAll(url).map { it.groupValues[1] }.distinct().toList()
 
 /**
+ * Why [AndroidBridge.openExternalUrl] did not open anything.
+ *
+ * Named constants rather than literals at each exit so a test can pin which
+ * reason belongs to which failure without pinning the wording, which is not the
+ * contract. The wording is user facing: the extension's "Open in Browser" puts
+ * whichever of these comes back straight into a `showErrorMessage`.
+ */
+internal const val OPEN_URL_STALE_SESSION =
+    "VSCodroid did not accept the request. Reload the window and try again."
+
+/** The reason that is worth acting on, and the only one the relay used to give. */
+internal const val OPEN_URL_NO_HANDLER =
+    "VSCodroid did not open it. No app on this device handles that link."
+
+/**
+ * Everything else, with the exception's class name appended.
+ *
+ * The class name and not its message: `ActivityNotFoundException` quotes the
+ * whole Intent it could not match, and `FileUriExposedException` quotes the
+ * file, so a message here would hand the URL to the page that supplied it and,
+ * through the extension, to a notification a user may screenshot.
+ */
+internal const val OPEN_URL_FAILED_PREFIX = "VSCodroid could not open that link: "
+
+/**
  * The sign-in requests this app launched a browser for, and when.
  *
  * Keyed by request id rather than being a single reading, and that is the whole
@@ -152,31 +177,6 @@ internal fun authRequestIdsIn(url: String): List<String> =
  * reopens the window. No arithmetic happens here; the window is applied by
  * `authCallbackIsExpected`, which this object deliberately does not call.
  */
-/**
- * Why [AndroidBridge.openExternalUrl] did not open anything.
- *
- * Named constants rather than literals at each exit so a test can pin which
- * reason belongs to which failure without pinning the wording, which is not the
- * contract. The wording is user facing: the extension's "Open in Browser" puts
- * whichever of these comes back straight into a `showErrorMessage`.
- */
-internal const val OPEN_URL_STALE_SESSION =
-    "VSCodroid did not accept the request. Reload the window and try again."
-
-/** The reason that is worth acting on, and the only one the relay used to give. */
-internal const val OPEN_URL_NO_HANDLER =
-    "VSCodroid did not open it. No app on this device handles that link."
-
-/**
- * Everything else, with the exception's class name appended.
- *
- * The class name and not its message: `ActivityNotFoundException` quotes the
- * whole Intent it could not match, and `FileUriExposedException` quotes the
- * file, so a message here would hand the URL to the page that supplied it and,
- * through the extension, to a notification a user may screenshot.
- */
-internal const val OPEN_URL_FAILED_PREFIX = "VSCodroid could not open that link: "
-
 object AuthTabWindow {
 
     private val launches = object : LinkedHashMap<String, Long>() {

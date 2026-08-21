@@ -129,8 +129,7 @@ object PortFinder {
      * what this rests on, and deliberately so — nobody has measured it on
      * Android, and a check that happens to agree with the server on one platform
      * is a check that disagrees with it on another.
-     */
-    /**
+     *
      * Binds the way the server that will use the port binds: with `SO_REUSEADDR`
      * set before the bind.
      *

@@ -601,12 +601,6 @@ class SafSyncEngine(private val context: Context) {
         "$path\t${file.lastModified()}\t${file.length()}"
 
     /**
-     * The lines of the last complete sync's record, or none when there is no usable one.
-     *
-     * Each is `path`, `modification time` and `length` separated by tabs. Parsing is the
-     * caller's, because a line it cannot read has to be dropped rather than repaired.
-     */
-    /**
      * Whether every file under [mirrorDir] is one this app can prove it copied from the
      * device folder, unchanged since.
      *
@@ -663,6 +657,15 @@ class SafSyncEngine(private val context: Context) {
         }
     }
 
+    /**
+     * The lines of the last complete sync's record, or none when there is no file to
+     * read or the read failed.
+     *
+     * The first line is [RECORD_HEADER]; every line after it is `path`, `modification
+     * time` and `length` separated by tabs. The header check and the parsing are both
+     * the caller's, because a record in a format this build does not know has to be
+     * discarded whole and a line it cannot read has to be dropped rather than repaired.
+     */
     private fun readSyncedRecord(record: File): List<String> =
         if (!record.isFile) {
             emptyList()
@@ -982,25 +985,6 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Writes a local file's contents back to its corresponding SAF document.
-     *
-     * The copy is bracketed by the in-flight journal, and the bracket is the whole
-     * point of this method's shape: `"wt"` truncates the document at open, and the
-     * provider stamps a fresh modification time on the shorter bytes, so a copy
-     * that dies partway leaves the device holding a *newer* copy of a file whose
-     * only complete version is the mirror's. That is indistinguishable, at the
-     * next sync, from an edit made on the device, and the sync would copy the
-     * truncation over the edit. The journal line is written before the stream
-     * opens and removed only by a copy that ran to its end, so the next sync can
-     * tell the two apart by the one fact it can know: whether this app was
-     * mid-upload when the copy stopped.
-     *
-     * One retry, because a first attempt that fails has already paid the
-     * truncation, and a second full write is cheaper than a session of a stale
-     * device copy. Permission loss is not retried: nothing about a revoked grant
-     * gets better within a second.
-     */
-    /**
      * Whether the device document and the mirror hold the same bytes.
      *
      * The one question that can be answered without a clock, and the only one this
@@ -1079,6 +1063,29 @@ class SafSyncEngine(private val context: Context) {
      */
     private val documentWritesInFlight = ConcurrentHashMap.newKeySet<String>()
 
+    /**
+     * Writes a local file's contents back to its corresponding SAF document.
+     *
+     * Declines outright when another write already holds the document, so two streams
+     * never interleave into one file: see [documentWritesInFlight].
+     *
+     * The copy itself runs in [writeLocalToSafHoldingDocument], bracketed by the
+     * in-flight journal, and the bracket is the whole point of that method's shape:
+     * `"wt"` truncates the document at open, and the provider stamps a fresh
+     * modification time on the shorter bytes, so a copy
+     * that dies partway leaves the device holding a *newer* copy of a file whose
+     * only complete version is the mirror's. That is indistinguishable, at the
+     * next sync, from an edit made on the device, and the sync would copy the
+     * truncation over the edit. The journal line is written before the stream
+     * opens and removed only by a copy that ran to its end, so the next sync can
+     * tell the two apart by the one fact it can know: whether this app was
+     * mid-upload when the copy stopped.
+     *
+     * One retry, because a first attempt that fails has already paid the
+     * truncation, and a second full write is cheaper than a session of a stale
+     * device copy. Permission loss is not retried: nothing about a revoked grant
+     * gets better within a second.
+     */
     private fun writeLocalToSaf(localFile: File, safDocUri: Uri) {
         val document = safDocUri.toString()
         if (!documentWritesInFlight.add(document)) {
@@ -2158,51 +2165,6 @@ class SafSyncEngine(private val context: Context) {
         internal const val MAX_UPLOAD_ENTRIES = 2000
 
         /**
-         * Whether the mirror copy may be replaced with the one from the device folder.
-         *
-         * Opening a folder re-runs the whole copy, so this is what stands between a
-         * reopen and the loss of edits not yet written back.
-         *
-         * Timestamps alone are not enough to decide this, for two reasons found the
-         * hard way:
-         *
-         * - A size mismatch beats any timestamp. A copy that fails part-way leaves a
-         *   short file carrying a *fresh* mtime, which timestamps alone would read as
-         *   "newer, keep it" — freezing the truncation in place forever and letting
-         *   the write-back push it onto the device. Different sizes mean the mirror is
-         *   not a copy of the source, whatever the clocks say.
-         * - An unknown source timestamp (0) is decided by [mirrorIsOurCopy], not by the
-         *   clock, because there is no clock to ask. COLUMN_LAST_MODIFIED is optional and
-         *   arrives as 0 from MTP, some USB-OTG and some network providers.
-         *
-         *   Both obvious answers are wrong. "Always copy" freezes nothing but replaces a
-         *   local edit on every reopen, which is what this used to do. "Always keep"
-         *   protects the edit and freezes the folder for ever, since nothing in the app
-         *   can clear a mirror. The record settles it without guessing: if the mirror is
-         *   still exactly what the last sync wrote there, it is this app's own copy and
-         *   the device is entitled to replace it, so the folder still heals. If it is
-         *   not, it holds something written since, and that is the only copy.
-         *
-         * The comparison is only sound because [copyDocumentToLocal] stamps the mirror
-         * with the source's own timestamp, so both sides come from the same clock.
-         */
-        /**
-         * Whether writing [localPath] back would replace a device document this sync
-         * never read.
-         *
-         * Extracted because two paths ask it and only one of them can be reached from a
-         * JVM test. [handleMirrorEvent] asks before queueing a job; [createOneInSaf] asks
-         * again while walking into a directory, which no event-driven test can drive here
-         * at all, since delivering a directory event constructs a `FileObserver` and that
-         * runs a static initializer reaching native code (see [SafWatchCoverageTest]).
-         * Naming the rule once is what lets it be asserted at all, and what stops the two
-         * call sites drifting apart, which is how the second one came to be missing it.
-         *
-         * [deviceHoldsDocument] is the provider's answer, not a guess: the set alone is a
-         * memory of what this sync could not read, and the document may have been deleted
-         * on the device since, in which case the local file is an ordinary new file.
-         */
-        /**
          * How many bytes phase 2 would have to fetch for [documents] into [mirrorDir].
          *
          * Counts only what a copy would actually spend: a directory costs nothing, a
@@ -2228,12 +2190,62 @@ class SafSyncEngine(private val context: Context) {
                 }
                 .sumOf { it.size }
 
+        /**
+         * Whether writing [localPath] back would replace a device document this sync
+         * never read.
+         *
+         * Extracted because two paths ask it and only one of them can be reached from a
+         * JVM test. [handleMirrorEvent] asks before queueing a job; [createOneInSaf] asks
+         * again while walking into a directory, which no event-driven test can drive here
+         * at all, since delivering a directory event constructs a `FileObserver` and that
+         * runs a static initializer reaching native code (see [SafWatchCoverageTest]).
+         * Naming the rule once is what lets it be asserted at all, and what stops the two
+         * call sites drifting apart, which is how the second one came to be missing it.
+         *
+         * [deviceHoldsDocument] is the provider's answer, not a guess: the set alone is a
+         * memory of what this sync could not read, and the document may have been deleted
+         * on the device since, in which case the local file is an ordinary new file.
+         */
         internal fun writeWouldReplaceUnreadDocument(
             localPath: String,
             deviceHoldsDocument: Boolean,
             unfetched: Set<String>,
         ): Boolean = deviceHoldsDocument && localPath in unfetched
 
+        /**
+         * Whether the mirror copy may be replaced with the one from the device folder.
+         *
+         * Opening a folder re-runs the whole copy, so this is what stands between a
+         * reopen and the loss of edits not yet written back.
+         *
+         * Timestamps alone are not enough to decide this, for two reasons found the
+         * hard way:
+         *
+         * - A size mismatch decides the tie, and only when the two timestamps agree.
+         *   Writers that preserve mtime (unzip, cp -p, rsync -t, git checkout) land
+         *   there with different lengths and still have to copy. Size came first once,
+         *   against a copy cut short leaving a short file with a *fresh* mtime, and it
+         *   cost far more than it saved: almost every edit changes a file's length, so
+         *   almost every unsaved edit read as "not a copy of the source" and was
+         *   overwritten by the older device copy. That truncation case is closed
+         *   elsewhere now, by [copyDocumentToLocal] writing beside the destination and
+         *   renaming only once the stream finished, so an interrupted copy leaves no
+         *   file at the destination at all.
+         * - An unknown source timestamp (0) is decided by [mirrorIsOurCopy], not by the
+         *   clock, because there is no clock to ask. COLUMN_LAST_MODIFIED is optional and
+         *   arrives as 0 from MTP, some USB-OTG and some network providers.
+         *
+         *   Both obvious answers are wrong. "Always copy" freezes nothing but replaces a
+         *   local edit on every reopen, which is what this used to do. "Always keep"
+         *   protects the edit and freezes the folder for ever, since nothing in the app
+         *   can clear a mirror. The record settles it without guessing: if the mirror is
+         *   still exactly what the last sync wrote there, it is this app's own copy and
+         *   the device is entitled to replace it, so the folder still heals. If it is
+         *   not, it holds something written since, and that is the only copy.
+         *
+         * The comparison is only sound because [copyDocumentToLocal] stamps the mirror
+         * with the source's own timestamp, so both sides come from the same clock.
+         */
         internal fun shouldOverwriteMirror(
             mirrorExists: Boolean,
             mirrorModified: Long,
@@ -2348,20 +2360,6 @@ class SafSyncEngine(private val context: Context) {
         }
 
         /**
-         * The directories a watch has to cover for [root]: [root] itself and everything
-         * below it that the walk would have mirrored.
-         *
-         * The exclusions are [SKIP_DIRECTORIES], the set [walkTree] already obeys —
-         * nothing inside them is mirrored in, so a watch there would spend a kernel
-         * descriptor on changes with nowhere to go. That is also what keeps the count
-         * survivable: one `node_modules` runs to thousands of directories on its own.
-         *
-         * Breadth-first, and capped at [limit]. The order matters only once the cap
-         * bites, and then it decides which directories go unwatched: breadth-first
-         * spends the budget on the shallow ones, which is where a person edits, rather
-         * than on wherever a depth-first descent happened to reach first.
-         */
-        /**
          * Everything under [root] that has to be created on the device when [root]
          * itself is created, parents before children.
          *
@@ -2442,6 +2440,18 @@ class SafSyncEngine(private val context: Context) {
         /**
          * The directories a watch has to cover for [root], one per directory, capped
          * at [limit] and spent breadth-first.
+         *
+         * [root] itself is included, and below it everything the walk would have
+         * mirrored: the exclusions are [SKIP_DIRECTORIES], the set [walkTree] already
+         * obeys, so nothing inside them is mirrored in and a watch there would spend a
+         * kernel descriptor on changes with nowhere to go. That is also what keeps the
+         * count survivable: one `node_modules` runs to thousands of directories on its
+         * own.
+         *
+         * The order matters only once the cap bites, and then it decides which
+         * directories go unwatched: breadth-first spends the budget on the shallow
+         * ones, which is where a person edits, rather than on wherever a depth-first
+         * descent happened to reach first.
          *
          * Symbolic links are not followed, for the same reason [uploadableEntries]
          * refuses them and with the same words: a mirror is routinely a checked-out

@@ -219,12 +219,6 @@ class SafDirectoryRenameTest {
     }
 
     /**
-     * `moveDocument` sits behind `FLAG_SUPPORTS_MOVE`, which a provider may withhold while
-     * still offering rename. The fallback has to be what the code did before there was a
-     * move at all: build the new name from the mirror and leave the old copy alone, rather
-     * than deleting a subtree the mirror cannot fully replace.
-     */
-    /**
      * `mkdir lib && mv util lib/` in one write-back tick. At event time the
      * destination folder's document does not exist yet, its own create job is
      * still ahead of this one in the queue, so the parent URI the move needs
@@ -384,6 +378,12 @@ class SafDirectoryRenameTest {
         verify(exactly = 0) { DocumentsContract.moveDocument(any(), any(), any(), any()) }
     }
 
+    /**
+     * `moveDocument` sits behind `FLAG_SUPPORTS_MOVE`, which a provider may withhold while
+     * still offering rename. The fallback has to be what the code did before there was a
+     * move at all: build the new name from the mirror and leave the old copy alone, rather
+     * than deleting a subtree the mirror cannot fully replace.
+     */
     @Test
     fun `a provider that will not move still gets the new name`() {
         deviceTree(mapOf("root" to listOf("util", "lib"), "doc:lib" to emptyList()))

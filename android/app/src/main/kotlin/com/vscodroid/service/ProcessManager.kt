@@ -894,14 +894,12 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
-     * Stops the server process.
-     *
-     * Attempts a graceful shutdown via [Process.destroy]. If the process does not
-     * exit, falls back to [Process.destroyForcibly]. Sets [isShuttingDown] to
-     * suppress watchdog crash callbacks.
-     */
-    /**
      * Stops the server, waiting briefly for it to go before killing it.
+     *
+     * [isShuttingDown] is set first, and that is what keeps [startWatchdog]
+     * quiet: the exit that follows is expected, so no crash callback fires and
+     * nothing restarts the server behind this call. It was the one thing a
+     * second, older copy of this documentation said that this one did not.
      *
      * The wait is short because it is paid on whichever thread calls this, and
      * the Stop action on the notification calls it from Service.onDestroy --
@@ -1118,17 +1116,6 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
-     * Starts a daemon thread that waits for the server process to exit.
-     *
-     * If [isShuttingDown] is `true`, the exit is expected and no callback fires.
-     * Otherwise, [onServerCrashed] is invoked with the exit code.
-     *
-     * Exit code interpretation:
-     * - 0: clean exit
-     * - 137 (SIGKILL): typically OOM killer or phantom process limit
-     * - other: unexpected crash
-     */
-    /**
      * Watches a server nobody here spawned.
      *
      * This is the whole answer to the objection that kept adoption out of the
@@ -1178,6 +1165,23 @@ class ProcessManager(private val context: Context) {
         }
     }
 
+    /**
+     * Starts a daemon thread that waits for the server process to exit.
+     *
+     * Readiness is cleared whatever the reason and before the shutdown branch,
+     * because a process that has exited is not serving.
+     *
+     * If [isShuttingDown] is `true`, the exit is expected and no callback fires.
+     * Otherwise, [onServerCrashed] is invoked with the exit code.
+     *
+     * Exit code interpretation:
+     * - 0: clean exit
+     * - 137: SIGKILL, typically the OOM killer or the phantom process limit
+     * - 129 to 192: killed by some other signal, named through [signalName].
+     *   This said "unexpected crash" while the bootstrap collapsed every signal
+     *   to a clean zero, which made even the 137 above unreachable
+     * - anything else: unexpected crash
+     */
     private fun startWatchdog() {
         watchdogThread = thread(name = "node-watchdog", isDaemon = true) {
             try {

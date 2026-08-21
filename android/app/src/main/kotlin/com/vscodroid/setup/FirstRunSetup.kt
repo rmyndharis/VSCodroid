@@ -404,6 +404,10 @@ class FirstRunSetup(
     }
 
     /**
+     * @param onBytes told how many bytes each extracted file wrote, so a caller can
+     *   report progress across a step that would otherwise show none. Null for the
+     *   short steps, where the cost of reporting outweighs what it shows.
+     *
      * @return false if any file under [assetPath] was present in the APK and
      *   could not be written. An asset that is simply absent is not a failure --
      *   several are, in builds that skip a download script -- so it answers
@@ -428,11 +432,6 @@ class FirstRunSetup(
      *
      * Nothing on device verifies those trees are complete;
      * `verify-server-tree.py` checks the build, not the install.
-     */
-    /**
-     * @param onBytes told how many bytes each extracted file wrote, so a caller can
-     *   report progress across a step that would otherwise show none. Null for the
-     *   short steps, where the cost of reporting outweighs what it shows.
      */
     private fun extractAssetDir(
         assetPath: String,
@@ -2669,47 +2668,6 @@ private class SettingPin(val key: String, valuePattern: String, val value: Strin
 private val FIRST_PROPERTY = Regex("""(?<=\{)\s*\n([ \t]*)(?=")""")
 
 /**
- * Reconciles the settings.json values this app manages, returning the updated
- * document or `null` when nothing needed changing.
- *
- * Two jobs. `git.path` still embeds `nativeLibraryDir`, which a reinstall moves,
- * so it is re-pointed whenever it has gone stale. The terminal profile is instead
- * migrated *off* `nativeLibraryDir` and onto the `usr/bin/bash` symlink, which
- * `setupToolSymlinks()` already repairs on every launch — after that move the
- * pattern no longer matches and the profile never goes stale again.
- *
- * The move carries the other two halves of the shell-integration fix with it,
- * because all three were written by the same release. Bundling them keeps the
- * migration one-shot: once the path is off `/data/app/`, nothing here fires
- * again, so a user who later turns shell integration back off keeps it off.
- *
- * Substitutes values in place and leaves every other byte untouched.
- * settings.json is JSONC: comments and trailing commas are legal there, so
- * parsing the document to re-serialise it would strip the user's comments,
- * escape every slash, and turn `["-i",]` into `["-i", null]`.
- *
- * A pattern that does not match changes nothing, so a file the user has
- * restructured is left as they wrote it rather than mangled.
- */
-/**
- * Names the extension directories left behind by an earlier bundled version.
- *
- * Bundled extensions are extracted to `publisher.name-version` directories, so
- * bumping a version extracts a new directory beside the old one. The scanner
- * shows only what `extensions.json` — the default profile's manifest — lists,
- * not what sits on disk, so the deletion here is half of the swap: it is what
- * lets reconcileExtensionsManifest drop the old entry and list the new version
- * in its place. The other stake is disk, which never comes back on its own:
- * the Python extension alone is 29 MB, kept for as long as the app is
- * installed. (An earlier version of this comment claimed the scanner discovers
- * extensions by listing directories; the manifest is what it reads.)
- *
- * Only strictly older copies are named. A user who installed a newer build of the
- * same extension from the marketplace keeps it — that is their copy, and the
- * scanner already prefers it. A version that is not purely numeric is left alone
- * rather than guessed at.
- */
-/**
  * Directories under our own publisher that this build no longer bundles.
  *
  * `vscodroid.*` never appears on the marketplace, so such a directory can only
@@ -2848,33 +2806,6 @@ internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>):
     bundled.filter { it.startsWith(OWN_EXTENSION_PREFIX) || it !in present }
 
 /**
- * Whether the setup recorded on this device belongs to a build other than the
- * one now running, and therefore has to be redone.
- *
- * Both halves of the identity are compared, and the versionCode is the half
- * that carries the guarantee. A versionName is a label a build declares about
- * itself and nothing stops two builds declaring the same one: 1.1.0 was
- * published under versionCode 11 and then again under 12. Comparing the label
- * alone, which is what this did, answers "same build" for those two -- so a
- * device holding the first takes the second, skips setup entirely, and keeps
- * running the older server tree under the newer app. Nothing reports it,
- * because from the app's side setup completed; it completed for a different
- * build.
- *
- * Play refuses an upload whose versionCode is not greater than the last, so the
- * code cannot repeat where the name can. Comparing both means the name stays
- * free to be whatever a release wants to call itself.
- *
- * A stored code of 0 is the value getInt returns when the
- * key was never written, which is any install predating the code being
- * recorded. Those are treated as stale, which redoes an extraction that is
- * idempotent, rather than trusting a record that was never made.
- *
- * Pure, and takes the four values rather than a Context, so the decision can be
- * pinned by a unit test; the reads themselves are one call each and have no
- * branch to get wrong.
- */
-/**
  * How much of `filesDir` the toolchains named in `toolchains.json` occupy.
  *
  * A withdrawn toolchain is still counted. `ToolchainRegistry.find` answers null
@@ -2902,6 +2833,33 @@ internal fun toolchainBytesFor(names: List<String>): Long = names.sumOf { name -
         ?: 0L
 }
 
+/**
+ * Whether the setup recorded on this device belongs to a build other than the
+ * one now running, and therefore has to be redone.
+ *
+ * Both halves of the identity are compared, and the versionCode is the half
+ * that carries the guarantee. A versionName is a label a build declares about
+ * itself and nothing stops two builds declaring the same one: 1.1.0 was
+ * published under versionCode 11 and then again under 12. Comparing the label
+ * alone, which is what this did, answers "same build" for those two -- so a
+ * device holding the first takes the second, skips setup entirely, and keeps
+ * running the older server tree under the newer app. Nothing reports it,
+ * because from the app's side setup completed; it completed for a different
+ * build.
+ *
+ * Play refuses an upload whose versionCode is not greater than the last, so the
+ * code cannot repeat where the name can. Comparing both means the name stays
+ * free to be whatever a release wants to call itself.
+ *
+ * A stored code of 0 is the value getInt returns when the
+ * key was never written, which is any install predating the code being
+ * recorded. Those are treated as stale, which redoes an extraction that is
+ * idempotent, rather than trusting a record that was never made.
+ *
+ * Pure, and takes the four values rather than a Context, so the decision can be
+ * pinned by a unit test; the reads themselves are one call each and have no
+ * branch to get wrong.
+ */
 internal fun setupIsStale(
     storedName: String?,
     storedCode: Int,
@@ -3150,6 +3108,24 @@ internal fun bundledIdsToRelist(
     }
 }
 
+/**
+ * Names the extension directories left behind by an earlier bundled version.
+ *
+ * Bundled extensions are extracted to `publisher.name-version` directories, so
+ * bumping a version extracts a new directory beside the old one. The scanner
+ * shows only what `extensions.json` — the default profile's manifest — lists,
+ * not what sits on disk, so the deletion here is half of the swap: it is what
+ * lets reconcileExtensionsManifest drop the old entry and list the new version
+ * in its place. The other stake is disk, which never comes back on its own:
+ * the Python extension alone is 29 MB, kept for as long as the app is
+ * installed. (An earlier version of this comment claimed the scanner discovers
+ * extensions by listing directories; the manifest is what it reads.)
+ *
+ * Only strictly older copies are named. A user who installed a newer build of the
+ * same extension from the marketplace keeps it — that is their copy, and the
+ * scanner already prefers it. A version that is not purely numeric is left alone
+ * rather than guessed at.
+ */
 internal fun supersededExtensionDirs(present: List<String>, bundled: List<String>): List<String> {
     fun split(dir: String): Pair<String, String>? {
         val cut = dir.lastIndexOf('-')
@@ -3180,6 +3156,36 @@ internal fun supersededExtensionDirs(present: List<String>, bundled: List<String
     }
 }
 
+/**
+ * Reconciles the settings.json values this app manages, returning the updated
+ * document or `null` when nothing needed changing.
+ *
+ * Two of the jobs are about paths. `git.path` still embeds `nativeLibraryDir`,
+ * which a reinstall moves, so it is re-pointed whenever it has gone stale. The
+ * terminal profile is instead migrated *off* it and onto `usr/bin/bash`, which
+ * `setupToolSymlinks()` already repairs on every launch — after that move the
+ * pattern no longer matches and the profile never goes stale again.
+ *
+ * The move carries the other two halves of the shell-integration fix with it,
+ * because all three were written by the same release. Bundling them keeps the
+ * migration one-shot: once the path is off `/data/app/`, nothing here fires
+ * again, so a user who later turns shell integration back off keeps it off.
+ *
+ * The remaining values are not migrations. They are inserted when absent rather
+ * than only refreshed, so they reach installs made before the setting existed:
+ * `claudeCode.claudeProcessWrapper`, itself a `nativeLibraryDir` path and so
+ * refreshed too, but left alone when it points somewhere the user chose;
+ * `extensions.verifySignature`; and the two Python pins [PYTHON_LOCATOR] and
+ * [PYTHON_ENV_EXTENSION].
+ *
+ * Substitutes values in place and leaves every other byte untouched.
+ * settings.json is JSONC: comments and trailing commas are legal there, so
+ * parsing the document to re-serialise it would strip the user's comments,
+ * escape every slash, and turn `["-i",]` into `["-i", null]`.
+ *
+ * A pattern that does not match changes nothing, so a file the user has
+ * restructured is left as they wrote it rather than mangled.
+ */
 internal fun refreshManagedPaths(
     content: String,
     shellPath: String,

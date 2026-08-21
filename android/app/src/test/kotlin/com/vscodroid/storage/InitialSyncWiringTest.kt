@@ -43,8 +43,7 @@ class InitialSyncWiringTest {
      * it — so it lands outside the directory `@TempDir` cleans up, and each test method
      * gets a fresh directory and therefore a fresh name. Removed here so the runs do not
      * accumulate one small file apiece in the system temp root.
-     */
-    /**
+     *
      * One method rather than two: JUnit 5 orders same-class lifecycle methods
      * deterministically but not by declaration, so a second @AfterEach would leave the
      * order between them written nowhere. Nothing here depends on it today -- the
