@@ -130,6 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The server log no longer rewrites itself on every output line once the lines it keeps are large, which stalled the thread draining the server's output.
 - A delivered toolchain pack the store did not actually delete is reclaimed at the next launch, instead of occupying a toolchain's worth of storage for good.
 - Certificate and link failure notices stop after eight in a session, so a page failing many hosts can no longer bury the editor under them.
+- The status badge and the action button on a toolchain card no longer draw over each other when a long label makes both wide.
 
 ### Security
 

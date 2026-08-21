@@ -69,15 +69,31 @@
             app:layout_constraintTop_toBottomOf="@+id/toolchainDescription" />
 
         <!-- Status badge (MANAGER mode: "Installed" green text) -->
+        <!--
+            Ends where the action button begins, because MANAGER mode shows both
+            of them on the same row and nothing else relates them horizontally:
+            the badge is anchored to the start, the button to the end, and a
+            wrap_content badge simply grew under the button until the two texts
+            sat on top of each other. Both labels are translated, so the length
+            that does it is not knowable from the English strings.
+
+            0dp rather than wrap_content so the badge yields the space instead of
+            claiming it, and wraps onto a second line when the pair cannot fit.
+            The button is deliberately left anchored to the parent rather than
+            chained to the badge, so it keeps its place when the badge is gone,
+            which is what PICKER mode and an unbadged card both show.
+        -->
         <TextView
             android:id="@+id/statusBadge"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
+            android:layout_marginEnd="8dp"
             android:textColor="@color/colorSuccess"
             android:textSize="12sp"
             android:textStyle="bold"
             android:visibility="gone"
+            app:layout_constraintEnd_toStartOf="@+id/actionButton"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/toolchainSize" />
 
