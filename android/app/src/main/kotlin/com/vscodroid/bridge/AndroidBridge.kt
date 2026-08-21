@@ -526,7 +526,7 @@ class AndroidBridge(
     fun openRecentFolder(authToken: String, uriString: String) {
         if (!security.validateToken(authToken)) return
         val uri = Uri.parse(uriString)
-        Logger.i(tag, "Opening recent SAF folder: $uri")
+        Logger.i(tag, "Opening recent SAF folder: ${redactToken(uri.toString())}")
         onOpenRecentFolder(uri)
     }
 
@@ -823,7 +823,7 @@ class AndroidBridge(
     @JavascriptInterface
     fun installToolchain(name: String, authToken: String) {
         if (!security.validateToken(authToken)) return
-        Logger.i(tag, "JS requested toolchain install: $name")
+        Logger.i(tag, "JS requested toolchain install: ${redactToken(name)}")
         toolchainManager.install(name)
     }
 
@@ -833,7 +833,7 @@ class AndroidBridge(
     @JavascriptInterface
     fun removeToolchain(name: String, authToken: String) {
         if (!security.validateToken(authToken)) return
-        Logger.i(tag, "JS requested toolchain removal: $name")
+        Logger.i(tag, "JS requested toolchain removal: ${redactToken(name)}")
         toolchainManager.uninstall(name)
     }
 

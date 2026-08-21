@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Values the editor page hands the app no longer reach logcat in the clear: a download's name and failure detail, a folder URI, and a toolchain name.
 - A link that fails to open now says why. Every refusal blamed a missing app, including a stale session and a URL Android refused outright.
 - The connection token no longer reaches logcat when a link fails to open. The URL was logged whole, twice, on a line that ships in release builds.
 - The system dark theme flipping no longer moves you out of your workspace, or restarts first-run extraction if it lands while setup is running.

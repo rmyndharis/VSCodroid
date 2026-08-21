@@ -78,7 +78,6 @@ class SafMirrorReclamationTest {
         every { uri } returns granted
     }
 
-    /** Builds the mirror directory and the sync record the engine keeps beside it. */
     /**
      * The journal is keyed on the mirror's real path, and the pass renames the
      * mirror before deleting it.
@@ -161,6 +160,9 @@ class SafMirrorReclamationTest {
     }
 
     /**
+     * Builds the mirror directory and the sync record the engine keeps beside it,
+     * which is what the pair it returns holds.
+     *
      * A mirror the reclaim pass is entitled to delete: every file in it is one the
      * record vouches for, in the format [SafSyncEngine.recordIdentity] writes.
      *

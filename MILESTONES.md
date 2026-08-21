@@ -360,10 +360,11 @@ M6 (Release)   → Play Store release
    - [x] `StorageManager.isStorageLow()` — low storage warning with Toast
    - [x] Exposed to JS via `AndroidBridge` (`getStorageInfo`, `clearCaches`, `getAvailableStorage`)
 
-6. **GitHub OAuth integration** (`AndroidBridge.kt`, `MainActivity.kt`)
-   - [x] `startGitHubAuth()` opens OAuth URL via Chrome Custom Tabs
-   - [x] Deep link callback: `vscodroid://oauth/github?code=XXX&state=YYY`
-   - [x] `handleOAuthCallback()` in `MainActivity` forwards to VS Code auth handler via JS
+6. **Browser sign-in callback relay** (`AndroidBridge.kt`, `MainActivity.kt`)
+   - [x] `openExternalUrl()` opens the authorisation URL, in a Chrome Custom Tab for https
+   - [x] Deep link callback: `vscodroid://callback?data=ENCODED_JSON`, generic rather than per provider
+   - [x] `MainActivity.onNewIntent` reads the id with `callbackRequestId()` and injects the payload into the page
+   - [x] `AuthTabWindow` arms the request ids a launch carries, so a callback nothing asked for is refused
    - [x] Push/pull to GitHub works from VS Code SCM panel after auth
 
 7. **External storage access (SAF)** (`SafStorageManager.kt`, `SafSyncEngine.kt`, `vscodroid-saf-bridge` extension)

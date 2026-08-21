@@ -49,15 +49,15 @@ Module._resolveFilename = function (request, ...rest) {
 };
 require.cache.vscode = { id: 'vscode', filename: 'vscode', loaded: true, exports: vscodeStub };
 
+// Captured before the first call overwrites TMPDIR, which os.tmpdir() reads.
+const BASE_TMP = os.tmpdir();
+
 /**
  * Activates a FRESH copy of the extension against one snapshot and returns the
  * notification it raised. Fresh because warningShownAtThreshold is module
  * state: a second activation of the same instance is latched and stays silent,
  * which would make the comparison below pass by saying nothing twice.
  */
-// Captured before the first call overwrites TMPDIR, which os.tmpdir() reads.
-const BASE_TMP = os.tmpdir();
-
 function notificationFor(snapshot) {
     const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-ext-'));
     process.env.TMPDIR = tmp;

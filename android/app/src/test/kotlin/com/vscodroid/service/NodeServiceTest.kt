@@ -308,7 +308,7 @@ class EndsUnreportedTest {
 /**
  * That the two start failures actually go through the recoverable stop.
  *
- * [SpawnedNothingTest] pins the decision; this pins that it is consulted
+ * [EndsUnreportedTest] pins the decision; this pins that it is consulted
  * and acted on. Neither subsumes the other: the predicate can be perfect and
  * called from nowhere, which is the exact shape of the defect being closed —
  * `enterTerminalState` did the right thing and the two start failures simply did

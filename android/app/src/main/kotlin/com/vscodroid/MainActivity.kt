@@ -342,7 +342,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
-            if (detail != null) Logger.w(tag, "Download of $fileName: $detail")
+            // Both halves are page supplied and this line is not gated on a
+            // debuggable build, so it ships. `fileName` arrives through
+            // `DownloadCoordinator.onDownloadNamed`, where the page names the file
+            // itself, and `detail` reaches here from `onComplete(requestId, error)`,
+            // whose error string the page also writes. Neither is followed by a
+            // predicate that could catch this, because both are renamed on the way
+            // in, which is how this site was missed while its siblings in
+            // `AndroidBridge` were redacted.
+            if (detail != null) {
+                Logger.w(tag, "Download of ${redactToken(fileName)}: ${redactToken(detail)}")
+            }
             val message = when (outcome) {
                 DownloadOutcome.SAVED -> "Saved $fileName"
                 DownloadOutcome.CANCELLED -> "Download cancelled"

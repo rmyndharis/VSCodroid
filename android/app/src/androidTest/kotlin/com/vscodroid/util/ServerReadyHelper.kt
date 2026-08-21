@@ -8,9 +8,10 @@ import java.net.URL
  * Shared helper for instrumented tests that need the VS Code server to be running.
  *
  * Provides:
- * - [waitForServerPort] — polls logcat for the server-ready message and returns the port.
- * - [markSetupComplete] — writes the setup_version pref so SplashActivity skips extraction.
- * - [healthCheck] — verifies the server responds to HTTP on the given port.
+ * - [markSetupComplete] writes the setup_version pref so SplashActivity skips extraction.
+ * - [clearSetupState] removes it again, plus the toolchain picker flag.
+ * - [healthCheck] asks the server for /version on a port and says whether it answered.
+ * - [waitForPort] polls that same check until the port answers or the timeout runs out.
  */
 object ServerReadyHelper {
 

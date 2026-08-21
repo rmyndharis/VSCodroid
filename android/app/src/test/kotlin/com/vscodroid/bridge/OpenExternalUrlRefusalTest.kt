@@ -310,7 +310,7 @@ class OpenExternalUrlRefusalTest {
      * silently gives up is the reason the ordering exists -- `launchUrl` hands
      * off to another process, and a browser that answers instantly can return
      * before the window it needs is open, refusing a sign-in that really did
-     * happen. It also strands the rollback: `armedFrom` would stay null and the
+     * happen. It also strands the rollback: `armed` would stay empty and the
      * `disarm` call become dead code.
      *
      * The property is about ordering against another process, so there is

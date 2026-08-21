@@ -2484,15 +2484,16 @@ private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE b
 # command's output instead of on a screen.
 """
 
-/**
- * The prompt block written into `.bashrc`, shared by the first-run write and by
- * [FirstRunSetup.ensurePromptFix], which replaces the legacy empty-PS1 prompt.
- */
+/** Bumped whenever [PROMPT_BLOCK] changes, so an older block is recognised and replaced. */
 private const val PROMPT_VERSION = "v2"
 private const val PROMPT_BEGIN = "# >>> vscodroid prompt"
 private const val PROMPT_END = "# <<< vscodroid prompt"
 private const val PROMPT_MARKER_CURRENT = "$PROMPT_BEGIN $PROMPT_VERSION >>>"
 
+/**
+ * The prompt block written into `.bashrc`, shared by the first-run write and by
+ * [FirstRunSetup.ensurePromptFix], which replaces the legacy empty-PS1 prompt.
+ */
 private val PROMPT_BLOCK = """
     $PROMPT_MARKER_CURRENT
     # PROMPT_COMMAND computes the directory, PS1 renders it. The \[ \] markers tell
