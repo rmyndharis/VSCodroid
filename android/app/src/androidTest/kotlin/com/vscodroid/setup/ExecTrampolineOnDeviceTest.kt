@@ -1,0 +1,175 @@
+package com.vscodroid.setup
+
+import android.content.Context
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+/**
+ * The one claim no JVM test can settle: that the trampoline actually starts a
+ * program the app is otherwise forbidden to run.
+ *
+ * Everything else about this mechanism is bookkeeping a unit test can check, and
+ * bookkeeping is not the question. The question is a kernel policy decision:
+ * SELinux denies `execute_no_trans` on `app_data_file`, so the app cannot execve
+ * anything under `filesDir` whatever its mode, and it may execve
+ * `/system/bin/linker64`, which then mmaps the payload out of `filesDir` under
+ * the `execute` permission it does hold. Only a test running as the app itself
+ * can ask that. `adb shell run-as` cannot substitute: it runs as
+ * `u:r:runas_app:s0`, a domain that is allowed to execute files this one may
+ * not, so it reports success for a binary that fails on the device.
+ *
+ * The CONTROL is asserted first and is not optional. If a direct execve of the
+ * copied payload SUCCEEDS on this device, then nothing was ever being denied
+ * here, the subject below would pass for a reason that has nothing to do with
+ * the trampoline, and the run proves nothing. That case fails loudly and says so
+ * rather than reporting green.
+ *
+ * The payload is `libmake.so`, copied out of `nativeLibraryDir`: it is small,
+ * self-contained, already bundled, and `make --version` exits 0 with output that
+ * cannot be mistaken for anything else.
+ */
+@RunWith(AndroidJUnit4::class)
+class ExecTrampolineOnDeviceTest {
+
+    private lateinit var context: Context
+    private lateinit var probeRoot: File
+    private lateinit var tcBin: File
+    private lateinit var table: File
+    private lateinit var payload: File
+
+    private val trampoline
+        get() = File(context.applicationInfo.nativeLibraryDir, "libexec-trampoline.so")
+
+    @Before
+    fun setUp() {
+        context = InstrumentationRegistry.getInstrumentation().targetContext
+
+        // Its own subtree, so nothing here touches the directories the app's own
+        // toolchain machinery owns and a failed run leaves no name on PATH.
+        probeRoot = File(context.filesDir, "exec-trampoline-probe")
+        probeRoot.deleteRecursively()
+        tcBin = File(probeRoot, "tcbin").apply { mkdirs() }
+        table = File(probeRoot, "toolchain-exec.tsv")
+
+        val source = File(context.applicationInfo.nativeLibraryDir, "libmake.so")
+        assertTrue(
+            "libmake.so is not in nativeLibraryDir, so there is nothing to run: $source",
+            source.isFile,
+        )
+        payload = File(probeRoot, "make")
+        source.copyTo(payload, overwrite = true)
+        assertTrue("could not mark the copied payload executable", payload.setExecutable(true, true))
+
+        assertTrue(
+            "libexec-trampoline.so is not in nativeLibraryDir. The APK was built " +
+                "without scripts/build-exec-trampoline.sh having run, which is the " +
+                "one failure in this area that leaves every other gate green: " +
+                trampoline,
+            trampoline.isFile,
+        )
+
+        table.writeText("make\t${payload.absolutePath}\n")
+        Runtime.getRuntime().exec(
+            arrayOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "make").absolutePath)
+        ).waitFor()
+        assertTrue("the trampoline link was not created", File(tcBin, "make").exists())
+    }
+
+    @After
+    fun tearDown() {
+        probeRoot.deleteRecursively()
+    }
+
+    /**
+     * The control. A copy of a working binary, under filesDir, mode 0755, run by
+     * absolute path. It must not start.
+     */
+    @Test
+    fun `a payload under filesDir cannot be executed directly`() {
+        val result = run(listOf(payload.absolutePath, "--version"), emptyMap())
+
+        assertNotEquals(
+            "a binary under filesDir executed directly. SELinux is not denying " +
+                "execve on this device, so the trampoline test beside this one " +
+                "would pass whether or not the trampoline works. Output: ${result.second}",
+            0, result.first,
+        )
+    }
+
+    /**
+     * The subject. Same binary, same mode, same directory, reached by bare name
+     * through a PATH holding only the trampoline directory.
+     */
+    @Test
+    fun `the trampoline runs the same payload by bare name`() {
+        val result = run(
+            listOf("make", "--version"),
+            mapOf(
+                "PATH" to tcBin.absolutePath,
+                "VSCODROID_EXEC_TABLE" to table.absolutePath,
+            ),
+        )
+
+        assertEquals("make did not run through the trampoline: ${result.second}", 0, result.first)
+        assertTrue(
+            "the trampoline ran something, but not GNU Make: ${result.second}",
+            result.second.contains("GNU Make"),
+        )
+    }
+
+    /**
+     * A name with no row answers 127 and says why, rather than starting whatever
+     * else happens to be reachable. The trampoline must never search PATH.
+     */
+    @Test
+    fun `a name with no row fails with a reason`() {
+        Runtime.getRuntime().exec(
+            arrayOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "nosuch").absolutePath)
+        ).waitFor()
+
+        val result = run(
+            listOf("nosuch"),
+            mapOf(
+                "PATH" to tcBin.absolutePath,
+                "VSCODROID_EXEC_TABLE" to table.absolutePath,
+            ),
+        )
+
+        assertEquals("an unlisted name did not report command-not-found: ${result.second}",
+            127, result.first)
+        assertTrue(
+            "the failure said nothing a user could act on: ${result.second}",
+            result.second.contains("no toolchain entry"),
+        )
+    }
+
+    /** Exit status and merged output of one command, run with exactly [env] added. */
+    private fun run(command: List<String>, env: Map<String, String>): Pair<Int, String> {
+        val builder = ProcessBuilder(command).redirectErrorStream(true)
+        // PATH is replaced rather than extended, so a hit can only have come from
+        // the trampoline directory and not from /system/bin.
+        builder.environment().remove("PATH")
+        builder.environment().putAll(env)
+        return try {
+            val process = builder.start()
+            val out = process.inputStream.bufferedReader().readText()
+            assertTrue("the command did not finish", process.waitFor(30, TimeUnit.SECONDS))
+            process.exitValue() to out
+        } catch (e: Exception) {
+            // A refused execve arrives as an IOException from ProcessBuilder
+            // rather than as a non-zero status, and for the control that is the
+            // expected shape. Reported as 126, the status a shell gives for
+            // "found but could not be executed".
+            126 to (e.message ?: e.toString())
+        }
+    }
+}

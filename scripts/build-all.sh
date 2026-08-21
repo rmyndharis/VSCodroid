@@ -57,6 +57,10 @@ step 9/10 "Building native addons and the compatibility shim..."
 "$SCRIPT_DIR/build-glibc-shim.sh" \
     --scan "$ASSETS/vscode-reh" \
     --scan "$ASSETS/extensions"
+# Depends on nothing downloaded, so its position here is a convenience. It writes
+# into jniLibs rather than assets/usr/lib, which download-termux-tools.sh wipes,
+# so it is not subject to the ordering constraint the shim above is.
+"$SCRIPT_DIR/build-exec-trampoline.sh"
 
 step 10/10 "Building the APK..."
 cd "$ROOT_DIR/android"

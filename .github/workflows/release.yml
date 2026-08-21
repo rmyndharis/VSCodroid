@@ -331,6 +331,17 @@ jobs:
             --scan android/app/src/main/assets/vscode-reh \
             --scan android/app/src/main/assets/extensions
 
+      # The one binary this repository compiles for the app itself. It is what
+      # puts a downloaded toolchain's commands on PATH as real files, so anything
+      # that resolves a bare name and execve's the result -- an extension
+      # spawning `ruby`, a make recipe under mksh, a "type": "process" task --
+      # can start them at all. Nothing this job caches covers jniLibs, so unlike
+      # build.yml there is no cache key to keep in step with it here.
+      - name: Build the execution trampoline
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-exec-trampoline.sh
+
       # Runs where the libraries actually exist, which lint.yml is not: it
       # builds stub assets, and a stub tree has nothing to attribute. Berkeley
       # DB shipped under AGPL-3.0 for every release before this check existed,

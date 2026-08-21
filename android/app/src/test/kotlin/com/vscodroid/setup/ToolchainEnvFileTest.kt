@@ -97,7 +97,7 @@ class ToolchainEnvFileTest {
         )
     }
 
-    private fun regenerate() = ToolchainManager(context).regenerateEnvFile()
+    private fun regenerate() = ToolchainManager(context).regenerateDerivedFiles()
 
     private fun envLines() = envFile.readText().lines().map { it.trim() }
 
@@ -136,8 +136,36 @@ class ToolchainEnvFileTest {
             "the toolchain's environment is missing:\n" + envFile.readText(),
         )
         assertTrue(
-            lines.contains("""export PATH="${'$'}PREFIX/../usr/opt/ruby/bin:${'$'}PATH""""),
+            lines.contains("""export PATH="${'$'}PATH:${'$'}PREFIX/../usr/opt/ruby/bin""""),
             "the toolchain's PATH entry is missing:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * Appended, never prepended, and the direction is the whole point.
+     *
+     * `pathDirs` names the directories the payload actually sits in, and for
+     * Ruby that is `usr/bin`, where `ruby` is the interpreter ELF itself, an
+     * inode under filesDir that SELinux refuses to execve. The trampoline
+     * directory that CAN start it is already ahead of them on the PATH the
+     * server process was given. A shell that prepended these would put the
+     * unexecutable copies back in front of it, for itself and for every child it
+     * spawns, and the fix would be invisible in exactly the place a user tests
+     * it first. Bash resolves its own functions before consulting PATH at all,
+     * so nothing about the interactive terminal would change to give it away.
+     */
+    @Test
+    fun `the toolchain PATH line appends rather than prepends`() {
+        elf("usr/opt/ruby/bin/ruby")
+        install("usr/opt/ruby/bin/ruby")
+
+        regenerate()
+
+        val pathLine = envLines().single { it.startsWith("export PATH=") }
+        assertTrue(
+            pathLine.startsWith("""export PATH="${'$'}PATH:"""),
+            "the raw, unexecutable payload directories were put back in front of the " +
+                "trampoline directory: $pathLine",
         )
     }
 

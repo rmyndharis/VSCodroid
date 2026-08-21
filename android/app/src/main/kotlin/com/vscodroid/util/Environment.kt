@@ -45,7 +45,24 @@ object Environment {
         // Merge toolchain env vars (GOROOT, JAVA_HOME, etc.)
         val toolchainEnv = getToolchainEnvironment(context)
         val extraPath = toolchainEnv.remove("__TOOLCHAIN_EXTRA_PATH")
-        val basePath = "$nativeLibDir:$filesDir/usr/bin"
+        // The trampoline directory sits between the bundled binaries and
+        // usr/bin, and both sides of that placement are load-bearing.
+        //
+        // Ahead of usr/bin, because for a toolchain that installs into usr/bin
+        // the two hold the same names: `usr/bin/ruby` IS the Ruby interpreter,
+        // an ELF under filesDir that SELinux refuses to execve, and
+        // `usr/bin/java` is a symlink onto the JDK's. Whichever comes first is
+        // what a bare-name lookup finds, so with usr/bin first the trampoline
+        // would never be reached and every programmatic invocation would go on
+        // failing with EACCES.
+        //
+        // Behind nativeLibDir, because that is where bash, node, git and rg
+        // live as real executables and no toolchain may shadow them.
+        //
+        // Absent for anyone who has installed no toolchain: the generator only
+        // creates it when there is something to put in it, and a PATH entry that
+        // does not exist costs one failed lookup per command.
+        val basePath = "$nativeLibDir:${getTrampolineBinDir(context)}:$filesDir/usr/bin"
         val path = if (extraPath != null)
             "$basePath:$extraPath:/system/bin"
         else
@@ -89,6 +106,12 @@ object Environment {
             // to run twice. What it does NOT reach is written out at
             // [FirstRunSetup.createBashEnvFile].
             "BASH_ENV" to getBashEnvPath(context),
+            // Where the execution trampoline finds out which program a command
+            // name means. It is a plain table rather than a shell file because
+            // its readers are not shells: a direct execve from an extension,
+            // mksh running a make recipe, or a "type": "process" task. See
+            // [getExecTablePath] for why it is exported rather than compiled in.
+            "VSCODROID_EXEC_TABLE" to getExecTablePath(context),
             "TERM" to term,
             "TERMINFO" to "$filesDir/usr/share/terminfo",
             "LANG" to "en_US.UTF-8",
@@ -233,6 +256,54 @@ object Environment {
      */
     fun getBashEnvPath(context: Context): String =
         "${getUserDataDir(context)}/bash-env.sh"
+
+    /**
+     * The table the execution trampoline reads, written by
+     * [ToolchainManager.regenerateExecTableLocked].
+     *
+     * Named here rather than spelled out at each end, because the two ends are
+     * a Kotlin writer and a C reader that share nothing but this string. A
+     * writer that moved the file, or an exported variable that named the old
+     * path, would each leave every toolchain command answering exit 127 with
+     * every test about the table's CONTENT still green. `EnvironmentPathOrderTest`
+     * holds the two together.
+     *
+     * The path reaches the trampoline through the environment rather than being
+     * compiled into it, so a build that moves the user-data directory does not
+     * need a new native binary; the trampoline also derives it from `PREFIX`
+     * when the variable has been scrubbed, which is the same relationship
+     * `toolchain-env.sh` already uses.
+     */
+    fun getExecTablePath(context: Context): String =
+        "${getUserDataDir(context)}/toolchain-exec.tsv"
+
+    /**
+     * The directory of trampoline symlinks that puts toolchain commands on PATH.
+     *
+     * Deliberately NOT `usr/bin`. For a toolchain that installs into `usr/bin`
+     * the interpreter itself is there under the command's own name, so a
+     * trampoline link written into that directory would overwrite the very
+     * binary the table points at. `usr/bin` is also written by three other
+     * passes (`setupToolSymlinks`, `installFromDirectory` and
+     * `createNpmWrappers`), and this directory belongs to one generator that
+     * sweeps whatever it does not recognise.
+     */
+    fun getTrampolineBinDir(context: Context): String =
+        "${context.filesDir}/usr/libexec/tcbin"
+
+    /**
+     * The trampoline binary itself, in the one directory this app may execve.
+     *
+     * Built by `scripts/build-exec-trampoline.sh` into `jniLibs/arm64-v8a`, so
+     * the package manager extracts it here with the execute bit. Every link in
+     * [getTrampolineBinDir] resolves to this one file; the command it should
+     * start is decided from `argv[0]` and the table, because a program reached
+     * through a symlink cannot learn which link invoked it (measured on
+     * emulator-5554, API 33: `argv[0]` is the bare name asked for and
+     * `/proc/self/exe` resolves all the way through to the shared binary).
+     */
+    fun getTrampolinePath(context: Context): String =
+        "${context.applicationInfo.nativeLibraryDir}/libexec-trampoline.so"
 
     fun getExtensionsDir(context: Context): String =
         "${context.filesDir}/home/.vscodroid/extensions"

@@ -149,6 +149,7 @@ the device.
 | TC-2 | Ruby install | Long-press app icon > Manage toolchains > Install Ruby | Downloads, extracts, `ruby --version` prints a version | | |
 | TC-3 | Java install | Long-press app icon > Manage toolchains > Install Java | Downloads, extracts, `java -version` prints a version | | |
 | TC-4 | Ruby and Java run | `ruby -e 'puts 1+1'`; write and run a `Hello.java` with `java Hello.java` | Both print their output | | |
+| TC-9 | A program, not a person, runs a toolchain command | With Ruby installed, write a two-line `Makefile` whose recipe is `ruby -e 'puts 1+1'` and run `make` in the terminal; then add a `"type": "process"` task whose command is `ruby` with args `-e` and `puts 1+1`, and run it | Both print `2`. `make` uses `/system/bin/sh`, and a process task uses no shell at all, so neither reads any bash startup file; a `Permission denied` or exit 126 means the trampoline is not on PATH | | |
 | TC-6 | Toolchain uninstall | Manage toolchains > uninstall one | Files removed, command no longer found in a new terminal | | |
 | TC-7 | A sideloaded install pins one release | Install any toolchain on a build that is NOT from Play, with `adb logcat -s VSCodroid.ToolchainManager` running (Logger prefixes every tag, so the bare name matches nothing) | One line reading `Pinned this install to .../releases/download/<tag>`, naming a concrete tag rather than `latest`, and the install completes. A `Falling back to the unpinned release URL` line instead is not a failure, but record it: it means the resolve did not work on this network | | |
 | TC-8 | A retired toolchain is reclaimed | On a device with Go installed from an earlier build, update and launch once, then open Manage toolchains | Go is gone from the list, `go` is not found in a new terminal, and its files are off the disk. `adb logcat -s VSCodroid.ToolchainManager` shows `Removing go: this build no longer offers it` | | |
@@ -175,7 +176,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | TT-8 | tmux | `tmux new-session -d && tmux ls` | Session listed | | |
 | TT-9 | ripgrep | `rg "pattern" .` | Search results shown | | |
 | TT-10 | VS Code Search | Use Search sidebar (Ctrl+Shift+F) | Results appear, file navigation works | | |
-| TT-11 | Commands outside the terminal | `bash -c 'type -t npm; type -t npx'`, then a `"type": "shell"` task running `npm -v` | Each reports `function`, and the task prints a version rather than "command not found". A toolchain command behaves the same once one is installed. `sh -c 'type npm'` still fails, which is the boundary, not a regression | | |
+| TT-11 | Commands outside the terminal | `bash -c 'type -t npm; type -t npx'`, then a `"type": "shell"` task running `npm -v` | Each reports `function`, and the task prints a version rather than "command not found". `sh -c 'type npm'` still fails, which is the boundary, not a regression: `npm` exists only as a bash function. A toolchain command is not bound by that boundary any more and TC-9 covers it | | |
 
 ## 12. SAF & External Files
 
@@ -220,10 +221,10 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Background/Foreground | 8 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
-| Toolchains | 6 | | | |
+| Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 8 | | | |
-| **Total** | **91** | | | |
+| **Total** | **92** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

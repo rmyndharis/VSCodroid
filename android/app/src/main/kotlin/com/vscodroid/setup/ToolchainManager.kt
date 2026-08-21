@@ -12,6 +12,7 @@ import com.google.android.play.core.assetpacks.AssetPackState
 import com.google.android.play.core.assetpacks.AssetPackStateUpdateListener
 import com.google.android.play.core.assetpacks.model.AssetPackErrorCode
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import org.json.JSONArray
 import org.json.JSONObject
@@ -47,6 +48,15 @@ class ToolchainManager(private val context: Context) {
     private val assetPackManager = AssetPackManagerFactory.getInstance(context)
     private val stateFile = File(context.filesDir, "home/.vscodroid/toolchains.json")
     private val envFile = File(context.filesDir, "home/.vscodroid/toolchain-env.sh")
+
+    /**
+     * The two derived files that make a toolchain command reachable from
+     * something that is not bash, both named from [Environment] so the writer
+     * here and the reader there cannot drift apart.
+     */
+    private val execTable = File(Environment.getExecTablePath(context))
+    private val tcBinDir = File(Environment.getTrampolineBinDir(context))
+
     private val filesDir = context.filesDir.absolutePath
     private val homeDir = "$filesDir/home"
 
@@ -481,7 +491,7 @@ class ToolchainManager(private val context: Context) {
         // Remove from state
         state.remove(idx)
         writeState(state)
-        regenerateEnvFileLocked()
+        regenerateDerivedFilesLocked()
 
         Logger.i(tag, "Uninstalled toolchain: $name")
         report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
@@ -829,7 +839,7 @@ class ToolchainManager(private val context: Context) {
                 fail(packName, ToolchainFailure.STORAGE)
                 return
             }
-            regenerateEnvFileLocked()
+            regenerateDerivedFilesLocked()
         }
 
         Logger.i(tag, "Toolchain $name installed successfully")
@@ -1434,10 +1444,34 @@ class ToolchainManager(private val context: Context) {
     // -- Environment file generation --
 
     /**
-     * Regenerates ~/.vscodroid/toolchain-env.sh from currently installed toolchains.
-     * This file is sourced by .bashrc so new terminal sessions pick up toolchain paths.
+     * Regenerates both files derived from the installed set.
+     *
+     * `~/.vscodroid/toolchain-env.sh` is sourced by `.bashrc` and by the
+     * `BASH_ENV` file, so a terminal and a `bash -c` pick up the toolchain's
+     * environment and its loader wrappers. `~/.vscodroid/toolchain-exec.tsv`
+     * and the symlinks beside it answer the same question for every caller that
+     * never reaches bash.
      */
-    fun regenerateEnvFile() = synchronized(stateLock) { regenerateEnvFileLocked() }
+    fun regenerateDerivedFiles() = synchronized(stateLock) { regenerateDerivedFilesLocked() }
+
+    /**
+     * Everything derived from `toolchains.json`, regenerated together.
+     *
+     * The two generators answer the same question for two different readers:
+     * `toolchain-env.sh` tells bash what a toolchain command means, and
+     * `toolchain-exec.tsv` tells the execution trampoline the same thing for
+     * every caller that never reaches bash. They are called as one because the
+     * three moments the installed set changes are the three moments both have to
+     * be rewritten, and a call site that remembered one and forgot the other
+     * would leave the terminal working while a task or a `make` recipe answered
+     * exit 127, which reads as the toolchain not being installed.
+     *
+     * Caller must hold [stateLock].
+     */
+    private fun regenerateDerivedFilesLocked() {
+        regenerateEnvFileLocked()
+        regenerateExecTableLocked()
+    }
 
     /**
      * Path to the system dynamic linker, which is the only way a toolchain
@@ -1530,11 +1564,20 @@ class ToolchainManager(private val context: Context) {
                     // A name bash cannot use as a function is skipped rather than
                     // written. The manifests are regenerated from upstream packages
                     // at build time, so a future version can introduce a binary
-                    // called something like `foo-bar` or `2to3` without anyone here
-                    // choosing it -- and this file is sourced by .bashrc, so one
-                    // unusable name is a parse error that takes out *every* new
-                    // terminal, not just that command. Losing one wrapper is the
-                    // smaller failure, and it says so in the log.
+                    // called something like `[`, coreutils' own name for `test`,
+                    // without anyone here choosing it -- and this file is sourced by
+                    // .bashrc, so one unusable name is a parse error that takes out
+                    // *every* new terminal, not just that command. Losing one
+                    // wrapper is the smaller failure, and it says so in the log.
+                    //
+                    // The bar is [isShellFunctionName], which refuses a name
+                    // carrying any of the measured unsafe characters. It is wider
+                    // than a shell identifier: `2to3` and `foo-bar` pass it, and
+                    // `ShellFunctionNameTest` establishes against a real bash that
+                    // they are genuinely usable. This skips fewer names than it
+                    // looks like it does, which is the intent. The exec table is
+                    // generated over the full list either way, since a trampoline
+                    // symlink has no naming constraint at all.
                     if (!isShellFunctionName(command)) {
                         Logger.w(tag, "No wrapper for $command: not a name bash can " +
                             "use as a function, so it would break every terminal")
@@ -1579,7 +1622,21 @@ class ToolchainManager(private val context: Context) {
         if (extraPaths.isNotEmpty()) {
             val paths = extraPaths.joinToString(":")
             sb.appendLine("# Toolchain PATH additions")
-            sb.appendLine("export PATH=\"$paths:\$PATH\"")
+            // Appended, never prepended. These directories hold the raw payload:
+            // `usr/bin/ruby` is the interpreter itself and the JDK's bin holds
+            // `java`, both ELF objects under filesDir that SELinux refuses to
+            // execve. The trampoline directory that CAN start them is already on
+            // PATH ahead of them, put there by
+            // [Environment.buildProcessEnvironment], and a shell that prepended
+            // these would restore the unexecutable copies in front of it for
+            // itself and for every child it spawns. Bash function lookup happens
+            // before PATH either way, so this line only decides what a
+            // non-bash child of a bash shell resolves.
+            //
+            // They are kept rather than dropped as insurance for a future
+            // manifest whose `binaries` list is incomplete: behind the
+            // trampoline directory they cost nothing.
+            sb.appendLine("export PATH=\"\$PATH:$paths\"")
         }
 
         envFile.parentFile?.mkdirs()
@@ -1592,6 +1649,221 @@ class ToolchainManager(private val context: Context) {
             return
         }
         Logger.i(tag, "Regenerated toolchain-env.sh (${installed.length()} toolchains)")
+    }
+
+    /**
+     * Writes the table the execution trampoline reads, then repoints the
+     * symlinks that put its names on PATH.
+     *
+     * The shell functions [regenerateEnvFileLocked] emits reach one shell
+     * family, and only once it has been told to read that file. Everything that
+     * resolves a bare command name and execve's the result went on failing with
+     * EACCES: a direct `spawn("ruby", args)` from an extension or a language
+     * server, a `make` recipe (whose shell `patch-default-shell.py` compiled to
+     * `/system/bin/sh`, which is mksh and has never heard of `BASH_ENV`), Node's
+     * own `exec()` for the same reason, bash invoked as `sh`, and a
+     * `"type": "process"` task. This file is what those callers reach instead.
+     *
+     * Two record shapes, matching the two the env file already emits:
+     *
+     *   `<command>\t<absolute path of an ELF>`
+     *   `<command>\t<absolute path of the interpreter>\t<absolute path of a script>`
+     *
+     * Absolute, and expanded here rather than written as `$PREFIX/../` the way
+     * the env file does. The trampoline is a C program and not a shell; a
+     * `$PREFIX` in the table would be a literal path component that does not
+     * exist.
+     *
+     * Two deliberate differences from the env file, each of which would be a
+     * defect if it were quietly made symmetrical:
+     *
+     *   * [isShellFunctionName] is NOT applied. That filter exists because one
+     *     name bash cannot use as a function is a parse error that takes out
+     *     every new terminal, and it refuses any name carrying a measured unsafe
+     *     character: coreutils' `[` is a real file name it turns away. A symlink
+     *     has no naming constraint at all, so reusing the filter here would drop
+     *     exactly the commands the trampoline was built to reach, and the only
+     *     sign would be one missing command.
+     *   * A later toolchain wins a name collision, which is what sourcing the
+     *     env file top to bottom already does to a redefined bash function.
+     *
+     * Caller must hold [stateLock]. This is derived from `toolchains.json`, so
+     * generating it from a state another instance is midway through changing
+     * describes a set of toolchains that never existed.
+     */
+    private fun regenerateExecTableLocked() {
+        val installed = readableState()
+        if (installed == null) {
+            // Damage is not absence, exactly as in [regenerateEnvFileLocked].
+            // Deleting the table over a state file this could not parse would
+            // take every toolchain command off PATH on every launch, while the
+            // payload it names is still on disk and still runnable through the
+            // table that was last written correctly.
+            Logger.w(tag, "toolchains.json is unreadable; keeping the exec table as it stands")
+            return
+        }
+        if (installed.length() == 0) {
+            if (execTable.exists()) execTable.delete()
+            refreshTrampolineLinks(emptySet())
+            return
+        }
+
+        // Insertion-ordered so the file is stable between runs: a table that
+        // reordered itself on every launch would make every diff of it
+        // unreadable, and this file is one of the first things to look at when
+        // a command goes missing.
+        val rows = LinkedHashMap<String, String>()
+        for (i in 0 until installed.length()) {
+            val tc = installed.optJSONObject(i) ?: continue
+            val name = tc.optString("name", "unknown")
+            val scriptNames = tc.optJSONObject("scriptWrappers")
+                ?.optJSONObject("scripts")?.keys()?.asSequence()?.toSet().orEmpty()
+
+            // Every ELF the manifest names, keyed by its command name, so the
+            // script rows below can resolve their interpreter to a real path.
+            val elfPaths = mutableMapOf<String, String>()
+            val binaries = tc.optJSONArray("binaries")
+            if (binaries != null) {
+                for (j in 0 until binaries.length()) {
+                    val relPath = binaries.getString(j)
+                    val command = relPath.substringAfterLast('/')
+                    if (command.isEmpty() || command in scriptNames) continue
+                    if (!isElfFile(File(context.filesDir, relPath))) continue
+                    val absolute = "$filesDir/$relPath"
+                    elfPaths[command] = absolute
+                    rows[command] = "$command\t$absolute"
+                }
+            }
+
+            val scriptWrappers = tc.optJSONObject("scriptWrappers")
+            val interpreter = scriptWrappers?.optString("interpreter", "").orEmpty()
+            val scripts = scriptWrappers?.optJSONObject("scripts")
+            if (interpreter.isNotEmpty() && scripts != null) {
+                // The manifest names the interpreter as a bare word because the
+                // env file's wrapper is read by a shell, which resolves it
+                // against PATH. Nothing resolves it for the trampoline, and it
+                // must not resolve it itself: searching PATH from inside the
+                // trampoline would let a poisoned PATH decide which program runs
+                // a toolchain's own scripts.
+                val interpreterPath = elfPaths[interpreter]
+                if (interpreterPath == null) {
+                    Logger.w(tag, "No exec-table rows for $name scripts: its interpreter " +
+                        "$interpreter is not an ELF this manifest ships")
+                } else {
+                    for (scriptName in scripts.keys()) {
+                        val scriptPath = scripts.getString(scriptName)
+                        rows[scriptName] = "$scriptName\t$interpreterPath\t$filesDir/$scriptPath"
+                    }
+                }
+            }
+        }
+
+        val body = rows.values.joinToString("\n", postfix = "\n")
+        execTable.parentFile?.mkdirs()
+        // Atomic for a reason of its own, not by imitation: a torn line is a
+        // truncated path, and the trampoline would refuse it naming a file the
+        // user never chose. A rename means a concurrent reader sees the whole of
+        // the old table or the whole of the new one.
+        if (!writeAtomically(execTable) { it.write(body.toByteArray()) }) {
+            Logger.e(tag, "Could not write toolchain-exec.tsv; it still holds the previous table")
+            return
+        }
+        refreshTrampolineLinks(rows.keys)
+        Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands)")
+    }
+
+    /**
+     * Puts one symlink per table entry in front of PATH, and sweeps the rest.
+     *
+     * Failure here is contained on purpose. The caller's next act may be to
+     * report an install as complete, and losing the links costs what this repair
+     * already costs on the next launch, while letting the exception out would
+     * lose the install record that names several hundred MB of files.
+     */
+    private fun refreshTrampolineLinks(commands: Set<String>) {
+        try {
+            refreshTrampolineLinksLocked(commands)
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not refresh the toolchain trampoline links: ${e.message}")
+        }
+    }
+
+    /**
+     * Every name in [commands] becomes a symlink onto the single trampoline
+     * binary in `nativeLibraryDir`; anything else in the directory is removed.
+     *
+     * The links point from filesDir INTO nativeLibraryDir and never the other
+     * way round, which is the shape `FirstRunSetup.setupToolSymlinks` has proved
+     * in production for ten binaries: the app cannot write to nativeLibraryDir,
+     * and execve judges the resolved inode, which there is on a partition the
+     * app may execute from.
+     *
+     * Rebuilt on every launch rather than only at install time, for the same
+     * reason those ten are: Android hands out a new `nativeLibraryDir` path on
+     * every reinstall, which dangles every absolute link into the old one.
+     * Staleness is decided by reading the link rather than by `File.exists()`,
+     * which follows a link and answers false for a dangling one, so a link
+     * pointing at a directory that no longer exists would be read as absent and
+     * then fail to be created.
+     *
+     * A link is created under a temporary name and renamed into place. The
+     * delete-then-create that `setupToolSymlinks` performs leaves a window in
+     * which the name does not exist at all, and unlike that pass this one runs
+     * while the server is alive and something may be resolving PATH through the
+     * directory. Rename within one directory is atomic, so a lookup sees the old
+     * link or the new one. The existing window is narrow and has caused no
+     * reported failure; this is the cheaper shape rather than a fix for
+     * something observed.
+     *
+     * The links are created even when the trampoline binary is missing, which is
+     * what a downgrade to a build without it produces. `execvp` treats ENOENT as
+     * "keep looking further along PATH", so a dangling link degrades to exactly
+     * today's behaviour rather than to something worse, and skipping the write
+     * would instead leave a link pointing into a `nativeLibraryDir` that a
+     * reinstall has already moved.
+     */
+    private fun refreshTrampolineLinksLocked(commands: Set<String>) {
+        val target = Environment.getTrampolinePath(context)
+        if (commands.isNotEmpty() && !tcBinDir.exists() && !tcBinDir.mkdirs()) {
+            Logger.w(tag, "Could not create ${tcBinDir.absolutePath}; " +
+                "toolchain commands stay unreachable to anything but bash")
+            return
+        }
+
+        var created = 0
+        var updated = 0
+        for (command in commands) {
+            val link = File(tcBinDir, command)
+            val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
+            if (current == target) continue
+
+            val staging = File(tcBinDir, ".$command.tmp~")
+            staging.delete()
+            try {
+                Os.symlink(target, staging.absolutePath)
+                Os.rename(staging.absolutePath, link.absolutePath)
+                if (current == null) created++ else updated++
+            } catch (e: Exception) {
+                staging.delete()
+                Logger.d(tag, "Failed to link $command to the trampoline: ${e.message}")
+            }
+        }
+
+        // The sweep, and it is not tidiness. A name left behind after its
+        // toolchain was uninstalled still resolves, so the command answers exit
+        // 127 from the trampoline saying there is no entry for it, rather than
+        // the shell's own "command not found" for a command the user has just
+        // removed.
+        var removed = 0
+        for (entry in tcBinDir.listFiles().orEmpty()) {
+            if (entry.name in commands) continue
+            if (entry.delete()) removed++
+        }
+
+        if (created + updated + removed > 0) {
+            Logger.i(tag, "Trampoline links: $created created, $updated repointed, " +
+                "$removed removed in usr/libexec/tcbin/")
+        }
     }
 
     /**
@@ -1701,9 +1973,15 @@ class ToolchainManager(private val context: Context) {
                 // Cheap enough to do every time: it reads toolchains.json, formats a
                 // few dozen lines and writes them atomically. With no toolchains
                 // installed it deletes the file and returns.
-                regenerateEnvFile()
+                //
+                // It is also where the trampoline table and its symlinks are
+                // rebuilt, and they need this launch pass for a second reason of
+                // their own: Android hands out a new nativeLibraryDir path on
+                // every reinstall, so the links an install created point into a
+                // directory that no longer exists until this repoints them.
+                regenerateDerivedFiles()
             } catch (e: Exception) {
-                Logger.w(tag, "Could not refresh toolchain-env.sh: ${e.message}")
+                Logger.w(tag, "Could not refresh the toolchain environment: ${e.message}")
             }
         }
     }

@@ -301,18 +301,19 @@ flowchart TD
 ### 2.3 Environment Variables
 
 ```kotlin
-// Illustrative shape only. Environment.buildProcessEnvironment sets 27 keys plus whatever
-// getToolchainEnvironment() contributes; the list below names all 27 but abbreviates the values.
+// Illustrative shape only. Environment.buildProcessEnvironment sets 28 keys plus whatever
+// getToolchainEnvironment() contributes; the list below names all 28 but abbreviates the values.
 val env = mapOf(
     "HOME"                    to "${filesDir}/home",
     "TMPDIR"                  to "${cacheDir}/tmp",
     "TMUX_TMPDIR"             to "${cacheDir}/tmp",   // Termux tmux hunts inside Termux's prefix otherwise
-    "PATH"                    to "${nativeLibDir}:${filesDir}/usr/bin:<toolchains>:/system/bin",
+    "PATH"                    to "${nativeLibDir}:${filesDir}/usr/libexec/tcbin:${filesDir}/usr/bin:<toolchains>:/system/bin",
     "LD_LIBRARY_PATH"         to "${nativeLibDir}:${filesDir}/usr/lib",
     "NODE_PATH"               to "${filesDir}/server/vscode-reh/node_modules",
     "NODE_OPTIONS"            to "--require=${filesDir}/server/platform-fix.js",
     "SHELL"                   to "${filesDir}/usr/bin/bash",
     "BASH_ENV"                to "${filesDir}/home/.vscodroid/bash-env.sh",  // see below
+    "VSCODROID_EXEC_TABLE"    to "${filesDir}/home/.vscodroid/toolchain-exec.tsv",  // see below
     "TERM"                    to "xterm-256color",
     "TERMINFO"                to "${filesDir}/usr/share/terminfo",
     "LANG"                    to "en_US.UTF-8",
@@ -342,9 +343,21 @@ is bundled either, so `git commit` with no `-m` has nothing to open.
 *functions*, not files, because SELinux refuses `execve` under `filesDir`. Those functions live in
 `.bashrc`, which only an interactive bash reads, so `BASH_ENV` names a second file carrying the same
 definitions for `bash -c`, `bash script.sh` and `bash -lc`. What it does not reach is a bare
-`execve` (`child_process.spawn("go", ...)` with no shell) and `sh -c`, since Android's `sh` is mksh
+`execve` (`child_process.spawn("ruby", ...)` with no shell) and `sh -c`, since Android's `sh` is mksh
 and has never heard of the variable. `child_process.exec()` and make's default recipe shell are both
 `/bin/sh`. See `FirstRunSetup.createBashEnvFile`, whose KDoc states the boundary in full.
+
+**`VSCODROID_EXEC_TABLE` answers exactly the cases `BASH_ENV` cannot.** It names a tab-separated
+table mapping a toolchain command to the absolute path of the binary or script that implements it,
+written by `ToolchainManager.regenerateExecTableLocked` beside the env file. The reader is
+`libexec-trampoline.so`, a small C program in `nativeLibraryDir` that
+`scripts/build-exec-trampoline.sh` compiles: `usr/libexec/tcbin` holds one symlink per command
+pointing at it, that directory sits ahead of `usr/bin` on `PATH`, and the trampoline hands the
+payload to `/system/bin/linker64` the same way the bash functions do. So a bare `execve`, an mksh
+`sh -c`, a `make` recipe and a `"type": "process"` task all reach a toolchain command now. What it
+still does not reach is an absolute-path invocation such as `$JAVA_HOME/bin/java`, a toolchain
+forking its own helper by absolute path (the JDK's `lib/jspawnhelper`), and direct execution of a
+shebang script under `filesDir`, whose own inode is refused before its interpreter is consulted.
 
 ---
 
