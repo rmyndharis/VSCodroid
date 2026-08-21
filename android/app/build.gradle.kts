@@ -1045,11 +1045,20 @@ tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
+// The eight, once. They were written twice before, here as task providers and
+// again below as a list of strings for the graph check, with nothing keeping the
+// two in step. The dangerous drift is one-directional and quiet: add a ninth gate
+// here and forget the other list, and the new gate is wired but never verified,
+// which is the state the check exists to make impossible.
+val packagingGates = listOf(
+    checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
+    verifyBundledShellPaths, verifyRubyPackShellPaths, verifyNativeAddons,
+    checkPackOverlap, verifyPythonPlatform,
+)
+
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
-        dependsOn(checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
-            verifyBundledShellPaths, verifyRubyPackShellPaths, verifyNativeAddons,
-            checkPackOverlap, verifyPythonPlatform)
+        dependsOn(packagingGates)
         dependsOn(bundleNotices)
     }
 
@@ -1079,11 +1088,16 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
 // hint. Whoever turns it on has to move this to a build service or flow action.
 // The question being asked is about the graph, so leaving that unexplained is
 // the failure mode, not the assertion itself.
-val packagingGateNames = listOf(
-    "checkPatchFingerprints", "verifyServerTree", "verifyBundledBinaries",
-    "verifyBundledShellPaths", "verifyRubyPackShellPaths", "verifyNativeAddons",
-    "checkPackOverlap", "verifyPythonPlatform",
-)
+// Derived, not restated. What that changes, said plainly because it cuts both
+// ways: the two lists can no longer disagree, so "wired but not verified" and
+// "verified but not wired" both stop being possible states rather than becoming
+// detectable ones. What the check below can still see is a gate that is wired and
+// absent from the graph anyway, which is not hypothetical: `-x checkPatchFingerprints`
+// on an assembleDebug does exactly that, and was measured failing with that gate
+// named. What it can no longer see is a gate deleted from `packagingGates`
+// outright, because that deletes it from both sides at once. The alarm above is
+// what covers the detachment case that used to be argued for the second list.
+val packagingGateNames = packagingGates.map { it.name }
 
 gradle.taskGraph.whenReady {
     // This project's tasks only. The gates named below are this project's, so a
@@ -1097,6 +1111,34 @@ gradle.taskGraph.whenReady {
     val here = allTasks.filter { it.path.startsWith(prefix) }
     val packaging = here.map { it.name }
         .filter { it.startsWith("merge") && it.endsWith("Assets") }
+
+    // The second question, and the reason it is not the first one again. Asking
+    // "does this build package assets" with the SAME predicate the wiring uses
+    // cannot notice the wiring detaching: rename the family upstream and this
+    // list empties, the early return below fires, and the build goes quiet at
+    // exactly the moment an unchecked tree could ship. So the graph is asked a
+    // question the name shape does not answer.
+    //
+    // AGP builds the asset merge from MergeSourceSetFolders. Measured on this
+    // project, AGP 9.3.1: mergeDebugAssets is
+    // com.android.build.gradle.tasks.MergeSourceSetFolders_Decorated, and the only
+    // other task of that type in the graph is mergeDebugJniLibFolders. The two
+    // always travel together, also measured, across four graphs by --dry-run:
+    // assembleDebug 1 and 1, bundleRelease 1 and 1, testDebugUnitTest 0 and 0,
+    // and `optimizeReleaseResources lintVitalRelease` 0 and 0. So the type answers
+    // the same question as the name on every graph this project runs, while
+    // surviving the rename that the name cannot.
+    val merging = here.filter { it.javaClass.name.contains("MergeSourceSetFolders") }
+    if (packaging.isEmpty() && merging.isNotEmpty()) {
+        throw GradleException(
+            "This build merges source-set folders (${merging.joinToString(", ") { it.name }}) " +
+                "but no task in it is called merge*Assets, which is the name shape the " +
+                "packaging checks are attached by.\n\nThat attachment is therefore reaching " +
+                "nothing, and every check that decides whether the bundled tree may ship is " +
+                "silently absent from this build. Re-point the tasks.matching predicate near " +
+                "`packagingGates` at whatever the merge is called now."
+        )
+    }
     if (packaging.isEmpty()) return@whenReady
 
     val present = here.map { it.name }.toSet()
