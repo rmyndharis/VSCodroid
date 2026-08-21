@@ -52,8 +52,14 @@
          bundled asset tree, which grows with every VS Code pin. A fixed 500 MB
          outlived the tree it was measured against and sent people to free half
          of what unpacking actually needs, so they cleared space, came back, and
-         failed in the same place. See FirstRunSetup.requiredStorageMb(). -->
-    <string name="error_storage_full">Not enough storage space. Free at least %1$d MB and try again.</string>
+         failed in the same place. See FirstRunSetup.requiredStorageMb().
+
+         It ends by naming the button, like its two siblings below. The failure
+         screen adds Retry after the fact and does not move accessibility focus
+         to it, so this announcement is the only place a screen reader user is
+         told the button is there; "try again" left them looking for a gesture
+         that does not exist. -->
+    <string name="error_storage_full">Not enough storage space. Free at least %1$d MB, then tap Retry.</string>
     <string name="error_setup_failed">Setup failed. Tap Retry or reinstall the app.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
