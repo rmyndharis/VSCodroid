@@ -824,8 +824,9 @@ class NodeService : Service() {
      * `endsUnreported` branch -- so a counter incremented there would charge one
      * kill twice and disable a value after a death and a half.
      *
-     * On this dispatcher, like every other piece of state this service keeps, and
-     * for the same reason the class header gives.
+     * Decided on this dispatcher, like every other piece of state this service
+     * keeps, and for the same reason the class header gives. Only the two touches
+     * of the preference file hop off it, and the body says why.
      *
      * The notification is raised only at the boundary, not on every kill. Before
      * the boundary the server is still being restarted with the user's value and
@@ -844,17 +845,31 @@ class NodeService : Service() {
     // `.apply()` for a source-reading guard to find, so the safer-looking spelling
     // is the one that can rot without anything going red.
     @Suppress("ApplySharedPref")
-    private fun chargeHeapOverride(exitCode: Int) {
+    private suspend fun chargeHeapOverride(exitCode: Int) {
         if (!processManager.heapOverrideInEffect()) return
-        val prefs = getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE)
-        val before = prefs.getInt(PREF_HEAP_KILLS, 0)
+        // Both touches of the preference file hop to IO; the decision between them
+        // and the message after them do not. `getSharedPreferences` blocks the
+        // caller until the file has been parsed, and `commit()` writes it back
+        // synchronously, so on this dispatcher they are disk work sitting in front
+        // of the notification this method may go on to raise.
+        //
+        // Suspending rather than launching, because the order is what the latch is
+        // made of: [handleServerCrash] must not reach [retryOrGiveUp] until the
+        // count is on disk, since the start that follows reads it straight back in
+        // `ProcessManager.requestedHeapCeiling` to decide whether the user's value
+        // still gets to be honoured.
+        val before = withContext(Dispatchers.IO) {
+            getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE).getInt(PREF_HEAP_KILLS, 0)
+        }
         val after = heapKillsAfter(exitCode, overrideInEffect = true, current = before)
         if (after == before) return
         // commit(), not apply(): the event being recorded is a SIGKILL, and the
         // kill of this app's own process often follows the one it is reacting to.
         // apply()'s deferred write is exactly what loses that race, and a latch
         // whose count does not survive is a latch that never latches.
-        prefs.edit().putInt(PREF_HEAP_KILLS, after).commit()
+        withContext(Dispatchers.IO) {
+            getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_HEAP_KILLS, after).commit()
+        }
         Logger.w(tag, "Server killed with a user heap ceiling in effect ($after of $HEAP_OVERRIDE_KILL_BUDGET)")
         if (heapOverrideSuspended(after)) {
             reportStartupNotice(getString(R.string.heap_override_suspended))
