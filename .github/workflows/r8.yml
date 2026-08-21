@@ -16,12 +16,19 @@ name: Shrinker
 # not a skipped one -- so a required check would sit at "Expected — waiting for
 # status to be reported" forever and block every unrelated PR.
 #
-# The paths list names what CONFIGURES the shrinkers, not the code they run over.
-# A pull request that only adds Kotlin does not trigger this; the weekly cron is
-# what covers that case, so a source change can be up to a week from its first
-# minified build. Widening to android/app/src/main/** would fix that and would
-# also run this on nearly every pull request, which is the cost the split exists
-# to avoid.
+# The two paths lists are deliberately not the same. Both name what CONFIGURES
+# the shrinkers; the push list also names the code they run over, because a tag
+# is cut from main and everything that reaches one passes through a push to main
+# first. So a change that only adds Kotlin gets a minified build within minutes
+# of landing rather than at the next cron, which is where the "up to a week from
+# its first minified build" this comment used to describe came from.
+#
+# What that trades: a pull request adding only Kotlin still does not trigger this,
+# so the first minified build of such a change is at merge rather than at review
+# time. Widening the pull_request list too would run a release compile on every
+# push of every branch under review, and the split exists to avoid that. On main
+# the same compile is one run per push, superseded by the concurrency group
+# below, and has taken 2 to 4 minutes including queue time on the runs so far.
 #
 # What it catches is these gates FAILING, not their being WRONG. A reflectively
 # reached member that no keep rule covers is removed silently, and this job is
@@ -37,8 +44,9 @@ on:
   # Most commits land straight on main rather than through a pull request, so a
   # pull_request trigger alone leaves the configuration files below reaching a
   # minified build only on the next cron, or first at tag time with the keystore
-  # already decoded. The paths list is repeated because GitHub Actions does not
-  # resolve YAML anchors in a workflow file.
+  # already decoded. The configuration half of the list is spelled out under both
+  # triggers because GitHub Actions does not resolve YAML anchors in a workflow
+  # file; the source paths below it are on this trigger only.
   push:
     branches: [main]
     paths:
@@ -49,6 +57,14 @@ on:
       - "android/gradle.properties"
       - "android/gradle/wrapper/gradle-wrapper.properties"
       - ".github/workflows/r8.yml"
+      # On main alone, the code the shrinkers run over as well. R8 reads the
+      # Kotlin, the resource shrinker and lintVital read res/ and the manifest;
+      # assets/ is read by none of the three, and the tree stubbed out below is
+      # what this job builds against anyway, so listing it would buy runner
+      # minutes and nothing else.
+      - "android/app/src/main/kotlin/**"
+      - "android/app/src/main/res/**"
+      - "android/app/src/main/AndroidManifest.xml"
   pull_request:
     branches: [main]
     paths:

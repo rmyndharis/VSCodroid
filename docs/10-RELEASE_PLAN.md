@@ -47,7 +47,7 @@ flowchart TD
 ```mermaid
 flowchart TD
   REPO["GitHub Repository"] --> B1["Pull request to main, and every push to main<br/>build.yml: debug APK, unit tests, instrumented suite compiled<br/>lint.yml: Android lint and the repository self-checks"]
-  REPO --> B2["Same events, only when one of seven build-configuration paths changes<br/>r8.yml: R8, the resource shrinker and lintVitalRelease"]
+  REPO --> B2["A pull request touching one of seven build-configuration paths, or a push to main touching those or the app sources<br/>r8.yml: R8, the resource shrinker and lintVitalRelease"]
   REPO --> B3["Tag v*<br/>release.yml: signed AAB and APK, toolchain ZIPs, GitHub Release"]
   REPO --> B4["Push to main touching docs/site, the user guide or the privacy policy<br/>pages.yml: publishes the usage site"]
   REPO --> B5["r8.yml: Monday 03:00 UTC, pushes to main, pull requests, or by hand<br/>patch-drift.yml: Monday 04:00 UTC, or by hand"]
@@ -87,8 +87,9 @@ resource shrinker.
 
 ```yaml
 # .github/workflows/r8.yml  ("Shrinker")
-# Monday 03:00 UTC, workflow_dispatch, and pull requests or pushes to main that
-# touch one of seven build-configuration paths.
+# Monday 03:00 UTC, workflow_dispatch, pull requests touching one of seven
+# build-configuration paths, and pushes to main touching those or the Kotlin,
+# resources and manifest the shrinkers run over.
 jobs:
   shrinker:
     # ./gradlew :app:optimizeReleaseResources :app:lintVitalRelease
@@ -101,7 +102,7 @@ jobs:
 | Workflow | Schedule | Purpose | Failure Action |
 |----------|----------|---------|----------------|
 | `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies every patch in `patches/` to an upstream VS Code tag, cumulatively and in glob order, the way the build does. Not `git apply --check`: two patches touch the same server source, so checking them independently would judge the second against a tree the first was supposed to have changed | Rebase the patch set before the next version bump |
-| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. The three event triggers are filtered to the files that configure the shrinkers, so a change to Kotlin alone still waits for the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
+| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. A pull request is filtered to the files that configure the shrinkers; a push to main also covers the app sources they run over, so a change to Kotlin alone reaches a minified build when it lands rather than at the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
 
 ### 2.3 Caching Strategy
 
