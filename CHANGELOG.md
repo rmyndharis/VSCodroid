@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A link that no installed app can open now says so. The tap did nothing and said nothing, which reads as a broken link rather than a missing app.
 - Activating a key on the extra key row through a screen reader now types it. Every key offered activation and none of them did anything.
 - A latched Ctrl, Alt or Shift now says so to a screen reader. The latch was carried by colour alone, so it could be switched but not observed.
+- Keys on the extra key row are wider to touch. The 2dp gap between them was taken off each key, which left them under Android's minimum target size.
 - Dragging a finger inside an application menu now scrolls it instead of closing the submenu. A menu that cannot scroll still reported scrolling, and the submenu closed on it.
 - Tapping the editor now raises the keyboard, and what it types now arrives. The app never took Android input focus for its view, so keyboard input was silently discarded.
 - Brackets, quotes and other symbols on the extra key row now type into the editor. On recent WebViews they inserted nothing at all.

@@ -260,6 +260,93 @@ class KeyRowAccessibilityInstrumentedTest {
         }
     }
 
+    /**
+     * Lays out one page at a given row width and returns each child's width in dp.
+     *
+     * Built from [keyLayoutParams] and [padLayoutParams] rather than from params
+     * written here, so the numbers below come from the same call the adapter
+     * makes. A page is a plain horizontal `LinearLayout` (KeyPageAdapter's
+     * `PageViewHolder`), and the row width is fixed with an EXACTLY spec because
+     * that is what ViewPager2 hands it, and it is the reason `minWidth` on a key
+     * is inert.
+     */
+    private fun keyWidthsDp(rowWidthDp: Int, keys: Int, withPad: Boolean): List<Float> {
+        val density = context.resources.displayMetrics.density
+        val widths = mutableListOf<Float>()
+        onMain {
+            val row = android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            repeat(keys) { row.addView(ExtraKeyButton(context), keyLayoutParams()) }
+            if (withPad) row.addView(GestureTrackpad(context), padLayoutParams())
+
+            val widthPx = (rowWidthDp * density).toInt()
+            row.measure(
+                android.view.View.MeasureSpec.makeMeasureSpec(widthPx, android.view.View.MeasureSpec.EXACTLY),
+                android.view.View.MeasureSpec.makeMeasureSpec((56 * density).toInt(), android.view.View.MeasureSpec.EXACTLY),
+            )
+            row.layout(0, 0, widthPx, (56 * density).toInt())
+            for (i in 0 until row.childCount) {
+                if (row.getChildAt(i) is ExtraKeyButton) widths.add(row.getChildAt(i).width / density)
+            }
+        }
+        return widths
+    }
+
+    @Test
+    fun aKeyGetsTheWholeShareOfTheRow() {
+        // The property the fix guarantees, and the only one that holds at every
+        // screen width: nothing is subtracted from a key before the finger gets
+        // it. A margin would show up here as a shortfall on every key.
+        val density = context.resources.displayMetrics.density
+        for (rowDp in listOf(320, 360, 411, 448, 800)) {
+            val widths = keyWidthsDp(rowDp, keys = 8, withPad = false)
+            assertEquals("expected eight keys at ${rowDp}dp", 8, widths.size)
+            val total = widths.sum()
+            assertTrue(
+                "keys at ${rowDp}dp add up to ${total}dp, so ${rowDp - total}dp of the row " +
+                    "is not on any key. A gap has moved back onto the layout params, and " +
+                    "every dp of it comes off a touch target",
+                kotlin.math.abs(total - rowDp) <= 8f / density,
+            )
+        }
+    }
+
+    @Test
+    fun keysClearFortyEightDpOnAMainstreamPhone() {
+        // 411dp is this emulator and the common Pixel width. Narrower phones do
+        // not clear the guideline on width even with the whole row shared out,
+        // and that needs a different decision: fewer keys per page, which means
+        // more pages. This case pins what the fix does reach, so a regression
+        // that puts the gap back is caught by a number rather than by a shape.
+        val page1 = keyWidthsDp(411, keys = 7, withPad = true)
+        val others = keyWidthsDp(411, keys = 8, withPad = false)
+
+        assertTrue(
+            "page 1 keys are ${page1.min()}dp beside the trackpad, under the 48dp target",
+            page1.min() >= 48f,
+        )
+        assertTrue(
+            "pages 2 to 5 keys are ${others.min()}dp, under the 48dp target",
+            others.min() >= 48f,
+        )
+    }
+
+    @Test
+    fun theGapBetweenKeysIsStillDrawn() {
+        // The gap did not disappear, it moved. If the inset goes too, the keys
+        // butt together and the row reads as one slab.
+        lateinit var bg: android.graphics.drawable.Drawable
+        onMain {
+            bg = ExtraKeyButton(context).background
+        }
+        assertTrue(
+            "the key background is no longer inset, so the 2dp gap is gone from the " +
+                "drawing as well as from the layout: it is ${bg.javaClass.simpleName}",
+            bg is android.graphics.drawable.InsetDrawable,
+        )
+    }
+
     @Test
     fun theTrackpadOffersOneActionPerArrow() {
         inWindow({ ctx -> GestureTrackpad(ctx) }) { _, node ->
@@ -305,4 +392,5 @@ class KeyRowAccessibilityInstrumentedTest {
             )
         }
     }
+
 }

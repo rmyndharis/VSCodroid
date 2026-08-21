@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.GestureDetector
@@ -173,7 +174,10 @@ class ExtraKeyButton @JvmOverloads constructor(
         maxLines = 1
         minWidth = dpToPx(48)
         minimumHeight = dpToPx(56)
-        setPadding(dpToPx(4), dpToPx(6), dpToPx(4), dpToPx(6))
+        // Horizontal padding carries the inset as well as the old padding, so
+        // the distance from the text to the edge of the drawn key is what it
+        // was before the gap moved off the layout params.
+        setPadding(dpToPx(4 + KEY_GAP_DP), dpToPx(6), dpToPx(4 + KEY_GAP_DP), dpToPx(6))
         isClickable = true
         isFocusable = false
 
@@ -226,10 +230,24 @@ class ExtraKeyButton @JvmOverloads constructor(
     }
 
     fun applyRoundedBackground(color: Int) {
-        background = GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dpToPx(6).toFloat()
-        }
+        // Inset rather than a margin, and the difference is the whole point of
+        // this drawable being built here. A 2dp gap between keys used to come
+        // from marginStart/marginEnd on the layout params, which takes the dp
+        // away from the view itself and therefore from what a finger can hit.
+        // As an inset it is taken from the drawing of the background instead:
+        // the gap between keys is the same 4dp and the touch target is 4dp
+        // wider. Measured on a 411dp screen, one visible change comes with it:
+        // the trackpad grows by about 5dp, because it never carried a margin
+        // and so now takes its weighted share of the dp the margins used to
+        // consume. A wider drag area is the right direction for the one
+        // control on the row that wants area, so it stays.
+        background = InsetDrawable(
+            GradientDrawable().apply {
+                setColor(color)
+                cornerRadius = dpToPx(KEY_GAP_DP * 3).toFloat()
+            },
+            dpToPx(KEY_GAP_DP), 0, dpToPx(KEY_GAP_DP), 0,
+        )
     }
 
     private fun dpToPx(dp: Int): Int =
@@ -274,3 +292,13 @@ internal fun toggleStateDescription(isToggle: Boolean, isActive: Boolean): CharS
         isActive -> "on"
         else -> "off"
     }
+
+/**
+ * The gap drawn on each side of a key, in dp.
+ *
+ * It is a drawing inset, not a layout margin. A margin subtracts from the
+ * view, so on a row that divides the width by weight it subtracts from the
+ * touch target of every key; an inset subtracts only from the background,
+ * leaving the view, and the finger's target, the full share of the row.
+ */
+internal const val KEY_GAP_DP = 2

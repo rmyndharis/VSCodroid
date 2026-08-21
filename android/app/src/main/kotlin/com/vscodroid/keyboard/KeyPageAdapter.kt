@@ -87,11 +87,13 @@ class KeyPageAdapter(
                         toggleButtons[item.value] = button
                     }
 
-                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                        marginStart = dpToPx(holder.container.context, 2)
-                        marginEnd = dpToPx(holder.container.context, 2)
-                    }
-                    holder.container.addView(button, lp)
+                    // No margins. The row divides its width by weight, so every
+                    // dp given to a margin is a dp taken off the touch target of
+                    // the key beside it, and these keys are already under the
+                    // 48dp guideline on a narrow phone. The 2dp gap now comes
+                    // from an inset inside the key's own background, which looks
+                    // the same and leaves the target whole.
+                    holder.container.addView(button, keyLayoutParams())
                 }
 
                 is KeyItem.GesturePad -> {
@@ -103,8 +105,7 @@ class KeyPageAdapter(
                             this@KeyPageAdapter.onDragEnd()
                         }
                     }
-                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.5f)
-                    holder.container.addView(trackpad, lp)
+                    holder.container.addView(trackpad, padLayoutParams())
                 }
             }
         }
@@ -124,8 +125,23 @@ class KeyPageAdapter(
         toggleButtons[keyValue]?.isToggleActive = active
     }
 
-    private fun dpToPx(context: android.content.Context, dp: Int): Int =
-        android.util.TypedValue.applyDimension(
-            android.util.TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), context.resources.displayMetrics
-        ).toInt()
 }
+
+/**
+ * How one key claims its share of the row.
+ *
+ * Weight with a zero width, so the row is divided rather than measured: the
+ * page container is measured EXACTLY, which means `LinearLayout` remeasures
+ * each of these children with an EXACTLY spec of its own and `TextView`'s
+ * minWidth clamp never runs. That is why [ExtraKeyButton]'s `minWidth` cannot
+ * hold a key at 48dp, and why nothing here may hand width back through a
+ * margin.
+ *
+ * Named rather than inline so a test can measure the real thing.
+ */
+internal fun keyLayoutParams(): LinearLayout.LayoutParams =
+    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+
+/** The trackpad's share, one and a half keys wide, for the same reason. */
+internal fun padLayoutParams(): LinearLayout.LayoutParams =
+    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.5f)
