@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The licence check matches each copyleft component against the source offer's own entries. A deleted offer used to pass because a neighbouring entry mentioned the project by name.
 - The toolchain check finds the welcome extension by name rather than a pinned version, so the next ordinary bump of that extension no longer fails the build.
 - The translatable-text check reports the test it actually applied instead of claiming no user-facing text sits outside the string resources.
+- Two tests pinning the write-back notice no longer pass when its wiring is commented out rather than deleted.
 
 ### Fixed
 

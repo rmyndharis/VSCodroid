@@ -51,13 +51,19 @@ class WriteBackNoticeWiringTest {
         assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
         val source = activity.readText()
 
+        // Anchored at the start of a line, and for the second pattern the character
+        // class is the anchor: nothing between the indent and the string name may be a
+        // slash, so a `//` cannot get in front of it. Unanchored, a substring search
+        // finds `// safManager.onWriteBackFailed { file ->` as readily as the call
+        // itself, and commenting a line out is how a developer disables something, so
+        // wiring that is already dead is the one shape these two could not see.
         assertTrue(
-            Regex("""safManager\.onWriteBackFailed\s*\{""").containsMatchIn(source),
+            Regex("""(?m)^\s*safManager\.onWriteBackFailed\s*\{""").containsMatchIn(source),
             "nothing wires the write-back notice, so a save that never reached the " +
                 "device folder is silent again",
         )
         assertTrue(
-            Regex("""saf_write_back_failed""").containsMatchIn(source),
+            Regex("""(?m)^\s*[^/\n]*saf_write_back_failed""").containsMatchIn(source),
             "the notice does not name the string that tells the user what happened",
         )
     }
