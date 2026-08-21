@@ -79,7 +79,15 @@
          does. The WebView documentation asks that SSL errors are not put to the
          user as a choice, and Google Play's insecure-SSL-error-handler policy
          refuses an app whose override proceeds past them. -->
-    <string name="tls_blocked_untrusted">Blocked %1$s: its certificate is not trusted by this device. Use http, or a certificate from a system-trusted CA.</string>
+    <!-- These reach the user as a Toast, which truncates. MEASURED on a landscape
+         phone at API 33, twice: a 113-character message was cut at 83 rendered
+         characters and a 70-character one at 74, and both times what went missing
+         was the half that says what to do. So each of these stays short enough to
+         render whole with a host substituted, and the advice is the shortest true
+         one rather than the fullest. Why a user-installed CA does not help is a
+         paragraph, not a toast: it is in the user guide, and the full reason is in
+         logcat on every refusal. -->
+    <string name="tls_blocked_untrusted">Blocked %1$s: certificate not trusted. Use http instead.</string>
     <string name="tls_blocked_hostname">Blocked %1$s: its certificate is issued for a different host name.</string>
     <string name="tls_blocked_date">Blocked %1$s: its certificate is expired or not yet valid.</string>
     <string name="tls_blocked_invalid">Blocked %1$s: its certificate could not be validated.</string>

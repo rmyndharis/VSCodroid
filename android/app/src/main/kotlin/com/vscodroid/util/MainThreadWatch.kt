@@ -38,31 +38,40 @@ import com.vscodroid.BuildConfig
  * and nothing is taken away.
  *
  * penaltyLog and nothing else. penaltyDeath fires from inside an arbitrary
- * framework call, and the first violation on every launch is
- * `publishedResourceRoots`, which is deliberate and documented, so death would
- * make the debug build unusable over a design decision. It would also fire for the
+ * framework call, and every violation a launch produces is deliberate, so death
+ * would make the debug build unusable over design decisions nobody is going to
+ * reverse. It would also fire for the
  * emoji font load that androidx.startup schedules through the InitializationProvider
  * in the merged manifest, which is not this repository's to fix. penaltyDialog
  * would put a dialog over the workbench during the very interaction being
  * investigated.
  *
- * What is expected to fire, so that a new line stands out against it:
- *  - `publishedResourceRoots` and `sensitiveLocations`, from the `resourceRoots`
- *    lazy in `initBridge`: six canonicalPath calls plus getExternalFilesDir. First
- *    and unavoidable, since the allowlist has to exist before the page starts
- *    loading or every extension resource 404s without a sound.
- *  - `ensureProjectsDir` from `loadVSCode`: getExternalFilesDir plus mkdirs.
- *  - `ProcessManager.readTokenFile` from `navigateToFolder`: once per process, and
- *    then cached.
- *  - `folderFromUrl` and `SafStorageManager.getPersistedFolders` from
- *    `onPageFinished`: twice per folder switch, because the server redirects.
- *  - `writeMemoryPressure` from either `onTrimMemory`: a short write that has to
- *    stay synchronous, because onTrimMemory can be the last code that runs before
- *    the process is killed and a write handed to an executor may never land. It
- *    cannot be wrapped in StrictMode.allowThreadDiskWrites either: `MemoryPressureTest`
- *    calls it on the JVM and `app/build.gradle.kts` sets no `isReturnDefaultValues`,
- *    so the android.jar stub would throw and redden that suite.
- *  - a WebView construction after `recreateWebView`, and the emoji font load.
+ * What a cold launch actually produces, measured on an API 33 emulator rather
+ * than predicted, so that a new line stands out against it. Thirteen violations,
+ * every one a disk READ and not one a write:
+ *
+ *  - Eleven of the thirteen resolve `context.filesDir`, once per call to an
+ *    `Environment.get*Dir`. `getFilesDir` stats the directory on every call, so
+ *    each of `getLogsDir`, `getServerDir`, `getExtensionsDir`, `getProjectsDir`,
+ *    `getSafMirrorsDir`, `getUserDataDir` and `getHomeDir` reports one.
+ *  - Twelve of the thirteen originate in `NodeService`, not in the activity: two
+ *    from `onCreate` and ten from the `launchServer` coroutine, which runs on
+ *    `Dispatchers.Main` because this service confines its own state to that
+ *    thread. `publishedResourceRoots` and `initBridge` do appear, but inside that
+ *    coroutine's stack rather than on a path of their own, and third rather than
+ *    first as an earlier version of this comment claimed.
+ *  - The thirteenth is `MainActivity.folderFromUrl` from `onPageFinished`.
+ *
+ * Judged rather than left open, so nobody re-litigates it: none of the eleven is
+ * worth removing. Memoising `filesDir` would take them all, and 37 tests across
+ * 36 files stub `context.filesDir` with a temp directory of their own, in one
+ * JVM, so a process-wide cache would hand the first test's tree to every test
+ * after it. A stat per call is the cheaper of the two risks by a wide margin.
+ *
+ * Sites that did NOT fire on that launch, and which an earlier version of this
+ * list named: `ProcessManager.readTokenFile`, `SafStorageManager.getPersistedFolders`,
+ * `writeMemoryPressure` and the WebView rebuild. Each needs an interaction a cold
+ * launch does not perform, so their absence says nothing about them.
  *
  * Anything not on that list is worth reading. What this cannot see is stated
  * rather than left to be discovered: a ThreadPolicy is per-thread, so nothing
