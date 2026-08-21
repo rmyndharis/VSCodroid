@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A registry token or proxy password in `.npmrc` survives the launch-time repair. Any byte that was not valid UTF-8 was replaced when the file was rewritten.
 - Bug reports now name the memory ceiling the server actually started with. The line existed but never reached the file the report carries.
 - The storage refusal on first run names the Retry button, so a screen reader user is told it is there.
+- A device folder list that fails to load says so, instead of reporting a failed removal the user never asked for.
 
 ### Security
 

@@ -318,11 +318,18 @@ function activate(context) {
     const manageDeviceFoldersCmd = vscode.commands.registerCommand(
         'vscodroid.manageDeviceFolders',
         async () => {
+            /** @type {*[]} */
+            let mirrors;
+            // Reading the list gets its own catch. It fails for reasons that have
+            // nothing to do with removing anything: the relay is not there, or the
+            // bridge times out. The catch below composes a sentence naming a failed
+            // removal, so sharing one with the listing told the user a folder's copy
+            // had survived a removal they were never offered and never confirmed.
             try {
                 const json = /** @type {string} */ (
                     await sendBridgeCommand('listSafMirrors')
                 );
-                const mirrors = JSON.parse(json || '[]');
+                mirrors = JSON.parse(json || '[]');
 
                 if (mirrors.length === 0) {
                     vscode.window.showInformationMessage(
@@ -330,7 +337,14 @@ function activate(context) {
                     );
                     return;
                 }
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(
+                    `Could not read the list of device folder copies: ${err.message}`
+                );
+                return;
+            }
 
+            try {
                 /** @type {(vscode.QuickPickItem & { mirror?: * })[]} */
                 const items = mirrors.map((/** @type {*} */ m) => ({
                     mirror: m,
