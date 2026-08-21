@@ -213,6 +213,41 @@ class ToolchainManager(private val context: Context) {
          * what keeps such a reader from ever seeing a half-written file even so.
          */
         private val stateLock = Any()
+
+        /**
+         * Pack names whose copy into the shared `usr/` tree is running right now.
+         *
+         * On the companion for the same reason [stateLock] is: every call site
+         * builds its own [ToolchainManager], and `ioExecutor` is an instance
+         * field, so the executors serialise each manager's own work and nothing
+         * serialises theirs against each other. Two managers installing one pack
+         * is reachable without trying: `ToolchainActivity` declares no
+         * `configChanges`, so a rotation mid-install recreates it with a second
+         * manager, and the card it rebuilds knows nothing of the install still
+         * running, so it offers Install again.
+         *
+         * What that costs is space and bookkeeping rather than the bytes
+         * themselves. Both copies carry identical source bytes, so the
+         * overlapping writes do not corrupt anything. But neither install's
+         * pre-flight reserves for the other, so a device whose free space sits
+         * between one install's reservation and two installs' real peak passes
+         * both checks and then hits ENOSPC partway through the second copy. That
+         * leaves a truncated tree under a record the first install has already
+         * written as installed, and `repairInstalledToolchains` does not
+         * re-examine a pack the record calls installed, so nothing ever puts it
+         * right.
+         *
+         * The second install declines rather than waits, which is the call
+         * `SafSyncEngine.documentWritesInFlight` already makes for this shape:
+         * waiting on an unbounded filesystem operation turns a race into a stall
+         * behind whatever the user is looking at, and here there is nothing to
+         * wait for anyway. The pack is being installed; the caller that declines
+         * has nothing to add to that.
+         *
+         * Ceiling: one process, exactly as above. Another process copying into
+         * `usr/` is outside this entirely, and nothing does today.
+         */
+        private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
     }
 
     private val listener = AssetPackStateUpdateListener { state ->
@@ -619,8 +654,15 @@ class ToolchainManager(private val context: Context) {
                 return
             }
         }
-        installFromDirectory(packName, assetsDir)
-        releasePack(packName)
+        // Released only by the call that did the install. A false here means
+        // another install of this pack is copying out of `assetsDir` at this
+        // moment, and `removePack` is a real recursive delete of that directory:
+        // releasing it would pull the source out from under the reader, which is
+        // the hazard [cancel] documents from the other direction. The install
+        // that holds the pack releases it when it is done with it.
+        if (installFromDirectory(packName, assetsDir)) {
+            releasePack(packName)
+        }
     }
 
     /**
@@ -702,7 +744,72 @@ class ToolchainManager(private val context: Context) {
 
     // -- File operations --
 
-    private fun installFromDirectory(packName: String, assetsDir: File) {
+    /**
+     * Copies a pack into the shared `usr/` tree, unless another install of the
+     * same pack is already doing exactly that.
+     *
+     * The claim is taken here rather than at either entry point because this is
+     * where the two of them meet: [installDeliveredPack] arrives from Play, the
+     * background task in [downloadViaHttp] arrives from a release ZIP, and the
+     * copy below is the part they share. One claim site is also what keeps a
+     * single install from claiming twice.
+     *
+     * A decliner touches nothing the install that holds the claim owns: it does
+     * not release the pack, does not delete a staging directory, and does not
+     * write the record. The staging directory is per download already
+     * ([toolchainTempDir]), so the HTTP path's own cleanup stays correct without
+     * knowing about any of this; the Play pack is not, which is why the return
+     * value exists.
+     *
+     * @return false when this call declined because another install holds the
+     *   pack. [installDeliveredPack] has to ask, because `removePack` is a real
+     *   recursive delete of the very directory the other install is copying out
+     *   of.
+     */
+    private fun installFromDirectory(packName: String, assetsDir: File): Boolean {
+        if (!installsInFlight.add(packName)) {
+            Logger.i(tag, "Another install already holds $packName; leaving it to that one")
+            // Neither COMPLETED nor FAILED, because both would be untrue in a way
+            // something acts on. COMPLETED is the word this class uses for "the
+            // record is written and the toolchain is usable", which this call did
+            // not do and cannot promise the other one will. FAILED carries a
+            // reason the user is asked to act on, and there is nothing here for
+            // them to act on.
+            //
+            // Reported at all, rather than returning in silence, because the
+            // first-run queue advances on reported state and `isTerminalPackStatus`
+            // counts anything outside the five in-progress statuses as finished.
+            // A silent return would leave that queue waiting on a pack that this
+            // manager has stopped working on, with every pack behind it.
+            //
+            // UNKNOWN and specifically NOT the neighbouring NOT_INSTALLED, which
+            // reads as terminal just as well and is wrong for a different reason.
+            // That one is this class's word for a completed uninstall, written at
+            // the end of `uninstallSync`, and `ToolchainCardState.updateState`
+            // reads it as exactly that and drops the pack from its installed set.
+            // The rotation this claim exists for is where that bites: the manager
+            // still holding the claim belongs to the destroyed Activity, so its
+            // COMPLETED reaches nothing, while this decline reaches the live card
+            // and would leave it offering Install for a toolchain that is on its
+            // way in. UNKNOWN carries no such meaning to any reader here.
+            report(packName, AssetPackStatus.UNKNOWN, 0)
+            return false
+        }
+        try {
+            installFromDirectoryHoldingPack(packName, assetsDir)
+        } finally {
+            // In a finally rather than at each exit: the body reports FAILED and
+            // returns from four places and throws from more, and a claim dropped
+            // on only the path its author had in mind is never released at all,
+            // which would refuse every later install of that pack for the life
+            // of the process.
+            installsInFlight.remove(packName)
+        }
+        return true
+    }
+
+    /** The install itself, with the pack already claimed by the caller. */
+    private fun installFromDirectoryHoldingPack(packName: String, assetsDir: File) {
         // Both of these report FAILED before returning, and that is load-bearing
         // rather than tidy. Every other way out of this function ends in a state
         // being reported -- success at the end, and the caller's catch on a throw
@@ -965,6 +1072,12 @@ class ToolchainManager(private val context: Context) {
                 zipFile.delete()
 
                 // Install from extracted directory (same path as Play Asset Delivery)
+                //
+                // The answer is not read here, unlike the Play path: a decline
+                // leaves this task with nothing to undo. The finally below
+                // deletes a staging directory this download owns alone, so it
+                // cannot reach whatever the install that holds the pack is
+                // reading.
                 installFromDirectory(packName, extractDir)
 
             } catch (e: MissingFromRelease) {
