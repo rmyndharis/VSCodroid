@@ -564,8 +564,10 @@ class ToolchainManager(private val context: Context) {
         // A retired pack answers null from the registry -- that pass-through is
         // deliberate and keeps uninstalling one working -- and the elvis then made the
         // whole reservation the 50 MB buffer. A gate that asks for 50 MB before copying
-        // 146 MB is worse than no gate: it passes exactly the devices it exists to
-        // refuse, and reports success while doing it.
+        // 155 MB, which is what Java 17 unpacks to today, is worse than no gate: it
+        // passes exactly the devices it exists to refuse, and reports success while
+        // doing it. That figure moves with the JDK, so re-measure it rather than
+        // trusting it here: `du -sk android/toolchain_java/src/main/assets/usr`.
         val unpacked = packUnpackedBytes(packName)
         if (unpacked == null) {
             // Unknown size, so there is no honest reservation to make. Said out loud
@@ -814,8 +816,8 @@ class ToolchainManager(private val context: Context) {
                 // ⚠️ The tree copied into `usr/` above is left where it is, and
                 // nothing removes it later. Uninstall works off this manifest, so a
                 // manifest that was never written leaves the files with no record
-                // naming them: roughly the unpacked size, 146 MB for Java 17, that
-                // only clearing app data reclaims.
+                // naming them: roughly the unpacked size, about 155 MB for the Java 17
+                // this ships, that only clearing app data reclaims.
                 //
                 // Not repaired here on purpose. The copy shares `usr/` with the base
                 // install and with other toolchains, so removing it means the
