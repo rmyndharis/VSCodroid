@@ -245,4 +245,139 @@ class DownloadStateWiringTest {
                 "queue one long Toast each, most of them over the editor",
         )
     }
+
+    /**
+     * Setup failure has to be spoken, because this screen has no other way to say it.
+     *
+     * Setup writes into one label for minutes, and a user who is not touching the screen
+     * hears nothing between the window opening and MainActivity arriving. Without the
+     * announcement "still extracting" and "gave up" sound identical, so the wait ends
+     * only when the user decides to check a screen that has been finished for a while.
+     * This is the only spoken channel for that transition: no layout here sets
+     * `accessibilityLiveRegion`, and the two `announceForAccessibility` calls in the app
+     * are both in this file.
+     *
+     * ⚠️ Source text, not behaviour, for the reason the two cases above are: the call
+     * lives in an Activity method and this module has no Robolectric. It proves the call
+     * is written, not that a screen reader speaks it, and `docs/DEVICE_TEST_CHECKLIST.md`
+     * is the instrument for that half.
+     */
+    @Test
+    fun `a setup failure is spoken as well as painted`() {
+        // 3,192 characters when this was written, in a file of 34,279. Bounded like the
+        // cases above, and load-bearing here for the same reason: this bodyOf counts
+        // braces raw, so an extraction that ran on would find the name in a later
+        // method and report a deleted announcement as a live one.
+        val raw = bodyOf("private fun showSetupError(")
+        check(raw.length in 500..8000) {
+            "extracted ${raw.length} characters of showSetupError, which means the " +
+                "extraction is wrong rather than the code"
+        }
+
+        // Anchored to the start of a line. Commenting a call out is how a developer
+        // disables one while debugging, and a substring search cannot tell the two
+        // apart; code() already blanks comments, and the anchor is what stops a call
+        // reappearing mid-line inside surviving text from satisfying this.
+        assertTrue(
+            Regex("""(?m)^\s*statusText\.announceForAccessibility\(""")
+                .containsMatchIn(code(raw)),
+            "showSetupError no longer speaks the failure, so a screen reader user is " +
+                "left on a screen that says nothing between the last progress step and " +
+                "a Retry button they never hear about",
+        )
+    }
+
+    /**
+     * A finished download row is repainted at full opacity, and named out loud.
+     *
+     * Two defects in one call, which is why one function owns both. The row's status
+     * text runs dimmed while it counts percentages, which is right for a number changing
+     * every second and wrong for the one word the user has to read at the end: setting
+     * only the colour left the dimming in place and "Failed" measured 3.28:1 against
+     * this window, under the 4.5:1 AA asks of 12sp text. And the row moved from a
+     * percentage to Done or Failed in silence, so a stalled download and a progressing
+     * one sounded the same.
+     *
+     * The announcement names its pack because the queue speaks several of these, and
+     * "Done" on its own says which one only to someone watching the rows.
+     */
+    @Test
+    fun `a finished download row is repainted at full opacity and named out loud`() {
+        // 998 characters when this was written. Bounded for the reason above.
+        val raw = bodyOf("private fun showResult(")
+        check(raw.length in 500..8000) {
+            "extracted ${raw.length} characters of showResult, which means the " +
+                "extraction is wrong rather than the code"
+        }
+        val body = code(raw)
+
+        assertTrue(
+            Regex("""(?m)^\s*view\.setTextColor\(""").containsMatchIn(body),
+            "showResult paints no colour, so a terminal row is left in the grey it " +
+                "counted percentages in",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*view\.alpha\s*=\s*1f""").containsMatchIn(body),
+            "showResult no longer undims the row, so the result colour lands at the " +
+                "opacity the percentages ran at and \"Failed\" measures 3.28:1 against " +
+                "this window, under the 4.5:1 AA asks of 12sp text",
+        )
+        // One expression covers both halves of the scenario: the call being deleted, and
+        // the pack name being dropped from it.
+        assertTrue(
+            Regex("""(?m)^\s*view\.announceForAccessibility\([^)]*packLabel""")
+                .containsMatchIn(body),
+            "showResult no longer says which pack finished, so a queue of downloads " +
+                "either ends in silence or ends in several unattributed results",
+        )
+    }
+
+    /**
+     * And nothing paints a result beside that function.
+     *
+     * A predicate rather than a pair of named branches: the defect was a colour set
+     * without the opacity that has to go with it, so what keeps it from coming back is
+     * that the caller cannot set a colour at all, whatever branch a later result is
+     * added to.
+     */
+    @Test
+    fun `handleDownloadState paints no result colour of its own`() {
+        val raw = bodyOf("private fun handleDownloadState(")
+        check(raw.length in 500..8000) {
+            "extracted ${raw.length} characters of handleDownloadState, which means the " +
+                "extraction is wrong rather than the code"
+        }
+
+        assertFalse(
+            code(raw).contains("setTextColor"),
+            "handleDownloadState sets a text colour directly, which is how the defect " +
+                "was shipped the first time: the colour without the opacity beside it. " +
+                "Terminal rows go through showResult, which sets the pair together",
+        )
+    }
+
+    /**
+     * The control for the three extractions above, because a body that quietly ran past
+     * its own function would satisfy every assertion in them by finding the token
+     * somewhere else, and `bodyOf` here counts braces raw rather than skipping comments.
+     *
+     * Measured against the real bodies rather than guessed: `override fun onDestroy`
+     * begins 6 characters past showSetupError's closing brace, and
+     * `private fun handleDownloadState` 6 characters past showResult's. An extraction
+     * that overran by one line would already carry the name this refuses, so the control
+     * is tight rather than nominal.
+     */
+    @Test
+    fun `each extracted body stops at the declaration that follows it`() {
+        assertFalse(
+            bodyOf("private fun showSetupError(").contains("override fun onDestroy"),
+            "bodyOf ran past showSetupError and swallowed the next declaration, so its " +
+                "assertions are really a file-wide search",
+        )
+        assertFalse(
+            bodyOf("private fun showResult(").contains("private fun handleDownloadState"),
+            "bodyOf ran past showResult and swallowed the next declaration, so its " +
+                "assertions are really a file-wide search",
+        )
+    }
 }

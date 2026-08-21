@@ -22,8 +22,8 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 
 ```mermaid
 flowchart TD
-  E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>37 tests, run by hand on a device"]
-  INT --> UNIT["Unit Tests<br/>1307 Kotlin tests in 205 classes (JVM)<br/>8 node:assert scripts for the bundled JavaScript"]
+  E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>26 tests, run by hand on a device"]
+  INT --> UNIT["Unit Tests<br/>1321 Kotlin tests in 206 classes (JVM)<br/>8 node:assert scripts for the bundled JavaScript"]
 ```
 
 ---
@@ -46,9 +46,7 @@ flowchart TD
 | SafSyncEngine | Mirror reconciliation, write-back filtering, rename pairing | `SafSyncEngineTest`, `SafWriteBackFilterTest`, `SafRenamePairingTest` |
 | VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceResolutionTest`, `DownloadCoordinatorTest` |
 
-The suite is **1307 tests in 205 classes**, and it is green. Both figures come from
-the XML a run writes under `app/build/test-results/testDebugUnitTest/`, one file per
-class, rather than from a figure carried forward. A test that needs a
+The suite is **1321 tests in 206 classes**, and it is green. A test that needs a
 filesystem builds its tree under a JUnit `@TempDir` rather than touching the
 checkout.
 
