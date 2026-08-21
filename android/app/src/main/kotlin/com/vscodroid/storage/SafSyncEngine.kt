@@ -1492,7 +1492,8 @@ class SafSyncEngine(private val context: Context) {
      * to put the child would file it somewhere the user did not put it.
      */
     private fun createChildrenInSaf(localDir: File, dirSafUri: Uri, treeUri: Uri) {
-        val entries = uploadableEntries(localDir, MAX_UPLOAD_ENTRIES)
+        val plan = uploadPlan(localDir, MAX_UPLOAD_ENTRIES)
+        val entries = plan.entries
         if (entries.isEmpty()) return
 
         val created = mutableMapOf(localDir.absolutePath to dirSafUri)
@@ -1508,7 +1509,11 @@ class SafSyncEngine(private val context: Context) {
                 made++
             }
         }
-        val capped = entries.size >= MAX_UPLOAD_ENTRIES
+        // The walk's own answer, not `entries.size >= MAX_UPLOAD_ENTRIES`. That test
+        // reported a directory holding exactly the cap as incompletely copied when every
+        // entry of it had just been created, because the walk stops at the cap and so
+        // can never return more than it.
+        val capped = plan.truncated
         if (capped) {
             Logger.w(tag, "Stopped at $MAX_UPLOAD_ENTRIES entries under ${localDir.name}; " +
                 "the rest were not copied to the device")
@@ -2425,11 +2430,15 @@ class SafSyncEngine(private val context: Context) {
          * construction, which the caller needs: a child cannot be created until its
          * parent document exists.
          *
+         * [UploadPlan.truncated] is how the caller learns the cap bit at all. The list
+         * cannot say so on its own, which is what the walk below collects one entry past
+         * the cap to answer.
+         *
          * Symbolic links are not followed. A mirror is routinely a checked-out
          * repository, so a link inside one is attacker-supplied in the ordinary case,
          * and following it would copy files from outside the folder the user granted.
          */
-        internal fun uploadableEntries(root: File, limit: Int): List<File> {
+        internal fun uploadPlan(root: File, limit: Int): UploadPlan {
             // [root] is tested for being a link before anything else, and that is not
             // symmetry with the children loop below -- it is the case that reaches
             // outside the folder the user granted. `File.isDirectory` follows links,
@@ -2439,17 +2448,27 @@ class SafSyncEngine(private val context: Context) {
             // would list the *target's* contents and copy them onto the device: point
             // one at a home directory inside a synced folder and the whole of it
             // uploads.
-            if (limit <= 0 || isLink(root) || !root.isDirectory) return emptyList()
+            if (limit <= 0 || isLink(root) || !root.isDirectory) {
+                return UploadPlan(emptyList(), truncated = false)
+            }
 
             val found = mutableListOf<File>()
             val pending = ArrayDeque<File>()
             pending.addLast(root)
 
-            while (pending.isNotEmpty() && found.size < limit) {
+            // One entry past the cap, which is what makes the truncation answer exact:
+            // a walk that stops at exactly [limit] cannot tell a directory that ends
+            // there from one with a thousand more files below it, and the extra entry
+            // exists only in the second case.
+            //
+            // Written as `<= limit` rather than as a `limit + 1` ceiling because a
+            // caller passing Int.MAX_VALUE would overflow that into a negative one and
+            // get an empty plan for a folder full of files.
+            while (pending.isNotEmpty() && found.size <= limit) {
                 val dir = pending.removeFirst()
                 val children = dir.listFiles() ?: continue
                 for (child in children.sortedBy { it.name }) {
-                    if (found.size >= limit) break
+                    if (found.size > limit) break
                     if (isLink(child)) continue
                     val isDir = child.isDirectory
                     if (isDir && shouldSkip(child.name, isDir = true)) continue
@@ -2465,8 +2484,24 @@ class SafSyncEngine(private val context: Context) {
                     if (isDir) pending.addLast(child)
                 }
             }
-            return found
+            // The extra entry is reported and then dropped: what the caller creates is
+            // still capped at [limit], and a prefix of a breadth-first walk keeps
+            // parents ahead of their children, which is what the caller creates by.
+            val truncated = found.size > limit
+            return UploadPlan(if (truncated) found.take(limit) else found, truncated)
         }
+
+        /**
+         * The entries [uploadPlan] found, for a caller with no use for its answer about
+         * truncation.
+         *
+         * Separate because the two questions have separate consequences: the list
+         * decides what is created on the device, while the flag decides whether the user
+         * is told the copy came out short, and deriving the second from the first is the
+         * mistake [UploadPlan] exists to prevent.
+         */
+        internal fun uploadableEntries(root: File, limit: Int): List<File> =
+            uploadPlan(root, limit).entries
 
         /**
          * Whether [file] is a symbolic link, without following it.
@@ -2626,6 +2661,17 @@ internal data class SyncJob(
 internal enum class SyncType {
     MODIFY, CREATE, DELETE, RENAME
 }
+
+/**
+ * What [SafSyncEngine.uploadPlan] found under a directory, and whether the cap stopped
+ * the walk short of the tree.
+ *
+ * The flag is carried rather than derived because the two part company at exactly the
+ * cap: [entries] is capped at the limit, so its size reads as "there was more" for a
+ * directory that ends there naturally as readily as for one with a thousand more files
+ * below.
+ */
+internal data class UploadPlan(val entries: List<File>, val truncated: Boolean)
 
 /**
  * A directory that left the mirror and has not been accounted for yet.

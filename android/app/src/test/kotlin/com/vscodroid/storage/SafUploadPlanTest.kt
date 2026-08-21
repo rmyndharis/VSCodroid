@@ -124,6 +124,41 @@ class SafUploadPlanTest {
         assertTrue(names.contains("b.txt"), "got $names")
     }
 
+    /**
+     * The two directories the count cannot tell apart, which is why the walk carries
+     * the answer instead of the caller deriving it.
+     *
+     * A walk that stops at the cap can never return more than the cap, so
+     * `entries.size >= limit` reads "there was more below" for a directory that ends
+     * exactly at the limit just as readily as for one with a thousand files under it.
+     * The first of those is a complete copy, and reporting it as truncated tells the
+     * user files were left behind when every one of them arrived.
+     */
+    @Test
+    fun `a directory ending exactly at the cap is not reported as truncated`(@TempDir tmp: File) {
+        val root = File(tmp, "exact").apply { mkdirs() }
+        repeat(3) { File(root, "f$it.txt").writeText("$it") }
+
+        val plan = SafSyncEngine.uploadPlan(root, limit = 3)
+
+        assertEquals(3, plan.entries.size, "every entry must still be offered: ${plan.entries}")
+        assertFalse(
+            plan.truncated,
+            "a directory holding exactly the cap was copied whole, so nothing was left behind",
+        )
+    }
+
+    @Test
+    fun `one entry past the cap is reported as truncated`(@TempDir tmp: File) {
+        val root = File(tmp, "over").apply { mkdirs() }
+        repeat(4) { File(root, "f$it.txt").writeText("$it") }
+
+        val plan = SafSyncEngine.uploadPlan(root, limit = 3)
+
+        assertEquals(3, plan.entries.size, "the cap still bounds what is created: ${plan.entries}")
+        assertTrue(plan.truncated, "a file below the cap was left behind and the user is owed the notice")
+    }
+
     @Test
     fun `machine-temporary files are not uploaded`(@TempDir tmp: File) {
         // The same filter shouldWriteBack applies to single-file events. The
