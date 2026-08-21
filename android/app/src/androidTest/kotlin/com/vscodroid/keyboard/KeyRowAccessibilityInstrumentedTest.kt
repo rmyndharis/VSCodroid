@@ -1,12 +1,16 @@
 package com.vscodroid.keyboard
 
+import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.vscodroid.ToolchainActivity
 import org.junit.runner.RunWith
 
 /**
@@ -38,6 +42,62 @@ class KeyRowAccessibilityInstrumentedTest {
      */
     private fun onMain(block: () -> Unit) =
         InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+
+    /**
+     * Runs [body] with the view alive inside a real window.
+     *
+     * The window is not a convenience, and neither is the shape of this helper.
+     *
+     * A detached view yields an EMPTY node: measured on API 33 and 37, a button
+     * with `isClickable`, a content description, `isSelected` and a state
+     * description all set produced a node reading `clickable=false,
+     * contentDescription=null, selected=false, stateDescription=null`.
+     * `View.onInitializeAccessibilityNodeInfoInternal` fills almost nothing
+     * without an attach info.
+     *
+     * That is also why [body] runs inside the scenario rather than the helper
+     * returning a node. An earlier version closed the scenario first and handed
+     * the view back; the first node, read while the activity lived, was
+     * complete, and every node read afterwards was empty again. A test written
+     * that way fails on the second assertion for a reason that has nothing to
+     * do with the code it is about.
+     *
+     * The one thing that survives detachment is an action added through
+     * `ViewCompat.addAccessibilityAction`, because that installs a delegate
+     * which contributes to the node after the host has finished. That is why
+     * the trackpad cases passed before any of this existed, and it is exactly
+     * the accident this removes.
+     *
+     * [ToolchainActivity] hosts it: the only activity here that neither runs
+     * first-run setup nor waits on the editor server.
+     */
+    private fun <T : android.view.View> inWindow(
+        create: (android.content.Context) -> T,
+        body: (view: T, node: () -> AccessibilityNodeInfo) -> Unit,
+    ) {
+        ActivityScenario.launch(ToolchainActivity::class.java).use { scenario ->
+            lateinit var view: T
+            scenario.onActivity { activity ->
+                view = create(activity)
+                activity.addContentView(
+                    view,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+            }
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            onMain {
+                assertTrue("the view never reached a window", view.isAttachedToWindow)
+            }
+            body(view) {
+                lateinit var node: AccessibilityNodeInfo
+                onMain { node = view.createAccessibilityNodeInfo()!! }
+                node
+            }
+        }
+    }
 
     @Test
     fun activatingAKeyDeliversItsPress() {
@@ -84,20 +144,132 @@ class KeyRowAccessibilityInstrumentedTest {
     }
 
     @Test
-    fun theTrackpadOffersOneActionPerArrow() {
-        lateinit var trackpad: GestureTrackpad
-        val node = AccessibilityNodeInfo.obtain()
-        onMain {
-            trackpad = GestureTrackpad(context)
-            trackpad.onInitializeAccessibilityNodeInfo(node)
-        }
-
-        val offered = node.actionList.mapNotNull { it.label?.toString() }
-        for ((label, _) in ARROW_ACTIONS) {
-            assertTrue(
-                "no accessibility action is labelled \"$label\"; the node offers $offered",
-                offered.contains(label),
+    fun aLatchedModifierSaysSoOnItsNode() {
+        inWindow({ ctx ->
+            ExtraKeyButton(ctx).apply {
+                keyValue = "Ctrl"
+                isToggle = true
+                contentDescription = "Control modifier"
+                isToggleActive = false
+            }
+        }) { button, node ->
+            assertEquals(
+                "the control for this test: with no description on the node the view is " +
+                    "not really in a window, and the state assertions would mean nothing",
+                "Control modifier",
+                node().contentDescription?.toString(),
             )
+            assertEquals(
+                "an idle modifier should say it is off, not stay silent",
+                "off",
+                node().stateDescription?.toString(),
+            )
+
+            onMain { button.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
+            assertEquals(
+                "a latched modifier does not say so, so a screen reader user can switch " +
+                    "it on and cannot tell that they did",
+                "on",
+                node().stateDescription?.toString(),
+            )
+
+            onMain { button.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
+            assertEquals(
+                "switching the modifier off is not published either",
+                "off",
+                node().stateDescription?.toString(),
+            )
+        }
+    }
+
+    @Test
+    fun aPlainKeyPublishesNoState() {
+        inWindow({ ctx ->
+            ExtraKeyButton(ctx).apply {
+                keyValue = "Tab"
+                isToggle = false
+                contentDescription = "Tab key"
+                isToggleActive = false
+            }
+        }) { _, node ->
+            assertEquals(
+                "control: no description means no window, and the assertion below would " +
+                    "pass for the wrong reason",
+                "Tab key",
+                node().contentDescription?.toString(),
+            )
+            assertNull(
+                "a plain key carries a state description, which would be read out on " +
+                    "every key",
+                node().stateDescription,
+            )
+        }
+    }
+
+    @Test
+    fun longPressingAKeyThroughAServiceOpensItsAlternates() {
+        var opened: List<AlternateKey>? = null
+        inWindow({ ctx ->
+            ExtraKeyButton(ctx).apply {
+                keyValue = "'"
+                contentDescription = "Apostrophe"
+                alternates = listOf(AlternateKey("\\", "\\"))
+                onLongPressAction = { _, alts -> opened = alts }
+            }
+        }) { button, node ->
+            assertTrue(
+                "the node does not offer a long click, so a service is refused before the " +
+                    "override can run; node actions: ${node().actionList.map { it.id }}",
+                node().actionList.any { it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK },
+            )
+
+            var handled = false
+            onMain {
+                handled = button.performAccessibilityAction(
+                    AccessibilityNodeInfo.ACTION_LONG_CLICK,
+                    null,
+                )
+            }
+            assertTrue("the long click was refused", handled)
+            assertEquals(
+                "long pressing through a service did not open the alternates",
+                listOf(AlternateKey("\\", "\\")),
+                opened,
+            )
+        }
+    }
+
+    @Test
+    fun aKeyWithNoAlternatesOffersNoLongClick() {
+        inWindow({ ctx ->
+            ExtraKeyButton(ctx).apply {
+                keyValue = "Tab"
+                contentDescription = "Tab key"
+            }
+        }) { _, node ->
+            assertEquals(
+                "control: without a description the view is not in a window",
+                "Tab key",
+                node().contentDescription?.toString(),
+            )
+            assertTrue(
+                "a key with nothing to show offers a long click, which would open an " +
+                    "empty popup",
+                node().actionList.none { it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK },
+            )
+        }
+    }
+
+    @Test
+    fun theTrackpadOffersOneActionPerArrow() {
+        inWindow({ ctx -> GestureTrackpad(ctx) }) { _, node ->
+            val offered = node().actionList.mapNotNull { it.label?.toString() }
+            for ((label, _) in ARROW_ACTIONS) {
+                assertTrue(
+                    "no accessibility action is labelled \"$label\"; the node offers $offered",
+                    offered.contains(label),
+                )
+            }
         }
     }
 
@@ -105,35 +277,32 @@ class KeyRowAccessibilityInstrumentedTest {
     fun performingAnArrowActionSendsThatArrowAndEndsTheDrag() {
         val sent = mutableListOf<String>()
         var dragsEnded = 0
-        lateinit var trackpad: GestureTrackpad
-        val node = AccessibilityNodeInfo.obtain()
-        onMain {
-            trackpad = GestureTrackpad(context).apply {
+        inWindow({ ctx ->
+            GestureTrackpad(ctx).apply {
                 onArrowKey = { sent.add(it) }
                 onDragEnd = { dragsEnded++ }
             }
-            trackpad.onInitializeAccessibilityNodeInfo(node)
-        }
+        }) { trackpad, node ->
+            for ((label, direction) in ARROW_ACTIONS) {
+                val action = node().actionList.firstOrNull { it.label?.toString() == label }
+                assertNotNull("no action labelled \"$label\"", action)
 
-        for ((label, direction) in ARROW_ACTIONS) {
-            val action = node.actionList.firstOrNull { it.label?.toString() == label }
-            assertNotNull("no action labelled \"$label\"", action)
+                var handled = false
+                onMain { handled = trackpad.performAccessibilityAction(action!!.id, null) }
+                assertTrue("the action \"$label\" was refused", handled)
+                assertEquals(
+                    "the action \"$label\" sent the wrong arrow",
+                    direction,
+                    sent.last(),
+                )
+            }
 
-            var handled = false
-            onMain { handled = trackpad.performAccessibilityAction(action!!.id, null) }
-            assertTrue("the action \"$label\" was refused", handled)
+            assertEquals("one arrow per action, no repeats", ARROW_ACTIONS.size, sent.size)
             assertEquals(
-                "the action \"$label\" sent the wrong arrow",
-                direction,
-                sent.last(),
+                "each action must end the drag, which is what clears a latched modifier",
+                ARROW_ACTIONS.size,
+                dragsEnded,
             )
         }
-
-        assertEquals("one arrow per action, no repeats", ARROW_ACTIONS.size, sent.size)
-        assertEquals(
-            "each action must end the drag, which is what clears a latched modifier",
-            ARROW_ACTIONS.size,
-            dragsEnded,
-        )
     }
 }

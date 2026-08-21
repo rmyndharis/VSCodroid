@@ -465,9 +465,11 @@ opening character, because Monaco closes the pair and places the caret inside. S
 long-press alternates, which `KeyPageConfig.kt` lists beside them.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
-emits arrow keys as the finger moves (`TrackpadGesture.accumulate`), which makes it the only cursor
-movement available to a touch user, and unavailable to any assistive input that cannot perform a
-drag.
+emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a
+finger, and it was the only route of any kind until the pad gained four accessibility actions, one
+per direction (`ARROW_ACTIONS`, registered in `GestureTrackpad`'s initialiser). Those are what an
+assistive input that cannot drag uses; each sends one arrow and then ends the drag, so a latched
+modifier clears exactly as it does on an ordinary key.
 
 ### 5.2 Key Injection
 

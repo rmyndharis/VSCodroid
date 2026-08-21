@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The gesture trackpad now offers four accessibility actions to move the cursor. A drag was the only way to send an arrow, and a screen reader cannot drag.
+- Long pressing a key through a screen reader now opens its alternate characters. The layer needed a finger held on the key, so `'` and `\` were unreachable.
 
 ### Changed
 
@@ -19,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven documents named a "Settings > Toolchains" screen the app has never had. They now name the real route, the launcher icon's **Manage toolchains** shortcut.
 - Three documents no longer list file-type "Open with" intent filters as shipped. A `content://` URI has no POSIX path, so every save would reach a copy.
 - The security document no longer lists two permissions the manifest has never declared, and now separates what this app declares from what the manifest merger adds on top.
-- The key row is documented as the five pages it is, with no arrow buttons: the gesture trackpad is the only cursor movement a touch user has.
+- The key row is documented as the five pages it is, with no arrow buttons: a drag on the gesture trackpad is how a finger moves the cursor.
 - The user guide says extraction repeats after an app update rather than happening only once, and names the nineteen colour themes that ship instead of claiming none do.
 - The technical specification matches the code on WebView settings, the app version, and the 27 environment variables the server process actually receives.
 - The backup test rows name the path that is really in the payload, and add the connection token and preferences as the near misses worth checking.
@@ -50,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A first run that fails now names the step and quotes the error, instead of only "Setup failed" and a Retry that walks into the same wall.
 - A link that no installed app can open now says so. The tap did nothing and said nothing, which reads as a broken link rather than a missing app.
 - Activating a key on the extra key row through a screen reader now types it. Every key offered activation and none of them did anything.
+- A latched Ctrl, Alt or Shift now says so to a screen reader. The latch was carried by colour alone, so it could be switched but not observed.
 - Dragging a finger inside an application menu now scrolls it instead of closing the submenu. A menu that cannot scroll still reported scrolling, and the submenu closed on it.
 - Tapping the editor now raises the keyboard, and what it types now arrives. The app never took Android input focus for its view, so keyboard input was silently discarded.
 - Brackets, quotes and other symbols on the extra key row now type into the editor. On recent WebViews they inserted nothing at all.

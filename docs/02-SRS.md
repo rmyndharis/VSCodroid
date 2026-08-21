@@ -139,7 +139,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | ID | Requirement | Priority | Milestone |
 |----|------------|----------|-----------|
-| FR-MUX-01 | System SHALL display Extra Key Row above the soft keyboard across five swipeable pages: Tab, Esc, Ctrl, Alt, Shift, a gesture trackpad and `{}` `()` on page 1; symbols on pages 2 and 3; F1 to F12 plus Home, End, PageUp, PageDown on pages 4 and 5. There are **no discrete arrow buttons**: the trackpad emits arrow keys and is the only cursor movement a touch user has (`KeyPageConfig.kt`, `TrackpadGesture.accumulate`) | P1 | M2 |
+| FR-MUX-01 | System SHALL display Extra Key Row above the soft keyboard across five swipeable pages: Tab, Esc, Ctrl, Alt, Shift, a gesture trackpad and `{}` `()` on page 1; symbols on pages 2 and 3; F1 to F12 plus Home, End, PageUp, PageDown on pages 4 and 5. There are **no discrete arrow buttons**: the trackpad emits arrow keys as a finger drags, and carries one accessibility action per direction for an assistive input that cannot drag (`KeyPageConfig.kt`, `TrackpadGesture.accumulate`, `ARROW_ACTIONS`) | P1 | M2 |
 | FR-MUX-02 | Extra Key Row Ctrl/Alt keys SHALL act as toggles (tap to activate, tap again to deactivate) | P1 | M2 |
 | FR-MUX-03 | System SHALL inject key events from Extra Key Row into WebView | P1 | M2 |
 | FR-MUX-04 | Extra Key Row SHALL show/hide based on soft keyboard visibility | P1 | M2 |

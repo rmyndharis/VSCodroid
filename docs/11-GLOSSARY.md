@@ -48,7 +48,7 @@ Compiling code on one platform (e.g., x86_64 Linux or macOS) to produce binaries
 The VS Code process/thread that runs extensions. It provides the `vscode.*` API namespace and manages extension lifecycle (activation, deactivation). In VSCodroid, it runs as a `worker_thread` instead of a child process.
 
 **Extra Key Row**
-A native Android View displayed above the soft keyboard, across five swipeable pages. Provides keys not available on standard mobile keyboards: Tab, Esc, Ctrl, Alt, Shift, brackets, symbols, and F1 to F12 with Home, End, PageUp and PageDown. Cursor movement comes from a gesture trackpad rather than from arrow buttons, which the row does not have; the trackpad emits arrow keys as you drag, and it is the only way a touch user moves the caret (`KeyPageConfig.kt`, `GestureTrackpad`).
+A native Android View displayed above the soft keyboard, across five swipeable pages. Provides keys not available on standard mobile keyboards: Tab, Esc, Ctrl, Alt, Shift, brackets, symbols, and F1 to F12 with Home, End, PageUp and PageDown. Cursor movement comes from a gesture trackpad rather than from arrow buttons, which the row does not have; the trackpad emits arrow keys as you drag, and that drag is the only route for a finger. It is not the only route at all: the pad also carries one accessibility action per direction, for an assistive input that cannot drag (`KeyPageConfig.kt`, `GestureTrackpad`).
 
 ### F
 

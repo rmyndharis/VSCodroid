@@ -31,6 +31,16 @@ class ExtraKeyButton @JvmOverloads constructor(
     var keyValue: String = ""
     var onKeyAction: ((key: String, isActive: Boolean) -> Unit)? = null
     var alternates: List<AlternateKey> = emptyList()
+        set(value) {
+            field = value
+            // A node advertises ACTION_LONG_CLICK only when the view says it is
+            // long clickable, and View gates the incoming action on the same
+            // flag, so without this line an assistive service is refused before
+            // performLongClick below can run. Keys with no alternates stay
+            // false: offering an action that opens nothing is the defect this
+            // pair exists to remove, not a second copy of it.
+            isLongClickable = value.isNotEmpty()
+        }
     var onLongPressAction: ((ExtraKeyButton, List<AlternateKey>) -> Unit)? = null
 
     private val gestureDetector = GestureDetector(context,
@@ -130,6 +140,26 @@ class ExtraKeyButton @JvmOverloads constructor(
      * service listens for; the return is `true` because this handled the click
      * regardless of what `super` reports with no listener attached.
      */
+    /**
+     * Opens the alternates layer when a service long presses this key.
+     *
+     * The same gap as [performClick], one gesture over: the popup's only entry
+     * was [GestureDetector]'s `onLongPress`, which needs a finger held on the
+     * view, and touch exploration never delivers one. Five of the eight
+     * alternates are top-level keys on other pages and one is Shift plus
+     * backtick, but `'` and `\` are on no page at all, so without this they
+     * exist on the row for sighted users only.
+     *
+     * A key with no alternates falls through to `super`, which is what keeps
+     * the row honest: those keys advertise no long click, so nothing offers an
+     * action that would open an empty popup.
+     */
+    override fun performLongClick(): Boolean {
+        if (alternates.isEmpty()) return super.performLongClick()
+        onLongPressAction?.invoke(this, alternates)
+        return true
+    }
+
     override fun performClick(): Boolean {
         emitPress()
         super.performClick()
@@ -183,6 +213,16 @@ class ExtraKeyButton @JvmOverloads constructor(
             applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
             setTextColor(context.getColor(R.color.colorExtraKeyText))
         }
+        // Whether a modifier is latched was carried by those two colours and
+        // nothing else, which is a channel a screen reader cannot read. That
+        // did not matter while the keys could not be activated at all; once
+        // they could, it created a state the user can change and cannot
+        // observe, which is worse than the key doing nothing.
+        //
+        // stateDescription rather than isSelected: the platform announces a
+        // change to it on its own, and it says "on" instead of "selected",
+        // which is what a latched modifier is.
+        stateDescription = toggleStateDescription(isToggle, isToggleActive)
     }
 
     fun applyRoundedBackground(color: Int) {
@@ -213,3 +253,24 @@ class ExtraKeyButton @JvmOverloads constructor(
  */
 internal fun pressedState(isToggle: Boolean, isActive: Boolean): Boolean =
     if (isToggle) !isActive else true
+
+/**
+ * What a screen reader should say about a key's latch, or null for a plain key.
+ *
+ * Split out for the same reason as [pressedState]: [ExtraKeyButton] is a `View`
+ * whose initialiser reaches resources on its first line, so a JVM test cannot
+ * construct one, and this is the half that is arithmetic.
+ *
+ * Null for a plain key states the contract rather than clearing anything today:
+ * [KeyPageAdapter] builds a fresh button on every bind, after
+ * `removeAllViews`, so no view carries a previous key's state into its next
+ * life. The null branch is unreachable from the adapter, since it only assigns
+ * `isToggleActive` to keys that are toggles. It is here so that a future caller
+ * who does assign it to a plain key gets silence rather than a stray "off".
+ */
+internal fun toggleStateDescription(isToggle: Boolean, isActive: Boolean): CharSequence? =
+    when {
+        !isToggle -> null
+        isActive -> "on"
+        else -> "off"
+    }

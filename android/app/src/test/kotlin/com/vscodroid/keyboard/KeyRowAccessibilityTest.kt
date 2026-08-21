@@ -2,6 +2,7 @@ package com.vscodroid.keyboard
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -157,6 +158,50 @@ class KeyRowAccessibilityTest {
     }
 
     @Nested
+    inner class ModifierState {
+
+        @Test
+        fun `a toggle says on or off, and a plain key says nothing`() {
+            assertEquals("on", toggleStateDescription(isToggle = true, isActive = true))
+            assertEquals("off", toggleStateDescription(isToggle = true, isActive = false))
+            assertNull(
+                toggleStateDescription(isToggle = false, isActive = false),
+                "a plain key has no state, and a stray \"off\" would be read out on every key",
+            )
+            assertNull(
+                toggleStateDescription(isToggle = false, isActive = true),
+                "isActive is meaningless on a plain key and must not leak a state either way",
+            )
+        }
+
+        @Test
+        fun `the latch is published wherever the appearance changes`() {
+            val lines = code("ExtraKeyButton.kt")
+
+            // Scoped to updateToggleAppearance, not the file: that method is the
+            // one place both colours are written, and it is reached from the
+            // isToggleActive setter, which is the only way a latch changes. A
+            // whole-file search would pass on the declaration of the helper
+            // alone, which publishes nothing.
+            val start = lines.indexOfFirst { it.contains("private fun updateToggleAppearance()") }
+            assertTrue(start >= 0, "updateToggleAppearance is no longer where this test looks")
+
+            val body = lines.drop(start).takeWhile { !it.contains("fun applyRoundedBackground") }
+            assertTrue(
+                body.any { it.contains("stateDescription = toggleStateDescription(") },
+                "the latch no longer reaches an accessibility service, so a screen reader " +
+                    "user can switch a modifier and cannot tell whether it is on. It reads: " +
+                    body.joinToString("\n"),
+            )
+            assertTrue(
+                body.any { it.contains("colorExtraKeyActive") },
+                "the scan is no longer reading the method that paints the latched state, so " +
+                    "its verdict above is worth nothing",
+            )
+        }
+    }
+
+    @Nested
     inner class ButtonActivation {
 
         @Test
@@ -187,6 +232,46 @@ class KeyRowAccessibilityTest {
                 bodyAfter.contains("emitPress()"),
                 "performClick no longer delivers a press, so activating a key through " +
                     "an accessibility service types nothing. It reads: $bodyAfter",
+            )
+        }
+
+        @Test
+        fun `the alternates layer has an assistive route, and only where it opens`() {
+            val lines = code("ExtraKeyButton.kt")
+
+            assertTrue(
+                lines.any { it.contains("private fun emitPress()") },
+                "control: the scan cannot see emitPress, so it is not reading this source",
+            )
+
+            val longClick = lines.indexOfFirst { it.contains("override fun performLongClick()") }
+            assertTrue(
+                longClick >= 0,
+                "nothing opens the alternates popup for an assistive service. Its only other " +
+                    "entry is a finger held on the view, which touch exploration never delivers",
+            )
+            val body = lines.drop(longClick).take(5).joinToString("\n")
+            assertTrue(
+                body.contains("onLongPressAction?.invoke("),
+                "performLongClick no longer opens the popup. It reads: $body",
+            )
+            assertTrue(
+                body.contains("alternates.isEmpty()"),
+                "a key with no alternates no longer falls through, so it would open an " +
+                    "empty popup. It reads: $body",
+            )
+
+            // The flag matters as much as the override: View refuses an incoming
+            // ACTION_LONG_CLICK, and leaves it off the node, unless the view is
+            // long clickable. Scoped to the alternates setter, because that is
+            // the only place that knows whether a key has any.
+            val setter = lines.indexOfFirst { it.contains("var alternates: List<AlternateKey>") }
+            assertTrue(setter >= 0, "the alternates property is no longer where this test looks")
+            val setterBody = lines.drop(setter).take(12).joinToString("\n")
+            assertTrue(
+                setterBody.contains("isLongClickable = value.isNotEmpty()"),
+                "the key never advertises a long click, so a service is refused before " +
+                    "performLongClick can run. It reads: $setterBody",
             )
         }
 
