@@ -349,13 +349,17 @@ internal fun tlsHostLabel(url: String?): String? {
 }
 
 /**
- * How many distinct refusals are remembered before the record starts over.
+ * How many refusals are put on screen, and with them how many are remembered.
  *
- * The hosts that end up in it are chosen by whatever page is open, and one of
- * those pages is the bundled simple browser holding an arbitrary remote site. So
- * an unbounded record is an allocation a remote page controls. Clearing at the cap
- * trades a message that may repeat once past eight distinct failures for a set
- * that cannot grow.
+ * The hosts that end up in the record are chosen by whatever page is open, and one
+ * of those pages is the bundled simple browser holding an arbitrary remote site.
+ * So the page picks both numbers, and each of them is a cost on its own: the set is
+ * an allocation, and every distinct host is another toast holding the bottom of the
+ * editor for about three and a half seconds.
+ *
+ * Clearing the record at the cap bounded only the first. A page minting fresh
+ * hostnames was announced once per name for as long as it cared to, and the clear
+ * made it worse, because the hosts already said became sayable again.
  */
 internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
 
@@ -373,6 +377,12 @@ internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
  * the same fact and adds nothing to act on; a second host, or the same host
  * failing a different way, is a new fact and still gets through.
  *
+ * Past [MAX_TLS_FAILURES_ANNOUNCED] distinct failures nothing more is said. The
+ * record is what counts them, so the same test bounds the toasts and the set at
+ * once. Eight refusals is already more than a reader acts on, and the ninth is the
+ * point at which the page, not the user, is choosing how long the editor stays
+ * covered.
+ *
  * [alreadySaid] belongs to the presenter, which keeps this class free of mutable
  * state, and its lifetime falls out of that: it survives a renderer crash, because
  * the certificate has not changed, and it dies with the Activity, so a fresh
@@ -382,7 +392,7 @@ internal fun tlsFailureToAnnounce(
     failure: TlsFailure,
     alreadySaid: MutableSet<TlsFailure>,
 ): TlsFailure? {
-    if (alreadySaid.size >= MAX_TLS_FAILURES_ANNOUNCED) alreadySaid.clear()
+    if (alreadySaid.size >= MAX_TLS_FAILURES_ANNOUNCED) return null
     return if (alreadySaid.add(failure)) failure else null
 }
 
@@ -407,12 +417,13 @@ internal fun tlsFailureToAnnounce(
 internal data class HandoffFailure(val scheme: String, val failureType: String)
 
 /**
- * How many distinct hand-off failures are remembered before the record starts over.
+ * How many hand-off failures are put on screen, and with them how many are
+ * remembered.
  *
- * Same bound and same trade as [MAX_TLS_FAILURES_ANNOUNCED]: the schemes that end
- * up in the record are chosen by whatever page is open, so an unbounded record is
- * an allocation a page controls, and clearing at the cap costs a message that may
- * repeat once past eight distinct failures.
+ * Same bound and same reasoning as [MAX_TLS_FAILURES_ANNOUNCED]. The schemes and
+ * exception types that end up in the record are chosen by whatever page is open,
+ * so the page picks the size of the set and the number of toasts alike, and a cap
+ * that only cleared the set left the second one to it.
  */
 internal const val MAX_HANDOFF_FAILURES_ANNOUNCED = 8
 
@@ -432,6 +443,10 @@ internal const val MAX_HANDOFF_FAILURES_ANNOUNCED = 8
  * mints a fresh key per navigation while producing an identical message, which is
  * a throttle that throttles nothing and a set that grows on strings a page chooses.
  *
+ * Past [MAX_HANDOFF_FAILURES_ANNOUNCED] distinct failures nothing more is said,
+ * for the reason [tlsFailureToAnnounce] gives: the record is what counts them, so
+ * one test bounds the toasts and the set together.
+ *
  * [alreadySaid] belongs to the presenter, which keeps this class free of mutable
  * state, and its lifetime falls out of that: it dies with the Activity, so a fresh
  * launch says everything again.
@@ -440,7 +455,7 @@ internal fun handoffFailureToAnnounce(
     failure: HandoffFailure,
     alreadySaid: MutableSet<HandoffFailure>,
 ): HandoffFailure? {
-    if (alreadySaid.size >= MAX_HANDOFF_FAILURES_ANNOUNCED) alreadySaid.clear()
+    if (alreadySaid.size >= MAX_HANDOFF_FAILURES_ANNOUNCED) return null
     return if (alreadySaid.add(failure)) failure else null
 }
 

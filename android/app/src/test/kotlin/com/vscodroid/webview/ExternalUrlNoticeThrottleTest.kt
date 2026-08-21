@@ -283,36 +283,46 @@ class ExternalUrlNoticeThrottleTest {
     }
 
     /**
-     * The record cannot grow without bound.
+     * Neither the record nor the number of toasts can grow without bound.
      *
-     * The schemes in it are chosen by whatever page is open, so an unbounded set is
-     * an allocation a page controls. What this case also documents is the residual:
-     * past the cap a message may be said a second time, and that is the intended
-     * trade rather than a defect.
+     * The schemes are chosen by whatever page is open, so that page picks the size
+     * of the set and the number of messages alike. Clearing the set at the cap
+     * answered only the first: every fresh scheme was a fact never told before and
+     * got its own toast, and the clear also handed back the ones already announced.
+     *
+     * Driven with far more distinct schemes than the cap, because at or just past
+     * it the two rules agree and the case would pass either way.
      */
     @Test
-    fun `the record is bounded and starts over at the cap`() {
+    fun `the number of messages is bounded, not only the record`() {
         val said = mutableSetOf<HandoffFailure>()
+        val shown = mutableListOf<HandoffFailure>()
         val first = HandoffFailure("scheme0", "ActivityNotFoundException")
 
-        // One short of the cap, so the record is still whole.
-        for (i in 0 until MAX_HANDOFF_FAILURES_ANNOUNCED - 1) {
-            val failure = HandoffFailure("scheme$i", "ActivityNotFoundException")
-            assertEquals(failure, handoffFailureToAnnounce(failure, said), "distinct failure $i")
+        for (i in 0 until MAX_HANDOFF_FAILURES_ANNOUNCED * 4) {
+            handoffFailureToAnnounce(
+                HandoffFailure("scheme$i", "ActivityNotFoundException"), said,
+            )?.let { shown += it }
         }
-        assertNull(
-            handoffFailureToAnnounce(first, said),
-            "below the cap nothing is forgotten, which is what makes the assertion below a " +
-                "reset rather than a set that never remembered anything",
-        )
-
-        val atCap = HandoffFailure("atcap", "ActivityNotFoundException")
-        assertEquals(atCap, handoffFailureToAnnounce(atCap, said))
 
         assertEquals(
-            first, handoffFailureToAnnounce(first, said),
-            "the record clears once it holds the cap, so an old failure is said a second time " +
-                "rather than the set growing on schemes a page chooses",
+            MAX_HANDOFF_FAILURES_ANNOUNCED, shown.size,
+            "a page inventing schemes got a toast for each one, and every toast holds " +
+                "the bottom of the editor for about three and a half seconds",
+        )
+        assertEquals(
+            first, shown.first(),
+            "the messages that got through are the first ones, which is what makes the " +
+                "count above a cap rather than a mute that started somewhere else",
+        )
+        assertNull(
+            handoffFailureToAnnounce(first, said),
+            "a failure already announced was announced a second time, so the record was " +
+                "forgotten rather than closed",
+        )
+        assertTrue(
+            said.size <= MAX_HANDOFF_FAILURES_ANNOUNCED,
+            "the record grew past the cap on schemes a page chooses: ${said.size}",
         )
     }
 

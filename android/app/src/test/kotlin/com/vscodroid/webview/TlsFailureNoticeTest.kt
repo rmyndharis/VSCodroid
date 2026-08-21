@@ -241,37 +241,47 @@ class TlsFailureNoticeTest {
     }
 
     /**
-     * The record cannot grow without bound.
+     * Neither the record nor the number of toasts can grow without bound.
      *
-     * The hosts in it are chosen by whatever page is open, including a remote site
-     * in the bundled simple browser, so an unbounded set is an allocation a remote
-     * page controls. What this case also documents is the residual: past the cap a
-     * message may be said a second time, and that is the intended trade rather than
-     * a defect.
+     * The hosts are chosen by whatever page is open, including a remote site in the
+     * bundled simple browser, so that page picks the size of the set and the number
+     * of messages alike. Clearing the set at the cap answered only the first: every
+     * fresh hostname was a fact never told before and got its own toast, and the
+     * clear also handed back the hosts already announced.
+     *
+     * Driven with far more distinct hosts than the cap, because at or just past it
+     * the two rules agree and the case would pass either way.
      */
     @Test
-    fun `the record is bounded and starts over at the cap`() {
+    fun `the number of messages is bounded, not only the record`() {
         val said = mutableSetOf<TlsFailure>()
+        val shown = mutableListOf<TlsFailure>()
         val first = TlsFailure("host0.example.com", TlsFailureReason.UNTRUSTED)
 
-        // One short of the cap, so the record is still whole.
-        for (i in 0 until MAX_TLS_FAILURES_ANNOUNCED - 1) {
-            val failure = TlsFailure("host$i.example.com", TlsFailureReason.UNTRUSTED)
-            assertEquals(failure, tlsFailureToAnnounce(failure, said), "distinct failure $i")
+        for (i in 0 until MAX_TLS_FAILURES_ANNOUNCED * 4) {
+            tlsFailureToAnnounce(
+                TlsFailure("host$i.example.com", TlsFailureReason.UNTRUSTED), said,
+            )?.let { shown += it }
         }
-        assertNull(
-            tlsFailureToAnnounce(first, said),
-            "below the cap nothing is forgotten, which is what makes the assertion below a reset " +
-                "rather than a set that never remembered anything",
-        )
-
-        val atCap = TlsFailure("atcap.example.com", TlsFailureReason.UNTRUSTED)
-        assertEquals(atCap, tlsFailureToAnnounce(atCap, said))
 
         assertEquals(
-            first, tlsFailureToAnnounce(first, said),
-            "the record clears once it holds the cap, so an old failure is said a second time " +
-                "rather than the set growing on hosts a remote page chooses",
+            MAX_TLS_FAILURES_ANNOUNCED, shown.size,
+            "a page minting fresh hostnames got a toast for each one, and every toast " +
+                "holds the bottom of the editor for about three and a half seconds",
+        )
+        assertEquals(
+            first, shown.first(),
+            "the messages that got through are the first ones, which is what makes the " +
+                "count above a cap rather than a mute that started somewhere else",
+        )
+        assertNull(
+            tlsFailureToAnnounce(first, said),
+            "a host already announced was announced a second time, so the record was " +
+                "forgotten rather than closed",
+        )
+        assertTrue(
+            said.size <= MAX_TLS_FAILURES_ANNOUNCED,
+            "the record grew past the cap on hosts a remote page chooses: ${said.size}",
         )
     }
 

@@ -129,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The notice shown when a device folder fails to open comes from a string resource, so it can be translated instead of staying English in every language.
 - The server log no longer rewrites itself on every output line once the lines it keeps are large, which stalled the thread draining the server's output.
 - A delivered toolchain pack the store did not actually delete is reclaimed at the next launch, instead of occupying a toolchain's worth of storage for good.
+- Certificate and link failure notices stop after eight in a session, so a page failing many hosts can no longer bury the editor under them.
 
 ### Security
 
