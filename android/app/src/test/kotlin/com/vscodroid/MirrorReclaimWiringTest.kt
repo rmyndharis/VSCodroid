@@ -77,6 +77,56 @@ class MirrorReclaimWiringTest {
     }
 
     /**
+     * And it obeys the answer it is given.
+     *
+     * The case above is satisfied by the call existing. A `reclaimRefusal` whose result
+     * is dropped names every one of those fields and reads as correct at a glance, and
+     * deleting the line that returns the refusal leaves the whole suite green. What that
+     * costs is the whole point of the rule: the mirror the rule refused goes straight to
+     * `reclaimMirror`, `force` deletes it, and its live observers replay every one of
+     * those deletes onto the user's device documents.
+     *
+     * Read from the source for the reason the header of this file gives. The two
+     * spellings below are the ones it recognises; a third fails loudly, and the answer
+     * to that is to add it here rather than to loosen the pattern until anything passes.
+     */
+    @Test
+    fun `a refused removal is returned before anything is deleted`() {
+        val body = methodBody("removeDeviceFolderCopy")
+
+        val refusal = Regex("""(?m)^\s*val (\w+) = SafStorageManager\.reclaimRefusal\(""")
+            .find(body)
+        assertTrue(refusal != null) {
+            "the guard does not keep what reclaimRefusal answers, so there is no answer " +
+                "for it to obey"
+        }
+        val answer = refusal!!.groupValues[1]
+
+        // Anchored at the start of a line, so a return that has been commented out
+        // cannot satisfy it. Commenting a line out is how a developer disables
+        // something, and an unanchored search cannot tell that from live code.
+        val enforced = Regex(
+            """(?m)^\s*(?:if \($answer != null\)\s*\{?\s*return $answer\b""" +
+                """|$answer\?\.let \{ return it \})"""
+        ).find(body)
+        assertTrue(enforced != null) {
+            "the guard asks reclaimRefusal and then ignores what it says, so a mirror " +
+                "that is in use is removed anyway and every delete inside it is replayed " +
+                "onto the user's device documents"
+        }
+
+        val removal = body.indexOf("safManager.reclaimMirror(")
+        assertTrue(removal >= 0) {
+            "the removal no longer goes through safManager.reclaimMirror, so the order " +
+                "checked below is measuring nothing"
+        }
+        assertTrue(enforced!!.range.first < removal) {
+            "the refusal is returned only after the removal has already happened, which " +
+                "is not a refusal"
+        }
+    }
+
+    /**
      * The extraction's own control. Every name above also appears elsewhere in this
      * activity, so a brace match that overran into the rest of the file would satisfy
      * the assertion above while checking nothing. `openSafFolder` is the neighbouring
