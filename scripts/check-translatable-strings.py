@@ -49,7 +49,15 @@ part it cannot see, which is most of it.
 ==============================================================================
 
 The prose predicate is deliberately loose in one direction. A literal counts as
-prose when, after interpolations are removed, at least one ASCII letter is left.
+prose when, after interpolations are removed, at least one ASCII letter is left,
+or when a literal written inside one of those interpolations is prose by that
+same rule. The second half is needed because removing an interpolation removes
+whatever was written inside it, and a whole sentence fits in there:
+`statusText.text = "${if (ok) "Up to date" else "An update is available"}"`
+puts two sentences at a sink and leaves nothing outside the braces for the strip
+to find. Only the literals inside those braces count, never the expression
+holding them, so `"${files.size}"` stays clean: an identifier is not language,
+and flagging one would send a translator after code.
 That keeps `"$percent%"` and `"\n\n"` out, which are formatting rather than
 language, and it keeps a key's label out only because a label is not passed to a
 sink at all: `KeyItem.Button("Tab", "Tab", ...)` writes the character the key
@@ -129,7 +137,9 @@ def tokenize(src):
     comments and raw strings replaced by spaces and every ordinary string
     literal replaced by a run of SENTINEL, so offsets and line numbers still
     line up and a parenthesis inside a string cannot unbalance the scan.
-    `literals` is a list of (start, end, content) for the ordinary literals.
+    `literals` is a list of (start, end, content, nested) for the ordinary
+    literals, where `nested` holds the contents of the literals written inside
+    that one's interpolations.
 
     Kotlin block comments nest, which is why a depth counter is kept rather
     than a search for the first `*/`.
@@ -169,8 +179,8 @@ def tokenize(src):
             blank(i, j)
             i = j
         elif c == '"':
-            j, content = scan_string(src, i)
-            literals.append((i, j, content))
+            j, content, nested = scan_string(src, i)
+            literals.append((i, j, content, nested))
             for k in range(i, j):
                 out[k] = SENTINEL if src[k] != "\n" else "\n"
             i = j
@@ -190,12 +200,16 @@ def tokenize(src):
 def scan_string(src, start):
     """Walk one ordinary literal from its opening quote past its closing one.
 
-    Interpolations get a brace-depth walk of their own because they may hold
-    string literals: `"${pkg?.name ?: "unknown"}"` is one literal, and a scan
-    that stopped at the third quote would call the rest of the line code.
+    Returns (end, content, nested). Interpolations get a brace-depth walk of
+    their own because they may hold string literals: `"${pkg?.name ?: "unknown"}"`
+    is one literal, and a scan that stopped at the third quote would call the
+    rest of the line code. Those inner literals are kept in `nested` rather than
+    discarded: `content` carries the interpolation whole and `is_prose` strips it
+    again, so a sentence written inside one reaches nothing unless it is carried
+    out separately.
     """
     i, n = start + 1, len(src)
-    body = []
+    body, nested = [], []
     while i < n:
         c = src[i]
         if c == "\\":
@@ -205,7 +219,9 @@ def scan_string(src, start):
             depth, j = 1, i + 2
             while j < n and depth:
                 if src[j] == '"':
-                    j = scan_string(src, j)[0]
+                    j, inner, inner_nested = scan_string(src, j)
+                    nested.append(inner)
+                    nested.extend(inner_nested)
                     continue
                 if src[j] == "{":
                     depth += 1
@@ -215,21 +231,28 @@ def scan_string(src, start):
             body.append(src[i:j])
             i = j
         elif c == '"':
-            return i + 1, "".join(body)
+            return i + 1, "".join(body), nested
         elif c == "\n":
             # An unterminated literal. Kotlin would not compile, so this is a
             # tokeniser fault rather than a finding; stopping here keeps the
             # rest of the file readable instead of shifting every offset after it.
-            return i, "".join(body)
+            return i, "".join(body), nested
         else:
             body.append(c)
             i += 1
-    return n, "".join(body)
+    return n, "".join(body), nested
 
 
-def is_prose(content):
-    """True when what is left after the interpolations is language."""
-    return bool(re.search(r"[A-Za-z]", INTERPOLATION_RE.sub("", content)))
+def is_prose(content, nested=()):
+    """True when what is left after the interpolations is language, or when a
+    literal written inside one of them is.
+
+    Only those inner literals are asked, never the expression holding them, so a
+    count, an identifier or a call inside `${ }` is still not language.
+    """
+    if re.search(r"[A-Za-z]", INTERPOLATION_RE.sub("", content)):
+        return True
+    return any(is_prose(inner) for inner in nested)
 
 
 def call_window(masked, open_paren):
@@ -282,8 +305,8 @@ def scan(path, src):
 
     findings = []
     for name, lo, hi in windows:
-        for start, end, content in literals:
-            if lo <= start and end <= hi and is_prose(content):
+        for start, end, content, nested in literals:
+            if lo <= start and end <= hi and is_prose(content, nested):
                 findings.append((path, src.count("\n", 0, start) + 1, name, content))
     # One sink can sit inside another's window (`setTitle(getString(...))` is
     # not, but a nested builder is), so the same literal can be reported twice.
