@@ -120,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The download percentage on the first-run screen comes from a string resource, so its sign and digits follow the device's language.
 - Installing a toolchain already being installed is declined rather than copying the tree twice, which could run a device out of space and leave a partial install.
 - A page can no longer bury the editor under notices about links it could not open. Only navigations you started are announced, and repeats of the same one are dropped.
+- Re-adding a device folder while its previous copy is still being removed no longer discards the new copy's record of which files have not reached the device.
 
 ### Security
 

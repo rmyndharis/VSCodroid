@@ -123,6 +123,51 @@ class SafMirrorReclamationTest {
     }
 
     /**
+     * The case the two paths cannot be told apart in, and the reason the records
+     * move with the directory rather than being cleared by the name the mirror had.
+     *
+     * A directory name is a digest of the tree URI, not of the session, so the path a
+     * removal frees is the path the same folder returns to the moment the user grants
+     * it again. The sweep runs on a thread that outlives the removal and takes as long
+     * as the tree is big, so a re-grant landing inside that window is ordinary rather
+     * than contrived. If the sweep then retires records by the old name, it retires the
+     * new mirror's, and those are the records that stop the next sync copying a
+     * truncated device document over the only complete copy.
+     */
+    @Test
+    fun `a re-granted mirror keeps its records when the old one is swept`() {
+        val hash = "abc123def456"
+        val original = File(mirrorsDir, hash)
+        val setAside = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + hash)
+        setAside.mkdirs()
+        File(setAside, "old.md").writeText("the copy being removed")
+        // The re-grant: the same folder, so the same digest, so the same path, live
+        // again while the sweep of its predecessor is still to run.
+        original.mkdirs()
+        File(original, "fresh.kt").writeText("written since the re-grant")
+
+        val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+        val departing = File(setAside, "old.md").absolutePath
+        val live = File(original, "fresh.kt").absolutePath
+        journal.writeText(departing + "\n" + live + "\n")
+        every { resolver.persistedUriPermissions } returns emptyList()
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(setAside.exists(), "the set-aside leftover should have gone")
+        assertFalse(
+            journal.readLines().contains(departing),
+            "the departing mirror's own record outlived it",
+        )
+        assertTrue(
+            journal.readLines().contains(live),
+            "the sweep took the live mirror's record with it, so the next sync will " +
+                "trust a device copy this app already knows is not current",
+        )
+        assertTrue(original.isDirectory, "the re-granted mirror was deleted by the sweep")
+    }
+
+    /**
      * The mirror is a copy and the device folder is the original, which is what
      * makes reclaiming safe. It stops being a copy when a write-back gave up, or
      * was refused with a SecurityException, which is exactly what a permission

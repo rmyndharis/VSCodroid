@@ -392,6 +392,13 @@ class SafStorageManager(private val context: Context) {
             Logger.w(tag, "Could not set $name aside; leaving it in place")
             return null
         }
+        // The records move with the directory, and this is the only moment they can.
+        // They are keyed by absolute path, and the name is a hash of the tree URI
+        // rather than of the session, so from here on the path this rename frees is
+        // the path the same folder gets again the moment the user re-grants it. Left
+        // behind, the departing mirror's records and the replacement's are the same
+        // strings and nothing downstream can tell them apart.
+        syncEngine.renameUploadsUnder(entry, target)
         return target
     }
 
@@ -399,11 +406,16 @@ class SafStorageManager(private val context: Context) {
      * Deletes an entry [setAside] has already moved, and retires the upload records
      * that named it.
      *
-     * [originalPath] is the path before the rename, and passing the `discarded-` one
-     * instead matched no journal entry at all, so records outlived the mirror they
-     * distrust: a later re-grant of the same folder hashes back to the same path, and
-     * the next sync then read the device's own document as this app's interrupted
-     * upload and wrote the stale mirror back over it.
+     * The records are retired under the `discarded-` path, which is the path they are
+     * filed under: [setAside] moves them when it moves the directory. Clearing under
+     * the name the mirror had *before* the rename is what this used to do, and it is
+     * wrong in the one case that matters. A mirror's directory name is a hash of the
+     * tree URI, so the path a removal frees is the path the same folder returns to when
+     * the user re-grants it, and a sweep finishing after that re-grant then retires the
+     * live mirror's records instead of the dead one's. That loses the very distrust
+     * that stops the next sync copying a truncated device document over the mirror's
+     * only complete copy. Clearing under the discarded path cannot reach a live mirror,
+     * because nothing else is ever filed there.
      *
      * The delete is [com.vscodroid.util.StorageManager.deleteRecursive] rather than
      * `File.deleteRecursively`, which asks `isDirectory` and `listFiles` and therefore
@@ -421,7 +433,18 @@ class SafStorageManager(private val context: Context) {
             Logger.w(tag, "Could not finish removing ${discarded.name}; the next launch retries")
             return false
         }
-        syncEngine.clearUploadsUnder(originalPath)
+        syncEngine.clearUploadsUnder(discarded)
+        // The second clear is for entries set aside before the records learned to move
+        // with the directory: theirs are still filed under the name the mirror had, and
+        // nothing else will ever retire them. Guarded on the path being free, because
+        // that is exactly the case this cannot tell apart. If the folder has been
+        // re-granted, the records under that name may be the new mirror's, and the two
+        // mistakes are not equal: keeping a dead record makes the next sync write a
+        // mirror over a device copy that matches it anyway, while dropping a live one
+        // lets a truncated device document overwrite the only complete copy. So the
+        // ambiguous case keeps them, and the next removal of that mirror clears them
+        // under its own discarded name.
+        if (!originalPath.exists()) syncEngine.clearUploadsUnder(originalPath)
         return true
     }
 

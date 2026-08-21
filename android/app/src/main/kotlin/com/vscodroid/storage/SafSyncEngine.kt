@@ -1325,6 +1325,39 @@ class SafSyncEngine(private val context: Context) {
      * read back as this app's own interrupted upload and thrown away in favour of
      * the stale copy. Reclaiming the mirror has to reclaim its distrust with it.
      */
+    /**
+     * Moves the upload records of [from] to [to], so they follow the directory a
+     * removal has just renamed out of the way.
+     *
+     * The journal is keyed by absolute path, and a mirror's directory name is a hash
+     * of the tree URI rather than of the session, so the path a removal frees is the
+     * path the same folder gets again when the user re-grants it. Without this, the
+     * records of the departing mirror and of its replacement are the same strings, and
+     * whichever side is cleared takes the other's with it: retiring them loses the live
+     * mirror's distrust, and keeping them applies a dead mirror's distrust to a live
+     * one. Both end the same way, with a stale copy written over the user's file.
+     *
+     * Renaming them at the moment the directory moves is what keeps the two apart,
+     * because that is the last moment anything can still tell them apart. It survives a
+     * process death for the same reason the rename does: both are on disk before
+     * anything else happens.
+     */
+    internal fun renameUploadsUnder(from: File, to: File) {
+        synchronized(uploadJournalLock) {
+            try {
+                val journal = uploadJournal()
+                if (!journal.isFile) return
+                val old = from.absolutePath + File.separator
+                val new = to.absolutePath + File.separator
+                val all = journal.readLines()
+                val moved = all.map { if (it.startsWith(old)) new + it.removePrefix(old) else it }
+                if (moved != all) rewriteJournal(moved)
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not move the upload records of ${from.name}: ${e.message}")
+            }
+        }
+    }
+
     internal fun clearUploadsUnder(mirrorRoot: File) {
         synchronized(uploadJournalLock) {
             try {
