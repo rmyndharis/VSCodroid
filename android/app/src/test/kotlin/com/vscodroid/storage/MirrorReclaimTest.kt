@@ -279,10 +279,22 @@ class MirrorReclaimTest {
         recentJson = """[{"uri":"$folderUri","name":"Project","lastOpened":1700000000}]"""
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(folderUri))
 
+        // The grant stays visible to the resolver for the whole case, deliberately.
+        // Dropping it to an empty list once the removal has run answers the question
+        // the assertion below asks: [getPersistedFolders] prunes every entry whose
+        // permission is gone, so an empty answer would then be the fixture's doing and
+        // the case would hold with the recent-list drop deleted from the manager.
+        // Releasing the grant is a call on a relaxed mock and changes nothing the mock
+        // reports, which is what leaves the row visible to be dropped on its merits.
+        assertEquals(
+            1, manager.getPersistedFolders().size,
+            "the fixture never put the folder in Open Recent, so what follows is not " +
+                "measuring the removal",
+        )
+
         manager.reclaimMirror(dir.name, force = true)
 
         verify { resolver.releasePersistableUriPermission(folderUri, any()) }
-        every { resolver.persistedUriPermissions } returns emptyList()
         assertEquals(
             emptyList<SafFolderInfo>(), manager.getPersistedFolders(),
             "the folder still appears in Open Recent, pointing at a directory that is gone",
