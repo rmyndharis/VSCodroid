@@ -36,6 +36,18 @@
          ago it was recorded, so it says nothing about elapsed time. -->
     <string name="status_server_slow_start">The development server is taking longer than usual to start. The editor will open as soon as it is ready.</string>
     <string name="status_updating_python">Updating Python…</string>
+    <!-- Says what happened and what to do about it, and deliberately does not
+         claim to have diagnosed anything. The app cannot tell an out-of-memory
+         kill from a phantom-process one: both arrive as the same exit code and
+         nothing here reads exit reasons. So the wording is "was turned off after
+         repeated crashes", not "was too much memory", because the second would be
+         a diagnosis the app did not make.
+
+         Naming the setting matters more than it looks. The value lives in
+         settings.json inside the editor, which is the surface this message is
+         about to become reachable again, and a user who is not told which
+         setting to look for has nothing to search on. -->
+    <string name="heap_override_suspended">The custom memory limit in settings.json was turned off after repeated crashes. Change vscodroid.server.heapCeilingMb and restart the app to try a different value.</string>
     <!-- The figure is passed in rather than written here: it is the size of the
          bundled asset tree, which grows with every VS Code pin. A fixed 500 MB
          outlived the tree it was measured against and sent people to free half

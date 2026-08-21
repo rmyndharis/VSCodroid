@@ -385,6 +385,220 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `a ceiling set in settings json reaches the command line, clamped`() {
+        // The wire for the override arm, and the counterpart of `the derived heap
+        // ceiling reaches the command line`. The pure functions above settle what
+        // the number should be; nothing there notices if the settings file is never
+        // opened, and the derived arm would go on producing a plausible number.
+        //
+        // The fixture asks for more than the device can hold on purpose, so the
+        // number that has to appear is the CLAMPED one. A test that asked for
+        // something already legal would pass against a wiring that skipped the
+        // clamp, which is the half that carries the safety argument.
+        //
+        // 3 GiB of visible RAM gives an override maximum of 768 (a quarter is 768,
+        // which is also where the floor on that maximum sits), so a request of 4096
+        // must arrive as 768. That collides with HEAP_CEILING_MAX_MB, so the sizes
+        // are chosen again below to keep the assertion discriminating.
+        val totalMb = 6L * 1024
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = totalMb * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            // One key per line, which is what every writer of this file produces:
+            // the workbench's settings editor, and FirstRunSetup.insertSetting.
+            // The reader is anchored to the start of a line, so a fixture that put
+            // the key beside the brace would be rejected for a reason that has
+            // nothing to do with the wiring under test.
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 4096,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+
+        // A quarter of 6144 is 1536, so the request is clamped to the absolute cap.
+        val expected = heapOverrideMaxMb(totalMb)
+        assertEquals(HEAP_OVERRIDE_ABS_MAX_MB, expected, "the fixture must exercise the clamp")
+        assertNotEquals(
+            heapCeilingMb(totalMb, isLowRam = false), expected,
+            "the fixture must not pick the number the derived arm would also produce",
+        )
+        assertNotEquals(
+            4096, expected,
+            "the fixture must not pick a number an unclamped wiring would also produce",
+        )
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=$expected"),
+            "the clamped override must reach the command line; got: $output",
+        )
+        assertTrue(
+            manager.heapOverrideInEffect(),
+            "a spawn that honoured the user's number must say so, or the kill latch " +
+                "charges the wrong party",
+        )
+    }
+
+    @Test
+    fun `exactly one heap flag reaches the command line`() {
+        // The Worker shim in patches/0003 matches --max-old-space-size=(\d+) and
+        // takes the LAST it sees when re-expressing it as a resource limit, so a
+        // second flag would silently decide the Extension Host's budget while the
+        // main isolate used the first. Cheap to assert, and invisible otherwise.
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertEquals(
+            1,
+            Regex("--max-old-space-size=").findAll(output).count(),
+            "there must be exactly one heap flag on the command line; got: $output",
+        )
+    }
+
+    @Test
+    fun `a ceiling that has spent its budget does not reach the command line`() {
+        // The latch's arithmetic is pinned by HeapOverrideLatchTest and its counting
+        // site by HeapLatchCallSiteTest. Neither notices if the START never consults
+        // the count, which is the arm that actually protects the user: without it
+        // the value is disabled in a preference nobody reads and the server keeps
+        // being spawned with it forever.
+        val totalMb = 6L * 1024
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = totalMb * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 4096,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+
+        // The value recorded as seen must be the same 4096, or heapKillsForValue
+        // hands back a fresh budget and this proves nothing. That is the whole
+        // fixture: a budget spent against THIS value.
+        val prefs = mockk<android.content.SharedPreferences>(relaxed = true) {
+            every { getInt(PREF_HEAP_VALUE_SEEN, any()) } returns 4096
+            every { getInt(PREF_HEAP_KILLS, any()) } returns HEAP_OVERRIDE_KILL_BUDGET
+        }
+        every { contextMock.getSharedPreferences(HEAP_PREFS_NAME, any()) } returns prefs
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=${heapCeilingMb(totalMb, isLowRam = false)}"),
+            "a suspended ceiling must fall back to the derived one; got: $output",
+        )
+        assertFalse(
+            output.contains("--max-old-space-size=${heapOverrideMaxMb(totalMb)}"),
+            "the suspended value must not reach the command line at all; got: $output",
+        )
+        assertFalse(
+            manager.heapOverrideInEffect(),
+            "a value that was not honoured must not be charged for the next kill",
+        )
+    }
+
+    @Test
+    fun `a device that ignores the request is not charged for its kills`() {
+        // The attribution bug this closes was in the obvious spelling: setting the
+        // flag from "a request was present" rather than "a request was taken". On a
+        // low-RAM device the request is not taken, the derived floor is what runs,
+        // and a flag set anyway hands the next SIGKILL to a value the device never
+        // ran with. Three of those disable a setting the user never got to try, and
+        // nothing anywhere would say why.
+        //
+        // 8 GB so the derived arm reaches the cap and not the floor: the assertion
+        // below is that 256 came from the low-RAM flag, and on a small total it
+        // would come from the arithmetic too.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns true
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 8L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 1024,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=$HEAP_CEILING_MIN_MB"),
+            "a low-RAM device must ignore the request; got: $output",
+        )
+        assertFalse(
+            manager.heapOverrideInEffect(),
+            "the request was not taken, so its budget must not be spent on this server's kills",
+        )
+    }
+
+    @Test
+    fun `a settings file that cannot be read leaves the derived ceiling alone`() {
+        // The fail-safe direction. A directory where the settings file belongs is
+        // the cheapest way to make readText throw; whatever the cause, the answer
+        // has to be the number the device ran before the key existed, and the start
+        // has to happen at all.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 3L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+        val notAFile = File(tempDir, "Machine/settings.json").apply { mkdirs() }
+        every { Environment.getMachineSettingsPath(any()) } returns notAFile.path
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "an unreadable settings file must not stop a start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=${heapCeilingMb(3L * 1024, isLowRam = false)}"),
+            "the derived ceiling must survive an unreadable settings file; got: $output",
+        )
+        assertFalse(
+            manager.heapOverrideInEffect(),
+            "nothing was honoured, so nothing may be charged for the next kill",
+        )
+    }
+
+    @Test
     fun `the port on the command line is the one PortFinder handed out`() {
         // `allocates a port on the first start` asserts only that the port is not
         // zero, which stays true if the wiring is replaced by any number at all.
@@ -700,6 +914,18 @@ private var ProcessManager.cachedTokenField: String?
 private var ProcessManager.procDirField: File
     get() = field("procDir").get(this) as File
     set(value) = field("procDir").set(this, value)
+
+/**
+ * Reaches `ProcessManager.heapOverrideActive`, which is private production state.
+ *
+ * Set rather than read: the tests that need it are asserting that something CLEARS
+ * the flag, and a field that starts false makes those assertions pass against a
+ * clear that was deleted. Putting it up first is what stands in for the earlier
+ * spawn in the same instance that would have left it there.
+ */
+private var ProcessManager.heapOverrideActiveField: Boolean
+    get() = field("heapOverrideActive").getBoolean(this)
+    set(value) = field("heapOverrideActive").setBoolean(this, value)
 
 private fun field(name: String) =
     ProcessManager::class.java.getDeclaredField(name).apply { isAccessible = true }
@@ -1108,6 +1334,40 @@ class AdoptionTest {
             asked!!.contains("tkn"),
             "the liveness probe must not carry the connection token: $asked",
         )
+    }
+
+    @Test
+    fun `adoption does not charge the user's ceiling for a server it never gave`() {
+        // An adopted server was spawned by a bootstrap that is gone, and it carries
+        // whatever ceiling that bootstrap gave it. Nothing here can learn what that
+        // was. Leaving the flag set from an earlier spawn means the next kill of
+        // this server spends a life belonging to a value it never ran with, and
+        // three of those disable a setting that was never actually tried.
+        //
+        // The flag is put up first, exactly as a previous spawn in this same
+        // ProcessManager instance would leave it. Asserting it without doing that
+        // proves nothing: the field starts false and the assertion passes against a
+        // clear that was deleted.
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        manager.heapOverrideActiveField = true
+
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertTrue(manager.isAdopted(), "the fixture must reach the adoption branch")
+        assertFalse(
+            manager.heapOverrideInEffect(),
+            "an adopted server's ceiling is unknowable, so it must be charged to nobody",
+        )
+    }
+
+    @Test
+    fun `stopping ends the charge as well as the server`() {
+        // A crash report can already be on its way to the service when Stop is
+        // pressed. Nothing of ours is running with the user's number after this
+        // point, so that report must not spend one of its lives.
+        manager.heapOverrideActiveField = true
+        manager.stopServer()
+        assertFalse(manager.heapOverrideInEffect())
     }
 
     @Test
@@ -1714,5 +1974,257 @@ class HeapCeilingTest {
         // floor, which would look like a considered decision.
         assertEquals(HEAP_CEILING_DEFAULT_MB, heapCeilingMb(0, isLowRam = false))
         assertEquals(HEAP_CEILING_DEFAULT_MB, heapCeilingMb(-1, isLowRam = false))
+    }
+
+    @Test
+    fun `the derived band binds exactly where the arithmetic says`() {
+        // `the band holds at both ends` uses 1 GB and 64 GB, which are far enough
+        // inside each clamp that moving either constant by a few hundred MB leaves
+        // it green. These are the breakpoints themselves, so a retune of the band
+        // has to come here and state the new ones.
+        assertEquals(256, heapCeilingMb(2048, isLowRam = false), "the floor binds at 2048")
+        assertEquals(257, heapCeilingMb(2056, isLowRam = false), "just above it the eighth wins")
+        assertEquals(767, heapCeilingMb(6143, isLowRam = false), "just under the cap the eighth wins")
+        assertEquals(768, heapCeilingMb(6144, isLowRam = false), "the cap binds at 6144")
+    }
+}
+
+/**
+ * The override arm: what a user may ask for, and what they are given instead.
+ *
+ * The clamp is the entire safety argument for exposing this at all, so each bound
+ * has a test that fails when only that bound is removed. Read them together with
+ * [heapOverrideMaxMb]'s documentation, which is where the reasoning lives.
+ */
+class HeapOverrideTest {
+
+    @Test
+    fun `a request below the floor is raised to it`() {
+        // The floor applies to the override in the RAISING direction. Below 256 the
+        // editor cannot open a real project, so a request for less costs the user
+        // the editor and buys them nothing.
+        assertEquals(HEAP_CEILING_MIN_MB, heapCeilingMb(3700, isLowRam = false, requestedMb = 64))
+    }
+
+    @Test
+    fun `on a small device the fraction is what bounds a request`() {
+        // 3700 MiB is a nominal 4 GB phone. A quarter of it is 925, well under the
+        // absolute cap, so this is the case the fraction alone decides. Asking for
+        // the absolute cap here must not get it.
+        assertEquals(925, heapCeilingMb(3700, isLowRam = false, requestedMb = HEAP_OVERRIDE_ABS_MAX_MB))
+    }
+
+    @Test
+    fun `on a large device the absolute cap is what bounds a request`() {
+        // 15500 MiB is a nominal 16 GB tablet, where a quarter is about 3875. The
+        // fraction has stopped protecting: three isolates at 3875 is more V8 old
+        // space than the device can hold beside the renderer, which is why the
+        // absolute bound exists on top of it.
+        assertEquals(
+            HEAP_OVERRIDE_ABS_MAX_MB,
+            heapCeilingMb(15500, isLowRam = false, requestedMb = 4096),
+        )
+    }
+
+    @Test
+    fun `the override ceiling never sits below what the device would get anyway`() {
+        // A 2 GB phone computes a quarter of 500, which is below the 768 the derived
+        // arm can reach. Without the floor on the override maximum, a user asking
+        // for more than the derived value would be handed LESS than it, and the
+        // setting would read as having broken something.
+        assertEquals(HEAP_CEILING_MAX_MB, heapOverrideMaxMb(2000))
+        assertEquals(
+            HEAP_CEILING_MAX_MB,
+            heapCeilingMb(2000, isLowRam = false, requestedMb = 1200),
+        )
+    }
+
+    @Test
+    fun `a low-RAM device ignores the request entirely`() {
+        // The OEM flag is the manufacturer saying totalMem overstates what this
+        // device can spare, and a user cannot know better than the OEM about their
+        // own hardware. Ordering, not arithmetic: this passes only while the flag is
+        // tested ABOVE the override arm.
+        assertEquals(
+            HEAP_CEILING_MIN_MB,
+            heapCeilingMb(2000, isLowRam = true, requestedMb = 1024),
+        )
+    }
+
+    @Test
+    fun `an unknown total ignores the request entirely`() {
+        // Also ordering. The override's only protection is a clamp computed from the
+        // total, so with no total there is nothing to clamp against and honouring a
+        // request there would be honouring it unbounded.
+        assertEquals(
+            HEAP_CEILING_DEFAULT_MB,
+            heapCeilingMb(0, isLowRam = false, requestedMb = 1024),
+        )
+    }
+
+    @Test
+    fun `a request may lower as well as raise`() {
+        // This exists to stop a defensive `coerceAtLeast(derived)` being added later
+        // as an obvious safety improvement. It would take away the only thing a user
+        // on a struggling device can do from here, and nothing else would go red.
+        assertEquals(400, heapCeilingMb(15500, isLowRam = false, requestedMb = 400))
+    }
+
+    @Test
+    fun `no request leaves every existing device on exactly the derived value`() {
+        // The backward-compatibility claim, asserted rather than assumed: an install
+        // with no key in settings.json must produce a byte-identical command line.
+        for (total in listOf(1024L, 2048L, 3700L, 6144L, 7600L, 15500L)) {
+            assertEquals(
+                heapCeilingMb(total, isLowRam = false),
+                heapCeilingMb(total, isLowRam = false, requestedMb = null),
+                "a null request changed the answer at $total MiB",
+            )
+        }
+    }
+}
+
+/**
+ * Reading the requested value out of the user's settings.json.
+ *
+ * settings.json is JSONC, it belongs to the user, and this is a text search over
+ * it rather than a parse. The case that matters most is the commented-out one.
+ */
+class HeapOverrideReaderTest {
+
+    @Test
+    fun `the key is read from a document shaped like the one this app writes`() {
+        val doc = """
+            {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "vscodroid.server.heapCeilingMb": 1024,
+                "extensions.verifySignature": false,
+            }
+        """.trimIndent()
+        assertEquals(1024, heapOverrideFromSettings(doc))
+    }
+
+    @Test
+    fun `a commented-out key is not honoured`() {
+        // The negative control this reader exists to survive. Without the (?m)^\s*
+        // anchor an example a user left in their file, or one this project could put
+        // there itself, is read as a setting, and nothing looks wrong until the
+        // device starts dying. 8192 is chosen so a regression is unmistakable in the
+        // failure message rather than a plausible number.
+        val doc = """
+            {
+                // "vscodroid.server.heapCeilingMb": 8192,
+                "extensions.verifySignature": false,
+            }
+        """.trimIndent()
+        assertNull(heapOverrideFromSettings(doc), "a commented-out example was honoured")
+    }
+
+    @Test
+    fun `a key that is only mentioned inside another value is not honoured`() {
+        // The other half of the anchor: a key name appearing mid-line, here inside a
+        // string somebody wrote, is not a setting either. On its own line, so the
+        // line-start anchor is not what rejects it and the quoting is.
+        val doc = """
+            {
+                "note": "set \"vscodroid.server.heapCeilingMb\": 4096 to tune it",
+            }
+        """.trimIndent()
+        assertNull(heapOverrideFromSettings(doc))
+    }
+
+    @Test
+    fun `a document written on one line is a known and accepted miss`() {
+        // Stated rather than hidden, because it is the price of the anchor and
+        // somebody will eventually meet it. A settings.json collapsed onto one line
+        // is not read, and the user silently gets the derived ceiling.
+        //
+        // Accepted for two reasons. Nothing writes this file that way: the
+        // workbench's settings editor and FirstRunSetup.insertSetting both put one
+        // key per line. And the failure direction is the safe one, where honouring
+        // a commented-out example is not. If this ever has to change, it must
+        // change without letting `a commented-out key is not honoured` go green on
+        // a comment.
+        assertNull(heapOverrideFromSettings("""{"vscodroid.server.heapCeilingMb": 1024}"""))
+    }
+
+    @Test
+    fun `an absent key reads as absent`() {
+        assertNull(heapOverrideFromSettings("""{ "extensions.verifySignature": false }"""))
+        assertNull(heapOverrideFromSettings(""))
+    }
+
+    @Test
+    fun `a value of the wrong type reads as absent rather than as a number`() {
+        // A quoted number is a mistake, and the safe reading of a mistake is the
+        // derived value. Relaxing `\d+` to something that accepts it would also
+        // start accepting the quotes as part of the number.
+        //
+        // Each on its own line, so a failure here means the type check failed and
+        // not that the anchor did the work.
+        assertNull(heapOverrideFromSettings("{\n    \"vscodroid.server.heapCeilingMb\": \"1024\",\n}"))
+        assertNull(heapOverrideFromSettings("{\n    \"vscodroid.server.heapCeilingMb\": true,\n}"))
+        assertNull(heapOverrideFromSettings("{\n    \"vscodroid.server.heapCeilingMb\": null,\n}"))
+    }
+
+    @Test
+    fun `a fractional value is read as its whole part and then clamped`() {
+        // Not a null, and worth pinning rather than leaving to be discovered.
+        // `\d+` stops at the point, so 1024.9 reads as 1024 and 10.5 reads as 10,
+        // which the floor then raises to 256. Both are safe: the clamp is what
+        // stands between any misreading here and the device, which is the reason
+        // the reader is allowed to be this simple.
+        assertEquals(1024, heapOverrideFromSettings("{\n    \"vscodroid.server.heapCeilingMb\": 1024.9,\n}"))
+        assertEquals(
+            HEAP_CEILING_MIN_MB,
+            heapCeilingMb(3700, isLowRam = false, requestedMb = 10),
+        )
+    }
+}
+
+/**
+ * The latch that turns a user's value off when it keeps killing the server.
+ *
+ * All three predicates are pure so they can be pinned without a Context, which is
+ * what lets the boundary cases below be stated as arithmetic rather than as a
+ * sequence of fake crashes.
+ */
+class HeapOverrideLatchTest {
+
+    @Test
+    fun `the budget boundary is the pair, not one side of it`() {
+        assertFalse(heapOverrideSuspended(HEAP_OVERRIDE_KILL_BUDGET - 1))
+        assertTrue(heapOverrideSuspended(HEAP_OVERRIDE_KILL_BUDGET))
+        assertTrue(heapOverrideSuspended(HEAP_OVERRIDE_KILL_BUDGET + 1))
+    }
+
+    @Test
+    fun `only a SIGKILL with the value in effect spends a life`() {
+        // 137 is 128 + SIGKILL, which is what a low-memory kill reaches the watchdog
+        // as. The other three cases are the ones a looser rule would swallow.
+        assertEquals(2, heapKillsAfter(137, overrideInEffect = true, current = 1))
+        assertEquals(
+            1, heapKillsAfter(137, overrideInEffect = false, current = 1),
+            "a derived ceiling must not spend a budget nobody is using",
+        )
+        assertEquals(
+            1, heapKillsAfter(134, overrideInEffect = true, current = 1),
+            "134 is V8's own heap-limit abort: the ceiling working, not failing",
+        )
+        assertEquals(
+            1, heapKillsAfter(ADOPTED_SERVER_LOST, overrideInEffect = true, current = 1),
+            "an adopted server never ran with this value",
+        )
+    }
+
+    @Test
+    fun `changing the value hands back a full budget`() {
+        // Without this the count is permanent, and a value disabled after three
+        // kills could never be re-enabled by lowering it. The only way out would be
+        // clearing app data, which destroys filesDir and with it the user's
+        // projects, toolchains and extensions.
+        assertEquals(3, heapKillsForValue(storedValue = 1024, storedKills = 3, currentValue = 1024))
+        assertEquals(0, heapKillsForValue(storedValue = 1024, storedKills = 3, currentValue = 900))
+        assertEquals(0, heapKillsForValue(storedValue = 0, storedKills = 3, currentValue = 1024))
     }
 }

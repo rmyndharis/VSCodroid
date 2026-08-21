@@ -55,7 +55,7 @@ class ExtractionOnDeviceTest {
 
     /** The 29 MB one, so a nearly-full disk is certain to run out inside it. */
     private val fetched = "ms-python.python-2026.4.0"
-    private val own = "vscodroid.vscodroid-process-monitor-1.0.0"
+    private val own = "vscodroid.vscodroid-process-monitor-1.1.0"
 
     private val extensionsDir get() = File(sandbox, "home/.vscodroid/extensions")
 

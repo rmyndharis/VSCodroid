@@ -807,11 +807,58 @@ class NodeService : Service() {
         }
 
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
+        chargeHeapOverride(exitCode)
         // The decision and the waiting both live in [retryOrGiveUp], shared with
         // the start path. Recomputing `crashAction` there costs nothing and reads
         // the same values: only a non-suspending log statement separates the two
         // reads, and both fields are confined to this dispatcher.
         retryOrGiveUp()
+    }
+
+    /**
+     * Spends one of a user-chosen heap ceiling's lives, when this death was one.
+     *
+     * Placed in [handleServerCrash] and NOT in [retryOrGiveUp], which is the more
+     * obvious home and is the wrong one. Two paths reach [retryOrGiveUp] for a
+     * single death -- the watchdog through here, and [launchServer]'s
+     * `endsUnreported` branch -- so a counter incremented there would charge one
+     * kill twice and disable a value after a death and a half.
+     *
+     * On this dispatcher, like every other piece of state this service keeps, and
+     * for the same reason the class header gives.
+     *
+     * The notification is raised only at the boundary, not on every kill. Before
+     * the boundary the server is still being restarted with the user's value and
+     * telling them it has been turned off would be untrue; at it, the next start
+     * will ignore the value and they need to know why the editor's behaviour just
+     * changed under them.
+     */
+    // ApplySharedPref: lint's advice here is the defect. Following it turns the
+    // latch off silently, and the warning sits on the one line in this file where
+    // apply() must not be used, which is exactly how a future reader tidying
+    // warnings would break it. `the count is committed rather than deferred` is the
+    // guard; this annotation is so the guard is never reached in the first place.
+    //
+    // The KTX `edit(commit = true) { }` form would also silence UseKtx and is
+    // deliberately not used: its regression is `edit { }`, which contains no
+    // `.apply()` for a source-reading guard to find, so the safer-looking spelling
+    // is the one that can rot without anything going red.
+    @Suppress("ApplySharedPref")
+    private fun chargeHeapOverride(exitCode: Int) {
+        if (!processManager.heapOverrideInEffect()) return
+        val prefs = getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE)
+        val before = prefs.getInt(PREF_HEAP_KILLS, 0)
+        val after = heapKillsAfter(exitCode, overrideInEffect = true, current = before)
+        if (after == before) return
+        // commit(), not apply(): the event being recorded is a SIGKILL, and the
+        // kill of this app's own process often follows the one it is reacting to.
+        // apply()'s deferred write is exactly what loses that race, and a latch
+        // whose count does not survive is a latch that never latches.
+        prefs.edit().putInt(PREF_HEAP_KILLS, after).commit()
+        Logger.w(tag, "Server killed with a user heap ceiling in effect ($after of $HEAP_OVERRIDE_KILL_BUDGET)")
+        if (heapOverrideSuspended(after)) {
+            reportStartupNotice(getString(R.string.heap_override_suspended))
+        }
     }
 
     /**

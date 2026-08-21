@@ -183,7 +183,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | Risk | Mitigation Plan | Contingency |
 |------|------------------|-------------|
 | T04 (WebView fragmentation) | **Done:** a runtime check reads the installed WebView at launch and warns when it is below Chrome 105 (`MainActivity.checkWebViewVersion`). **Not done:** no compatibility matrix in CI or a device lab, and no release gate on WebView smoke tests | Deliberately a warning, not a blocking dialog: the floor is a tested one rather than a hard incompatibility, and an editor that degrades beats one that will not open |
-| T05 (memory pressure/OOM) | Derive the V8 heap ceiling from device RAM (`ProcessManager.heapCeilingForDevice`, held between 256 MB and 768 MB), lazy-load extensions/LSP, add memory watchdog and pressure-based cleanup | Auto-disable heavy extensions and reduce concurrent LSP to 1 |
+| T05 (memory pressure/OOM) | Derive the V8 heap ceiling from device RAM (`ProcessManager.heapCeilingForDevice`, held between 256 MB and 768 MB), lazy-load extensions/LSP, add memory watchdog and pressure-based cleanup. **This bounds one number out of several and must not be read as bounding the app's memory.** See the note below | Auto-disable heavy extensions and reduce concurrent LSP to 1. A user-set ceiling disables itself after three `SIGKILL`s and says so |
 | T06 — node-pty failure | Build node-pty in CI for each Node.js bump, run PTY integration tests on physical device, keep pinned known-good node-pty version | Fallback terminal mode with reduced features until PTY patch is fixed |
 | T07 — 16KB page alignment | Enforce linker flags in all native build scripts, validate with `readelf` checks in CI | Block release for API 36 target until all binaries pass alignment checks |
 | T09 (asset pack download requires internet) | Keep the core toolchain offline-ready (Node/Python/Git), clear UI states for pending downloads, retry/backoff for flaky networks | A non-Play install fetches the same toolchain ZIPs over HTTPS from GitHub Releases, checked against a published sha256 manifest |
@@ -197,6 +197,37 @@ These plans cover risks that did not yet have dedicated sections above.
 | R02 (upstream source layout changes) | Pin `VSCODE_VERSION`, rebuild the server once per bump, and prove every patch reached the packaged bundle with `scripts/check-patch-fingerprints.py` against `patches/fingerprints.txt` | Stay on the pinned version until the diffs are reworked |
 | R03 — burnout/single maintainer risk | Enforce milestone scope limits, reserve buffer in each milestone, document key build/release runbooks | Freeze new features and run maintenance-only cycle |
 | R04 (limited real-device access) | CI compiles the instrumented suite (`assembleDebugAndroidTest`); a person runs it on a physical device, because an arm64 emulator on hosted runners has no KVM. Define the minimum required test set per milestone | Delay milestone exit until the mandatory device matrix is met |
+
+> **T05: what the heap ceiling does and does not bound.** The mitigation above has been read as
+> "the app caps its own memory". It does not, in three separate ways, and each one has already
+> been the basis of a wrong conclusion somewhere in this repository.
+>
+> 1. **The flag caps each V8 isolate, not all of them together.** `--max-old-space-size` reaches
+>    the bootstrap, the editor server's main isolate, the Extension Host worker, the Pty Host
+>    worker and the forked file watcher, and every one of them is capped at the same number
+>    rather than sharing it. A ceiling of N authorises roughly 3N of old space in that family.
+>    Raising the number is a larger step than it looks, which is why the user override is
+>    clamped to a quarter of RAM and to 1536 MB, not to whatever the device could nominally
+>    hold.
+> 2. **It does not reach the largest V8 heap on the device.** `typescript-language-features`
+>    passes `tsserver.maxMemory` as tsserver's own `--max-old-space-size`, defaulting to
+>    3072 MB with no reference to device RAM. tsserver is forked by the Extension Host, so
+>    nothing in this app is on its path. On a 4 GB phone the editor server is held to 462 MB
+>    while one language server is authorised 3072 MB. **Open decision:** whether to clamp that
+>    number to the device, pin it explicitly so it is at least deliberate, or leave it. Clamping
+>    it would do more for stability on a small phone than any raise of the server ceiling does
+>    for capability on a large tablet, and it is a behaviour change for existing installs.
+> 3. **It caps the V8 heap, not process RSS.** Native memory, ICU data, loaded addons and the
+>    Chromium renderer all sit outside it, and what ends the process is Android's low-memory
+>    killer, which does not read flags.
+>
+> The user override (`vscodroid.server.heapCeilingMb`, NFR-RES-07a) narrows the mitigation
+> further: on a device where it is set, the app no longer bounds this number on the user's
+> behalf. The compensating control is that the value disables itself after three `SIGKILL`s and
+> the user is told which setting was turned off. That over-reacts on purpose. The app cannot
+> tell an out-of-memory kill from a phantom-process kill, since both arrive as the same exit
+> code, so the direction is chosen: a false positive costs one notification, and a false
+> negative is an app that crash-loops across every relaunch with no reachable way back in.
 
 ---
 

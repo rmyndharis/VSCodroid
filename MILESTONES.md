@@ -291,7 +291,7 @@ M6 (Release)   → Play Store release
    - [x] 4 custom VSCodroid extensions:
      - `vscodroid.vscodroid-welcome-1.2.2`, welcome tab with quick actions
      - `vscodroid.vscodroid-saf-bridge-1.4.0` — SAF storage integration
-     - `vscodroid.vscodroid-process-monitor-1.0.0` — phantom process monitoring
+     - `vscodroid.vscodroid-process-monitor-1.1.0` — phantom process monitoring
      - `vscodroid.vscodroid-serve-network-1.1.0`, serve a dev server on the LAN
    - [x] `extensions.json` manifest auto-generated on first run
 

@@ -206,12 +206,34 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~990 MB with both toolchains | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
-| NFR-RES-07 | V8 heap limit | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
+| NFR-RES-07 | V8 heap limit (default) | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
+| NFR-RES-07a | V8 heap limit (user override) | Optional, set as `vscodroid.server.heapCeilingMb`; clamped to `min(RAM / 4, 1536 MB)` and never below 256 MB | P2 |
 
 > NFR-RES-05 and NFR-RES-07 carry measured figures, not targets. Verify them against
 > `BuildConfig.EXTRACTED_ASSET_BYTES` and `ProcessManager.heapCeilingForDevice` rather than
 > this table: the extracted tree grows with every VS Code bump, and the heap ceiling is
 > derived per device because a flat cap leaves 3-4 GB phones nothing to work with.
+
+> **NFR-RES-07a replaced a guarantee with a user responsibility, and that is the point of
+> stating it separately.** NFR-RES-07 alone read as a promise that this app bounds its own
+> memory, and it is no longer one for a device where the key has been set. Three things keep
+> that from becoming a way to break an install, and all three are requirements rather than
+> implementation detail:
+>
+> - The clamp is computed from live `totalMem` on every start, never stored. A settings file
+>   carried to a smaller device is bounded by the device it is running on.
+> - A device the manufacturer flagged as low-RAM, and a device whose total cannot be read,
+>   ignore the key entirely. The clamp is the only protection and it is derived from the
+>   total, so with no trustworthy total there is nothing to clamp against.
+> - The value disables itself after three `SIGKILL`s and the user is told. Without that, its
+>   only editing surface is inside the editor it can prevent from starting, and the recovery
+>   of last resort is clearing app data, which destroys the user's projects.
+>
+> Two limits worth knowing before quoting either row. The flag caps EACH V8 isolate in the
+> server, not all of them together, so a ceiling of N authorises roughly 3N of old space
+> across the server process family. And neither row bounds the largest V8 heap the device
+> actually runs: `tsserver.maxMemory` defaults to 3072 MB with no reference to device RAM,
+> and nothing in this app reaches it.
 
 ### 4.3 Reliability (NFR-REL)
 

@@ -694,6 +694,99 @@ class StillOurRunTest {
 }
 
 /**
+ * That the kill latch is wired where a single death is counted once.
+ *
+ * [HeapOverrideLatchTest] pins the arithmetic and says nothing about where it
+ * runs, which is the half that is easy to get wrong here and impossible to notice
+ * afterwards. Two paths reach `retryOrGiveUp` for one death, the watchdog through
+ * `handleServerCrash` and `launchServer`'s `endsUnreported` branch, and the
+ * existing code deliberately routes both there. So `retryOrGiveUp` is the obvious
+ * home for a counter and the wrong one: a value would lose two lives per crash and
+ * be disabled after a death and a half, with the user told it crashed three times
+ * when it crashed twice.
+ *
+ * Source-reading, and the weaker layer for the reason its neighbours give: the
+ * method is private on a `Service` and this suite can build neither a `Service`
+ * nor its main dispatcher.
+ *
+ * The comment filter is load-bearing rather than tidiness. A guard over source
+ * text is blind to the difference between code and a comment describing code, and
+ * every paragraph above mentions `retryOrGiveUp` by name. Without the filter this
+ * test reads documentation and passes on it.
+ */
+class HeapLatchCallSiteTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `one death spends at most one life`() {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+        val report = { hits: List<IndexedValue<String>> ->
+            hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+        }
+
+        // Exactly two: the declaration and the one call. A third mention is either
+        // a second charging path or the same one moved, and both need reading.
+        val mentions = lines.filter { (_, l) -> l.contains("chargeHeapOverride") }
+        assertEquals(
+            2, mentions.size,
+            "charging a kill has one caller, in handleServerCrash. Found ${mentions.size} " +
+                "mention(s):\n" + report(mentions),
+        )
+
+        // And that the caller is the watchdog-fed entry rather than the shared
+        // retry. Located by brace depth from the declaration, because the name of
+        // the enclosing function is not on the line that calls it. Depth is counted
+        // over the comment-free lines for the reason the class header gives: a
+        // brace inside a comment widens the window without bounding anything.
+        val declaration = lines.indexOfFirst { (_, l) ->
+            l.contains("private suspend fun handleServerCrash(")
+        }
+        assertTrue(declaration >= 0, "handleServerCrash is gone; this guard names a method")
+        var depth = 0
+        var entered = false
+        var charged = false
+        for ((_, line) in lines.drop(declaration)) {
+            depth += line.count { it == '{' } - line.count { it == '}' }
+            if (depth > 0) entered = true
+            if (line.contains("chargeHeapOverride(")) charged = true
+            if (entered && depth <= 0) break
+        }
+        assertTrue(
+            charged,
+            "the kill must be charged from handleServerCrash, which the watchdog feeds " +
+                "once per death, and not from retryOrGiveUp, which two paths reach for one",
+        )
+    }
+
+    @Test
+    fun `the count is committed rather than deferred`() {
+        // apply() is the idiomatic choice everywhere else and is wrong here. The
+        // event being recorded is a SIGKILL, and the kill of this app's own process
+        // often follows the one it is reacting to; apply()'s deferred write is
+        // exactly what loses that race, and a count that does not survive is a
+        // latch that never latches.
+        val charging = codeLines().filter { (_, l) -> l.contains("PREF_HEAP_KILLS") }
+        assertTrue(charging.isNotEmpty(), "nothing in NodeService writes the kill count")
+        assertTrue(
+            charging.none { (_, l) -> l.contains(".apply()") },
+            "the kill count must be committed, not applied:\n" +
+                charging.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" },
+        )
+    }
+}
+
+/**
  * What a crash report gets: nothing, another attempt, or the end.
  */
 class CrashActionTest {

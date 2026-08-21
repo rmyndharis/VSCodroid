@@ -85,8 +85,33 @@ class ProcessManager(private val context: Context) {
     @Volatile
     private var spawnedOntoHeldPort = false
 
+    /**
+     * Whether the process the last [startServer] spawned was given a ceiling the
+     * user chose rather than one derived from the device.
+     *
+     * The only consumer is the kill latch in `NodeService.handleServerCrash`, and
+     * what it is really recording is attribution: a SIGKILL only counts against a
+     * user's number if that number is what the dead process was running with.
+     *
+     * Volatile for the same reason as the flags above: written on whichever thread
+     * called [startServer], read from the service's main dispatcher.
+     */
+    @Volatile
+    private var heapOverrideActive = false
+
     /** The port the server is listening on. Only valid after [startServer] returns true. */
     val port: Int get() = _port
+
+    /**
+     * Whether the running server was started with a user-chosen heap ceiling.
+     *
+     * False whenever no process of ours is running with one, which covers more
+     * than the plain case: a server that was adopted rather than spawned, and a
+     * server that has been stopped, both answer false. Both matter, because a
+     * crash attributed to a value the dead process never carried would spend the
+     * user's budget on something they did not do.
+     */
+    fun heapOverrideInEffect(): Boolean = heapOverrideActive
 
     /**
      * Whether the server on the port was adopted rather than started here.
@@ -305,6 +330,13 @@ class ProcessManager(private val context: Context) {
             // than left, because it survives in this instance across attempts and
             // a value left over from a previous one is not about this server.
             spawnedOntoHeldPort = false
+            // The same reasoning, and a sharper consequence. An adopted server was
+            // spawned by a bootstrap that is gone, and it carries whatever ceiling
+            // that bootstrap gave it -- which is unknowable from here and is not
+            // whatever this instance last read out of settings.json. Left set, the
+            // user's number would be charged for a kill of a process that never
+            // ran with it, and three of those disable a value that was never tried.
+            heapOverrideActive = false
             startAdoptionWatch()
             return true
         }
@@ -523,7 +555,14 @@ class ProcessManager(private val context: Context) {
             serverProcess = processBuilder.start().also { it.outputStream.close() }
             startOutputReader()
             startWatchdog()
-            Logger.i(tag, "Server process started with PID ${getServerPid()}, heap ceiling ${heapMb}MB")
+            // The source is named, not only the number. A ceiling in a bug report
+            // that could be either a derived value or a user's is a number nobody
+            // can act on, and this line is what carries it into `server.log`.
+            Logger.i(
+                tag,
+                "Server process started with PID ${getServerPid()}, heap ceiling ${heapMb}MB " +
+                    "(${if (heapOverrideActive) "user override, clamped" else "derived from device RAM"})",
+            )
             true
         } catch (e: Exception) {
             Logger.e(tag, "Failed to start server", e)
@@ -924,6 +963,9 @@ class ProcessManager(private val context: Context) {
     fun stopServer() {
         isShuttingDown = true
         _isReady = false
+        // Nothing of ours is running with the user's number after this, so a crash
+        // report still on its way to the service must not be charged against it.
+        heapOverrideActive = false
         if (adopted) {
             // No `Process` handle exists for a server this class did not spawn, which is
             // why this used to be a log line saying the stop could not end it. The note
@@ -984,24 +1026,104 @@ class ProcessManager(private val context: Context) {
      * `worker_threads` Workers, so handing it to them as a Worker resource limit
      * looks like a missing step. It is not one, twice over. Measured on Node
      * 22.17.1, which is a major behind the runtime that ships here:
-     * `--max-old-space-size` is process-wide in V8, so a Worker created with no
-     * resource limits at all still died at the ceiling, and a Worker given an
-     * explicit, smaller limit ran past it to the ceiling instead, because the
+     * `--max-old-space-size` is applied process-wide in V8, so a Worker created
+     * with no resource limits at all still died at the ceiling, and a Worker given
+     * an explicit, smaller limit ran past it to the ceiling instead, because the
      * command-line flag overrides `resourceLimits` rather than the other way
      * round. Separately, `fork()` passes the parent's `execArgv` on by default,
      * so the flag is already in `process.execArgv` at both places a host Worker
      * is created, and `workerAsChildProcess.ts` turns it into a resource limit
      * there. Adding a pass-through would change no number.
+     *
+     * READ THE PARAGRAPH ABOVE AS "EACH ISOLATE IS CAPPED AT THIS NUMBER", NOT AS
+     * "THE ISOLATES SHARE ONE HEAP OF THIS SIZE". The word process-wide is about
+     * where the flag applies, not about what is being divided, and taking it the
+     * other way is what makes the arithmetic invisible: a Worker dying AT the
+     * ceiling rather than at the ceiling minus what the main isolate already held
+     * is what a per-isolate limit looks like. So the number MULTIPLIES rather than
+     * divides. Today's 768 authorises about 768 in the bootstrap isolate, 768 in
+     * the editor server's main isolate, 768 in the Extension Host worker, 768 in
+     * the Pty Host worker and 768 in the still-forked file watcher. Anyone raising
+     * this number is taking a larger step than it looks, which is the reason
+     * [heapOverrideMaxMb] is as conservative as it is.
+     *
+     * NOT THE LARGEST V8 HEAP ON THE DEVICE, and this is the other thing the
+     * number invites a reader to assume. `typescript-language-features` builds
+     * tsserver's own `--max-old-space-size` from `tsserver.maxMemory`, whose
+     * upstream default is 3072 with no reference to device RAM, and tsserver is
+     * forked by the Extension Host so nothing here is on its path. On a 4 GB phone
+     * the editor server gets 462 MB from this function while one language server
+     * gets 3072. Whether that number should be clamped, pinned or left is a
+     * product decision and not settled here; it is written down so the next reader
+     * does not conclude this function bounds the device.
      */
     private fun heapCeilingForDevice(): Int = try {
         val am = context.getSystemService(ActivityManager::class.java)
         val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-        heapCeilingMb(info.totalMem / 1_048_576, am.isLowRamDevice)
+        val totalMb = info.totalMem / 1_048_576
+        val requested = requestedHeapCeiling()
+        // "was it taken", not "was one present". See [heapOverrideHonoured]: the
+        // two part company on exactly the devices that ignore the request, and the
+        // flag decides whose budget the next kill spends.
+        heapOverrideActive = heapOverrideHonoured(totalMb, am.isLowRamDevice, requested)
+        heapCeilingMb(totalMb, am.isLowRamDevice, requested)
     } catch (e: Exception) {
         // Reading it is not worth failing a start over, and the old literal is
         // the right thing to fall back to: it is what every device ran until now.
+        heapOverrideActive = false
         Logger.w(tag, "Could not read device memory, using the default ceiling: ${e.message}")
         HEAP_CEILING_DEFAULT_MB
+    }
+
+    /**
+     * The ceiling the user has asked for, or null when there is none to honour.
+     *
+     * Read on every [startServer] rather than cached, and that placement is not an
+     * accident: [ProcessManager] is constructed once in `NodeService.onCreate` and
+     * lives for the whole service, which spans every crash restart, so a value
+     * resolved in a field initialiser or a constructor would be frozen for longer
+     * than the user would ever guess.
+     *
+     * Returns null in four cases that are deliberately not distinguished here,
+     * because the answer to all four is the derived ceiling: no settings file, no
+     * key in it, a value that is not a bare integer, and a value whose budget of
+     * [HEAP_OVERRIDE_KILL_BUDGET] SIGKILLs is spent.
+     *
+     * The write side of the latch lives here rather than beside the counter for a
+     * reason worth keeping: recording the value SEEN at the moment it is honoured
+     * is what lets [heapKillsForValue] tell a value that has been killing this
+     * device from one the user has since changed. Written with `commit()` and not
+     * `apply()`, on IO where this already runs, because the very next thing this
+     * record has to survive is a SIGKILL of this app's process, and `apply()`'s
+     * deferred write can lose that race.
+     */
+    // ApplySharedPref: deliberate, for the reason the KDoc gives. What this record
+    // has to survive is a SIGKILL of this app's process, which is the one case
+    // apply()'s deferred write does not.
+    @Suppress("ApplySharedPref")
+    private fun requestedHeapCeiling(): Int? = try {
+        val settings = File(Environment.getMachineSettingsPath(context))
+        val asked = settings.takeIf { it.isFile }?.let { heapOverrideFromSettings(it.readText()) }
+        if (asked == null) null else {
+            val prefs = context.getSharedPreferences(HEAP_PREFS_NAME, Context.MODE_PRIVATE)
+            val kills = heapKillsForValue(
+                prefs.getInt(PREF_HEAP_VALUE_SEEN, 0), prefs.getInt(PREF_HEAP_KILLS, 0), asked
+            )
+            prefs.edit().putInt(PREF_HEAP_VALUE_SEEN, asked).putInt(PREF_HEAP_KILLS, kills).commit()
+            if (heapOverrideSuspended(kills)) {
+                Logger.w(
+                    tag,
+                    "The heap ceiling of ${asked}MB in settings.json was followed by $kills " +
+                        "kills and is being ignored; change the value to try it again",
+                )
+                null
+            } else asked
+        }
+    } catch (e: Exception) {
+        // A settings file that cannot be read is not a reason to refuse a start.
+        // The derived ceiling is what the device ran before the key existed.
+        Logger.w(tag, "Could not read the heap ceiling from settings: ${e.message}")
+        null
     }
 
     /**
@@ -1330,7 +1452,107 @@ internal const val HEAP_CEILING_MIN_MB = 256
 internal const val HEAP_CEILING_MAX_MB = 768
 
 /**
- * An eighth of RAM, held inside a band.
+ * The divisor the override arm is bounded by, against the eighth the derived arm uses.
+ *
+ * A quarter is the largest fraction that still leaves the other isolates
+ * somewhere to live. See [heapOverrideMaxMb] for the count of them, which is the
+ * reason the fraction cannot be raised much further whatever the device holds.
+ */
+internal const val HEAP_OVERRIDE_DIVISOR = 4
+
+/**
+ * The hard stop on a user-chosen ceiling, whatever the device reports.
+ *
+ * NOT MEASURED, and it should not be presented as though it were. It is twice the
+ * largest number any device gets today, which is the largest step that can be
+ * argued for from the reasoning in [heapOverrideMaxMb] alone. Settling it needs a
+ * device run that nobody has done: spawn the server with a raised ceiling on an
+ * 8 GB device, drive a large workspace, and read VmHWM for the node child out of
+ * `/proc`, which this app may do for its own children.
+ */
+internal const val HEAP_OVERRIDE_ABS_MAX_MB = 1536
+
+/**
+ * The `settings.json` key a user sets to override the derived ceiling.
+ *
+ * Duplicated in the bundled process-monitor extension's `contributes.configuration`,
+ * which is what puts it in the workbench Settings UI. The two are held together by
+ * `HeapSettingManifestParityTest`, because drifting them apart produces a setting
+ * that appears in the UI and does nothing, with nothing failing anywhere.
+ */
+internal const val HEAP_SETTING_KEY = "vscodroid.server.heapCeilingMb"
+
+/**
+ * How many SIGKILLs a user-chosen ceiling is allowed before it is disabled.
+ *
+ * See [heapKillsAfter] for why a SIGKILL is the event counted and what that
+ * deliberately over-counts.
+ */
+internal const val HEAP_OVERRIDE_KILL_BUDGET = 3
+
+/**
+ * Where the kill count and the value it was counted against are kept.
+ *
+ * SharedPreferences and not a field, because the thing being bounded outlives the
+ * process. `NodeService.restartCount` is in-memory and resets on every
+ * `onCreate`, so a counter kept there would hand a fatal value a fresh budget of
+ * five on every relaunch and repeat forever, which is the exact loop this latch
+ * exists to end.
+ */
+internal const val PREF_HEAP_KILLS = "heap_override_kills"
+internal const val PREF_HEAP_VALUE_SEEN = "heap_override_value_seen"
+
+/** The preferences file `PortFinder` and `SplashActivity` already share. */
+internal const val HEAP_PREFS_NAME = "vscodroid"
+
+/**
+ * The largest ceiling a user may ask for on a device of this size.
+ *
+ * ```
+ * heapOverrideMaxMb(T) = clamp(T / 4, 768, 1536)
+ * ```
+ *
+ * Each bound answers a different failure, and none of the three is decorative.
+ *
+ * The fraction, T/4, bounds the request against the device rather than against a
+ * literal. The derived arm spends an eighth because the editor server is one of
+ * several processes this app is responsible for; a quarter is the most that can be
+ * spent on it while the Extension Host isolate, the Pty Host isolate, the forked
+ * file watcher, tsserver, the app process and the Chromium renderer still have
+ * somewhere to live. Note what makes that count matter: the flag is a PER-ISOLATE
+ * limit, not one heap shared between them, so a request of R authorises roughly 3R
+ * of V8 old space inside the server process family before anything native is
+ * counted. See [heapCeilingForDevice] for the measurement behind that.
+ *
+ * The absolute cap, 1536, exists because the fraction stops protecting once T is
+ * large: on a 16 GiB tablet T/4 is about 3900, and three isolates of that is more
+ * V8 old space than the device can hold beside the renderer. Without this bound the
+ * knob would let the app destabilise the DEVICE rather than only the editor, and
+ * that failure is invisible from inside the app: Android's low-memory killer works
+ * from `oom_score_adj` and does not read V8 flags, so with VSCodroid in the
+ * foreground the processes it reaches first belong to somebody else.
+ *
+ * The floor, 768, is [HEAP_CEILING_MAX_MB]: the override ceiling can never sit
+ * below what the derived arm would have handed the same device. Without it, a 2 GB
+ * phone would compute an override maximum of 500 and a user asking for more than
+ * that would be clamped BELOW the 768 the same device could have reached by
+ * setting nothing at all, which reads as the setting having broken something.
+ */
+internal fun heapOverrideMaxMb(totalRamMb: Long): Int =
+    (totalRamMb / HEAP_OVERRIDE_DIVISOR)
+        .coerceIn(HEAP_CEILING_MAX_MB.toLong(), HEAP_OVERRIDE_ABS_MAX_MB.toLong())
+        .toInt()
+
+/**
+ * An eighth of RAM, held inside a band, unless the user has asked for a number.
+ *
+ * ```
+ * heapCeilingMb(T, lowRam, R) =
+ *     256                                       if lowRam
+ *     512                                       if T <= 0
+ *     clamp(R, 256, heapOverrideMaxMb(T))       if R is present
+ *     clamp(T / 8, 256, 768)                    otherwise
+ * ```
  *
  * The eighth is a budget rather than a measurement: the editor server is one of
  * several processes this app is responsible for, and the flag governs only the
@@ -1343,8 +1565,28 @@ internal const val HEAP_CEILING_MAX_MB = 768
  * A device the manufacturer flagged as low-RAM gets the floor whatever its
  * total says, because that flag is the OEM stating the device is constrained in
  * ways totalMem does not show.
+ *
+ * THE ORDER OF THE FOUR ARMS IS THE SAFETY ARGUMENT, so it is written down rather
+ * than left to the reader. Both short-circuits sit ABOVE the override on purpose.
+ * The low-RAM flag is the manufacturer stating that totalMem overstates what this
+ * device can spare, and a user cannot know better than the OEM about their own
+ * hardware, so their number is not consulted. The unreadable-total case is above it
+ * for a different reason: the override's whole protection is a clamp computed from
+ * T, so with no T there is nothing to clamp a request against, and honouring one
+ * there would be honouring it unbounded.
+ *
+ * The floor applies to a request as well, and in the RAISING direction. Below 256
+ * the editor cannot open a real project, which is the existing reason for the
+ * floor; a user who asks for less gains nothing and loses the editor.
+ *
+ * A request may lower as well as raise. That is deliberate and is worth stating,
+ * because the obvious defensive move -- refusing to go below the derived value --
+ * would take away the only thing a user on a struggling device can do from here.
  */
-internal fun heapCeilingMb(totalRamMb: Long, isLowRam: Boolean): Int {
+internal fun heapCeilingMb(totalRamMb: Long, isLowRam: Boolean, requestedMb: Int? = null): Int {
+    if (heapOverrideHonoured(totalRamMb, isLowRam, requestedMb)) {
+        return requestedMb!!.coerceIn(HEAP_CEILING_MIN_MB, heapOverrideMaxMb(totalRamMb))
+    }
     if (isLowRam) return HEAP_CEILING_MIN_MB
     // Guard the unreadable case rather than trusting it: totalMem has been seen
     // to report 0 on emulators, and 0/8 would silently become the floor while
@@ -1354,3 +1596,105 @@ internal fun heapCeilingMb(totalRamMb: Long, isLowRam: Boolean): Int {
         HEAP_CEILING_MIN_MB.toLong(), HEAP_CEILING_MAX_MB.toLong()
     ).toInt()
 }
+
+/**
+ * Whether a request is the arm [heapCeilingMb] will actually take.
+ *
+ * Split out rather than left implicit in the ordering of [heapCeilingMb]'s arms,
+ * because two callers need the same answer and a second copy of the condition is
+ * a copy that can drift.
+ *
+ * The second caller is the kill latch, and the drift would be silent in the worst
+ * direction. `heapOverrideActive` records whether the running server was given the
+ * user's number, and it is what decides whose budget a `SIGKILL` spends. Answering
+ * it with "a request was present" rather than "a request was taken" charges a
+ * low-RAM device's kills, and an unreadable-total device's kills, to a value that
+ * those devices never ran with, and three of those disable a setting the user
+ * never actually got to try.
+ */
+internal fun heapOverrideHonoured(totalRamMb: Long, isLowRam: Boolean, requestedMb: Int?): Boolean =
+    requestedMb != null && !isLowRam && totalRamMb > 0
+
+/**
+ * The requested ceiling, read out of a `settings.json` document, or null.
+ *
+ * The `(?m)^\s*` anchor is load-bearing rather than tidiness. settings.json is
+ * JSONC and the documents this app writes carry comments; without the anchor a
+ * commented-out `// "vscodroid.server.heapCeilingMb": 8192` sitting in the user's
+ * file as an example would be honoured as though they had set it, and nothing
+ * would look wrong until the device started dying. This repository has been bitten
+ * by exactly that blindness before.
+ *
+ * A regex over the text rather than a parse, for the reason
+ * `FirstRunSetup.refreshManagedPaths` documents at length: parsing the document to
+ * re-serialise it would strip the user's comments, escape every slash and turn
+ * `["-i",]` into `["-i", null]`. This one only reads, so it does not even risk
+ * that -- but the same reasoning says a JSON parser has no business being pointed
+ * at a document it cannot faithfully reproduce.
+ *
+ * `\d+` and not something looser, so a quoted `"1024"` reads as absent rather than
+ * as a number. A setting written with the wrong type is a mistake, and falling back
+ * to the derived value is the safe reading of one.
+ */
+internal fun heapOverrideFromSettings(content: String): Int? =
+    HEAP_SETTING_PATTERN.find(content)?.groupValues?.get(1)?.toIntOrNull()
+
+private val HEAP_SETTING_PATTERN =
+    Regex("""(?m)^\s*"${Regex.escape(HEAP_SETTING_KEY)}"\s*:\s*(\d+)""")
+
+/**
+ * Whether a user-chosen ceiling has spent its budget and must be ignored.
+ *
+ * A separate counter from `NodeService.restartCount` and not folded into it: that
+ * one is a per-run restart budget with its own documented boundary, and reusing it
+ * would change what every crash cause means, not only this one.
+ */
+internal fun heapOverrideSuspended(kills: Int, budget: Int = HEAP_OVERRIDE_KILL_BUDGET) =
+    kills >= budget
+
+/**
+ * The kill count that applies to [currentValue], given what was last recorded.
+ *
+ * Changing the number is a fresh decision by the user and gets a fresh budget.
+ * Without this the count would be permanent: a value disabled after three kills
+ * could never be re-enabled by lowering it, because the counter it is judged
+ * against would still be full, and the only way out would be clearing app data --
+ * which destroys `filesDir`, and with it the user's projects, their installed
+ * toolchains and their extensions.
+ */
+internal fun heapKillsForValue(storedValue: Int, storedKills: Int, currentValue: Int) =
+    if (storedValue == currentValue) storedKills else 0
+
+/**
+ * The kill count after an exit, counting only what a too-high ceiling produces.
+ *
+ * 137 is `128 + SIGKILL`, which `assets/server.js` produces from its child's signal
+ * and the watchdog already names. It is the right event to count and a deliberate
+ * over-count, and both halves need saying.
+ *
+ * Right, because a ceiling set higher than the device can hold does not fail at
+ * START. V8 reserves virtual address space rather than committing it, so a node
+ * spawned with `--max-old-space-size=4096` on a 4 GB phone comes up normally; the
+ * failure is deferred and load-dependent, and arrives as the low-memory killer.
+ * A latch that asked "did the last start survive" would therefore never fire.
+ *
+ * Over-counting, because the phantom-process limit produces the same 137 and the
+ * app cannot tell the two apart. Nothing here reads exit reasons or memory state,
+ * and both arrive through the same path. The direction is chosen rather than
+ * conceded: a false positive costs the user one notification and a setting to
+ * re-enter, while a false negative is an app that crash-loops across every relaunch
+ * with no way back in, because `restartCount` resets each launch and the terminal
+ * state therefore does not stick.
+ *
+ * What is deliberately NOT counted is exit 134, `128 + SIGABRT`, which is what V8's
+ * own heap-limit abort produces along with a `FATAL ERROR: JavaScript heap out of
+ * memory` line that `startOutputReader` puts into `server.log`. That is the ceiling
+ * working as intended, and disabling a value for doing its job would be backwards.
+ * `ADOPTED_SERVER_LOST` is not counted for a plainer reason: an adopted server never
+ * ran with this value at all.
+ */
+internal fun heapKillsAfter(exitCode: Int, overrideInEffect: Boolean, current: Int) =
+    if (overrideInEffect && exitCode == HEAP_OVERRIDE_FATAL_EXIT) current + 1 else current
+
+/** `128 + SIGKILL`, as `assets/server.js` reports a signalled child. */
+internal const val HEAP_OVERRIDE_FATAL_EXIT = 137
