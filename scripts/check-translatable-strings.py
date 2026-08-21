@@ -317,8 +317,17 @@ def main():
     # rename that moved the sources, or an edge case that made scan_string
     # swallow a file, would report zero findings over zero literals and read
     # exactly like a clean tree.
+    # The sentence says what the scan establishes, which is narrower than what a
+    # reader wants it to say. Two classes pass it while being read by a user: a
+    # sink this file does not list, and a literal is_prose judges to be formatting
+    # rather than language. `row.statusText.text = "$percent%"` was the second of
+    # those; is_prose needs a letter to survive the interpolation strip, and no
+    # letter survives that one. Widening is_prose is not the answer either, since
+    # it would flag every numeric format string in the app. So the line reports the
+    # predicate that was actually evaluated, and the docstring above says what sits
+    # outside it.
     print(f"ok: {len(files)} Kotlin sources, {literals_seen} string literals, "
-          f"no user-facing text outside strings.xml")
+          "no prose literal at a recognised sink")
     return 0
 
 
