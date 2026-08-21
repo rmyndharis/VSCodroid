@@ -112,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A directory holding exactly the copy limit is no longer reported as partly copied when every file in it arrived.
 - Keys on the extra row keep the space above and below their labels, which the rounded background had been replacing with none.
 - A setup failure names the real error in release builds. The shrinker renamed the type, so the screen showed a two-letter token instead.
+- The download percentage on the first-run screen comes from a string resource, so its sign and digits follow the device's language.
 - Installing a toolchain already being installed is declined rather than copying the tree twice, which could run a device out of space and leave a partial install.
 - A page can no longer bury the editor under notices about links it could not open. Only navigations you started are announced, and repeats of the same one are dropped.
 

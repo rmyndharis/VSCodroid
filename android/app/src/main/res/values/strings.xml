@@ -134,6 +134,12 @@
     <!-- Toolchain download progress -->
     <string name="progress_title">Installing toolchains\u2026</string>
     <string name="progress_waiting">Waiting\u2026</string>
+    <!-- How much of a download has arrived. The number is an argument rather than
+         part of a literal built in Kotlin because neither half of a percentage is
+         fixed across locales: the sign sits before the number in some of them, and
+         the digits are drawn with a different set of glyphs in others. Passing it
+         through the resource lets both follow the device's locale. -->
+    <string name="progress_percent">%1$d%%</string>
     <string name="progress_installing">Installing\u2026</string>
     <string name="progress_done">Done</string>
     <string name="progress_failed">Failed</string>

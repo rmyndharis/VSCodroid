@@ -507,7 +507,10 @@ class SplashActivity : AppCompatActivity() {
         when (status) {
             AssetPackStatus.DOWNLOADING, AssetPackStatus.TRANSFERRING -> {
                 row.progressBar.progress = percent
-                row.statusText.text = "$percent%"
+                // Through the resource, not "$percent%": the sign's position and
+                // the digit glyphs are both locale-dependent, and getString
+                // formats with the configuration's locale.
+                row.statusText.text = getString(R.string.progress_percent, percent)
             }
             AssetPackStatus.COMPLETED -> {
                 row.progressBar.progress = 100
