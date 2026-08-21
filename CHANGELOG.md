@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The system dark theme flipping no longer moves you out of your workspace, or restarts first-run extraction if it lands while setup is running.
 - The menubar no longer closes itself when the on-screen keyboard drops. The resize that follows the tap shut the menu 40ms after it opened, leaving no route to the File or Terminal menus.
 - A screen reader now hears the Toolchains back arrow, which toolchain is selected in the picker, that setup failed, and that a download finished.
 - Six texts on the setup and toolchain screens were too faint to read, including the Continue button and the word that says a download failed.

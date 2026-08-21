@@ -28,11 +28,39 @@
         tools:targetApi="34">
 
         <!-- Splash screen: shown during binary extraction and server startup -->
+        <!-- uiMode is in both lists below, and it is the only one of the eleven
+             undeclared qualifiers that fires with no user interaction at all: a
+             sunset-to-sunrise dark schedule and battery saver's forced dark both
+             flip it while the app is in use. Here the cost is the worst in the
+             app. runSetup() runs inside lifecycleScope, and
+             FirstRunSetup.markSetupComplete() is the last statement of the same
+             block, so a relaunch cancels it before setup is ever marked
+             complete, isFirstRun() stays true, and the whole extraction starts
+             over. In MainActivity the cost is smaller but unattended: the fresh
+             WebView holds only the data: placeholder, folderFromUrl refuses an
+             opaque URI, and loadVSCode falls through to the default projects
+             directory, so the user is silently moved out of their workspace.
+
+             This is safe to declare because neither activity has anything that
+             resolves differently by night: the module has no values-night
+             directory at all, and every layout these two inflate names its
+             colours as fixed @color resources rather than ?attr, picker card
+             included. That is the condition, not a coincidence. If anyone adds
+             a values-night qualifier, or switches one of these layouts to
+             ?attr/colorSurface, this declaration becomes a bug: the framework
+             stops relaunching and nothing re-resolves, leaving the screen in the
+             previous appearance. Handle onConfigurationChanged then, or take
+             uiMode back out.
+
+             The other ten stay undeclared deliberately. locale, layoutDirection,
+             fontScale, density, colorMode and fontWeightAdjustment all need the
+             user to leave the app and change a system setting, and a relaunch is
+             the correct answer to them. -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
             android:noHistory="true"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:theme="@style/Theme.VSCodroid">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -45,7 +73,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.VSCodroid">
 

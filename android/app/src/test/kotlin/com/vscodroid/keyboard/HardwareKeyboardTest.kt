@@ -155,7 +155,21 @@ class HardwareKeyboardTest {
         // attribute, it costs the same teardown, and a message that says to keep
         // the rest of the string while checking none of it is an invitation to
         // trim the attribute down to what this test reads.
-        val required = listOf("keyboard", "keyboardHidden", "orientation", "screenSize")
+        // uiMode joins them for the same reason and a worse consequence. It is the
+        // only qualifier outside this list that fires with nobody touching the
+        // device: a sunset-to-sunrise dark schedule, and battery saver's forced
+        // dark, both flip it mid-session. In MainActivity that silently moves the
+        // user out of their workspace, because the rebuilt WebView carries only
+        // the data: placeholder and loadVSCode falls through to the default
+        // projects directory. In SplashActivity it restarts the whole first-run
+        // extraction, because runSetup() lives in lifecycleScope and the relaunch
+        // cancels it before markSetupComplete() runs.
+        //
+        // Declaring it is only safe while neither activity has anything that
+        // resolves by night. The manifest comment states that condition; this
+        // list is what fails if the declaration is removed, not if the condition
+        // stops holding, and no test can see the second half.
+        val required = listOf("keyboard", "keyboardHidden", "orientation", "screenSize", "uiMode")
         val unguarded = guarded.filterNot { name ->
             declared[name].orEmpty().split("|").containsAll(required)
         }
