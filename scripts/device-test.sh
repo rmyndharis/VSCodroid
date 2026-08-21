@@ -970,6 +970,45 @@ check_symlink "python3" "libpython.so"
 check_symlink "rg"      "libripgrep.so"
 check_symlink "ssh"     "libssh.so"
 
+# The bundle git reads, and the one place the user half of the device trust
+# store can be measured at all. Nothing in the JVM suite can reach it:
+# AndroidCAStore has no provider off a device, so the `user:` alias convention
+# that decides which certificates setupGitCaBundle folds in is checked here or
+# nowhere.
+#
+# The verdict is only that the bundle exists and holds certificates. Without one
+# every HTTPS remote dies on a trust-anchor error naming the Termux path curl
+# fell back to, which points at no install of this app and reads like a device
+# fault. Whether the device under test has a CA of its own installed is the
+# tester's choice rather than a property of the build, so the user count beside
+# it is reported and not judged. It is also arithmetic over two counts rather
+# than a parse: the system store holds one certificate per file, and the bundle
+# copies each of those files through whole, so the difference is the user half
+# unless that stops being true.
+#
+# The pattern carries no space, and that is not style. `adb shell` joins its
+# arguments and hands the result to the device's shell, so quoting applied on
+# this side never arrives: a pattern of "BEGIN CERTIFICATE" reaches grep as two
+# arguments, the second read as a filename, and the count comes back empty. The
+# anchored form is one argument however it is joined. Measured against the
+# device, which is how the split was found.
+CA_BUNDLE_REL="files/usr/etc/tls/cert.pem"
+BUNDLE_CERTS=$($ADB shell run-as "$PKG" grep -c "^-----BEGIN" "$CA_BUNDLE_REL" 2>/dev/null | tr -d '\r')
+SYSTEM_CA_DIR=/apex/com.android.conscrypt/cacerts
+if ! $ADB shell "ls $SYSTEM_CA_DIR" >/dev/null 2>&1; then
+    SYSTEM_CA_DIR=/system/etc/security/cacerts
+fi
+SYSTEM_CERTS=$($ADB shell "ls $SYSTEM_CA_DIR" 2>/dev/null | tr -d '\r' | grep -c . || true)
+if [ -n "$BUNDLE_CERTS" ] && [ "$BUNDLE_CERTS" -gt 0 ] 2>/dev/null; then
+    if [ -n "$SYSTEM_CERTS" ] && [ "$SYSTEM_CERTS" -gt 0 ] 2>/dev/null; then
+        pass "ca_bundle ($BUNDLE_CERTS certificates; $SYSTEM_CERTS in $SYSTEM_CA_DIR, so $((BUNDLE_CERTS - SYSTEM_CERTS)) came from the user store)"
+    else
+        pass "ca_bundle ($BUNDLE_CERTS certificates; system store unread, so the user half is unknown)"
+    fi
+else
+    fail "ca_bundle" "no certificates in $CA_BUNDLE_REL; every HTTPS remote fails on a trust-anchor error"
+fi
+
 # ═══════════════════════════════════════════════════════════════════
 # TESTS 15-19: Tool version checks
 # ═══════════════════════════════════════════════════════════════════

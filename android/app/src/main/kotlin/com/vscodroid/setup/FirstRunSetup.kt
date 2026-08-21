@@ -15,6 +15,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.cert.Certificate
+import java.util.Base64
 
 /**
  * @param assetBytes how much the APK's asset tree weighs, and [largestAssetBytes]
@@ -635,16 +639,42 @@ class FirstRunSetup(
      *
      * The bundle is concatenated from the device's own trust store rather than
      * shipped, so it reflects what this device actually trusts and does not age
-     * inside the APK. Rebuilt when the store's directory is newer than the file,
-     * which is one stat rather than 143.
+     * inside the APK. Two stores, not one: the system roots, and whatever CAs
+     * the device owner installed for themselves through Settings. That second
+     * half is why the bundle exists in the form it does. A developer whose
+     * company re-signs TLS, or who runs an internal git host behind a CA they
+     * issued, has already told the device to trust it, gone through the
+     * full-screen warning and confirmed with their device credential; the
+     * bundle honouring that is the app agreeing with a decision its owner
+     * already made, not making one for them. Everything else here keeps system
+     * trust: this writes the file git's curl reads and nothing more, so the
+     * WebView and the toolchain downloader are untouched.
+     *
+     * The freshness test is two conditions rather than one, and the second is
+     * not optional. Installing a CA through Settings writes into a store of its
+     * own and never touches the mtime of the system certificate directory, so
+     * the directory-newer-than-the-file check calls the bundle fresh at exactly
+     * the moment it has gone stale. Without the fingerprint the right bundle
+     * would be built once and then never again, and a user who installs a CA
+     * would see the app ignore it for ever with nothing to indicate why. The
+     * fingerprint covers the certificates' own bytes rather than their aliases
+     * because a Conscrypt alias is a hash of the subject, so a CA re-issued
+     * under the same name keeps the alias it had.
      */
     fun setupGitCaBundle() {
-        val caDir = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
+        val caDir = systemCaCertificateDirs
             .map { File(it) }
             .firstOrNull { it.isDirectory } ?: return
 
         val bundle = File(context.filesDir, "usr/etc/tls/cert.pem")
-        if (bundle.exists() && bundle.length() > 0 && bundle.lastModified() >= caDir.lastModified()) {
+        val marker = File(context.filesDir, "usr/etc/tls/.user-ca-fingerprint")
+        val userPems = userCertificatePems()
+        val fingerprint = sha256HexOf(userPems.joinToString(""))
+
+        if (bundle.exists() && bundle.length() > 0 &&
+            bundle.lastModified() >= caDir.lastModified() &&
+            runCatching { marker.readText() }.getOrNull() == fingerprint
+        ) {
             return
         }
 
@@ -664,15 +694,116 @@ class FirstRunSetup(
                 for (cert in certs) {
                     if (cert.isFile) cert.inputStream().use { it.copyTo(out) }
                 }
+                for (pem in userPems) out.write(pem.toByteArray())
             }
             if (!written) {
                 Logger.e(tag, "Could not write the CA bundle; the previous one is unchanged")
                 return
             }
-            Logger.i(tag, "CA bundle: ${certs.size} certificates from ${caDir.path}")
+            // The marker goes last, after the bundle it vouches for is already
+            // under its final name. Written first, a crash between the two would
+            // strand a marker describing a bundle that was never built, and the
+            // freshness check would then return early on every later launch --
+            // the same permanent-staleness failure the atomic write above exists
+            // to prevent, arriving by the other door. In this order a crash
+            // anywhere leaves the marker absent or disagreeing, which is a
+            // mismatch, which is a rebuild.
+            if (!writeAtomically(marker) { it.write(fingerprint.toByteArray()) }) {
+                Logger.w(tag, "Could not record the user-CA fingerprint; the bundle will be rebuilt next launch")
+            }
+            Logger.i(
+                tag,
+                "CA bundle: ${certs.size} certificates from ${caDir.path}, " +
+                    "and ${userPems.size} user-installed CA(s)",
+            )
         } catch (e: Exception) {
             Logger.e(tag, "Failed to build CA bundle", e)
         }
+    }
+
+    /**
+     * The CAs the device owner installed themselves, PEM-encoded and sorted.
+     *
+     * Sorted because [KeyStore.aliases] promises no order, and an order that
+     * varies between launches would change the fingerprint without the trust
+     * having changed, rebuilding the whole bundle on the main thread every time
+     * the app starts.
+     *
+     * Degrades to an empty list rather than throwing, at both levels. This runs
+     * inside SplashActivity's per-launch repair block, where an exception costs
+     * the repairs that follow it, and the whole feature is worth less than
+     * [setupToolSymlinks]. So a provider that is absent or refuses to load
+     * yields no user CAs and today's system-only bundle, and one certificate
+     * whose encoding cannot be read is skipped rather than costing the other
+     * entries the store holds.
+     *
+     * The cost is paid on every launch and it is not free. Measured on an API 33
+     * emulator with one CA installed, five launches: 28 ms in the steady state,
+     * of which `KeyStore.aliases()` over 126 entries is 25 to 27 ms and the rest
+     * is under a millisecond, against 45 ms for the whole repair block around
+     * it. The first launch after an install costs 160 ms once.
+     *
+     * A cheaper signal was looked for and deliberately not taken. Measured from
+     * inside this app on the same emulator, `/data/misc/user/0/cacerts-added` is
+     * readable: `exists`, `isDirectory` and `Os.stat` all answer, and the
+     * listing has the one entry it should. So an mtime on that directory could
+     * skip the enumeration on the launches where nothing changed. It is not used
+     * because it is a hardcoded platform path with a user id baked into it, it
+     * would need the current user's id on a multi-user device, and no version of
+     * it has been checked on Android 14 or later, where the root store moved
+     * into an APEX. A path like that stops matching in silence, and the way it
+     * fails here is the expensive direction: a directory that no longer exists
+     * reads as "nothing changed". Not worth 28 ms on a screen whose next act is
+     * to start a Node server. If the cost ever stops being affordable, move this
+     * repair off the main thread beside the toolchain passes that already run
+     * there, rather than weakening the fingerprint until the store's changes go
+     * unnoticed again.
+     */
+    private fun userCertificatePems(): List<String> =
+        runCatching { userTrustedCertificates() }
+            .onFailure { Logger.w(tag, "Could not read the user CA store: ${it.message}") }
+            .getOrDefault(emptyList())
+            .mapNotNull { cert -> runCatching { pemOf(cert) }.getOrNull() }
+            .sorted()
+
+    /**
+     * Where the system trust store lives, as an injectable list so the bundle
+     * builder can be exercised against a directory a test controls.
+     *
+     * A `var` for the same reason `SafSyncEngine.usableSpaceOf` and
+     * `ProcessManager.killRecordedProcess` are: the real value is an absolute
+     * path outside the app that no test can create. Not a seam to be tidied
+     * away. The order was already the code's and is kept: the Conscrypt APEX
+     * copy is asked for first, and the legacy path answers where the APEX one is
+     * absent. Measured on an API 33 emulator, only the legacy path exists there
+     * and it holds 125 certificates, so both entries are live rather than one
+     * being a leftover.
+     */
+    internal var systemCaCertificateDirs: List<String> =
+        listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
+
+    /**
+     * Reads the user half of the device trust store.
+     *
+     * `AndroidCAStore` is the platform's own merged view of both halves, and it
+     * is used here rather than the directories underneath it because it is the
+     * documented API and carries no path this app has to keep up to date.
+     * Conscrypt names its entries `system:<hash>.<n>` and `user:<hash>.<n>`, so
+     * the prefix is what separates the owner's own CAs from the roots that
+     * shipped with the device. Measured on an API 33 emulator from inside this
+     * app's process, with one CA installed through Settings: 126 aliases, of
+     * which exactly one began `user:`.
+     *
+     * A `var` for the same reason as [systemCaCertificateDirs], and more
+     * sharply: the provider does not exist on a JVM at all, so every test of
+     * the bundle builder replaces this.
+     */
+    internal var userTrustedCertificates: () -> List<Certificate> = {
+        val store = KeyStore.getInstance("AndroidCAStore")
+        store.load(null)
+        store.aliases().toList()
+            .filter { it.startsWith("user:") }
+            .mapNotNull { alias -> runCatching { store.getCertificate(alias) }.getOrNull() }
     }
 
     /**
@@ -3126,6 +3257,35 @@ internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boo
         }
         true
     }
+
+/**
+ * PEM-encodes one certificate, in the shape the concatenated bundle is made of.
+ *
+ * The files under the system trust store are already PEM, so this exists only
+ * for the user-installed half, which arrives as parsed [Certificate] objects and
+ * has to be turned back into text before it can be appended. MIME encoding with
+ * a 64-character line length and a bare newline separator gives it the shape
+ * every other entry in the file already has, since the system store's files are
+ * copied through byte for byte and OpenSSL wrote them at 64 columns. Whether
+ * the reader on the far side insists on the breaks is untested here and beside
+ * the point: matching the rest of the file costs one encoder argument, and a
+ * single unbroken run of base64 in the middle of a bundle is a difference with
+ * nothing to gain from it.
+ *
+ * `java.util.Base64` rather than `android.util.Base64` so the encoding is the
+ * same object in a unit test as it is on the device. minSdk is 33, well past
+ * the 26 that added it.
+ */
+private fun pemOf(cert: Certificate): String =
+    "-----BEGIN CERTIFICATE-----\n" +
+        Base64.getMimeEncoder(64, byteArrayOf('\n'.code.toByte())).encodeToString(cert.encoded) +
+        "\n-----END CERTIFICATE-----\n"
+
+/** SHA-256 of [text] as lower-case hex, for the user-CA freshness marker. */
+private fun sha256HexOf(text: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(text.toByteArray())
+        .joinToString("") { "%02x".format(it) }
 
 /**
  * One lock for every atomic write, not one per destination.

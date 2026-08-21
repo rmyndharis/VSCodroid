@@ -96,9 +96,9 @@
          characters and a 70-character one at 74, and both times what went missing
          was the half that says what to do. So each of these stays short enough to
          render whole with a host substituted, and the advice is the shortest true
-         one rather than the fullest. Why a user-installed CA does not help is a
-         paragraph, not a toast: it is in the user guide, and the full reason is in
-         logcat on every refusal. -->
+         one rather than the fullest. Why a user-installed CA does not help a page,
+         when it does help git, is a paragraph rather than a toast: it is in the
+         user guide, and the full reason is in logcat on every refusal. -->
     <string name="tls_blocked_untrusted">Blocked %1$s: certificate not trusted. Use http instead.</string>
     <string name="tls_blocked_hostname">Blocked %1$s: its certificate is issued for a different host name.</string>
     <string name="tls_blocked_date">Blocked %1$s: its certificate is expired or not yet valid.</string>

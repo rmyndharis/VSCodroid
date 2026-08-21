@@ -125,8 +125,13 @@ object Environment {
             // The bundle file curl actually reads. Its Termux build looks for
             // one at a path that does not exist here, and fails before checking
             // any certificate; CAPATH alone does not satisfy it, measured on
-            // device. setupGitCaBundle() writes this from the system trust
-            // store on every launch it has changed.
+            // device. setupGitCaBundle() writes this on every launch it has
+            // changed, from the system trust store plus any CA the device owner
+            // installed themselves through Settings. That second half reaches
+            // git and nothing else: SSL_CERT_DIR below names the system store
+            // directly, so python, ruby and curl still see system roots only,
+            // and the WebView and the toolchain downloader go through the
+            // platform trust manager, which this file cannot influence.
             "GIT_SSL_CAINFO" to "$filesDir/usr/etc/tls/cert.pem",
             "SSL_CERT_DIR" to getSystemCaCertsPath(),
             "NPM_CONFIG_PREFIX" to "$filesDir/usr",

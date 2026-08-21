@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Toolchain commands now work when a program calls them, not only from bash. Tasks, `make` recipes and extensions previously failed on a correctly installed toolchain.
 - Device folder copies can now be listed by size and removed one at a time. Removing one that holds files not on the device deletes them, so it asks first.
 - The editor server's memory ceiling is now settable from settings. It is clamped to what the device can hold, and turns itself off after repeated crashes.
+- git now trusts certificate authorities you installed through Android Settings. The bundle is rebuilt at launch when that store changes; pages in the editor still use system roots only.
 - Bug reports now carry the server's own output. The report always had a section for it, and nothing ever wrote the file it reads, so it was always empty.
 - The gesture trackpad now offers four accessibility actions to move the cursor. A drag was the only way to send an arrow, and a screen reader cannot drag.
 - Long pressing a key through a screen reader now opens its alternate characters. The layer needed a finger held on the key, so `'` and `\` were unreachable.
@@ -21,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every dialog, toast and spoken description now comes from a string resource, so the app can be translated. No translation ships yet; sixty-nine texts were unreachable to one.
 - A build that packages the app now fails loudly if the checks guarding its bundled tree have come unattached, instead of going quiet and shipping an unchecked tree.
 - Two accessibility guards stopped passing on code that is commented out, and one no longer loses its scope to a brace inside a comment.
-- The user guide no longer promises that certificate errors should not happen. It says which roots the bundle carries, that a private CA is not among them, and that npm does not use it.
+- The user guide no longer promises that certificate errors should not happen. It says which roots the bundle carries and that npm does not use it.
 - The picker's checked state and the Toolchains back-arrow label are now pinned by tests. Both are invisible to a sighted reviewer, so either could be deleted without a symptom.
 - Editing a layout or a string no longer leaves the unit suite up to date. Two suites read those files, and both were skipped on exactly the edits they exist to catch.
 - A test no longer states that AGP builds no release unit test task. It does build one, and it has run; what is true is that no workflow invokes it.

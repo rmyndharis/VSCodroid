@@ -416,9 +416,11 @@ empty and there was nothing to tell that apart from a server that was not runnin
 
 Plain `http://` is the answer for a local preview: cleartext is permitted here precisely
 because that is what dev servers speak. Installing your own CA through Android Settings
-does not help either. The app trusts the device's system roots only, which is the same
-wall described for git above, so a certificate you issued yourself is not trusted no
-matter where you install it.
+does not help for a page, and this is the one place where it makes a difference which
+part of the app is asking. Pages are rendered by the system WebView, which trusts the
+device's system roots and nothing else. git does read a CA you installed, because the
+app builds git's certificate bundle from both halves of the device trust store. So the
+same certificate can clone fine in the terminal and still be refused in a preview tab.
 
 #### Opening in the device's browser instead
 
@@ -795,7 +797,7 @@ If `npm install` fails with errors:
 ### Git Push/Pull Fails
 
 - **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519` in the terminal and add it to your GitHub/GitLab account.
-- **SSL certificate error** -- the CA bundle git uses is built from your device's own system roots, so a public certificate authority is already trusted and a private or corporate one is not. Installing that CA through Android Settings does not change it either: user-installed certificates live in a separate store this app does not read. The practical answer for an internal host is an SSH remote (`git@`) instead of `https://`. Note that npm does not use that bundle at all, so a private registry behind its own CA is a different wall rather than the same one.
+- **SSL certificate error** -- the CA bundle git uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. So a private or corporate CA does work for git, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: npm, which has its own trust store, and pages loaded inside the editor, which use the system roots only.
 
 ### App Uses Too Much Storage
 
