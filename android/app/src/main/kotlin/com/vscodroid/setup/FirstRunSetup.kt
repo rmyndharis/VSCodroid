@@ -1229,14 +1229,29 @@ class FirstRunSetup(
         // nothing else is present, which keeps existing installs from seeing a
         // rewrite on the launch after this ships.
         val ownedLine = Regex("""^\s*(script-shell\s*=|os\[]\s*=\s*(linux|android)\s*$)""")
-        val carriedOver = (if (npmrc.exists()) npmrc.readText() else "")
+        // Latin-1, not UTF-8, and the charset is load-bearing for the reason
+        // [ensurePromptFix] gives: it maps all 256 byte values one to one, so
+        // every byte read here comes back out unchanged. `.npmrc` is where npm
+        // keeps a registry auth token, a proxy password and a `cafile` path, none
+        // of which is required to be valid UTF-8, and `readText` replaces every
+        // byte that is not with U+FFFD. That would destroy the credential this
+        // carry-through exists to preserve, on the first launch after the user
+        // set it, with nothing on screen and nothing in the log to say so. The
+        // three owned lines are ASCII, so encoding the result back through the
+        // same mapping is lossless as well.
+        val existing = if (npmrc.exists()) String(npmrc.readBytes(), Charsets.ISO_8859_1) else ""
+        val carriedOver = existing
             .lines()
             .filterNot { ownedLine.containsMatchIn(it) }
             .dropLastWhile { it.isBlank() }
         val expectedContent =
             (listOf("script-shell=$bashPath", "os[]=linux", "os[]=android") + carriedOver)
                 .joinToString("\n", postfix = "\n")
-        if (!npmrc.exists() || npmrc.readText() != expectedContent) {
+        // Compared against that same decoding rather than a second `readText`.
+        // A file holding one byte that is not valid UTF-8 would never compare
+        // equal to what was just written to it, so every launch would rewrite an
+        // already-correct file for ever.
+        if (existing != expectedContent) {
             // Atomically, like every other setup file this class writes. This one
             // was the exception, and it is a bad one to be: `writeText` truncates
             // before it writes, so a write that runs out of disk leaves an empty
@@ -1255,7 +1270,7 @@ class FirstRunSetup(
             // above is reached only when the content differs, and an empty file
             // does differ, but only on a launch that has room, which is the
             // launch that would not have broken it.
-            if (writeAtomically(npmrc) { it.write(expectedContent.toByteArray()) }) {
+            if (writeAtomically(npmrc) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }) {
                 Logger.d(tag, "Updated .npmrc")
             } else {
                 Logger.w(tag, "Could not update .npmrc; it keeps whatever it held before")
