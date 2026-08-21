@@ -56,7 +56,13 @@ BIONIC_LIBS = ["-lc", "-lm", "-ldl", "-llog"]
 # Provided by whatever loads the addon rather than by any library: Node defines
 # these itself and resolves them at dlopen. Forwarding them would bind to
 # nothing.
-RUNTIME_PROVIDED = re.compile(r"^(napi_|node_api_)")
+#
+# uv_ belongs with the other two for the same reason and was measured the same
+# way: node links libuv in and re-exports it, so the bundled runtime's dynamic
+# symbol table carries 318 uv_ names alongside 145 napi_ ones, uv_thread_create
+# among them. An addon importing one of those is asking the process that loads
+# it, not a library on disk.
+RUNTIME_PROVIDED = re.compile(r"^(napi_|node_api_|uv_)")
 
 # Always optional. The linker emits references to them for instrumentation that
 # is not present, and a forwarder would fail to link.
@@ -99,6 +105,7 @@ SHT_GNU_VERDEF = 0x6FFFFFFD
 STT_FUNC, STT_OBJECT = 2, 1
 STT_NOTYPE = 0
 TYPE_NAMES = {STT_NOTYPE: "STT_NOTYPE", STT_OBJECT: "STT_OBJECT", STT_FUNC: "STT_FUNC"}
+STB_WEAK = 2
 
 # Data imports cannot be a branch -- the addon reads the storage itself, so the
 # stub has to own a variable of the right type and fill it with Bionic's value
@@ -246,7 +253,7 @@ class Elf:
         return next((s for s in self.sections if s["type"] == want), None)
 
     def imports(self):
-        """Yield (soname, version, symbol, sym_type) for every undefined import.
+        """Yield (soname, version, symbol, sym_type, is_weak) for each import.
 
         sym_type is the raw STT_* value rather than a func/data flag. The
         difference is load-bearing: STT_NOTYPE is neither, and collapsing it
@@ -254,6 +261,11 @@ class Elf:
 
         soname and version are None for imports with no version requirement --
         those bind by name alone and need no stub.
+
+        is_weak is the binding, and it is what separates the two kinds of
+        unversioned import: the loader leaves a weak one unresolved and the
+        caller tests the address, where a strong one has to be exported by
+        something already loaded or dlopen refuses the object outright.
         """
         dynsym = self._by_type(SHT_DYNSYM)
         if not dynsym:
@@ -303,7 +315,7 @@ class Elf:
                 idx, = struct.unpack_from("<H", self.data, versym["offset"] + i * 2)
                 version, soname = vermap.get(idx & 0x7FFF, (None, None))
 
-            yield soname, version, name, st_info & 0xF
+            yield soname, version, name, st_info & 0xF, (st_info >> 4) == STB_WEAK
 
 
     def exports(self):
@@ -370,11 +382,30 @@ def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
     print("--- addon imports vs shipped stubs ---")
 
     needed: dict = {}
+    unbound = set()
     for path in inputs:
-        for soname, version, name, _ in Elf(path).imports():
-            if soname is None or version is None:
-                continue
+        for soname, version, name, _, is_weak in Elf(path).imports():
             if RUNTIME_PROVIDED.match(name) or name in WEAK_OPTIONAL:
+                continue
+            if soname is None or version is None:
+                # No version requirement means the import names no library, so
+                # there is no stub to look it up in. That is not the same as
+                # harmless, and skipping the lot of them was how an addon could
+                # ship asking for a name nothing on the device exports.
+                #
+                # Weak is the one case that is harmless: the loader leaves a
+                # weak import unresolved rather than refusing the object, and
+                # the caller tests the address before using it. Every such
+                # import in the tree today is written that way -- gettid,
+                # pidfd_spawnp, posix_spawn_file_actions_addchdir, sdallocx and
+                # the OPENSSL_memory_/ZSTD_trace_ hooks, all STB_WEAK.
+                #
+                # A strong one is the opposite: dlopen fails outright unless
+                # something already loaded exports that exact name, and the
+                # failure lands on the device with nothing here having said so.
+                if is_weak:
+                    continue
+                unbound.add((str(path), name))
                 continue
             needed.setdefault(soname, set()).add((name, version))
 
@@ -400,8 +431,18 @@ def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
         for soname, name, version in missing:
             suffix = f"@{version}" if version else ""
             print(f"    {soname}: {name}{suffix}", file=sys.stderr)
-        return 1
-    return 0
+
+    if unbound:
+        print(f"\n  ERROR: {len(unbound)} strong import(s) name no library and no"
+              f"\n  stub carries them, so dlopen refuses the addon on the device:",
+              file=sys.stderr)
+        for owner, name in sorted(unbound):
+            print(f"    {owner}: {name}", file=sys.stderr)
+        print("\n  A name the loading process defines itself belongs in"
+              "\n  RUNTIME_PROVIDED. Anything else needs the library that exports"
+              "\n  it, or the addon rebuilt without the reference.", file=sys.stderr)
+
+    return 1 if (missing or unbound) else 0
 
 
 def report_unforwardable(unforwardable) -> int:
@@ -429,7 +470,7 @@ def generate(inputs, out_dir: pathlib.Path):
     unforwardable, skipped_runtime = set(), set()
 
     for path in inputs:
-        for soname, version, name, sym_type in Elf(path).imports():
+        for soname, version, name, sym_type, _ in Elf(path).imports():
             if RUNTIME_PROVIDED.match(name):
                 skipped_runtime.add(name)
                 continue
@@ -596,7 +637,7 @@ def generate(inputs, out_dir: pathlib.Path):
 
     if skipped_runtime:
         print(f"\n  {len(skipped_runtime)} runtime-provided symbols skipped"
-              f" (napi_*), as the loader defines those")
+              f" (napi_*, uv_*), as the loader defines those")
 
     if unforwardable:
         return report_unforwardable(unforwardable)
@@ -614,7 +655,7 @@ def needs_glibc(path: pathlib.Path) -> bool:
     except (ValueError, IndexError, struct.error):
         return False
     return any(so and so.endswith((".so.6", ".so.2", ".so.1", ".so.0"))
-               for so, _, _, _ in elf.imports())
+               for so, _, _, _, _ in elf.imports())
 
 
 def scan(roots):
@@ -629,7 +670,7 @@ def scan(roots):
             if not path.is_file() or not needs_glibc(path):
                 continue
             try:
-                libs = {so for so, _, _, _ in Elf(path).imports() if so}
+                libs = {so for so, _, _, _, _ in Elf(path).imports() if so}
             except (ValueError, IndexError, struct.error):
                 continue
             hard = libs & UNSUPPORTED_LIBS
