@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Long pressing a key through a screen reader now opens its alternate characters. The layer needed a finger held on the key, so `'` and `\` were unreachable.
 
 ### Changed
+- The toolchain picker is offered until you answer it. An interrupted first run used to skip it permanently, leaving the launcher shortcut as the only way to add a language.
+- Packaging now checks every bundled binary is 16 KB page aligned, so a build that could not load on Android 16 fails at build time instead of on a device.
+- Toolchain cards now quote sizes in the same unit as the rest of the app, so a card and the storage screen no longer disagree by five percent.
+- The editor now opens with the chat panel closed on a phone, so the walkthrough and the file tree are not squeezed into half the width on a first run.
+- The process counter no longer shows a warning on an untouched install. Its threshold sat exactly on what the app costs when idle, so it was always lit.
 - Download outcome messages and the About dialog's unknown-version wording are now translatable; both were written in code and stayed English in every language.
 - Long-press alternates now carry spoken, translatable names, so a screen reader can tell the apostrophe from the backtick instead of reading the bare glyph.
 - The key row now says which of its five pages is showing, and announces the change on a swipe, instead of leaving five unlabelled indicator dots.
@@ -77,6 +82,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Kotlin plugin's own build directory is ignored, so a build no longer leaves compiler scratch sitting in the working tree.
 
 ### Fixed
+- The setup screen now keeps the display awake while it unpacks the app, so a screen timeout can no longer strand a first run part-way through an 800 MB extraction.
+- Toolchain screen: a download already running is now shown with its progress and a Cancel button instead of an Install button that started nothing.
+- Clearing caches now frees the toolchain download staging directories it was already counting, leaving alone any directory a running download is still using.
+- Saving a download no longer stops working after the page reloads or the workspace folder changes; the abandoned transfer is released and its part-written file removed.
+- The copied crash report is marked sensitive, so Android no longer draws a preview of the server log and crash text over the editor.
+- The storage and device-folder screens no longer time out on installs with many files: the commands that walk the disk now get a deadline that fits.
+- Refusals the bridge shows in the editor, a link that would not open or a folder copy still in use, moved to string resources so they can be translated.
+- Every install, new or upgraded, now opens with the secondary side bar closed, so a phone-width editor is not half covered by a chat view with no provider.
+- Settings files written before this release now gain the secondary side bar default, which previously reached clean installs only and left every upgraded device on the upstream layout.
+- A workspace whose saved layout still opens the chat view is corrected once, on the next launch. Opening the bar yourself is remembered and is never undone again.
+- The process list now names the program behind each entry, so several rows no longer read identically as the bundled Node runtime and its heap setting.
+- The chat agent's model backend is now recognised as a language server, so both the idle reclaim under memory pressure and Kill Idle Servers can reach it.
 - Git helper setup no longer follows its own symlinks when setting the execute bit, ending refused permission changes on every launch.
 - Extra key row: a Shift latched and then left unused while typing on the soft keyboard no longer changes which character the next row key inserts.
 - The first-run toolchain picker subtitle now uses plain punctuation; the escaped dash it carried was expanded into the compiled resource and shown to users.
