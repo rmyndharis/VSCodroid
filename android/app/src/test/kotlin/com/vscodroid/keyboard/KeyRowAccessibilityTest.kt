@@ -43,12 +43,36 @@ class KeyRowAccessibilityTest {
         return file.readText()
     }
 
-    /** Source with comment lines dropped, so prose naming a call is not a call. */
-    private fun code(name: String): List<String> =
-        source(name).lines().filterNot {
-            val start = it.trimStart()
-            start.startsWith("//") || start.startsWith("*") || start.startsWith("/*")
+    /**
+     * Source with comment lines dropped, so prose naming a call is not a call.
+     *
+     * Both forms, because both switch code off. A line comment carries its own
+     * marker and is recognised one line at a time; a block opened at the start
+     * of a line leaves its inner lines unmarked, so the block is tracked to its
+     * close instead. Without that, wrapping a registration in one left every
+     * case below green over a view that registers nothing.
+     *
+     * A line that both opens and closes a block goes with it, whatever else it
+     * carries. Nothing in this package writes one, and the cost of being wrong
+     * about that is a red case quoting the window it read.
+     */
+    private fun code(name: String): List<String> {
+        var inBlock = false
+        return source(name).lines().filterNot { line ->
+            val start = line.trimStart()
+            when {
+                inBlock -> {
+                    if (line.indexOf("*/") >= 0) inBlock = false
+                    true
+                }
+                start.startsWith("/*") -> {
+                    if (line.indexOf("*/", line.indexOf("/*") + 2) < 0) inBlock = true
+                    true
+                }
+                else -> start.startsWith("//") || start.startsWith("*")
+            }
         }
+    }
 
     @Nested
     inner class TrackpadArrowActions {

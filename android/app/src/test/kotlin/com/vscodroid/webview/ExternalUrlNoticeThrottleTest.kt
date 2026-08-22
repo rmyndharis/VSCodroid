@@ -333,8 +333,10 @@ class ExternalUrlNoticeThrottleTest {
      * Read from the source rather than driven through the Activity, which needs a
      * device. ⚠️ Its ceiling, the same one `WriteBackNoticeWiringTest` records:
      * this catches the call being deleted, not the branch being made unreachable.
-     * Anchored at the start of a line so that commenting the call out, which is how
-     * a developer disables something, does not still satisfy it.
+     * Comments come out before the search, so neither the call switched off while
+     * debugging nor the prose over the record it consults can stand in for it. The
+     * property above holds exactly that prose, one bracket away from satisfying a
+     * search of the raw text.
      */
     @Test
     fun `MainActivity puts a hand-off failure through the throttle`() {
@@ -342,9 +344,40 @@ class ExternalUrlNoticeThrottleTest {
         assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
 
         assertTrue(
-            Regex("""(?m)^[^/\n]*handoffFailureToAnnounce\(""").containsMatchIn(activity.readText()),
+            withoutComments(activity.readText()).contains("handoffFailureToAnnounce("),
             "nothing in MainActivity consults the record of what has already been said, so " +
                 "every hand-off failure reaches the screen as its own toast",
         )
+    }
+
+    /**
+     * Both comment forms, since either one switches a call off. A line comment is
+     * cut from wherever it opens; a block is cut only where it opens a line, which
+     * is how one is written around code and how every doc comment in that file
+     * begins. A wildcard mime type and an injected CSS comment carry the same two
+     * characters inside a string literal and switch nothing off.
+     */
+    private fun withoutComments(text: String): String {
+        var inBlock = false
+        return text.lines().joinToString("\n") { raw ->
+            var line = raw
+            if (inBlock) {
+                val close = line.indexOf("*/")
+                if (close < 0) return@joinToString ""
+                inBlock = false
+                line = line.substring(close + 2)
+            }
+            while (line.trimStart().startsWith("/*")) {
+                val open = line.indexOf("/*")
+                val close = line.indexOf("*/", open + 2)
+                if (close < 0) {
+                    inBlock = true
+                    return@joinToString line.substring(0, open)
+                }
+                line = line.substring(0, open) + line.substring(close + 2)
+            }
+            val marker = line.indexOf("//")
+            if (marker >= 0) line.substring(0, marker) else line
+        }
     }
 }

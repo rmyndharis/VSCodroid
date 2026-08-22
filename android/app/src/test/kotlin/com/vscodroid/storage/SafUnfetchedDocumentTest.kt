@@ -303,18 +303,47 @@ class SafUnfetchedDocumentTest {
      * into a directory, and delivering a directory event builds a `FileObserver`, whose
      * static initializer needs native code. What holds it to the behaviour above is that
      * there is one refusal in the file, so this reads the source and pins that.
+     *
+     * Two claims, and they fail differently. The message having one home says that a
+     * second refusal cannot have been written that forgets to announce. The call count
+     * says both refusals are still there: the sentence can sit in the file, spelt exactly
+     * once, while the site that reaches it has been commented out. That site is the
+     * destructive one (with the call gone, `createOneInSaf` falls through to the write
+     * and truncates a device document this sync never read), and no behavioural test in
+     * this class can reach it.
+     *
+     * The call count counts only what the compiler sees. A plain search over raw text
+     * finds the call inside a line a `//` has disabled exactly as readily as inside a
+     * live one, which is how a guard of this shape reports wiring that is already dead
+     * as present. Excluded for the same reason: the declaration, which wears the same
+     * spelling, and a doc comment naming the helper.
      */
     @Test
     fun `the refusal message has one home, so both sites announce`() {
         val engineSource =
             File("../../android/app/src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt")
         assertTrue(engineSource.isFile, "SafSyncEngine.kt is not where this test expects it")
+        val text = engineSource.readText()
 
         assertEquals(
             1,
-            Regex("sync never read, and writing would replace it")
-                .findAll(engineSource.readText()).count(),
+            Regex("sync never read, and writing would replace it").findAll(text).count(),
             "a second copy of the refusal means a site that refuses without saying so",
+        )
+        val callSites = text.lines().count { line ->
+            val at = line.indexOf("refuseUnreadDocument(")
+            val before = if (at < 0) "" else line.substring(0, at)
+            at >= 0 && "//" !in before && !before.trimStart().startsWith("*") &&
+                "private fun " !in before
+        }
+        assertEquals(
+            2,
+            callSites,
+            "the two write paths that can find a document this sync never read are the " +
+                "event path and the directory walk, and each has to refuse through the " +
+                "announcing helper. If a third path legitimately grew one, raise this " +
+                "number; if one went away, the write it used to refuse now replaces a " +
+                "document the user has no other copy of",
         )
     }
 }

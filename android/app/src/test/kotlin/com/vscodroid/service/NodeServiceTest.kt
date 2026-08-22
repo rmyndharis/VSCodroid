@@ -730,6 +730,9 @@ class HeapLatchCallSiteTest {
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
 
+    /** [codeLines] as one string, for the cases that cut a window out of the file. */
+    private fun code(): String = codeLines().joinToString("\n") { it.value }
+
     /**
      * Every `SharedPreferences` edit in [file], as the text running from `.edit()`
      * to the call that ends it.
@@ -823,10 +826,15 @@ class HeapLatchCallSiteTest {
      *
      * Read off the source because the alternative is racing a teardown against a
      * crash, which would be a test that passes on a fast machine.
+     *
+     * The window is cut out of the comment-free rendering, not out of the raw
+     * text. The body of this method is mostly prose and that prose argues for
+     * the very calls named below, so raw text would let a disabled write go on
+     * satisfying the precondition that exists to prove the write is there.
      */
     @Test
     fun `the charge survives the scope being cancelled`() {
-        val body = nodeService.readText()
+        val body = code()
             .substringAfter("private suspend fun chargeHeapOverride")
             .substringBefore("\n    }")
         assertTrue(

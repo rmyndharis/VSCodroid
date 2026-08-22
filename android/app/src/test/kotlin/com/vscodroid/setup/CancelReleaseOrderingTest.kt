@@ -37,7 +37,17 @@ class CancelReleaseOrderingTest {
             manager.isFile,
             "${manager.absolutePath} is missing; this test would otherwise pass by reading nothing",
         )
+        // Block comments come out before anything is searched for. The `(?m)^\s*`
+        // anchors below already refuse a call disabled with `//`, and one whose
+        // whole line is wrapped in `/* */`; what they cannot refuse is a block
+        // comment opened on one line and closed on another, because the call then
+        // sits on a line of its own that carries no marker and the anchor matches
+        // it exactly as it matches live code. Measured: with the call wrapped that
+        // way and nothing else changed, both cases here passed. Nothing else in
+        // the suite covers this one, either: the race needs a real delivery, so
+        // there is no behavioural test to fall back on.
         val text = manager.readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
         val start = text.indexOf("fun cancel(packName: String)")
         assertTrue(start >= 0, "ToolchainManager has no cancel(packName)")
         val end = text.indexOf("\n    }\n", start)

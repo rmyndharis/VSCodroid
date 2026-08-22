@@ -55,12 +55,36 @@ class DownloadListenerWiringTest {
      * Comments removed, so prose about the rule cannot satisfy a search for the
      * rule. This file's subject is discussed at length in the comments around
      * the very lines it checks.
+     *
+     * Both forms, because both disable code, and a call switched off while
+     * debugging and left that way is the state these cases exist to catch. A
+     * block counts as a comment only where it opens a line: a wildcard mime
+     * type and the CSS comments inside the scripts this file injects carry the
+     * same two characters inside a string literal and disable nothing.
      */
-    private fun withoutComments(text: String): String =
-        text.lines().joinToString("\n") { line ->
+    private fun withoutComments(text: String): String {
+        var inBlock = false
+        return text.lines().joinToString("\n") { raw ->
+            var line = raw
+            if (inBlock) {
+                val close = line.indexOf("*/")
+                if (close < 0) return@joinToString ""
+                inBlock = false
+                line = line.substring(close + 2)
+            }
+            while (line.trimStart().startsWith("/*")) {
+                val open = line.indexOf("/*")
+                val close = line.indexOf("*/", open + 2)
+                if (close < 0) {
+                    inBlock = true
+                    return@joinToString line.substring(0, open)
+                }
+                line = line.substring(0, open) + line.substring(close + 2)
+            }
             val marker = line.indexOf("//")
             if (marker >= 0) line.substring(0, marker) else line
         }
+    }
 
     @Test
     fun `every WebView gets a download listener that reaches the coordinator`() {

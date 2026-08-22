@@ -183,6 +183,29 @@ class ProcessWideMemoryPressureTest {
     private val source = File("src/main/kotlin/com/vscodroid/VSCodroidApp.kt")
     private val manifest = File("src/main/AndroidManifest.xml")
 
+    /**
+     * Both source-reading cases below ask whether something is still WRITTEN in a
+     * file, and a plain search answers yes just as readily from a line someone
+     * disabled while debugging and did not put back, which is the regression they
+     * exist to catch, so the comments come out first.
+     *
+     * Which forms are stripped follows how a line is actually disabled. An editor
+     * wraps the selected statement in a block comment, so that form goes first and
+     * across lines; a developer typing it out puts `//` in front, which the line
+     * filter takes afterwards. Only a leading `//` is dropped: a trailing one
+     * cannot disable the code it sits behind, and dropping the whole line would
+     * lose that code.
+     */
+    private fun kotlinWithoutComments(file: File): List<String> =
+        file.readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lines()
+            .filterNot { it.trimStart().startsWith("//") }
+
+    /** The same, for the one comment form XML has. */
+    private fun xmlWithoutComments(file: File): String =
+        file.readText().replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+
     @Test
     fun `the manifest points the process at this class`() {
         check(manifest.isFile) {
@@ -196,8 +219,13 @@ class ProcessWideMemoryPressureTest {
         // one in the tree restores the defect exactly: the process again has no
         // writer once the Activity is gone, and the two tests below stay green
         // because the class still declares the override and still calls out.
+        // Comments are taken out first. XML has no way to disable one attribute,
+        // so swapping the application class means commenting out the whole
+        // <application> element and writing another beside it. The commented-out
+        // one still holds this exact text, which is what a raw search would go on
+        // finding long after nothing read it.
         assertTrue(
-            manifest.readText().contains("android:name=\".VSCodroidApp\""),
+            xmlWithoutComments(manifest).contains("android:name=\".VSCodroidApp\""),
             "the process reports pressure through whichever class <application> names; " +
                 "VSCodroidApp is not that class, so its override is never called"
         )
@@ -219,13 +247,21 @@ class ProcessWideMemoryPressureTest {
                 "otherwise pass by looking at nothing"
         }
 
-        val body = source.readLines()
+        val body = kotlinWithoutComments(source)
             .dropWhile { !it.contains("override fun onTrimMemory(") }
             .drop(1)
             .takeWhile { !it.startsWith("    }") }
-            .filterNot { it.trimStart().startsWith("//") }
             .joinToString(" ")
             .replace(Regex("\\s+"), " ")
+
+        // Says which of the two ways this can fail happened. An override that was
+        // commented out leaves nothing to search, and "the call is not in an empty
+        // string" is a true but useless thing for a failure to report.
+        assertTrue(
+            body.isNotBlank(),
+            "${source.name} has no live onTrimMemory body, so nothing reports pressure " +
+                "for the process once the Activity is gone"
+        )
 
         // The whole call, not just the name: the directory has to be the one
         // process-monitor.js resolves TMPDIR to, and the level has to arrive

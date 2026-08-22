@@ -81,6 +81,28 @@ class MirrorLookupTest {
     }
 
     /**
+     * Does this line carry [fragment] as something the compiler sees?
+     *
+     * A search over raw source text finds a call inside a line a `//` has
+     * disabled exactly as readily as inside a live one, and commenting a line
+     * out is how a developer turns something off while chasing something else.
+     * So a guard for wiring that must exist stays green over wiring that is
+     * already dead, which is the one shape it was written to catch. The KDoc
+     * asterisk is excluded for the same reason from the other side: this file's
+     * subject is named in the prose around the lines it checks.
+     *
+     * Covers the two forms a disabled line takes here, a leading `//` and a
+     * doc-comment continuation. A block comment opened on an earlier line is not
+     * covered; nothing in this repository disables a single call that way.
+     */
+    private fun String.carriesLive(fragment: String): Boolean {
+        val at = indexOf(fragment)
+        if (at < 0) return false
+        val before = substring(0, at)
+        return "//" !in before && !before.trimStart().startsWith("*")
+    }
+
+    /**
      * The wiring, which no JVM test can drive: the reconciliation needs a live
      * Activity, `lifecycleScope` and an `AlertDialog`. Read off the source
      * instead, the way `SyncCancellationTest` reads the same file, because the
@@ -95,11 +117,11 @@ class MirrorLookupTest {
         }
         val lines = source.readLines()
 
-        val callback = lines.indexOfFirst { it.contains("onPageLoaded = { url ->") }
+        val callback = lines.indexOfFirst { it.carriesLive("onPageLoaded = { url ->") }
         assertTrue(callback >= 0, "the page-load callback was renamed or removed")
         assertTrue(
             (callback until minOf(callback + 12, lines.size))
-                .any { lines[it].contains("adoptWorkbenchFolder(") },
+                .any { lines[it].carriesLive("adoptWorkbenchFolder(") },
             "nothing reconciles the watcher when the workbench opens a folder itself, " +
                 "so edits to it stay in the mirror and never reach the device",
         )

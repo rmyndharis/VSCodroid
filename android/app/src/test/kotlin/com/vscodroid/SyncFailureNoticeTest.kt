@@ -62,6 +62,20 @@ class SyncFailureNoticeTest {
         error("Unbalanced braces after `private fun $name(`.")
     }
 
+    /**
+     * Is the occurrence at [at] one the compiler sees?
+     *
+     * A `//` earlier on the same line makes it text rather than a call, and a
+     * doc-comment continuation makes it prose. Both read identically to a search over
+     * raw source, so without this the count below is satisfied by call sites that no
+     * longer run, and the sentence they pass is checked in dead text while the live
+     * path goes unread.
+     */
+    private fun liveAt(source: String, at: Int): Boolean {
+        val before = source.substring(source.lastIndexOf('\n', at) + 1, at)
+        return "//" !in before && !before.trimStart().startsWith("*")
+    }
+
     /** Each call's argument list, from its parenthesis to the one that closes it. */
     private fun callArguments(name: String): List<String> {
         val source = mainActivity.readText()
@@ -72,7 +86,7 @@ class SyncFailureNoticeTest {
             // The declaration wears the same spelling as a call and is not one.
             val declaredHere = from >= declaration.length &&
                 source.startsWith(declaration + name + "(", from - declaration.length)
-            if (!declaredHere) {
+            if (!declaredHere && liveAt(source, from)) {
                 val open = source.indexOf('(', from)
                 var depth = 0
                 for (i in open until source.length) {
@@ -114,14 +128,22 @@ class SyncFailureNoticeTest {
         )
     }
 
-    /** The cause half, which each caller supplies. */
+    /**
+     * The cause half, which each caller supplies.
+     *
+     * The count is the guard against this passing vacuously: with no call sites found,
+     * there are no arguments to check and the claim below is green over nothing. It
+     * counts only sites the compiler sees, so a site that has been commented out fails
+     * it rather than standing in for the live one it replaced.
+     */
     @Test
     fun `the cause of a folder that did not open comes from a resource`() {
         val calls = callArguments("reportSyncFailure")
 
         assertTrue(calls.size >= 2) {
-            "found ${calls.size} calls to reportSyncFailure, and the sync has two ways " +
-                "to fail, so this is not reading the call sites"
+            "found ${calls.size} live calls to reportSyncFailure, and the sync has two " +
+                "ways to fail, so either this is not reading the call sites or one of " +
+                "them no longer runs and that failure now reaches nobody"
         }
         assertEquals(
             emptyList<String>(), calls.flatMap { prose(it) },

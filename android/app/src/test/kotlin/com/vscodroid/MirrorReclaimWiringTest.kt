@@ -56,9 +56,28 @@ class MirrorReclaimWiringTest {
         error("Unbalanced braces after `private fun $name(`.")
     }
 
+    /**
+     * [body] with its comments blanked, so a name that survives only in prose or
+     * in a call somebody switched off cannot answer for a live one.
+     *
+     * Not optional here. Commenting a line out is how a call gets disabled while
+     * something is being debugged, and it leaves every character of that call in
+     * the file; the guard below asks whether a name is present, and raw text
+     * answers yes for the disabled call exactly as it does for the live one. The
+     * body it reads also explains the guard in prose, so the names are in reach
+     * of a search twice over.
+     *
+     * Applied to the extracted body rather than to the whole file: [methodBody]
+     * counts braces raw, and blanking a `//` inside a string literal elsewhere in
+     * this activity would take its closing brace with it and truncate the span.
+     */
+    private fun code(body: String) = body
+        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
+        .replace(Regex("""//[^\n]*"""), " ")
+
     @Test
     fun `the removal guard is given every piece of state that decides it`() {
-        val body = methodBody("removeDeviceFolderCopy")
+        val body = code(methodBody("removeDeviceFolderCopy"))
 
         val missing = listOf(
             "watchedSafFolder",
@@ -190,7 +209,12 @@ class MirrorReclaimWiringTest {
                 "truncates the device document at open.",
         )
 
-        assertTrue(begin.contains("mirrorsWatchedThisProcess.add")) {
+        // Anchored at the start of a line, for the reason `code()` exists: a
+        // recording that has been commented out leaves its own text behind, and a
+        // substring search reads the disabled line as the live one. The call is a
+        // statement of its own in `beginWatching`, so the anchor matches what is
+        // written today and refuses the same line behind a `//`.
+        assertTrue(Regex("""(?m)^\s*mirrorsWatchedThisProcess\.add\(""").containsMatchIn(begin)) {
             "beginWatching no longer records the mirror, so the record is empty and the " +
                 "guard's widest check passes everything"
         }

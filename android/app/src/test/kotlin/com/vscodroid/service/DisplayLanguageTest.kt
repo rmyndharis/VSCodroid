@@ -64,15 +64,25 @@ class DisplayLanguageTest {
         // Both halves matter and they are separately losable: the environment
         // variable can be dropped while the literal survives in a comment, and
         // the locale can be changed while the assignment stays.
+        //
+        // The first half is anchored to the assignment at the start of a line,
+        // which is what makes "survives in a comment" something this can tell
+        // apart. Commenting the line out is how the pin gets switched off while
+        // something else is being tried, and it leaves every character in place,
+        // so a substring search reads the disabled line as the live one and
+        // reports the limit as still enforced. The variable is written once, as a
+        // statement of its own, so the anchor matches what is there today.
         assertTrue(
-            source.contains("VSCODE_NLS_CONFIG"),
+            Regex("""(?m)^\s*process\.env\.VSCODE_NLS_CONFIG\s*=""").containsMatchIn(source),
             "server.js no longer sets VSCODE_NLS_CONFIG. The editor then resolves a language " +
                 "from the environment instead of being held at English, and the Known " +
                 "Limitations entry 'The Interface Is English Only' in docs/USER_GUIDE.md is " +
-                "no longer true of the server side.",
+                "no longer true of the server side. If the assignment moved out of a " +
+                "statement of its own, retarget this deliberately rather than unanchoring it.",
         )
         assertTrue(
-            Regex("""VSCODE_NLS_CONFIG[\s\S]{0,120}?locale:\s*'en'""").containsMatchIn(source),
+            Regex("""(?m)^\s*process\.env\.VSCODE_NLS_CONFIG[\s\S]{0,120}?locale:\s*'en'""")
+                .containsMatchIn(source),
             "server.js no longer pins VSCODE_NLS_CONFIG to the 'en' locale. Rewrite the " +
                 "'The Interface Is English Only' entry in docs/USER_GUIDE.md to match whatever " +
                 "it now does.",

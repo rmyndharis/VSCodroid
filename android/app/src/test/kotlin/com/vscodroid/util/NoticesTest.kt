@@ -49,13 +49,22 @@ class NoticesTest {
      * Found by name, not by task type. The type has an assertion of its own
      * below, and a parse anchored on it would answer a change of type with
      * "the task is gone", which is a different defect and the wrong one to fix.
+     *
+     * Anchored to the start of a line, with only whitespace allowed in front.
+     * `build.gradle.kts` is Kotlin, so `//` disables a line here exactly as it
+     * does anywhere else, and a substring search reads a commented-out
+     * `from(...)` as a document the build copies. That is the shape this whole
+     * file exists to refuse: the list below would go on agreeing with
+     * [Notices.BUNDLED] while the Sync copied one document fewer and the dialog
+     * came up short on a device. Every `from(...)` in the task begins its own
+     * line, so the anchor costs nothing.
      */
     private fun copiedPaths(): List<String> {
         val script = buildScript.readText()
         val task = script.substringAfter("(\"bundleNotices\") {", "")
         assertFalse(task.isEmpty(), "bundleNotices task is gone from build.gradle.kts")
         val body = task.substringBefore("\n}")
-        return Regex("""from\(File\(repoRoot,\s*"([^"]+)"\)\)""")
+        return Regex("""(?m)^\s*from\(File\(repoRoot,\s*"([^"]+)"\)\)""")
             .findAll(body).map { it.groupValues[1] }.toList()
     }
 
@@ -81,7 +90,7 @@ class NoticesTest {
         val script = buildScript.readText()
         val body = script.substringAfter("(\"bundleNotices\") {", "")
             .substringBefore("\n}")
-        val destination = Regex("""into\(layout\.buildDirectory\.dir\("([^"]+)"\)\)""")
+        val destination = Regex("""(?m)^\s*into\(layout\.buildDirectory\.dir\("([^"]+)"\)\)""")
             .find(body)?.groupValues?.get(1)
         assertNotNull(destination, "bundleNotices names no destination directory")
 
@@ -95,9 +104,19 @@ class NoticesTest {
         // fails the build when one does not, which is a thing that happens in
         // the release graph and nowhere a pull request would see it. Pinning the
         // path spelling alone would have turned that improvement red.
-        val registersPath = Regex("assets\\.srcDir\\([^)]*" + Regex.escape(destination!!) + "[^)]*\\)")
-            .containsMatchIn(script)
-        val registersTask = Regex("""assets\.srcDir\(\s*bundleNotices\s*\)""")
+        //
+        // Both are anchored at the start of a line, and the character class in
+        // front is the anchor rather than the `^`: the live registration is
+        // `sourceSets["main"].assets.srcDir(...)`, so a receiver has to be
+        // allowed through, and what may not get through is a slash. A `//` in
+        // front of the call cannot then satisfy either alternative. Without
+        // that, commenting the registration out leaves this case green over an
+        // APK whose notices directory is copied and never packaged, which is
+        // the state the assertion exists to name.
+        val anchored = """(?m)^\s*[^/\n]*"""
+        val registersPath = Regex(anchored + "assets\\.srcDir\\([^)]*" +
+            Regex.escape(destination!!) + "[^)]*\\)").containsMatchIn(script)
+        val registersTask = Regex(anchored + """assets\.srcDir\(\s*bundleNotices\s*\)""")
             .containsMatchIn(script)
         assertTrue(
             registersPath || registersTask,
@@ -109,8 +128,11 @@ class NoticesTest {
         // And the copy has to be made to run. Nothing infers it from the source
         // directory: on a clean build the directory is simply empty, and every
         // gate stays green while the APK ships no notices at all.
+        // Line-anchored for the reason the registration above is: one of the two
+        // live wirings is `.configureEach { dependsOn(bundleNotices) }`, so the
+        // anchor has to let a receiver through and refuse a slash.
         assertTrue(
-            Regex("dependsOn\\([^)]*bundleNotices").containsMatchIn(script),
+            Regex(anchored + "dependsOn\\([^)]*bundleNotices").containsMatchIn(script),
             "Nothing depends on bundleNotices, so a clean build packages an empty " +
                 "notices directory."
         )
@@ -122,7 +144,8 @@ class NoticesTest {
         // out clean and never saw it, which is what makes it worth a gate rather
         // than a habit.
         assertTrue(
-            script.contains("tasks.register<Sync>(\"bundleNotices\")"),
+            Regex(anchored + """tasks\.register<Sync>\("bundleNotices"\)""")
+                .containsMatchIn(script),
             "bundleNotices is not a Sync, so a document removed or renamed stays " +
                 "in the notices directory and ships from any incremental build."
         )
