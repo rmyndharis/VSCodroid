@@ -810,8 +810,10 @@ class NodeService : Service() {
         chargeHeapOverride(exitCode)
         // The decision and the waiting both live in [retryOrGiveUp], shared with
         // the start path. Recomputing `crashAction` there costs nothing and reads
-        // the same values: only a non-suspending log statement separates the two
-        // reads, and both fields are confined to this dispatcher.
+        // the same values. The charge above now suspends, so the two reads are no
+        // longer separated by non-suspending statements alone; what keeps them
+        // reading the same values is that both fields are confined to this
+        // dispatcher and the charge resumes on it before returning.
         retryOrGiveUp()
     }
 

@@ -1314,18 +1314,6 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Drops every journal entry under [mirrorRoot], for when the mirror itself is
-     * going away.
-     *
-     * An entry outlives its mirror otherwise, and the damage is delayed rather
-     * than avoided: the folder's permission lapses, the mirror is reclaimed with
-     * the entry still recorded, and a re-grant weeks later hashes back to the same
-     * path. The first sync after it copies the device down with the mirror absent,
-     * so the entry is not consumed; an edit made on the device after that is then
-     * read back as this app's own interrupted upload and thrown away in favour of
-     * the stale copy. Reclaiming the mirror has to reclaim its distrust with it.
-     */
-    /**
      * Moves the upload records of [from] to [to], so they follow the directory a
      * removal has just renamed out of the way.
      *
@@ -1358,6 +1346,18 @@ class SafSyncEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Drops every journal entry under [mirrorRoot], for when the mirror itself is
+     * going away.
+     *
+     * An entry outlives its mirror otherwise, and the damage is delayed rather
+     * than avoided: the folder's permission lapses, the mirror is reclaimed with
+     * the entry still recorded, and a re-grant weeks later hashes back to the same
+     * path. The first sync after it copies the device down with the mirror absent,
+     * so the entry is not consumed; an edit made on the device after that is then
+     * read back as this app's own interrupted upload and thrown away in favour of
+     * the stale copy. Reclaiming the mirror has to reclaim its distrust with it.
+     */
     internal fun clearUploadsUnder(mirrorRoot: File) {
         synchronized(uploadJournalLock) {
             try {
