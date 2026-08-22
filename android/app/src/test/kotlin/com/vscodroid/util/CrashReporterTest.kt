@@ -315,6 +315,79 @@ class CrashReporterTest {
             assertFalse(report.contains("crash number 1"), "only three are embedded:\n$report")
         }
 
+        /**
+         * An absent mirror and a quiet server used to read the same, because the
+         * whole section was dropped when the file was missing. That is the exact
+         * ambiguity [ServerLog] was added to remove, so the header is printed
+         * either way and says which of the two it is.
+         */
+        @Test
+        fun `the server section says so when there is no server output`() {
+            initCrashDir()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(report.contains("--- Server Log (last 200 lines) ---"), "$report")
+            assertTrue(report.contains("(no server output recorded)"), "$report")
+        }
+
+        @Test
+        fun `the server section carries the output and says what it is`() {
+            initCrashDir()
+            val log = File(tempDir, "logs/server.log")
+            log.parentFile.mkdirs()
+            log.writeText("Extension host agent listening on 41003\n")
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(
+                report.contains("Extension host agent listening on 41003"),
+                "the server output did not reach the report:\n$report",
+            )
+            assertFalse(
+                report.contains("(no server output recorded)"),
+                "a file with output was reported as empty:\n$report",
+            )
+            assertTrue(
+                report.contains("server and extension-host output"),
+                "the section does not say whose output it is, and the user is about " +
+                    "to paste it somewhere public:\n$report",
+            )
+        }
+
+        /**
+         * The section is not this app's own output. The editor server echoes the
+         * extension host's stdout and stderr into its console, so an extension
+         * that dumps a failing request writes whatever authenticated it onto the
+         * stream this section quotes.
+         *
+         * Written straight to the file rather than through [ServerLog], on
+         * purpose: that writer redacts on the way in, so a file it wrote holds
+         * nothing to find. A device upgrading from a build whose mirror did not
+         * redact still has that file, and this is the reader that has to cope.
+         */
+        @Test
+        fun `a credential in the server log does not reach the report`() {
+            initCrashDir()
+            val log = File(tempDir, "logs/server.log")
+            log.parentFile.mkdirs()
+            log.writeText(
+                "<4242><stderr> POST /v1/messages failed\n" +
+                    "<4242><stderr> Authorization: Bearer sk-live-9f8e7d6c5b4a3210\n"
+            )
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertFalse(
+                report.contains("sk-live-9f8e7d6c5b4a3210"),
+                "the clipboard is readable by anything the user pastes into:\n$report",
+            )
+            assertTrue(
+                report.contains("POST /v1/messages failed"),
+                "this is the only diagnostic channel there is; the rest has to survive:\n$report",
+            )
+        }
+
         @Test
         fun `the crash section says so when there is nothing to report`() {
             initCrashDir()

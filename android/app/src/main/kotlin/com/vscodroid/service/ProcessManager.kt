@@ -43,7 +43,22 @@ class ProcessManager(private val context: Context) {
      */
     private val serverLog = ServerLog(File(Environment.getLogsDir(context), "server.log"))
 
+    /**
+     * The spawned bootstrap, and the thread watching it.
+     *
+     * Volatile for the same reason as the flags below, and the two threads are
+     * named there too: both are written on whichever thread called [startServer],
+     * which `NodeService.launchServer` puts on `Dispatchers.IO`, and both are read
+     * and written on the main thread by [stopServer], which the notification's
+     * Stop action and `Service.onDestroy` both reach. Without it the second stop
+     * that `NodeService.shutdown` documents as the reaper for a process spawned
+     * inside its own window has no happens-before edge to that write, so it can
+     * read null over a live process and leave Node running with no service and no
+     * watchdog behind it.
+     */
+    @Volatile
     private var serverProcess: Process? = null
+    @Volatile
     private var watchdogThread: Thread? = null
     private var _port: Int = 0
     @Volatile
@@ -87,11 +102,13 @@ class ProcessManager(private val context: Context) {
 
     /**
      * Whether the process the last [startServer] spawned was given a ceiling the
-     * user chose rather than one derived from the device.
+     * user chose that is above the one the device would otherwise have had.
      *
      * The only consumer is the kill latch in `NodeService.handleServerCrash`, and
      * what it is really recording is attribution: a SIGKILL only counts against a
-     * user's number if that number is what the dead process was running with.
+     * user's number if that number is what the dead process was running with, and
+     * only if that number could have caused the kill. [heapOverrideRaisesCeiling]
+     * is the second half.
      *
      * Volatile for the same reason as the flags above: written on whichever thread
      * called [startServer], read from the service's main dispatcher.
@@ -99,17 +116,36 @@ class ProcessManager(private val context: Context) {
     @Volatile
     private var heapOverrideActive = false
 
+    /**
+     * The user's number, as [heapCeilingForDevice] took it, or null when the
+     * ceiling was derived.
+     *
+     * Kept only so the start summary can name what was asked for beside what was
+     * given. Not volatile, and deliberately not: it is written and read on the
+     * one thread that is inside [startServer], a few statements apart, and giving
+     * it the annotation would tell the next reader that some other thread looks
+     * at it.
+     */
+    private var heapOverrideAskedMb: Int? = null
+
     /** The port the server is listening on. Only valid after [startServer] returns true. */
     val port: Int get() = _port
 
     /**
-     * Whether the running server was started with a user-chosen heap ceiling.
+     * Whether the running server was started with a user-chosen heap ceiling that
+     * is HIGHER than the one this device would have been given anyway.
      *
      * False whenever no process of ours is running with one, which covers more
      * than the plain case: a server that was adopted rather than spawned, and a
      * server that has been stopped, both answer false. Both matter, because a
      * crash attributed to a value the dead process never carried would spend the
      * user's budget on something they did not do.
+     *
+     * The direction is part of the question, not a detail of the answer. The only
+     * consumer is the kill latch in `NodeService.chargeHeapOverride`, whose remedy
+     * is to ignore the user's number and fall back to the derived one, and that
+     * remedy is only a remedy when the user's number was the larger of the two.
+     * See [heapOverrideRaisesCeiling] for what a direction-blind flag cost.
      */
     fun heapOverrideInEffect(): Boolean = heapOverrideActive
 
@@ -552,15 +588,46 @@ class ProcessManager(private val context: Context) {
                 redirectErrorStream(true)
                 directory(context.filesDir)
             }
-            serverProcess = processBuilder.start().also { it.outputStream.close() }
+            val spawned = processBuilder.start().also { it.outputStream.close() }
+            // A stop that landed while this was spawning has to take the process
+            // it could not see. [stopServer] runs on the main thread and reads
+            // `serverProcess`, which is still null everywhere above this line, so
+            // a Stop pressed inside the few milliseconds `ProcessBuilder.start()`
+            // takes destroys nothing and returns, and what it leaves behind is a
+            // Node process with no foreground service tracking it, no watchdog
+            // (this returns before either is started), and the editor port in its
+            // hand. The next cold start then either adopts it, inheriting the dead
+            // DNS proxy the branch above warns about, or moves to another port and
+            // takes the workbench's IndexedDB with it.
+            //
+            // Read after the spawn rather than before it, because before it the
+            // answer is meaningless: the window this closes opens at the spawn.
+            if (isShuttingDown) {
+                Logger.i(tag, "A stop landed while the server was spawning; ending it again")
+                spawned.destroyForcibly()
+                return false
+            }
+            serverProcess = spawned
             startOutputReader()
             startWatchdog()
             // The source is named, not only the number. A ceiling in a bug report
             // that could be either a derived value or a user's is a number nobody
             // can act on.
+            //
+            // What was asked for is named too, and only the word "clamped" is
+            // conditional on it. The line used to say "clamped" for every honoured
+            // override, including the common case where the request passed through
+            // untouched, so a reader was told the app had reduced a number it had
+            // not, with nothing to separate that from the case where it really had.
+            val asked = heapOverrideAskedMb
+            val ceilingSource = when {
+                asked == null -> "derived from device RAM"
+                asked == heapMb -> "user override"
+                else -> "user override of ${asked}MB, clamped"
+            }
             val summary =
                 "Server process started with PID ${getServerPid()}, heap ceiling ${heapMb}MB " +
-                    "(${if (heapOverrideActive) "user override, clamped" else "derived from device RAM"})"
+                    "($ceilingSource)"
             Logger.i(tag, summary)
             // And said twice on purpose. A bug report carries `server.log`, which
             // only [ServerLog] writes, while `Logger.i` reaches logcat and in a
@@ -1068,16 +1135,21 @@ class ProcessManager(private val context: Context) {
         val am = context.getSystemService(ActivityManager::class.java)
         val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
         val totalMb = info.totalMem / 1_048_576
-        val requested = requestedHeapCeiling()
-        // "was it taken", not "was one present". See [heapOverrideHonoured]: the
-        // two part company on exactly the devices that ignore the request, and the
-        // flag decides whose budget the next kill spends.
-        heapOverrideActive = heapOverrideHonoured(totalMb, am.isLowRamDevice, requested)
+        val requested = requestedHeapCeiling(totalMb, am.isLowRamDevice)
+        heapOverrideAskedMb = requested?.takeIf {
+            heapOverrideHonoured(totalMb, am.isLowRamDevice, it)
+        }
+        // "was it taken and was it larger", not "was one present". See
+        // [heapOverrideHonoured] for the first half and [heapOverrideRaisesCeiling]
+        // for the second; the flag decides whose budget the next kill spends, and
+        // both halves have to hold before it is the user's.
+        heapOverrideActive = heapOverrideRaisesCeiling(totalMb, am.isLowRamDevice, requested)
         heapCeilingMb(totalMb, am.isLowRamDevice, requested)
     } catch (e: Exception) {
         // Reading it is not worth failing a start over, and the old literal is
         // the right thing to fall back to: it is what every device ran until now.
         heapOverrideActive = false
+        heapOverrideAskedMb = null
         Logger.w(tag, "Could not read device memory, using the default ceiling: ${e.message}")
         HEAP_CEILING_DEFAULT_MB
     }
@@ -1096,6 +1168,15 @@ class ProcessManager(private val context: Context) {
      * key in it, a value that is not a bare integer, and a value whose budget of
      * [HEAP_OVERRIDE_KILL_BUDGET] SIGKILLs is spent.
      *
+     * The latch is consulted only for a request that RAISES the ceiling, which is
+     * why this needs the device's numbers. Suspending a request that lowered it
+     * would hand the device back a ceiling twice the size of the one the user
+     * chose precisely because it was being killed, and it would do it on the
+     * strength of kills the user's value cannot have caused. A device that already
+     * carries a count recorded against a lowered value therefore finds that value
+     * honoured again on the next start, rather than staying suspended over a count
+     * nothing would ever add to.
+     *
      * The write side of the latch lives here rather than beside the counter for a
      * reason worth keeping: recording the value SEEN at the moment it is honoured
      * is what lets [heapKillsForValue] tell a value that has been killing this
@@ -1108,10 +1189,16 @@ class ProcessManager(private val context: Context) {
     // has to survive is a SIGKILL of this app's process, which is the one case
     // apply()'s deferred write does not.
     @Suppress("ApplySharedPref")
-    private fun requestedHeapCeiling(): Int? = try {
+    private fun requestedHeapCeiling(totalRamMb: Long, isLowRam: Boolean): Int? = try {
         val settings = File(Environment.getMachineSettingsPath(context))
         val asked = settings.takeIf { it.isFile }?.let { heapOverrideFromSettings(it.readText()) }
-        if (asked == null) null else {
+        if (asked == null) null else if (!heapOverrideRaisesCeiling(totalRamMb, isLowRam, asked)) {
+            // Nothing to charge and nothing to suspend. A device that ignores the
+            // request never ran with it, and a request that lowers the ceiling
+            // cannot be what a low-memory kill is about, so neither one touches
+            // the record kept for a value that can.
+            asked
+        } else {
             val prefs = context.getSharedPreferences(HEAP_PREFS_NAME, Context.MODE_PRIVATE)
             val kills = heapKillsForValue(
                 prefs.getInt(PREF_HEAP_VALUE_SEEN, 0), prefs.getInt(PREF_HEAP_KILLS, 0), asked
@@ -1623,6 +1710,41 @@ internal fun heapOverrideHonoured(totalRamMb: Long, isLowRam: Boolean, requested
     requestedMb != null && !isLowRam && totalRamMb > 0
 
 /**
+ * Whether an honoured request puts the ceiling ABOVE what the device would have
+ * been given with no request at all.
+ *
+ * The kill latch turns on this and not on [heapOverrideHonoured], and the
+ * difference is the whole of it. `heapCeilingMb` supports lowering as well as
+ * raising, on purpose: lowering is the only thing a user on a struggling device
+ * can do from this setting. The latch's remedy for a value that keeps getting the
+ * server killed is to ignore it and fall back to the derived arm, which for a
+ * lowered value is the LARGER number. So a direction-blind latch answered three
+ * kills on a device that was already short of memory by doubling the ceiling on
+ * it, and told the user, in a notice inviting them to pick another value, that
+ * their limit had been turned off. Picking another value handed them a fresh
+ * budget, and the loop had no end.
+ *
+ * A ceiling that is not larger than the derived one cannot be the cause the latch
+ * exists to end, so it is neither charged nor suspended. That is not a softening
+ * of the protection: every value the latch was built for is a raise, and the
+ * deliberate over-count `heapKillsAfter` documents (the phantom-process limit
+ * produces the same 137) is only defensible in that direction, because the false
+ * positive it accepts costs a raising user a notification and costs a lowering
+ * user the device.
+ *
+ * Equality counts as "not raised". A request that lands exactly on the derived
+ * value changes nothing about what runs, so there is nothing about it to disable.
+ */
+internal fun heapOverrideRaisesCeiling(
+    totalRamMb: Long,
+    isLowRam: Boolean,
+    requestedMb: Int?,
+): Boolean =
+    heapOverrideHonoured(totalRamMb, isLowRam, requestedMb) &&
+        heapCeilingMb(totalRamMb, isLowRam, requestedMb) >
+        heapCeilingMb(totalRamMb, isLowRam, null)
+
+/**
  * The requested ceiling, read out of a `settings.json` document, or null.
  *
  * The `(?m)^\s*` anchor is load-bearing rather than tidiness. settings.json is
@@ -1699,9 +1821,13 @@ internal fun heapKillsForValue(storedValue: Int, storedKills: Int, currentValue:
  * working as intended, and disabling a value for doing its job would be backwards.
  * `ADOPTED_SERVER_LOST` is not counted for a plainer reason: an adopted server never
  * ran with this value at all.
+ *
+ * The flag passed in answers [heapOverrideRaisesCeiling], not merely "a value was
+ * honoured". A value that lowered the ceiling is not counted, because the remedy
+ * for a spent budget is the derived ceiling and that is the larger of the two.
  */
-internal fun heapKillsAfter(exitCode: Int, overrideInEffect: Boolean, current: Int) =
-    if (overrideInEffect && exitCode == HEAP_OVERRIDE_FATAL_EXIT) current + 1 else current
+internal fun heapKillsAfter(exitCode: Int, overrideRaisedCeiling: Boolean, current: Int) =
+    if (overrideRaisedCeiling && exitCode == HEAP_OVERRIDE_FATAL_EXIT) current + 1 else current
 
 /** `128 + SIGKILL`, as `assets/server.js` reports a signalled child. */
 internal const val HEAP_OVERRIDE_FATAL_EXIT = 137

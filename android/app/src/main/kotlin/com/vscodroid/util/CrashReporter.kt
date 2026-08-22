@@ -83,6 +83,15 @@ object CrashReporter {
      * `/delay-shutdown` and `/callback`. The containment stops where that
      * function's does, at the literal `tkn=` parameter, so a bare token in no
      * parameter at all still passes through.
+     *
+     * The server section carries a second class of secret, and [redactSecrets]
+     * is what answers it. That section is not this app's own output: the editor
+     * server echoes the extension host's stdout and stderr into its console, so
+     * an extension that dumps a failing request writes whatever authenticated it
+     * onto the stream this section quotes. [ServerLog] takes the same two
+     * functions on the way in, so a file written by this build holds neither
+     * shape; both run again here, because this is the boundary the text crosses
+     * and a file written by an older build is still on the device.
      */
     fun generateBugReport(context: Context): String {
         val sb = StringBuilder()
@@ -131,12 +140,27 @@ object CrashReporter {
         // output reader in `ProcessManager`. Redacted here as well as on the way
         // in: this reader is where the rule belongs, and keeping it means the
         // report stays clean whatever else ever writes to that file.
-        val serverLog = File(Environment.getLogsDir(context), "server.log")
-        if (serverLog.exists()) {
-            sb.appendLine("--- Server Log (last 200 lines) ---")
-            val lines = serverLog.readLines()
-            val tail = if (lines.size > 200) lines.takeLast(200) else lines
-            tail.forEach { sb.appendLine(redactToken(it)) }
+        //
+        // Read through [ServerLog.tail] rather than off the file, so the read
+        // takes the same lock a rotation holds. A rotation truncates the file and
+        // then writes its tail back, and a read landing between the two returns
+        // short or empty -- which is indistinguishable from a server that said
+        // nothing, the exact ambiguity the mirror was added to remove.
+        //
+        // The header is printed whether or not there is anything under it. An
+        // absent section and a quiet server used to look the same from the
+        // outside, so a report from a device where the mirror never ran said
+        // nothing about the mirror at all.
+        sb.appendLine("--- Server Log (last 200 lines) ---")
+        // The line telling the user what they are about to paste. This section
+        // is not the app talking: it carries whatever the editor server and the
+        // extension host printed, which is why [redactSecrets] runs over it.
+        sb.appendLine("(server and extension-host output, credentials removed)")
+        val tail = ServerLog(File(Environment.getLogsDir(context), "server.log")).tail(200)
+        if (tail.isEmpty()) {
+            sb.appendLine("(no server output recorded)")
+        } else {
+            tail.forEach { sb.appendLine(redactSecrets(redactToken(it))) }
         }
 
         return sb.toString()

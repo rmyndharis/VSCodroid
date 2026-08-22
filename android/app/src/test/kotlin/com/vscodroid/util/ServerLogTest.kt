@@ -6,6 +6,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * [ServerLog] and the one line that connects it to the server's output.
@@ -209,6 +212,173 @@ class ServerLogTest {
             "the oversized line is still being carried, so the file never " +
                 "returns under the cap",
         )
+    }
+
+
+    /**
+     * The guard is over the file, so it cannot be over one instance of this class.
+     *
+     * Two are reachable in one process. `ProcessManager` builds one and
+     * `NodeService.onCreate` builds one `ProcessManager`, but a service that has
+     * been stopped and started again is a second instance in the same process, and
+     * a drain thread that outlives the stop meant to end it leaves the first
+     * writing too. An instance monitor puts them on separate locks over one path,
+     * and a rotation is a read of the whole file followed by a write of the whole
+     * file: an append landing inside one is written to a length that is about to
+     * stop existing.
+     *
+     * Held from the test thread rather than raced, because racing a rotation only
+     * measures how fast the machine is. What is asserted is the property itself:
+     * while the file's lock is held, an append through a DIFFERENT instance does
+     * not proceed.
+     */
+    @Test
+    fun `an append through a second instance waits for the lock on the file`() {
+        val file = logFile()
+        val lock = ServerLog::class.java.getDeclaredField("FILE_LOCK")
+            .apply { isAccessible = true }
+            .get(null)
+
+        val started = CountDownLatch(1)
+        val written = CountDownLatch(1)
+        val worker = synchronized(lock) {
+            val t = thread(name = "second-server-log") {
+                started.countDown()
+                ServerLog(file).append("from the second instance")
+                written.countDown()
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS), "the second writer never ran")
+            assertFalse(
+                written.await(300, TimeUnit.MILLISECONDS),
+                "a second ServerLog wrote the file while its lock was held, so the two " +
+                    "instances are on separate monitors and a rotation by either can " +
+                    "swallow the other's line",
+            )
+            t
+        }
+
+        assertTrue(
+            written.await(5, TimeUnit.SECONDS),
+            "the second writer never woke after the lock was released",
+        )
+        worker.join()
+        assertEquals(
+            listOf("from the second instance"), file.readLines(),
+            "the line was lost rather than merely delayed",
+        )
+    }
+
+    /**
+     * The reader takes the same lock, for the same reason the writers do.
+     *
+     * `CrashReporter` used to read the file directly. A rotation truncates it and
+     * then writes the tail back, so a report taken between the two carries a short
+     * or empty server section, which is indistinguishable from a server that had
+     * nothing to say.
+     */
+    @Test
+    fun `a tail read waits for the lock on the file`() {
+        val file = logFile()
+        file.parentFile.mkdirs()
+        file.writeText("one\ntwo\n")
+        val lock = ServerLog::class.java.getDeclaredField("FILE_LOCK")
+            .apply { isAccessible = true }
+            .get(null)
+
+        val started = CountDownLatch(1)
+        val read = CountDownLatch(1)
+        val worker = synchronized(lock) {
+            val t = thread(name = "server-log-reader") {
+                started.countDown()
+                ServerLog(file).tail(200)
+                read.countDown()
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS), "the reader never ran")
+            assertFalse(
+                read.await(300, TimeUnit.MILLISECONDS),
+                "the reader does not take the lock a rotation holds, so a report can " +
+                    "still be taken from a file that is part-way through being rewritten",
+            )
+            t
+        }
+
+        assertTrue(read.await(5, TimeUnit.SECONDS), "the reader never woke")
+        worker.join()
+    }
+
+    @Test
+    fun `the tail is the newest lines and nothing more`() {
+        val file = logFile()
+        file.parentFile.mkdirs()
+        file.writeText((1..10).joinToString("\n", postfix = "\n") { "line-$it" })
+
+        assertEquals(listOf("line-8", "line-9", "line-10"), ServerLog(file).tail(3))
+        assertEquals(10, ServerLog(file).tail(200).size, "a tail wider than the file is the file")
+    }
+
+    /**
+     * A file that was never written answers with nothing rather than throwing, so
+     * the reader can say "no server output recorded" instead of dropping its
+     * section and leaving the reader of the report to guess which happened.
+     */
+    @Test
+    fun `a missing file tails to nothing rather than throwing`() {
+        assertEquals(emptyList<String>(), ServerLog(File(tempDir, "nowhere/server.log")).tail(200))
+    }
+
+    /**
+     * The stream this file mirrors is not only ours.
+     *
+     * `assets/server.js` forks the editor server with `stdio: 'inherit'`, and the
+     * editor server echoes the extension host's stdout and stderr into its own
+     * console. So an extension that authenticates, and that dumps a failing
+     * request when it goes wrong, writes its credential onto the stream that ends
+     * up here and then in a bug report the user pastes somewhere public.
+     */
+    @Test
+    fun `an extension's credentials do not reach the file`() {
+        val file = logFile()
+        val log = ServerLog(file)
+
+        log.append("<4242><stderr> request failed: {\"authorization\":\"Bearer abcd1234efgh5678\"}")
+        log.append("<4242> GET /v1/models api_key=super-secret-value")
+        log.append("<4242> using key sk-abcdefghijklmnopqrstuvwxyz")
+        log.append("<4242> token ghp_abcdefghijklmnopqrstuvwxyz0123")
+
+        val written = file.readText()
+        for (secret in listOf(
+            "abcd1234efgh5678",
+            "super-secret-value",
+            "sk-abcdefghijklmnopqrstuvwxyz",
+            "ghp_abcdefghijklmnopqrstuvwxyz0123",
+        )) {
+            assertFalse(secret in written, "\"$secret\" was written to disk verbatim:\n$written")
+        }
+        assertTrue(
+            written.contains("<redacted>"),
+            "nothing was replaced, so the shapes are not being matched at all:\n$written",
+        )
+    }
+
+    /**
+     * The control for the case above. A redaction wide enough to swallow the
+     * output makes the file useless for the one thing it exists for, and a
+     * `<redacted>` in place of every line would satisfy that test perfectly.
+     */
+    @Test
+    fun `ordinary server output survives redaction untouched`() {
+        val file = logFile()
+        val log = ServerLog(file)
+        val lines = listOf(
+            "Extension host agent listening on 41003",
+            "[error] Error: listen EADDRINUSE: address already in use 127.0.0.1:41003",
+            "<4242> Extension host with pid 4242 started",
+            "Authorization failed for a request that carried no header",
+            "FATAL ERROR: JavaScript heap out of memory",
+        )
+        lines.forEach { log.append(it) }
+
+        assertEquals(lines, file.readLines(), "diagnostics were eaten by the redaction")
     }
 
     /**

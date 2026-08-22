@@ -821,6 +821,12 @@ class NodeService : Service() {
     /**
      * Spends one of a user-chosen heap ceiling's lives, when this death was one.
      *
+     * Only a ceiling the user RAISED has lives to spend, which is the question
+     * [ProcessManager.heapOverrideInEffect] answers. The remedy at the end of the
+     * budget is to fall back to the derived ceiling, and for a value the user
+     * lowered that is the larger number, on the device that was being killed at
+     * the smaller one.
+     *
      * Placed in [handleServerCrash] and NOT in [retryOrGiveUp], which is the more
      * obvious home and is the wrong one. Two paths reach [retryOrGiveUp] for a
      * single death -- the watchdog through here, and [launchServer]'s
@@ -886,7 +892,7 @@ class NodeService : Service() {
         val after = withContext(NonCancellable + Dispatchers.IO) {
             val prefs = getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE)
             val before = prefs.getInt(PREF_HEAP_KILLS, 0)
-            val charged = heapKillsAfter(exitCode, overrideInEffect = true, current = before)
+            val charged = heapKillsAfter(exitCode, overrideRaisedCeiling = true, current = before)
             if (charged == before) return@withContext null
             prefs.edit().putInt(PREF_HEAP_KILLS, charged).commit()
             charged

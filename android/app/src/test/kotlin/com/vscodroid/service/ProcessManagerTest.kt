@@ -26,6 +26,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -717,6 +718,227 @@ class ProcessManagerTest {
             manager.heapOverrideInEffect(),
             "nothing was honoured, so nothing may be charged for the next kill",
         )
+    }
+
+    @Test
+    fun `a ceiling the user lowered is never suspended by the latch`() {
+        // The direction the latch had no notion of. Its remedy for a value that
+        // keeps getting the server killed is to ignore it and fall back to the
+        // derived arm -- which for a value the user LOWERED is the larger number,
+        // handed back to the device that was being killed at the smaller one. The
+        // 137 the latch counts is deliberately over-counted (the phantom-process
+        // limit produces it too), so the kills need not have anything to do with
+        // the user's value at all.
+        //
+        // 6 GB derives 768; the request is 384, which is honoured verbatim. The
+        // preference file says that exact value has already spent the whole budget,
+        // which under the old rule was enough to disable it.
+        val totalMb = 6L * 1024
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = totalMb * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 384,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+
+        val derived = heapCeilingMb(totalMb, isLowRam = false)
+        assertTrue(384 < derived, "the fixture must LOWER the ceiling, derived is $derived")
+
+        // A budget already spent against this exact value. heapKillsForValue hands
+        // a fresh budget to a value that has changed, so the stored value has to be
+        // the same 384 or this proves nothing.
+        val prefs = mockk<android.content.SharedPreferences>(relaxed = true) {
+            every { getInt(PREF_HEAP_VALUE_SEEN, any()) } returns 384
+            every { getInt(PREF_HEAP_KILLS, any()) } returns HEAP_OVERRIDE_KILL_BUDGET
+        }
+        every { contextMock.getSharedPreferences(HEAP_PREFS_NAME, any()) } returns prefs
+
+        val output = StringBuilder()
+        val printed = CountDownLatch(1)
+        manager.onServerOutput = { line -> output.append(line).append('\n'); printed.countDown() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+        assertTrue(printed.await(5, TimeUnit.SECONDS), "the spawned process never printed its arguments")
+
+        assertTrue(
+            output.contains("--max-old-space-size=384"),
+            "a lowered ceiling was suspended, so the device that was being killed at " +
+                "384 is handed $derived instead; got: $output",
+        )
+        assertFalse(
+            output.contains("--max-old-space-size=$derived"),
+            "the derived ceiling reached the command line over the user's smaller " +
+                "one; got: $output",
+        )
+        assertFalse(
+            manager.heapOverrideInEffect(),
+            "a lowered ceiling cannot be what a low-memory kill is about, so the next " +
+                "one must not spend a life against it",
+        )
+    }
+
+    @Test
+    fun `the start summary names what was asked for and clamps only when it clamped`() {
+        // The one line in a bug report whose whole job is to say where the ceiling
+        // came from. It used to read "user override, clamped" for every honoured
+        // value, including the common case where the request passed through
+        // untouched, so a maintainer was told the app had reduced a number it had
+        // not and went looking for a request nobody made.
+        //
+        // 4 GB derives 512 and allows up to 1024, so 640 is honoured verbatim.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 4L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 640,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+        assertEquals(
+            640, heapCeilingMb(4L * 1024, isLowRam = false, requestedMb = 640),
+            "the fixture must pick a value the clamp leaves alone",
+        )
+
+        // Synchronised, because two threads log into it. `startWatchdog` is
+        // running before `startServer` composes the summary, so the watchdog's
+        // own line and this one are appended concurrently, and an ArrayList
+        // loses one of them. The loss is invisible in isolation and shows up
+        // only under the load of the whole suite, which is the worst way for a
+        // test to be wrong.
+        val said = Collections.synchronizedList(mutableListOf<String>())
+        every { Logger.i(any(), any()) } answers { said += secondArg<String>() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+
+        val summary = said.singleOrNull { it.startsWith("Server process started") }
+        assertNotNull(summary, "the start summary was not logged at all: $said")
+        assertTrue(
+            summary!!.contains("heap ceiling 640MB (user override)"),
+            "the summary does not name the source without claiming a clamp: $summary",
+        )
+        assertFalse(
+            summary.contains("clamped"),
+            "the summary claims a clamp over a value that passed through untouched: $summary",
+        )
+    }
+
+    @Test
+    fun `the start summary says what a clamped request asked for`() {
+        // The other half. 6 GB allows up to 1536, so a request of 4096 really is
+        // reduced -- and the reader has to be able to tell this case from the one
+        // above, which the single word "clamped" could not do on its own.
+        val totalMb = 6L * 1024
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = totalMb * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+
+        val settings = File(tempDir, "Machine/settings.json").apply {
+            parentFile!!.mkdirs()
+            writeText("{\n    \"vscodroid.server.heapCeilingMb\": 4096,\n}\n")
+        }
+        every { Environment.getMachineSettingsPath(any()) } returns settings.path
+
+        // Synchronised, because two threads log into it. `startWatchdog` is
+        // running before `startServer` composes the summary, so the watchdog's
+        // own line and this one are appended concurrently, and an ArrayList
+        // loses one of them. The loss is invisible in isolation and shows up
+        // only under the load of the whole suite, which is the worst way for a
+        // test to be wrong.
+        val said = Collections.synchronizedList(mutableListOf<String>())
+        every { Logger.i(any(), any()) } answers { said += secondArg<String>() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+
+        val summary = said.singleOrNull { it.startsWith("Server process started") }
+        assertNotNull(summary, "the start summary was not logged at all: $said")
+        assertTrue(
+            summary!!.contains("heap ceiling ${heapOverrideMaxMb(totalMb)}MB (user override of 4096MB, clamped)"),
+            "a reduced request must show both numbers, or the clamp is unreadable: $summary",
+        )
+    }
+
+    @Test
+    fun `the start summary says so when nobody asked for anything`() {
+        // The control. A summary that said "user override" unconditionally would
+        // satisfy both cases above while telling every reader that a user chose a
+        // number they never touched.
+        val am = mockk<ActivityManager>(relaxed = true) {
+            every { isLowRamDevice } returns false
+            every { getMemoryInfo(any()) } answers {
+                firstArg<ActivityManager.MemoryInfo>().totalMem = 4L * 1024 * 1024 * 1024
+            }
+        }
+        every { contextMock.getSystemService(ActivityManager::class.java) } returns am
+        every { Environment.getMachineSettingsPath(any()) } returns
+            File(tempDir, "Machine/settings.json").path
+
+        // Synchronised, because two threads log into it. `startWatchdog` is
+        // running before `startServer` composes the summary, so the watchdog's
+        // own line and this one are appended concurrently, and an ArrayList
+        // loses one of them. The loss is invisible in isolation and shows up
+        // only under the load of the whole suite, which is the worst way for a
+        // test to be wrong.
+        val said = Collections.synchronizedList(mutableListOf<String>())
+        every { Logger.i(any(), any()) } answers { said += secondArg<String>() }
+
+        assertTrue(startAndAwaitWatchdog(), "the fixture server must start")
+
+        val summary = said.singleOrNull { it.startsWith("Server process started") }
+        assertNotNull(summary, "the start summary was not logged at all: $said")
+        assertTrue(
+            summary!!.contains("heap ceiling 512MB (derived from device RAM)"),
+            "a derived ceiling must not be reported as a user's choice: $summary",
+        )
+    }
+
+    @Test
+    fun `a stop that lands while the server is spawning takes the process with it`() {
+        // The window NodeService.shutdown documents and leaves to onDestroy to
+        // reap. `stopServer()` runs on the main thread and reads `serverProcess`,
+        // which is null everywhere above the spawn, so a Stop pressed inside the
+        // few milliseconds ProcessBuilder.start() takes destroys nothing and
+        // returns. What it leaves is a Node process with no foreground service
+        // tracking it, no watchdog, and the editor port in its hand: the next cold
+        // start either adopts it, inheriting the dead DNS proxy, or moves to
+        // another port and takes the workbench's IndexedDB with it.
+        //
+        // The stop is fired from inside the start rather than raced against it.
+        // buildProcessEnvironment is the last thing startServer asks for before it
+        // spawns, so answering it from the stop is the same interleaving a Stop
+        // press produces, and it produces it every time rather than on a slow
+        // machine.
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            manager.stopServer()
+            emptyMap()
+        }
+
+        assertFalse(
+            manager.startServer(),
+            "a start that spawned into a stop reported success, so the caller believes " +
+                "there is a server and nothing is tracking the process there is",
+        )
+        assertNull(
+            manager.serverProcessField,
+            "the spawned process is still referenced, so the stop that already ran " +
+                "cannot have ended it",
+        )
+        assertFalse(manager.isRunning(), "a stopped server must not report itself alive")
     }
 
     @Test
@@ -1414,9 +1636,14 @@ class AdoptionTest {
         File(tempDir, "server/editor-server.pid")
             .writeText("""{"pid":$pid,"port":$port}""")
         File(tempDir, "proc/$pid").mkdirs()
-        // NUL-separated, the way the kernel writes argv.
+        // NUL-separated, the way the kernel writes argv. Written as escapes
+        // rather than as raw bytes: two NULs in the source made every tool
+        // that classifies a file by its bytes call this one binary, and plain
+        // grep then reported zero matches for every pattern in the largest
+        // test file in this package. A sweep over the tree cannot tell that
+        // zero from a clean one.
         File(tempDir, "proc/$pid/cmdline")
-            .writeText("/lib/libnode.so /data/server/vscode-reh/out/$entry ")
+            .writeText("/lib/libnode.so\u0000/data/server/vscode-reh/out/$entry\u0000")
         manager.procDirField = File(tempDir, "proc")
     }
 
@@ -2323,19 +2550,69 @@ class HeapOverrideLatchTest {
     fun `only a SIGKILL with the value in effect spends a life`() {
         // 137 is 128 + SIGKILL, which is what a low-memory kill reaches the watchdog
         // as. The other three cases are the ones a looser rule would swallow.
-        assertEquals(2, heapKillsAfter(137, overrideInEffect = true, current = 1))
+        assertEquals(2, heapKillsAfter(137, overrideRaisedCeiling = true, current = 1))
         assertEquals(
-            1, heapKillsAfter(137, overrideInEffect = false, current = 1),
-            "a derived ceiling must not spend a budget nobody is using",
+            1, heapKillsAfter(137, overrideRaisedCeiling = false, current = 1),
+            "a derived ceiling, and a ceiling the user lowered, must not spend a " +
+                "budget nobody is using",
         )
         assertEquals(
-            1, heapKillsAfter(134, overrideInEffect = true, current = 1),
+            1, heapKillsAfter(134, overrideRaisedCeiling = true, current = 1),
             "134 is V8's own heap-limit abort: the ceiling working, not failing",
         )
         assertEquals(
-            1, heapKillsAfter(ADOPTED_SERVER_LOST, overrideInEffect = true, current = 1),
+            1, heapKillsAfter(ADOPTED_SERVER_LOST, overrideRaisedCeiling = true, current = 1),
             "an adopted server never ran with this value",
         )
+    }
+
+    @Test
+    fun `only a raise has lives to spend`() {
+        // The direction the latch had no notion of at all. Its remedy is the
+        // derived ceiling, which for a lowered value is the LARGER number, so
+        // charging one and then suspending it raises the ceiling on the device
+        // that was already being killed.
+        //
+        // 6144 MiB derives 768 and allows a request up to 1536.
+        val total = 6L * 1024
+        assertEquals(768, heapCeilingMb(total, isLowRam = false), "fixture: the derived arm")
+
+        assertTrue(
+            heapOverrideRaisesCeiling(total, isLowRam = false, requestedMb = 1024),
+            "a value above the derived one is what the latch exists for",
+        )
+        assertFalse(
+            heapOverrideRaisesCeiling(total, isLowRam = false, requestedMb = 384),
+            "a lowered ceiling cannot be the cause of the kill the latch answers",
+        )
+        assertFalse(
+            heapOverrideRaisesCeiling(total, isLowRam = false, requestedMb = 768),
+            "a request that lands on the derived value changes nothing to disable",
+        )
+        assertFalse(
+            heapOverrideRaisesCeiling(total, isLowRam = false, requestedMb = null),
+            "no request, nothing to charge",
+        )
+        assertFalse(
+            heapOverrideRaisesCeiling(total, isLowRam = true, requestedMb = 1024),
+            "a low-RAM device never ran with the request, whatever its direction",
+        )
+        assertFalse(
+            heapOverrideRaisesCeiling(0, isLowRam = false, requestedMb = 1024),
+            "an unreadable total ignores the request, so there is nothing in effect",
+        )
+    }
+
+    @Test
+    fun `a clamped raise is still a raise`() {
+        // The value that reaches the command line is what matters, not the number
+        // in settings.json. A request of 4096 on a 6 GB device arrives as 1536,
+        // which is still twice the derived 768 and is exactly the case the budget
+        // is for.
+        assertTrue(heapOverrideRaisesCeiling(6L * 1024, isLowRam = false, requestedMb = 4096))
+        // And a request BELOW the floor is raised to it, which on a large device is
+        // still a lowering: 256 against a derived 768.
+        assertFalse(heapOverrideRaisesCeiling(6L * 1024, isLowRam = false, requestedMb = 64))
     }
 
     @Test

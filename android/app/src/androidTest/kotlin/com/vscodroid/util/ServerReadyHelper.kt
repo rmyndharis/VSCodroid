@@ -8,8 +8,9 @@ import java.net.URL
  * Shared helper for instrumented tests that need the VS Code server to be running.
  *
  * Provides:
- * - [markSetupComplete] writes the setup_version pref so SplashActivity skips extraction.
- * - [clearSetupState] removes it again, plus the toolchain picker flag.
+ * - [markSetupComplete] writes the setup_version and setup_version_code prefs so
+ *   SplashActivity skips extraction.
+ * - [clearSetupState] removes them again, plus the toolchain picker flag.
  * - [healthCheck] asks the server for /version on a port and says whether it answered.
  * - [waitForPort] polls that same check until the port answers or the timeout runs out.
  */
@@ -20,6 +21,21 @@ object ServerReadyHelper {
     // SplashActivity uses "vscodroid" for toolchain_picker_shown
     private const val APP_PREFS = "vscodroid"
     private const val KEY_SETUP_VERSION = "setup_version"
+
+    /**
+     * The other half of the staleness test, and the half that was missing.
+     *
+     * `FirstRunSetup.isFirstRun` asks `setupIsStale(storedName, storedCode, ...)`,
+     * which is an OR: either one differing re-runs the whole of setup. Writing
+     * only the name left the code at its default 0 against a real versionCode, so
+     * on any install where setup had never actually completed, this helper could
+     * not make `isFirstRun()` false and every test that called it to skip
+     * extraction ran against a false premise. On a device that had completed setup
+     * once it appeared to work, because the value it did not write was already
+     * right, which is why it went unnoticed: `adb shell pm clear` is what parts the
+     * two, and that is exactly what a clean instrumented run starts from.
+     */
+    private const val KEY_SETUP_VERSION_CODE = "setup_version_code"
     private const val KEY_PICKER_SHOWN = "toolchain_picker_shown"
 
     /**
@@ -27,20 +43,27 @@ object ServerReadyHelper {
      * first-run setup already done and jumps straight to [com.vscodroid.MainActivity].
      *
      * Writes to both prefs files to match how the production code uses them:
-     * - `vscodroid_setup` for `setup_version` (read by [com.vscodroid.setup.FirstRunSetup])
+     * - `vscodroid_setup` for `setup_version` and `setup_version_code`
+     *   (both read by [com.vscodroid.setup.FirstRunSetup])
      * - `vscodroid` for `toolchain_picker_shown` (read by [com.vscodroid.SplashActivity])
+     *
+     * Both version keys, because the production test is an OR over the pair. See
+     * [KEY_SETUP_VERSION_CODE].
      *
      * Call this in a @Before method for tests that only need MainActivity.
      */
     fun markSetupComplete(context: Context) {
-        val versionName = try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        val info = try {
+            context.packageManager.getPackageInfo(context.packageName, 0)
         } catch (_: Exception) {
-            "test"
+            null
         }
         context.getSharedPreferences(SETUP_PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_SETUP_VERSION, versionName)
+            .putString(KEY_SETUP_VERSION, info?.versionName ?: "test")
+            // Read back with getInt, and narrowed the same way FirstRunSetup
+            // narrows it, so the two comparands are the same number.
+            .putInt(KEY_SETUP_VERSION_CODE, info?.longVersionCode?.toInt() ?: 0)
             .commit()
         context.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -49,13 +72,19 @@ object ServerReadyHelper {
     }
 
     /**
-     * Clears the setup_version pref so the next SplashActivity launch runs
-     * first-run extraction. Useful for SplashActivity tests.
+     * Clears the setup_version and setup_version_code prefs so the next
+     * SplashActivity launch runs first-run extraction. Useful for SplashActivity
+     * tests.
+     *
+     * Removing only one of the pair would still force extraction, because the
+     * staleness test is an OR, but it would leave the other behind for the next
+     * test in the same run to read.
      */
     fun clearSetupState(context: Context) {
         context.getSharedPreferences(SETUP_PREFS, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_SETUP_VERSION)
+            .remove(KEY_SETUP_VERSION_CODE)
             .commit()
         context.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
             .edit()
