@@ -265,6 +265,18 @@ function namesProgram(name, needle) {
 }
 
 /**
+ * The first argument that is not an option: the script the runtime was asked to
+ * run.
+ *
+ * One definition for the two readers below. The row's name and the backend rule
+ * in classify() both mean this argument, and a second copy of the rule is how
+ * one of them comes to mean something slightly different.
+ */
+function scriptArgument(parts) {
+    return parts.slice(1).find((arg) => !arg.startsWith('-')) || '';
+}
+
+/**
  * The name the details view prints for a process.
  *
  * This was the basename of argv[0] followed by argv[1], and on this device that
@@ -285,7 +297,7 @@ function namesProgram(name, needle) {
 function shortCommand(cmdline) {
     const parts = cmdline.split(' ').filter(Boolean);
     const program = path.basename(parts[0] || '');
-    const script = parts.slice(1).find((arg) => !arg.startsWith('-'));
+    const script = scriptArgument(parts);
     const type = parts.find((arg) => arg.startsWith('--type='));
 
     let name = script ? path.basename(script) : '';
@@ -319,7 +331,8 @@ function classify(cmdline) {
     // The paths below stay on the whole line deliberately: saf-mirrors and
     // saf-writeback ARE directories rather than program names, so a basename
     // would never see them.
-    const names = cmd.split(' ').filter(Boolean).map((arg) => path.basename(arg));
+    const parts = cmd.split(' ').filter(Boolean);
+    const names = parts.map((arg) => path.basename(arg));
 
     if (cmd.includes('server-main.js')) return 'server';
     if (cmd.includes('bootstrap-fork') && cmd.includes('filewatcher')) return 'fileWatcher';
@@ -351,7 +364,23 @@ function classify(cmdline) {
     // 'Kill Idle Servers' command, which filters on this very type. Both exist for
     // a lazily started, idle-killable server forked by a host, which is what this
     // is.
-    if (cmd.includes('node_modules/@github/copilot-')) return 'langserver';
+    //
+    // `node_modules/@github/copilot-` on its own is not ours. @github/copilot
+    // names eight @github/copilot-<platform> packages as optionalDependencies in
+    // its own manifest, so a user who installs the Copilot CLI in a project of
+    // their own has that exact fragment under their own node_modules, and a
+    // substring over the whole line reaches it. That is the defect that took
+    // 'vscode-eslint' out of the list above, in the same shape: the names a loose
+    // needle can still reach are the user's, and this label is what makes a
+    // process eligible for the SIGTERM below.
+    //
+    // So the rule asks for the tree this app unpacks, in the one argument that
+    // names the program. filesDir/server/vscode-reh holds both alias sites
+    // FirstRunSetup.setupCopilotAndroidAliases builds, the agent host's and the
+    // session provider's, and a project directory cannot be inside it.
+    const script = scriptArgument(parts);
+    if (script.includes('/server/vscode-reh/') &&
+        script.includes('/node_modules/@github/copilot-')) return 'langserver';
 
     for (const pattern of LANG_SERVER_PATTERNS) {
         const needle = pattern.toLowerCase();
@@ -401,11 +430,20 @@ function scan() {
             // command line matches no pattern and would come out 'unknown'.
             const type = pid === process.pid ? 'bootstrap' : classify(cmdline);
             if (type === 'app') continue; // main Android process, not a phantom
-            tree.push({ pid, ppid: info.ppid, type, cmd: shortCommand(cmdline) });
+            const entry = { pid, ppid: info.ppid, type, cmd: shortCommand(cmdline) };
+            tree.push(entry);
 
             if (type === 'langserver') {
                 activeLsPids.add(pid);
                 trackLangServer(pid, now);
+                // After the tracking, never before. trackLangServer is what
+                // moves lastActive when the CPU time has changed, so asking
+                // first answers from the previous scan's reading and reports a
+                // server idle in the very scan that saw it do work. A first
+                // sighting is not what makes the order matter -- there is no
+                // tracker entry then and isIdle says false either way -- so the
+                // fixture that holds this is one whose CPU time moves.
+                entry.idle = isIdle(pid, now);
             }
         }
 
@@ -447,6 +485,23 @@ function scan() {
     }
 }
 
+/**
+ * Whether a tracked language server has gone IDLE_KILL_THRESHOLD_MS without its
+ * CPU time moving.
+ *
+ * One definition, two reclaim paths. The pressure kill below applies it here,
+ * and the snapshot carries its answer so that the 'Kill Idle Servers' command
+ * can apply the same one: that command runs in the extension host, which sees
+ * nothing of this process but the JSON file, so before this it filtered on the
+ * type alone and SIGTERMed every language server, including the one the user was
+ * waiting on. A process whose CPU time could not be read is never tracked, and
+ * so is never claimed to be idle.
+ */
+function isIdle(pid, now) {
+    const tracked = lsCpuTracker.get(pid);
+    return !!tracked && now - tracked.lastActive >= IDLE_KILL_THRESHOLD_MS;
+}
+
 function trackLangServer(pid, now) {
     const cpuTime = readCpuTime(pid);
     if (cpuTime < 0) return;
@@ -466,8 +521,11 @@ function trackLangServer(pid, now) {
 
 function killIdleLangServers(now) {
     const killed = [];
-    for (const [pid, info] of lsCpuTracker) {
-        if (now - info.lastActive >= IDLE_KILL_THRESHOLD_MS) {
+    // A copied key list rather than the live map: the deletions below happen
+    // inside the loop, and iterating a Map while removing from it is a question
+    // this does not need to have an answer to.
+    for (const pid of [...lsCpuTracker.keys()]) {
+        if (isIdle(pid, now)) {
             try {
                 const cmdline = readCmdline(pid);
                 process.kill(pid, 'SIGTERM');

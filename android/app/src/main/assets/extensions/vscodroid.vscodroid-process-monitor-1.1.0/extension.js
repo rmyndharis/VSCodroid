@@ -74,6 +74,7 @@ function updateStatusBar(snapshot) {
     const budget = snapshot.budget || {};
     const soft = budget.soft || 8;
     const error = budget.error || 14;
+    const idle = budget.idle || 5;
     if (total >= error) {
         statusBarItem.backgroundColor = new vscode.ThemeColor(
             'statusBarItem.errorBackground'
@@ -128,7 +129,15 @@ function updateStatusBar(snapshot) {
     // current tree however old the sentence above them is -- and
     // showProcessTree() prints the per-type counts and the recommendations that
     // used to be crammed in here, freshly, each time it is opened.
-    if (total >= 12 && !criticalShownAtThreshold) {
+    //
+    // The tiers are the snapshot's, like the colours above. They were 12 and 8
+    // here while the bar coloured on 14 and 8, so between 12 and 13 an error
+    // notification stood in front of a status item that was merely amber, and
+    // nothing tied the 12 to any number the monitor publishes. The target named
+    // in the warning is the idle baseline, which is a constant of the app rather
+    // than a reading of this tree, so it stays in the sentence and now comes from
+    // the same place as everything else.
+    if (total >= error && !criticalShownAtThreshold) {
         criticalShownAtThreshold = true;
         vscode.window.showErrorMessage(
             'Too many phantom processes; Android may start killing them. ' +
@@ -139,10 +148,10 @@ function updateStatusBar(snapshot) {
             if (choice === 'Kill Idle Servers') killIdleLanguageServers();
             else if (choice === 'Show Details') showProcessTree();
         });
-    } else if (total >= 8 && !warningShownAtThreshold) {
+    } else if (total >= soft && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
         vscode.window.showWarningMessage(
-            'Phantom processes are above the target of 5. ' +
+            `Phantom processes are above the target of ${idle}. ` +
                 'The live count is in the status bar.',
             'Kill Idle Servers',
             'Show Details'
@@ -150,7 +159,7 @@ function updateStatusBar(snapshot) {
             if (choice === 'Kill Idle Servers') killIdleLanguageServers();
             else if (choice === 'Show Details') showProcessTree();
         });
-    } else if (total < 5) {
+    } else if (total < idle) {
         warningShownAtThreshold = false;
         criticalShownAtThreshold = false;
     }
@@ -162,14 +171,33 @@ function killIdleLanguageServers() {
         return;
     }
 
+    // Idle, not merely present. This filtered on the type alone and SIGTERMed
+    // every language server the snapshot listed, which is not what the command
+    // is called and not what a user pressing it under memory pressure is
+    // agreeing to: the server doing the work they are waiting on is the one
+    // most likely to be in the list. Idleness is CPU time between two scans and
+    // is decided in process-monitor.js, which is the only side that can see it;
+    // the row carries its answer.
     const langservers = (lastSnapshot.tree || []).filter(p => p.type === 'langserver');
     if (langservers.length === 0) {
         vscode.window.showInformationMessage('No language servers running.');
         return;
     }
 
+    // `=== true` and not a truthiness test: a snapshot written before the row
+    // carried this field has no answer to give, and an absent one has to mean
+    // 'not known to be idle' rather than being coerced into one.
+    const idle = langservers.filter(p => p.idle === true);
+    if (idle.length === 0) {
+        vscode.window.showInformationMessage(
+            `${langservers.length} language server${langservers.length !== 1 ? 's' : ''} ` +
+                'running, none idle. Idle ones are freed automatically under memory pressure.'
+        );
+        return;
+    }
+
     let killed = 0;
-    for (const proc of langservers) {
+    for (const proc of idle) {
         try {
             process.kill(proc.pid, 'SIGTERM');
             killed++;
@@ -179,7 +207,7 @@ function killIdleLanguageServers() {
     }
 
     vscode.window.showInformationMessage(
-        `Sent SIGTERM to ${killed} language server${killed !== 1 ? 's' : ''}. They will restart on demand.`
+        `Sent SIGTERM to ${killed} idle language server${killed !== 1 ? 's' : ''}. They will restart on demand.`
     );
 }
 

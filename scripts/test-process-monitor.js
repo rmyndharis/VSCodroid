@@ -453,6 +453,17 @@ function main() {
         // eligible to be killed.
         [1031, [NODE, '/data/user/0/com.vscodroid/files/home/projects/copilot-demo/index.js'],
             'unknown'],
+        // The needle's own negative control, and the reason it is not a bare
+        // package name: @github/copilot lists eight @github/copilot-<platform>
+        // packages as optional dependencies, so this is what a user gets by
+        // running the Copilot CLI's own install inside a project. It is theirs,
+        // and 'langserver' would put it one idle period from a SIGTERM.
+        [1032, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/node_modules/@github/copilot-linux-arm64/index.js',
+            '--headless'], 'unknown'],
+        // The other alias site, which the agent host does not use but the
+        // session provider can: same tree, deeper path.
+        [1033, [NODE, `${REH}/extensions/copilot/node_modules/@github/copilot-android-arm64/index.js`,
+            '--stdio'], 'langserver'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
@@ -510,6 +521,76 @@ function main() {
         `error ${budget.error}, hard ${budget.hard}`,
     );
     assert.strictEqual(snapshot.total, cases.length + 1, 'the count moved');
+
+    // A language server seen once is not idle, and the field has to be there to
+    // say so: the 'Kill Idle Servers' command reads it off the row and treats a
+    // missing one as 'not idle', so an absent field and a false one are the same
+    // to it and only this can tell them apart.
+    const servers = snapshot.tree.filter((e) => e.type === 'langserver');
+    assert.ok(servers.length > 1, `only ${servers.length} language server(s) reached the snapshot`);
+    assert.deepStrictEqual(
+        servers.filter((e) => e.idle !== false).map((e) => e.pid), [],
+        'a language server first seen in this very scan is reported idle, so the command that ' +
+            'sheds idle servers would SIGTERM one that has never had a chance to run',
+    );
+
+    // The other direction, which needs time rather than another fixture: the
+    // tracker holds the first scan's reading and the stat files never change, so
+    // a scan five minutes later sees no CPU movement and every one of them is
+    // idle. Date.now is moved rather than the fixtures, because what is being
+    // measured is elapsed time and nothing else in the scan reads a clock.
+    // One of them does not sit still, and it is what binds the ORDER of the two
+    // calls the scan makes rather than only their result. trackLangServer is
+    // what moves lastActive when the CPU time has changed, so a scan that asks
+    // isIdle before it runs answers from the previous scan's reading: this
+    // server used CPU between the two scans and would be called idle in the very
+    // scan that saw the work. A first sighting cannot show that, because there
+    // is no tracker entry yet and the answer is false whichever order they run
+    // in.
+    //
+    // The mutation is asserted rather than assumed. A stat file that did not
+    // change would leave this row indistinguishable from the ones that really
+    // are idle, and the pair of assertions below would then both be satisfied by
+    // a monitor that never reads CPU time at all.
+    const BUSY = 1002;
+    const busyStat = path.join(proc, String(BUSY), 'stat');
+    const beforeStat = fs.readFileSync(busyStat, 'utf8');
+    fs.writeFileSync(busyStat, beforeStat.replace('7 3', '9 5'));
+    assert.notStrictEqual(
+        fs.readFileSync(busyStat, 'utf8'), beforeStat,
+        `pid ${BUSY}'s utime and stime did not move, so this fixture cannot tell a server that ` +
+            'ran from one that sat idle',
+    );
+    assert.strictEqual(
+        byPid.get(BUSY).type, 'langserver',
+        `pid ${BUSY} is not classified as a language server, so its CPU time is never read and ` +
+            'the reading above is not part of any comparison',
+    );
+
+    const realNow = Date.now;
+    Date.now = () => realNow() + 6 * 60 * 1000;
+    try {
+        monitor.start(1001, { procRoot: proc });
+        monitor.stop();
+    } finally {
+        Date.now = realNow;
+    }
+    const later = JSON.parse(fs.readFileSync(path.join(tmp, 'vscodroid-processes.json'), 'utf8'));
+    const stillBusy = later.tree
+        .filter((e) => e.type === 'langserver' && e.pid !== BUSY && e.idle !== true)
+        .map((e) => e.pid);
+    assert.deepStrictEqual(
+        stillBusy, [],
+        'these language servers have not used a tick of CPU in six minutes and are still not ' +
+            'reported idle, so the command that sheds idle servers finds none, ever: ' +
+            stillBusy.join(', '),
+    );
+    assert.strictEqual(
+        later.tree.find((e) => e.pid === BUSY).idle, false,
+        `pid ${BUSY} used CPU between the two scans and is still reported idle, so the row is ` +
+            'answered from the reading taken before the one that saw the work, and the command ' +
+            'that sheds idle servers would SIGTERM a server that is working',
+    );
 
     const contract = checkPressureContract(tmp);
     const labelled = checkLabelCoverage(snapshot);
