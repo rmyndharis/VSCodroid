@@ -170,6 +170,19 @@ class PickerAccessibilityWiringTest {
     }
 
     /**
+     * The layout with its comments taken out.
+     *
+     * XML has no way to disable one attribute, so a toolbar is retired by wrapping
+     * the element in `<!-- -->` and writing another beside it. Both questions below
+     * are answered by the retired copy if it is left in the text, and the first one
+     * exists precisely to stop the second passing over an icon that is no longer
+     * there. Non-greedy and dot-matches-all, because a commented-out element spans
+     * lines.
+     */
+    private fun layoutWithoutComments(): String =
+        toolbarLayout.readText().replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+
+    /**
      * `setSupportActionBar` is never called anywhere in this app, so the framework's
      * own "Navigate up" default never applies and no toolbar style supplies one.
      * The attribute in the layout is the only thing standing between a screen reader
@@ -182,7 +195,7 @@ class PickerAccessibilityWiringTest {
             "${toolbarLayout.path} is missing; this test would otherwise pass by " +
                 "reading nothing",
         )
-        val xml = toolbarLayout.readText()
+        val xml = layoutWithoutComments()
 
         // Anchored on the `=` rather than written as a substring. `app:navigationIcon`
         // is a prefix of `app:navigationIconTint`, which this toolbar also sets, so a
@@ -215,7 +228,7 @@ class PickerAccessibilityWiringTest {
             "${toolbarLayout.path} or ${strings.path} is missing; without this the " +
                 "reader gets a FileNotFoundException instead of the sentence above",
         )
-        val xml = toolbarLayout.readText()
+        val xml = layoutWithoutComments()
         val name = Regex("""app:navigationContentDescription="@string/(\w+)"""")
             .find(xml)?.groupValues?.get(1)
 
