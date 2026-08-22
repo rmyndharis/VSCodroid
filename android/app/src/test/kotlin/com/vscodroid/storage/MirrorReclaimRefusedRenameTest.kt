@@ -101,6 +101,48 @@ class MirrorReclaimRefusedRenameTest {
     }
 
     /** A mirror whose every file the record vouches for, so the gate lets it through. */
+    /**
+     * The other half of the same commit point, and the half nothing else executes.
+     *
+     * The journal is keyed by absolute path, and a mirror's name is a digest of the
+     * tree URI rather than of the session, so the path a removal frees is the path the
+     * same folder returns to when the user grants it again. The records have to move
+     * with the directory, and the rename is the last moment anything can still tell the
+     * departing mirror's records from a replacement's.
+     *
+     * Driven through reclaimMirror rather than by planting the moved lines, because
+     * planting them measures the sweep that reads them and not the rename that writes
+     * them. Nothing else in the suite reaches this call.
+     */
+    @Test
+    fun `a set-aside mirror takes its upload records with it`() {
+        val dir = vouchedMirror()
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(folderUri))
+
+        val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+        val underMirror = File(dir, "src/main.kt").absolutePath
+        val elsewhere = File(filesDir, "somewhere/other.kt").absolutePath
+        journal.writeText(underMirror + "\n" + elsewhere + "\n")
+
+        manager.reclaimMirror(dir.name, force = true)
+
+        val moved = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + dir.name)
+        val lines = journal.readLines()
+        assertTrue(
+            lines.contains(File(moved, "src/main.kt").absolutePath),
+            "the record did not follow the directory, so a re-grant of this folder gets " +
+                "a mirror whose path already carries the departing copy's distrust: $lines",
+        )
+        assertTrue(
+            !lines.contains(underMirror),
+            "the record was left under the freed path, where the next mirror will be: $lines",
+        )
+        assertTrue(
+            lines.contains(elsewhere),
+            "a record belonging to another mirror was moved by the same rewrite: $lines",
+        )
+    }
+
     private fun vouchedMirror(): File {
         val dir = manager.getMirrorDir(folderUri).apply { mkdirs() }
         File(dir, "src").mkdirs()
