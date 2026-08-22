@@ -83,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The release plan carries a checklist for an ordinary release, and tagging refuses a version this file has no section for.
 - Packaging checks that the documented list of bundled binaries matches what ships, so a binary added without its documentation fails the build.
 - The testing document gives the command that measures the suite instead of a figure that goes stale the next time a test is added.
+- Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 
 ### Fixed
 - The setup screen now keeps the display awake while it unpacks the app, so a screen timeout can no longer strand a first run part-way through an 800 MB extraction.
@@ -230,6 +231,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A modifier latched on the key row is cleared when the editor page is rebuilt after a crash, instead of staying held for a page that never heard of it.
 - Running out of space during setup says how much to free rather than how much the whole unpack needs.
 - The storage check no longer counts an installed toolchain's files as space the unpack can reuse, which let a full device through a gate meant to refuse it.
+- Files created in the editor inside a device folder no longer arrive on the device with .txt appended to their name.
+- A screen reader can reach Cancel during a toolchain download. Every progress report replaced the card, taking accessibility focus with it.
+- Cancelling a toolchain download now stops it during extraction and the copy, not only before the checksum, and no longer stalls the packs queued behind it.
+- A first run interrupted by the system no longer leaves a bundled extension permanently half-installed, listed but broken on every activation.
+- The loading screen is shown while the editor server starts, instead of a blank white page.
+- Renaming a folder inside a device folder keeps the record of edits that never reached the device, so a part-written copy can no longer overwrite the complete one.
+- Saving a download no longer freezes the app between chunks, and a storage provider that has gone away no longer ends the app when the destination is opened.
+- Ctrl+Shift+P and other two-modifier shortcuts no longer lose the modifier just pressed to a stale reading from the page.
+- Opening a device folder no longer does two cross-process lookups and a preferences read on the interface thread.
+- Workspace images, fonts and other assets edited on disk are served fresh instead of from a one-year cache.
+- Kill Idle Servers and the memory-pressure sweep no longer treat a program running from your own device folder as a language server.
+- The repair for a truncated .bashrc or settings.json no longer deletes the file before rewriting it, so a failed repair leaves it for the next launch instead of losing it.
+- Running out of space during setup says how much to free rather than the size of the whole unpack.
+- The process list no longer freezes for the rest of a session when the system reclaims the app's cache directory.
+- The toolchain removal dialog is dismissed on rotation instead of leaking its window.
 
 ### Security
 - Symbolic links inside a device folder's local copy are no longer written out to the device, where they arrived as ordinary files carrying whatever their target held.
@@ -240,6 +256,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Content rendered in the editor can no longer read workspace files across origins. Served files are readable by anyone, and a page in the built-in browser could fetch one.
 - A webview can no longer name an arbitrary file and have the app read it with the editor's own credential. The route that did was reachable but unused.
 - The editor can no longer make the app fetch an arbitrary web address on its behalf. The route reached any host, including addresses only this device can see.
+- Bug reports redact credentials named the way a server names them. A rule required the name to start at a word boundary, so NPM_TOKEN, DB_PASSWORD and their family were written out in full.
+- A device folder's path no longer reaches the system log when the folder is opened from the recent list.
+- Content rendered in the editor can no longer steer the address the app fetches when it proxies an editor asset.
 
 ## [1.1.0] - 2026-08-19
 
