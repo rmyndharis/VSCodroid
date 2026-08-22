@@ -145,7 +145,10 @@ class SafSyncEngine(private val context: Context) {
         mirrorDir: File,
         onProgress: (Int, Int) -> Unit
     ) = withContext(Dispatchers.IO) {
-        Logger.i(tag, "Starting initial sync: $safUri → ${mirrorDir.absolutePath}")
+        // By mirror name rather than by tree URI: the URI spells the user's own
+        // directory path, and Logger.i is not gated on a debuggable build. See
+        // SafStorageManager.persistPermission for the whole of that reasoning.
+        Logger.i(tag, "Starting initial sync of ${mirrorDir.name}")
         val startTime = System.currentTimeMillis()
 
         // Clear cache for fresh sync
@@ -1036,7 +1039,8 @@ class SafSyncEngine(private val context: Context) {
      * Writes a local file's contents back to its corresponding SAF document.
      *
      * Declines outright when another write already holds the document, so two streams
-     * never interleave into one file: see [documentWritesInFlight].
+     * never interleave into one file: see [documentWritesInFlight]. Declines a symbolic
+     * link outright too, for the reason spelled out at that test.
      *
      * The copy itself runs in [writeLocalToSafHoldingDocument], bracketed by the
      * in-flight journal, and the bracket is the whole point of that method's shape:
@@ -1056,6 +1060,28 @@ class SafSyncEngine(private val context: Context) {
      * gets better within a second.
      */
     private fun writeLocalToSaf(localFile: File, safDocUri: Uri) {
+        // A symbolic link is never written out, which is the same refusal [uploadPlan]
+        // and [watchableDirectories] make, in the same words and for the same reason: a
+        // mirror is routinely a checked-out repository, so a link inside one is
+        // attacker-supplied in the ordinary case. Every stream below reads *through* the
+        // link, so without this a link named `notes.txt` puts its target's bytes into the
+        // device document of that name, and the target can be anywhere this app can read,
+        // its own private storage included.
+        //
+        // Here rather than at the four call sites, because this is the one point all four
+        // pass through and two of them had no link test anywhere: a CREATE or MODIFY the
+        // observer reports for a single entry never goes near [uploadPlan], which is the
+        // only place the tree stated this policy. A DELETE does not come through here,
+        // which is what it needs: by then the entry is gone, the link question has no
+        // answer, and the device document still has to be removed.
+        if (isLink(localFile)) {
+            Logger.w(
+                tag,
+                "Not writing ${localFile.name} back: it is a symbolic link, and writing " +
+                    "it would copy its target's bytes into the device folder",
+            )
+            return
+        }
         val document = safDocUri.toString()
         if (!documentWritesInFlight.add(document)) {
             // Someone is streaming into this document now. Declining is what keeps the
@@ -1284,11 +1310,16 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Drops a journal line this sync has already acted on, without touching any claim.
+     * Drops a journal line whose reason to exist has gone, without touching any claim.
+     *
+     * Two callers, and neither of them is a writer. [initialSync] consumes a record left
+     * by a process that died, for a path it is about to write itself. [processWriteBack]
+     * consumes one when the mirror file the line names has been deleted, which is where
+     * a file rename arrives too: the line records an edit that never reached the device,
+     * and once the file holding that edit is gone there is no edit left to protect.
      *
      * Not the same operation as [clearUploadInFlight] and deliberately not spelled as
-     * one. [initialSync] consumes a record left by a process that died, and it does that
-     * for a path it is about to write itself; treating that as releasing a claim would
+     * one. Treating either of those as releasing a claim would
      * decrement a live writer to zero and remove the line while that writer was still
      * streaming, which is the defect the count exists to prevent, arriving through a
      * different door. A path somebody is writing right now is left alone, and that
@@ -1700,6 +1731,21 @@ class SafSyncEngine(private val context: Context) {
                 if (job.relativePath.isNotEmpty()) {
                     forgetCachedSubtree(job.relativePath)
                 }
+                // And the upload record, for the same reason and with the same
+                // reach. A journal line is keyed by the mirror path and is removed
+                // only by a write of that path that lands, so a write-back that gave
+                // up left one standing, deliberately, and nothing ever retired it
+                // once the file it names went away. Since a file rename arrives here
+                // as MOVED_FROM, one failed save followed by renaming the file in the
+                // editor was enough to strand a line for ever, and a stranded line is
+                // not inert: `SafStorageManager.mayReclaim` reads any line under a
+                // mirror as "this mirror holds a write that never reached the device",
+                // so the launch pass kept the mirror, the storage screen described it
+                // as holding work the device does not, and the removal the user asked
+                // for was refused, all on the strength of a file that is not there.
+                // The claim count is what keeps this off a path somebody is streaming
+                // into right now; see [consumeStaleUploadRecord].
+                consumeStaleUploadRecord(job.localPath)
             }
             SyncType.RENAME -> {
                 // safDocUri is the document under the *old* name here, and localPath the
@@ -1748,7 +1794,11 @@ class SafSyncEngine(private val context: Context) {
                     job.safDocUri != null && job.safSourceParentUri != null &&
                         targetParentUri != null ->
                         moveInSaf(job.safDocUri, job.safSourceParentUri, targetParentUri)
-                    // A rename inside one directory has nothing to move.
+                    // A rename inside one directory has nothing to move. This arm is
+                    // only that case: [handleMirrorEvent] does not offer a RENAME at
+                    // all when the pair crossed directories and the source parent
+                    // could not be resolved, because renaming in the parent the
+                    // document is already in is not the move that was asked for.
                     job.safSourceParentUri == null -> job.safDocUri
                     // A cross-directory move that could not be attempted has not
                     // happened, whatever an unchanged name implies; reporting it
@@ -1923,7 +1973,7 @@ class SafSyncEngine(private val context: Context) {
         val renamedFrom =
             if (isDirectory &&
                 (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_TO &&
-                hasVanishedCandidate() &&
+                hasVanishedCandidate(now) &&
                 (safDocUri == null || !providerHoldsDocument(safTreeUri, relativePath))
             ) claimVanishedDirectory(relativePath, now) else null
         // Resolved after the claim rather than when the directory vanished, so that the
@@ -1937,21 +1987,40 @@ class SafSyncEngine(private val context: Context) {
         // actually is rather than from the destination: `moveDocument` refuses a source
         // parent the document is not in. Resolving it unconditionally would ask the
         // provider on every ordinary rename for a value nothing would read.
+        val crossesDirectories = renamedFrom != null && renamedFromUri != null &&
+            parentPathOf(renamedFrom) != parentPathOf(relativePath)
         val sourceParentUri =
-            if (renamedFrom != null && renamedFromUri != null &&
-                parentPathOf(renamedFrom) != parentPathOf(relativePath)
-            ) resolveDocumentUri(safTreeUri, parentPathOf(renamedFrom)) else null
+            if (crossesDirectories) {
+                resolveDocumentUri(safTreeUri, parentPathOf(renamedFrom!!))
+            } else {
+                null
+            }
+
+        // A pair that crossed directories and whose source parent did not resolve is not
+        // a rename this write-back can carry out, so it is not offered as one. Both
+        // reasons for a null source parent used to arrive at the same place -- a pair
+        // inside one directory, which genuinely has nothing to move, and a cross-directory
+        // pair whose old parent the provider would not answer for -- and the arm they
+        // shared hands the write-back the document under its OLD name with nothing to
+        // move it. On the common shape of a move, dragging `src/util` into `src/legacy/`,
+        // the name does not change either, so the write-back performed no call at all and
+        // still reported the move done: the device kept `src/util`, never received
+        // `src/legacy/util`, and the create fallback that would have delivered it was
+        // skipped. Declining the pairing puts the job back on the ordinary create path,
+        // which is what an unclaimed move has always fallen back to, and leaves the old
+        // copy standing on the device where the user can see it.
+        val pairedRename = renamedFromUri != null && !(crossesDirectories && sourceParentUri == null)
 
         session.queue.offer(
             SyncJob(
-                type = if (renamedFromUri != null) SyncType.RENAME else type,
+                type = if (pairedRename) SyncType.RENAME else type,
                 localPath = localFile.absolutePath,
-                safDocUri = renamedFromUri ?: safDocUri,
+                safDocUri = if (pairedRename) renamedFromUri else safDocUri,
                 safParentUri = safParentUri,
                 safTreeUri = safTreeUri,
                 timestamp = now,
                 safSourceParentUri = sourceParentUri,
-                previousName = renamedFrom?.let { File(it).name },
+                previousName = if (pairedRename) renamedFrom?.let { File(it).name } else null,
                 relativePath = relativePath
             )
         )
@@ -1975,16 +2044,29 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Whether any vanished directory is still waiting for its other half, without
-     * consuming anything.
+     * Whether any vanished directory is still claimable at [now], without consuming
+     * anything.
      *
      * Asked before the provider walk in the claim decision, because it is a lock
      * and a size check while the walk is a binder round trip per path segment on
      * the observer thread, and most directory MOVED_TO events have nothing to
      * pair with: a folder arriving from outside the mirror, a build tool swapping
      * trees. Those used to pay the walk for an answer the cheap check settles.
+     *
+     * [now] is a parameter rather than a reading taken here so that this and
+     * [renameSourceFor] judge one event against one clock. Without the window this
+     * answered "yes" for an entry [renameSourceFor] would decline as expired, and
+     * because entries are otherwise pruned only when the next directory MOVED_FROM
+     * arrives, one departure that never found a partner (`mv dist /sdcard/...`) left
+     * the filter answering yes for the rest of the session: every directory a
+     * `git checkout` or an `npm install` created then paid the per-segment provider
+     * walk on the observer thread, which is the thread that has to keep up with every
+     * inotify event for the whole mirror. Pruning here as well as on the add is what
+     * stops it: the verdict is unchanged, since [renameSourceFor] applies the same
+     * window, and the walk it saves is the point.
      */
-    private fun hasVanishedCandidate(): Boolean = synchronized(vanishedLock) {
+    internal fun hasVanishedCandidate(now: Long): Boolean = synchronized(vanishedLock) {
+        vanishedDirectories.removeAll { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
         vanishedDirectories.isNotEmpty()
     }
 

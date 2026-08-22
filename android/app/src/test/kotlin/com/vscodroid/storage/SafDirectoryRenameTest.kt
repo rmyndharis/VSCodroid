@@ -116,7 +116,18 @@ class SafDirectoryRenameTest {
      * [tree] maps a parent's document id to the names directly under it, with `root` as
      * the tree's own document id.
      */
-    private fun deviceTree(tree: Map<String, List<String>>) {
+    private fun deviceTree(tree: Map<String, List<String>>) =
+        deviceTree { parent -> tree[parent] ?: emptyList() }
+
+    /**
+     * The same, for a case whose answers change while one event is being handled.
+     *
+     * A provider that stops answering for a directory it answered for a moment ago is
+     * the whole of what a transient failure looks like from here, and the fixed map
+     * above cannot express it. [children] is asked per query with the parent's document
+     * id, so a case can decide from what has already been asked.
+     */
+    private fun deviceTree(children: (String) -> List<String>) {
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
             val parent = secondArg<String>()
             mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:$parent" }
@@ -135,7 +146,7 @@ class SafDirectoryRenameTest {
         }
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             val parent = firstArg<Uri>().toString().removePrefix("children:")
-            val names = tree[parent] ?: emptyList()
+            val names = children(parent)
             val cursor = mockk<Cursor>(relaxed = true)
             var row = -1
             every { cursor.moveToNext() } answers { ++row < names.size }
@@ -397,6 +408,70 @@ class SafDirectoryRenameTest {
 
         verify(exactly = 1) { DocumentsContract.createDocument(any(), any(), any(), "util") }
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    /**
+     * A device tree that loses `src` the moment it has answered for what is inside it.
+     *
+     * That is the shape of the transient failure this pair of cases turns on: the pair's
+     * old path resolves, and the query for its old *parent*, which comes a moment later,
+     * does not. [stillHasSrc] lets the control run the identical sequence with the
+     * provider answering throughout.
+     */
+    private fun providerLosingSrc(stillHasSrc: Boolean) {
+        var visible = true
+        deviceTree { parent ->
+            when (parent) {
+                "root" -> if (visible) listOf("src") else emptyList()
+                "doc:src" -> listOf("util").also { if (!stillHasSrc) visible = false }
+                else -> emptyList()
+            }
+        }
+    }
+
+    /**
+     * `mv src/util .` where the provider will not say what `src` is any more.
+     *
+     * Both reasons for having no source parent used to arrive at the same arm of the
+     * write-back: a pair that stayed inside one directory, which genuinely has nothing to
+     * move, and a pair that crossed directories whose old parent could not be resolved.
+     * That arm hands the write-back the document under its OLD name with nothing to move
+     * it, and on the common shape of a move the name does not change either, so no
+     * provider call was made at all and the move was still recorded as done. The device
+     * kept `src/util`, never received `util`, the mirror's copy was left mirror-only, and
+     * the create that would have delivered it was skipped because the job claimed success.
+     */
+    @Test
+    fun `a move whose old parent stops resolving is created at its new path`() {
+        providerLosingSrc(stillHasSrc = false)
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "src/util")
+        observe(FileObserver.MOVED_TO or isDirFlag, "util")
+        File(mirror, "util").mkdirs()
+        drain()
+
+        verify(exactly = 1) { DocumentsContract.createDocument(any(), any(), any(), "util") }
+        verify(exactly = 0) { DocumentsContract.renameDocument(any(), any(), any()) }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    /**
+     * The control, and the reason the case above cannot be satisfied by declining every
+     * move. The identical sequence against a provider that keeps answering still moves
+     * the document, which is the operation that carries the subtree the mirror does not
+     * hold.
+     */
+    @Test
+    fun `the same move is still performed when the old parent resolves`() {
+        providerLosingSrc(stillHasSrc = true)
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "src/util")
+        observe(FileObserver.MOVED_TO or isDirFlag, "util")
+        File(mirror, "util").mkdirs()
+        drain()
+
+        verify(exactly = 1) { DocumentsContract.moveDocument(any(), any(), any(), any()) }
+        verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
     }
 
     /**

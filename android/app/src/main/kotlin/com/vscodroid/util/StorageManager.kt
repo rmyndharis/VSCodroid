@@ -137,7 +137,13 @@ object StorageManager {
 
     /**
      * Deletes [dir] and everything under it, unlinking links rather than following
-     * them, and reports the bytes freed.
+     * them, and reports the bytes the filesystem accepted the unlink of.
+     *
+     * "Accepted the unlink of" rather than "released": a file another process still
+     * holds open keeps its blocks until that descriptor closes, and the running server
+     * is appending to `data/logs/server.log` while this walks it. That part cannot be
+     * answered from here and the figure is a ceiling to that extent. What it is no
+     * longer is a count of what was merely attempted.
      *
      * Shared rather than private for the reason [dirSize] is, and here the cost of a
      * second implementation is the user's files rather than a wrong number. The mirror
@@ -166,8 +172,16 @@ object StorageManager {
             if (isLink(f)) {
                 f.delete()
             } else if (f.isFile) {
-                freed += f.length()
-                f.delete()
+                // Counted only once the unlink succeeded, and the length is taken
+                // first because there is nothing left to measure afterwards. Adding it
+                // unconditionally charged every file the walk reached to the total
+                // whether or not it went, so a clear that removed nothing still
+                // reported the whole tree as freed. The screen this number reaches is
+                // the one a person opens because they are out of disk, and a confident
+                // "Freed 187.4 MB" that changes nothing is worse than a small figure
+                // they can act on.
+                val length = f.length()
+                if (f.delete()) freed += length
             } else if (f.isDirectory) {
                 dirs.addFirst(f)
                 f.listFiles()?.forEach { stack.addLast(it) }

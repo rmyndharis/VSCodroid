@@ -117,9 +117,23 @@ class SafStorageManager(private val context: Context) {
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             context.contentResolver.takePersistableUriPermission(uri, flags)
             addToRecentFolders(uri)
-            Logger.i(tag, "Persisted permission for: $uri")
+            Logger.i(tag, "Persisted permission for ${getMirrorDir(uri).name}")
         } catch (e: SecurityException) {
-            Logger.e(tag, "Failed to persist permission for: $uri", e)
+            // Neither the URI nor the throwable, and it takes both to be redaction at
+            // all. A SAF tree URI spells the user's own directory
+            // (`.../tree/primary%3ADocuments%2F<folder>`), and
+            // takePersistableUriPermission's SecurityException quotes that URI in its
+            // own message, so dropping the interpolation while still passing the
+            // exception along would put the same string in logcat by another route.
+            // Logger.i, .w and .e are not gated on a debuggable build, so every one of
+            // them ships. The mirror name is the six-byte digest of that same URI: it is
+            // stable, it is not reversible, and it lines this up with every other line
+            // the app writes about the folder.
+            Logger.e(
+                tag,
+                "Could not persist the permission for ${getMirrorDir(uri).name}: " +
+                    e.javaClass.simpleName,
+            )
         }
     }
 
@@ -253,6 +267,13 @@ class SafStorageManager(private val context: Context) {
      * a fresh directory this pass cannot reach. A rename that survives a killed process
      * is reclaimed by the next pass.
      *
+     * That last argument holds only for a grant taken *after* the rename, so what
+     * decides the removal has to sit next to the rename rather than at the top of the
+     * loop. It stopped doing so when the vouching walk was interposed between them: a
+     * grant arriving during the walk was judged by an answer taken before it. The
+     * question is therefore asked twice, cheaply at the top so the walk never runs for an
+     * entry that is plainly live, and again immediately before the rename.
+     *
      * @return how many entries were removed.
      */
     internal fun reclaimRevokedMirrorsSync(): Int {
@@ -349,6 +370,25 @@ class SafStorageManager(private val context: Context) {
                 Logger.w(
                     tag,
                     "Keeping $name: it holds files no sync ever vouched for",
+                )
+                return@forEach
+            }
+
+            // Asked a second time, and this is the one that matters. The gate above
+            // used to be the last thing before the rename; the vouching walk now sits
+            // between the two, and that walk is a full traversal of the mirror -- the
+            // slowest case by construction, because a mirror that passes it is one the
+            // walk had to finish. On a project tree that is seconds to tens of seconds
+            // of a detached thread, and the whole window is one where the user can reach
+            // MainActivity, re-pick the same folder and have it re-synced and watched
+            // into the very directory this pass is about to rename away. The set-aside
+            // branch is exempt for the reason it is exempt above: a `discarded-` entry
+            // is an earlier pass's leftover, already unreachable, and no grant can bring
+            // it back.
+            if (!alreadySetAside && hash in liveMirrorNames()) {
+                Logger.i(
+                    tag,
+                    "Leaving $name alone: its folder was granted again while this pass ran",
                 )
                 return@forEach
             }
@@ -667,7 +707,9 @@ class SafStorageManager(private val context: Context) {
         syncEngine.initialSync(safUri, mirrorDir, onProgress)
         updateLastOpened(safUri)
 
-        Logger.i(tag, "Sync complete: $safUri → ${mirrorDir.absolutePath}")
+        // By mirror name, for the reason [persistPermission] gives: the tree URI is the
+        // user's own directory path and this level ships.
+        Logger.i(tag, "Sync complete for ${mirrorDir.name}")
         return mirrorDir
     }
 
