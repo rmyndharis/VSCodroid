@@ -2534,9 +2534,19 @@ claude() {
          *    there. So on a genuinely fresh install `installedBytes` is already
          *    above zero, the headroom fired, and the gate asked a device with
          *    nothing unpacked for 986 MB where 873 is what the unpack needs.
-         *    Only `server/` answers the question honestly, because nothing but
-         *    extraction writes there, and it is also where the biggest file lands
-         *    (`vscode-reh` extracts to `server/vscode-reh`).
+         *    `server/` answers it honestly, and it is also where the biggest file
+         *    lands (`vscode-reh` extracts to `server/vscode-reh`). Not because
+         *    extraction is the only thing that writes there, which is not true:
+         *    `setupCopilotAndroidAliases` writes an alias `package.json` under it
+         *    on every launch, and `setupRipgrepVscodeSymlink` makes directories
+         *    and a symlink. Because neither can put a counted byte there before
+         *    extraction has run, for two different reasons. The alias manifests
+         *    sit behind `if (linuxPkg.isDirectory)`, which is the extracted tree
+         *    itself; and the ripgrep repair writes only a directory and a link,
+         *    which [installedExtractionBytes] counts as nothing, with no copying
+         *    fallback if the link fails. Check both if either is edited: a repair
+         *    that starts writing a file into `server/` unconditionally puts this
+         *    gate back where it was.
          *  - [EXTRACTION_SLACK_BYTES], for what neither of those counts.
          *
          * Takes its figures rather than reading `BuildConfig`, so the decision can
@@ -3339,8 +3349,15 @@ private val ATOMIC_WRITE_LOCK = Any()
  *
  * Only `server/` is passed in, though extraction also fills `usr/` and the
  * bundled extensions, and the asymmetry is the design rather than an omission.
- * `server/` is 700 of the tree's 810 MiB and nothing but extraction writes
- * there, so every byte counted is a byte the next unpack genuinely writes over.
+ * `server/` is 700 of the tree's 810 MiB, and near enough every byte counted
+ * there is a byte the next unpack writes over. Near enough rather than all:
+ * `setupCopilotAndroidAliases` writes an alias `package.json` beside the
+ * packages it aliases, and those are counted here without extraction replacing
+ * them. That is a credit for bytes overwriting does not give back, so it asks
+ * for less space rather than more, which is the direction the paragraph below
+ * calls the worse one. They are kilobytes against 700 MiB and the slack absorbs
+ * them many times over, so they are left rather than filtered; a repair that
+ * ever writes something substantial there would have to be.
  * The other two are shared ground: toolchains install into `usr/`, Java is
  * 146 MB unpacked, `npm install -g` lands there too, and
  * `home/.vscodroid/extensions` fills with whatever the user takes from the
