@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Long pressing a key through a screen reader now opens its alternate characters. The layer needed a finger held on the key, so `'` and `\` were unreachable.
 
 ### Changed
+- Download outcome messages and the About dialog's unknown-version wording are now translatable; both were written in code and stayed English in every language.
+- Long-press alternates now carry spoken, translatable names, so a screen reader can tell the apostrophe from the backtick instead of reading the bare glyph.
+- The key row now says which of its five pages is showing, and announces the change on a swipe, instead of leaving five unlabelled indicator dots.
+- Toolchain installs record Java 17 at its measured unpacked size, so the storage checks and the card no longer understate it by about 9 MB.
+- Idle toolchain file work threads are released, so repeated launches no longer leave one parked per launch for the life of the process.
+- New installs open with the secondary side bar closed, so a phone-width editor is not half covered by a chat view this build has no provider for.
+- The splash icon is no longer announced by a screen reader, which repeated the app name already rendered as text directly below it.
+- The start summary in the log and in bug reports now names the requested heap ceiling and says clamped only when the value was actually reduced.
+- Bug reports always carry a server-log section, saying explicitly when no server output was recorded instead of dropping the section without a word.
+- The server log is written and read under one process-wide lock, so a report taken while the file is being rotated is no longer short, empty or interleaved.
+- Packaging now refuses a build whose bundled binaries are incomplete, so a toolchain command cannot reach a device resolving to a file that was never produced.
+- The privacy policy now lists the two permissions the manifest merger adds from libraries, matching what the Play Store listing shows, and a check holds it to the manifest that ships.
+- The privacy policy now describes the sign-in callback window as the app enforces it: matched against the specific sign-in that produced it, not against the last browser launch.
+- The document-date and plain-punctuation checks now run on pull requests and on tags alike, so a documentation change no longer surfaces its first failure as an aborted release.
+- The process monitor's status bar no longer shows an internal identifier where a readable label belongs, and drops an entry for a process type the editor stopped creating.
 
 - Documentation, code comments and the Get Started walkthrough now use ordinary punctuation throughout, and a check keeps new text consistent with it.
 - Every dialog, toast and spoken description now comes from a string resource, so the app can be translated. No translation ships yet; sixty-nine texts were unreachable to one.
@@ -62,6 +77,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Kotlin plugin's own build directory is ignored, so a build no longer leaves compiler scratch sitting in the working tree.
 
 ### Fixed
+- Git helper setup no longer follows its own symlinks when setting the execute bit, ending refused permission changes on every launch.
+- Extra key row: a Shift latched and then left unused while typing on the soft keyboard no longer changes which character the next row key inserts.
+- The first-run toolchain picker subtitle now uses plain punctuation; the escaped dash it carried was expanded into the compiled resource and shown to users.
+- The alternates popup is closed when the key row leaves its window, so finishing or recreating the activity with one open no longer leaks that window.
+- Fixed a device folder re-opened during startup cleanup having its local copy removed underneath the editor, which reached the device as deletions of the user's real documents.
+- A save the device folder refused, followed by deleting or renaming that file, no longer marks the folder's local copy as permanently holding work the device does not have.
+- Moving a folder into another directory now reaches the device when its previous location cannot be looked up, instead of being recorded as done with nothing sent.
+- Clearing caches now reports the space actually released rather than counting files the filesystem refused to remove.
+- Creating directories in a device folder no longer slows down for the rest of a session after a folder is moved out of it.
+- Cancel now reaches a toolchain download started before the screen was recreated, and a second tap no longer starts the same transfer over again.
+- A Play delivery whose install runs out of room at the record write is kept, so the next launch can finish it without downloading the pack again.
+- One toolchain whose delivery cannot be reconciled at launch no longer stops the packs behind it from being installed or reclaimed.
+- A toolchain script whose upstream name bash cannot use as a function is skipped rather than written, which used to break every new terminal.
+- Staging directories left by a toolchain download the system killed are reclaimed at launch, instead of occupying the space the retry then asks for.
+- A selected toolchain card no longer announces its selection twice to a screen reader; the card's own checked state is the single channel.
+- Setup no longer stalls the launch thread for the length of one asset copy: atomic writes now exclude per destination instead of sharing a single process-wide lock.
+- The storage check no longer charges an upgrade for rewriting a file bigger than everything currently on disk, which refused devices that had room to spare.
+- An upgrade across the server-tree change reclaims the old tree once, so a retry after a failed unpack keeps what the previous attempt already wrote.
+- Setup clears its own caches before refusing for storage, so a full npm cache no longer strands the user behind a screen the editor never opens.
+- The storage check credits only bundled extension directories that are already unpacked, no longer counting gallery installs as space the unpack can reuse.
+- A bundled extension is no longer unpacked when a newer copy is installed, which left tens of megabytes that nothing loaded and nothing removed.
+- A heap ceiling set below the value derived from device RAM is no longer disabled after three kills, which used to raise the ceiling on the device being killed.
+- A WebView provider that is missing or being updated by Play no longer crashes the app at launch, before first-run setup and toolchain repairs can run.
+- Stopping the server while it is still starting now ends the process that start spawned, instead of leaving an untracked Node holding the editor port.
+- Fix sign-in callbacks whose authorisation code or state contained escaped characters: the relay decoded the payload a second time, rewriting the provider's own values before the extension saw them.
+- Opening a vscodroid:// link on an install that had never finished setting up started the editor with no server tree behind it; it now runs setup first and keeps the link.
+- The setup screen is no longer dismissed when the display times out, which used to skip the toolchain picker permanently and could cost a full re-extraction on the next launch.
+- A download still transferring when the editor window is rebuilt no longer leaves a part-written file in the chosen folder under the name the user picked.
+- A download whose page script cannot start now reports a failure instead of stalling silently and blocking every download queued behind it.
+- The memory-pressure hint is written again after Android reclaims the app cache directory, so idle language servers are still shed when memory runs short.
+- Switching device folders no longer freezes the interface while the previous folder's pending writes drain or the new copy's directory watches are registered.
+- Closing the editor no longer waits up to two seconds for pending device-folder writes before the window goes away.
+- The sign-in restart notice is shown once per session, so a repeated external link can no longer fill the screen with it.
+- The extra key row releases a WebView destroyed by a renderer crash instead of holding it for the rest of the session.
+- Requests for editor assets that name the VS Code CDN are now always answered on device; when the local server is unreachable they no longer fall through to the network.
+- A page failing certificates on many hosts could cover the editor with toasts almost continuously; past the cap refusals are now throttled to one per interval.
+- External links are logged by scheme and host only, so an OAuth code or API key carried in a link's query no longer reaches release logs.
+- Download names chosen by the page are now redacted wherever they are logged, matching the download report and closing the paths that still printed them in full.
+- Overlong download names are trimmed by byte length, so a name in CJK or emoji no longer exceeds the filesystem limit the chosen folder must create it under.
 
 - A terminal in a window with no folder open now starts in your projects directory, not in the last device folder you ever opened.
 - A file you edited on the device is no longer overwritten by the app's copy after a write-back that failed once and later succeeded.
@@ -137,6 +191,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The status badge and the action button on a toolchain card no longer draw over each other when a long label makes both wide.
 
 ### Security
+- Symbolic links inside a device folder's local copy are no longer written out to the device, where they arrived as ordinary files carrying whatever their target held.
+- Opening a device folder no longer writes that folder's path to the system log; the lines identify it by the name of its local copy instead.
+- Toolchain downloads refuse a redirect that leaves HTTPS, so the payload and the digest that vouches for it cannot arrive over cleartext.
+- Server output kept for bug reports no longer records credentials an extension prints to stdout or stderr, so a report copied to the clipboard cannot carry them.
 
 - Content rendered in the editor can no longer read workspace files across origins. Served files are readable by anyone, and a page in the built-in browser could fetch one.
 - A webview can no longer name an arbitrary file and have the app read it with the editor's own credential. The route that did was reachable but unused.
