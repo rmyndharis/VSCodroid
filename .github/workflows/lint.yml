@@ -132,6 +132,16 @@ jobs:
       # The other half of this script reads the extracted trees for the licence
       # they declare, and runs from download-extensions.sh, because those trees
       # are gitignored and no job here builds them.
+      # Three Unicode dashes this project does not write, replaced by ordinary
+      # punctuation. 857 of them had accumulated across 118 files before anyone
+      # counted, because each arrives one edit at a time from an editor that
+      # substitutes them, which is the shape a convention cannot hold on its own.
+      # Verbatim licence text and the body of a patch are exempt: both are
+      # reproduced rather than written, and a patch context line has to match the
+      # file it applies to byte for byte.
+      - name: Check the tree writes plain punctuation
+        run: python3 scripts/check-plain-punctuation.py
+
       - name: Check the bundled extensions match the notices
         run: python3 scripts/check-bundled-extensions.py
 

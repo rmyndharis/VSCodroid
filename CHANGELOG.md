@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documentation, code comments and the Get Started walkthrough now use ordinary punctuation throughout, and a check keeps new text consistent with it.
 - Every dialog, toast and spoken description now comes from a string resource, so the app can be translated. No translation ships yet; sixty-nine texts were unreachable to one.
 - A build that packages the app now fails loudly if the checks guarding its bundled tree have come unattached, instead of going quiet and shipping an unchecked tree.
 - Two accessibility guards stopped passing on code that is commented out, and one no longer loses its scope to a brace inside a comment.
