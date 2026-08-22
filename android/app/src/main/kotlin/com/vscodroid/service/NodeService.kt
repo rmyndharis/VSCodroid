@@ -18,6 +18,7 @@ import com.vscodroid.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -860,18 +861,36 @@ class NodeService : Service() {
         // count is on disk, since the start that follows reads it straight back in
         // `ProcessManager.requestedHeapCeiling` to decide whether the user's value
         // still gets to be honoured.
-        val before = withContext(Dispatchers.IO) {
-            getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE).getInt(PREF_HEAP_KILLS, 0)
-        }
-        val after = heapKillsAfter(exitCode, overrideInEffect = true, current = before)
-        if (after == before) return
+        // NonCancellable, and that is the half of this that is not about threads.
+        // `withContext` is a cancellation point and this scope is cancelled in
+        // `onDestroy`, so a crash arriving while the service is being torn down
+        // could reach the read and never reach the write. What is written is not
+        // work in progress a cancelled caller no longer wants: it is the record of
+        // a death that has already happened, and losing it means a ceiling that
+        // kills the server every time is never charged for the last of those kills
+        // and so is never suspended. Before these touches hopped off this
+        // dispatcher the read and the write ran to completion once entered, and
+        // this is what keeps that true.
+        //
+        // One block rather than three, so nothing can land between the read and
+        // the write that is based on it.
+        //
         // commit(), not apply(): the event being recorded is a SIGKILL, and the
         // kill of this app's own process often follows the one it is reacting to.
         // apply()'s deferred write is exactly what loses that race, and a latch
         // whose count does not survive is a latch that never latches.
-        withContext(Dispatchers.IO) {
-            getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_HEAP_KILLS, after).commit()
-        }
+        // Null when this death does not move the count, which is every exit that is
+        // not the kill the ceiling is charged for, and the early return it drives is
+        // what keeps the line below and the notice after it from firing on an
+        // ordinary crash.
+        val after = withContext(NonCancellable + Dispatchers.IO) {
+            val prefs = getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE)
+            val before = prefs.getInt(PREF_HEAP_KILLS, 0)
+            val charged = heapKillsAfter(exitCode, overrideInEffect = true, current = before)
+            if (charged == before) return@withContext null
+            prefs.edit().putInt(PREF_HEAP_KILLS, charged).commit()
+            charged
+        } ?: return
         Logger.w(tag, "Server killed with a user heap ceiling in effect ($after of $HEAP_OVERRIDE_KILL_BUDGET)")
         if (heapOverrideSuspended(after)) {
             reportStartupNotice(getString(R.string.heap_override_suspended))

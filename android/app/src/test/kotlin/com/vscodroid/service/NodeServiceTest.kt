@@ -810,6 +810,38 @@ class HeapLatchCallSiteTest {
         )
     }
 
+    /**
+     * The write has to outlive the cancellation of the scope that reaches it.
+     *
+     * The charge runs in the service's own scope, which onDestroy cancels, and it
+     * suspends on its way to the preference file. A crash arriving while the
+     * service is being torn down could otherwise reach the read and never reach
+     * the write, and what is lost is not work a cancelled caller stopped wanting:
+     * it is the record of a death that has already happened. A ceiling that kills
+     * the server every time would go uncharged for the last of those kills and so
+     * would never be suspended.
+     *
+     * Read off the source because the alternative is racing a teardown against a
+     * crash, which would be a test that passes on a fast machine.
+     */
+    @Test
+    fun `the charge survives the scope being cancelled`() {
+        val body = nodeService.readText()
+            .substringAfter("private suspend fun chargeHeapOverride")
+            .substringBefore("\n    }")
+        assertTrue(
+            body.contains("PREF_HEAP_KILLS"),
+            "chargeHeapOverride no longer writes the count, so this guard is reading " +
+                "the wrong method and would pass whatever the write does",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*val \w+ = withContext\(NonCancellable""").containsMatchIn(body),
+            "the charge suspends on its way to the preference file without " +
+                "NonCancellable, so a teardown landing mid-charge drops the count " +
+                "the suspension budget is made of",
+        )
+    }
+
     @Test
     fun `the count is committed rather than deferred`() {
         // apply() is the idiomatic choice everywhere else and is wrong here. The
