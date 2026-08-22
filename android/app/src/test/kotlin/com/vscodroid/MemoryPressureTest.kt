@@ -97,7 +97,7 @@ class MemoryPressureWireTest {
     @BeforeEach
     fun setUp() {
         mockkObject(Logger)
-        every { Logger.d(any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
     }
 
     @AfterEach
@@ -148,9 +148,32 @@ class MemoryPressureWireTest {
         // one that fails after a swipe has no Activity behind it. A tag naming
         // one caller sends whoever reads the line looking for a lifecycle bug in
         // a component that was already gone.
+        //
+        // At warning level, not debug: Logger.d is gated on a debuggable build,
+        // so a broken channel left no trace at all on the releases where it
+        // matters, and what it costs is the idle-language-server kill never
+        // firing again for the life of that server process.
         verify {
-            Logger.d("MemoryPressure", match { it.startsWith("Failed to write memory pressure") })
+            Logger.w("MemoryPressure", match { it.startsWith("Failed to write memory pressure") })
         }
+    }
+
+    @Test
+    fun `the directory the monitor reads from is created if it has gone`() {
+        // cacheDir/tmp, which the platform deletes under storage pressure. Only a
+        // server start, first-run setup and the cache-clearing command build it
+        // again, so it can vanish while the server is still running; and
+        // process-monitor.js resolved its path once, at start, so it goes on
+        // reading the same place. Every write after that failed silently and the
+        // idle-language-server kill never fired again.
+        val gone = File(tmpDir, "reclaimed")
+        assertTrue(!gone.exists(), "the fixture must start with the directory absent")
+
+        assertEquals(PRESSURE_CRITICAL, applyMemoryPressure(gone, TRIM_MEMORY_RUNNING_CRITICAL))
+        assertEquals(
+            PRESSURE_CRITICAL, File(gone, "vscodroid-memory-pressure").readText(),
+            "the severity has to reach the file even when the directory had to be rebuilt"
+        )
     }
 }
 

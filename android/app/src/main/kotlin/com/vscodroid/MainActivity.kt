@@ -138,6 +138,14 @@ class MainActivity : AppCompatActivity() {
     private var workbenchLoaded = false
 
     /**
+     * Whether the "the editor restarted" explanation has already been shown.
+     *
+     * One per Activity, which is what the case it exists for needs and what an
+     * outside caller cannot repeat. See [receiveCallbackIntent] for both halves.
+     */
+    private var restartNoticeShown = false
+
+    /**
      * Set when notification permission arrives before the service binding does,
      * and consumed by [setupServiceCallbacks]. See [refreshServiceNotification].
      */
@@ -386,13 +394,22 @@ class MainActivity : AppCompatActivity() {
             // failures come back through finishDownload; a missing script has
             // nothing to send one with, and without this the download would sit
             // on a created file forever with nothing said.
+            //
+            // Anything that is not "true" is that case, rather than only
+            // "false". The script answers with a JSON literal, so a read that
+            // began is `"true"` and nothing else is; an expression that throws
+            // or yields undefined reaches this callback as `"null"`, which
+            // testing for "false" alone read as success. The download then sat
+            // in `pending` for ever, the queue behind it never drained, and the
+            // user was left with an empty file wearing the name they chose and
+            // no message either way.
             val script = "(function() {" +
                 "  if (!window.__vscodroidDownload) return false;" +
                 "  return window.__vscodroidDownload.send(" +
                 "${JSONObject.quote(url)}, ${JSONObject.quote(requestId)});" +
                 "})()"
             webView?.evaluateJavascript(script) { answer ->
-                if (answer == "false") {
+                if (answer != "true") {
                     downloads.onComplete(requestId, "the page cannot read this download")
                 }
             } ?: downloads.onComplete(requestId, "there is no page to read this download")
@@ -410,10 +427,16 @@ class MainActivity : AppCompatActivity() {
             if (detail != null) {
                 Logger.w(tag, "Download of ${redactToken(fileName)}: ${redactToken(detail)}")
             }
+            // Resources rather than literals, and the reason is that these three
+            // are the whole user-visible outcome of the download feature. A
+            // message assembled into a local before it reaches the sink is the
+            // shape `check-translatable-strings.py` names as the hole it cannot
+            // see, so these stayed English in every locale while the gate
+            // reported clean.
             val message = when (outcome) {
-                DownloadOutcome.SAVED -> "Saved $fileName"
-                DownloadOutcome.CANCELLED -> "Download cancelled"
-                DownloadOutcome.FAILED -> "Could not save $fileName"
+                DownloadOutcome.SAVED -> getString(R.string.download_saved, fileName)
+                DownloadOutcome.CANCELLED -> getString(R.string.download_cancelled)
+                DownloadOutcome.FAILED -> getString(R.string.download_not_saved, fileName)
             }
             // Hopped because the bytes arrive on the WebView's bridge thread, so
             // the end of a download is reported from a thread that cannot touch
@@ -440,6 +463,9 @@ class MainActivity : AppCompatActivity() {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        // First, because everything below it assumes an extracted tree. See
+        // handOffToSetup for what reaching this activity without one costs.
+        if (handOffToSetup()) return
         setContentView(R.layout.activity_main)
 
         safManager = SafStorageManager(this)
@@ -516,6 +542,51 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Sends a launch that got here without first-run setup back through it.
+     *
+     * The VIEW filter on this activity is exported and BROWSABLE, so any
+     * installed app and any page the user taps a link on can start the editor
+     * directly, and a `singleTask` activity started that way builds a fresh
+     * instance rather than going through [SplashActivity]. On an install whose
+     * setup has never run there is nothing behind it: measured after clearing
+     * app data, `files/` held only `home` and `profileInstalled`, and the
+     * service spawned `libnode.so` five times, each dying on a missing
+     * `libz.so.1`, before telling the user the server had crashed repeatedly.
+     * The same entry also skips the repairs [SplashActivity] runs on every
+     * launch, so a session reached this way runs on dangling `usr/bin` symlinks
+     * and on `settings.json` paths naming the previous install's native library
+     * directory.
+     *
+     * The filter stays on this activity rather than moving to the splash
+     * screen, and that is a decision rather than an omission. A callback
+     * arriving while the editor is running has to reach `onNewIntent` on the
+     * live page; routing every one of them through [SplashActivity] would run
+     * its launch repairs with a device folder open, and
+     * [SafStorageManager.reclaimRevokedMirrors] is placed there precisely
+     * because nothing else guarantees no folder is open.
+     *
+     * The intent travels with the hand-off, so the sign-in this filter exists
+     * for is not lost: [SplashActivity] passes `data` and the extras on to the
+     * activity it launches once setup finishes.
+     *
+     * It cannot loop. Every route from [SplashActivity] to this activity runs
+     * after `markSetupComplete()`, which is what `isFirstRun()` reads, and the
+     * one screen that does not reach it (a failed setup) offers Retry and no
+     * way past. A future route that launched the editor with setup still
+     * incomplete would bounce back here, so keep that property when adding one.
+     */
+    private fun handOffToSetup(): Boolean {
+        if (!FirstRunSetup(this).isFirstRun()) return false
+        Logger.w(tag, "Started before setup had run; handing the launch to the splash screen")
+        startActivity(Intent(this, SplashActivity::class.java).apply {
+            data = intent?.data
+            intent?.extras?.let { putExtras(it) }
+        })
+        finish()
+        return true
+    }
+
+    /**
      * Takes the OAuth callback relay out of an intent, if that is what it is.
      *
      * The only intent that carries a URI here is the callback relay, which is the
@@ -577,11 +648,25 @@ class MainActivity : AppCompatActivity() {
             // explanation for exactly the user who came back expecting to be
             // signed in.
             Logger.w(tag, "Extension callback arrived with no workbench page left to receive it")
-            Toast.makeText(
-                this,
-                getString(R.string.sign_in_editor_restarted),
-                Toast.LENGTH_LONG
-            ).show()
+            // Bounded, for the reason the expiry message below is bounded, and
+            // this was the one message in this function that was neither bounded
+            // nor keyed on a launch this app made. `workbenchLoaded` is false on
+            // every cold start, for the whole of a server start-up, after
+            // showServerGaveUp and after recreateWebView, so anything on the
+            // device could fire this filter in a loop and hold the screen with a
+            // long toast telling the user to sign in again, each delivery
+            // bringing this app to the front on someone else's cue.
+            //
+            // The case it exists for still gets it: coming back from the browser
+            // after the process was killed is one arrival into a fresh instance.
+            if (!restartNoticeShown) {
+                restartNoticeShown = true
+                Toast.makeText(
+                    this,
+                    getString(R.string.sign_in_editor_restarted),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             return
         }
         // The id the callback names, matched against the launch that could have
@@ -629,11 +714,54 @@ class MainActivity : AppCompatActivity() {
             ).show()
             return
         }
-        handleExtensionCallback(uri)
+        // The id the gate just accepted, handed on rather than read again. See
+        // handleExtensionCallback for why re-reading it was the defect.
+        handleExtensionCallback(uri, requestId)
     }
 
     override fun onDestroy() {
-        safManager.stopFileWatcher()
+        // Detached, because the wait it contains buys this teardown nothing.
+        // SafSyncEngine.stopWatching stops the observers first and then joins the
+        // write-back worker for up to two seconds, and the interrupt cannot
+        // shorten that: the copy inside writeLocalToSaf streams through a
+        // ContentResolver output stream, which is not interruptible. Nothing here
+        // depends on the drain having finished, and a drain that outruns the wait
+        // is left running either way, so on the main thread that join was two
+        // seconds of a frozen screen while the user swiped the app away.
+        //
+        // The observers still come down first, on that thread, before the join.
+        // What the hand-off costs is the moment between this returning and the
+        // thread being scheduled, and reaching a second engine on the same mirror
+        // in it would take a whole server start and page load.
+        //
+        // Guarded on the manager existing, because this activity can finish
+        // before it builds one: handOffToSetup returns out of onCreate ahead of
+        // every field below, and Android delivers onDestroy to an activity that
+        // finished during onCreate. Reading a lateinit that was never assigned
+        // throws, and a throw here is a crash on a path whose whole purpose is
+        // to recover quietly.
+        //
+        // Both captured into locals so nothing about this activity outlives it.
+        // Reading `safManager` or `tag` from inside the lambda would capture the
+        // Activity, and with it the view tree, for as long as the drain runs.
+        val stopping = if (::safManager.isInitialized) safManager else null
+        val logTag = tag
+        if (stopping != null) {
+            thread(name = "saf-watch-stop", isDaemon = true) {
+                try {
+                    stopping.stopFileWatcher()
+                } catch (e: Exception) {
+                    Logger.w(logTag, "Stopping the device folder watcher failed: ${e.message}")
+                }
+            }
+        }
+        // Before the WebView goes, because the page that owed the bytes is what
+        // is about to be destroyed. Without this the stream opened on the user's
+        // chosen document was dropped unclosed and the document left behind: a
+        // file in their folder wearing the name of the one they wanted, holding
+        // part of it, and indistinguishable from a finished save until opened.
+        // Silent and idempotent by design, which is what a teardown needs.
+        downloads.onPageGone()
         // Before unbinding, and this order is the point. The service is started
         // as well as bound, so it outlives this activity by design; the four
         // callbacks below are lambdas that close over `this`, so leaving them in
@@ -781,7 +909,22 @@ class MainActivity : AppCompatActivity() {
                 // What happens to it if the sync fails depends on which folder
                 // failed, and restoreWatcherAfterFailure is where that is
                 // decided.
-                safManager.stopFileWatcher()
+                //
+                // Off this thread, and the wrapper below is what made that easy
+                // to miss: only the sync was ever inside it, while this call and
+                // the pair after it read as confined by sitting beside one that
+                // was. Both are expensive on the main thread and the progress
+                // dialog is already up. Stopping joins the previous folder's
+                // write-back drain for up to two seconds and the interrupt
+                // cannot shorten it, because the provider stream it is inside is
+                // not interruptible; starting walks the whole mirror and issues
+                // one inotify registration per directory, up to the engine's cap
+                // of 2048.
+                //
+                // Plain Dispatchers.IO rather than NonCancellable: a scope
+                // cancelled at this point must skip the sync as well, and the
+                // hop throwing is what does that.
+                withContext(Dispatchers.IO) { safManager.stopFileWatcher() }
                 watchedSafFolder = null
 
                 val mirrorDir = withContext(Dispatchers.IO) {
@@ -796,7 +939,11 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                safManager.startFileWatcher(mirrorDir, uri)
+                withContext(Dispatchers.IO) { safManager.startFileWatcher(mirrorDir, uri) }
+                // On the main thread, deliberately, unlike the call above it.
+                // [watchedSafFolder] has one writer thread by contract and this
+                // is it; the work worth moving is the tree walk, not the two
+                // assignments that record it.
                 beginWatching(mirrorDir, uri)
 
 
@@ -875,12 +1022,16 @@ class MainActivity : AppCompatActivity() {
      * is the failure this whole reorder exists to avoid, arriving from the other
      * direction.
      *
+     * Suspending for the reason [openSafFolder] hops: starting a watcher walks
+     * the whole mirror and registers one kernel watch per directory, and this
+     * runs from a failure handler with a dialog still on screen.
+     *
      * @return whether write-back is running for the folder the user is looking at.
      */
-    private fun restoreWatcherAfterFailure(previous: Pair<File, Uri>?, failed: Uri): Boolean {
+    private suspend fun restoreWatcherAfterFailure(previous: Pair<File, Uri>?, failed: Uri): Boolean {
         val (mirrorDir, uri) = previous ?: return false
         if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString())) return false
-        safManager.startFileWatcher(mirrorDir, uri)
+        withContext(Dispatchers.IO) { safManager.startFileWatcher(mirrorDir, uri) }
         beginWatching(mirrorDir, uri)
         Logger.i(tag, "Restored the previous folder's watcher after a failed switch")
         return true
@@ -2302,10 +2453,16 @@ class MainActivity : AppCompatActivity() {
      * Shows the About dialog. Called from AndroidBridge via JS.
      */
     fun showAboutDialog() {
+        // The stand-in is a resource for the reason `tls_unknown_host` is one:
+        // it is rendered inside a translated sentence, so a Kotlin literal here
+        // leaves one English word in the middle of an otherwise translated
+        // dialog, and the gate over translatable strings cannot see a literal
+        // that reaches its sink through a local.
         val versionName = try {
             packageManager.getPackageInfo(packageName, 0).versionName
+                ?: getString(R.string.about_version_unknown)
         } catch (_: Exception) {
-            "unknown"
+            getString(R.string.about_version_unknown)
         }
         val version = getString(R.string.about_version_format, versionName)
         val disclaimer = getString(R.string.legal_disclaimer)
@@ -2413,6 +2570,14 @@ class MainActivity : AppCompatActivity() {
         val lastUrl = wv.url
         val container = findViewById<android.widget.LinearLayout>(R.id.webViewContainer)
         container.removeView(wv)
+        // Dropped before the view it wraps is destroyed. The only thing that
+        // rebuilds this is initBridge, which is reached from loadVSCode below and
+        // therefore only when a port is already bound; a renderer that dies during
+        // a cold start leaves serverPort at zero, and the key row then held a
+        // KeyInjector around a destroyed WebView for the rest of the session.
+        // ExtraKeyRow null-guards every use, so it does nothing until a live one
+        // arrives, which is the right thing for a row with no page under it.
+        extraKeyRow?.keyInjector = null
         wv.destroy()
 
         val newWebView = WebView(this)
@@ -2459,17 +2624,52 @@ class MainActivity : AppCompatActivity() {
      * localStorage domains. This method receives the token data via deep link
      * (vscodroid://callback?data=ENCODED_JSON) and injects it into the WebView's
      * localStorage so the workbench can pick it up.
+     *
+     * The payload is read once, here, and what goes into the page is the result
+     * rather than the text. Both halves of that matter and neither is style.
+     *
+     * **Once.** `callback.html` encodes exactly one time
+     * (`encodeURIComponent(JSON.stringify({ id, uri }))`) and
+     * `Uri.getQueryParameter` undoes it, which is why [callbackRequestId] can
+     * parse what arrives as JSON at all. The script this used to inject then ran
+     * `decodeURIComponent` over that already-decoded text, so every percent
+     * escape in the callback was undone a second time, and `uri.query` is
+     * percent-encoded by construction: `callback.html` builds it with
+     * `params.toString()`. Measured end to end, a query of
+     * `code=4%2F0AX4XfWjA%2BbQ%2FcD&state=a%26b%3Dc` reached the workbench as
+     * `code=4/0AX4XfWjA+bQ/cD&state=a&b=c`, so the `+` inside a base64 code
+     * became a space, `state` was truncated at the injected `&`, and a
+     * parameter the provider never sent appeared beside them. A callback
+     * carrying a double quote went further and made `JSON.parse` throw, ending
+     * the sign-in with nothing on screen. GitHub's flow is hex and a uuid with
+     * nothing to escape, which is how this survived.
+     *
+     * **The result, not the text.** The gate in [receiveCallbackIntent] and the
+     * page were parsing the same attacker-supplied bytes by two different
+     * grammars, so the id the gate approved was not necessarily the id the page
+     * wrote under. The id now comes from the caller, which is the value the gate
+     * matched against [AuthTabWindow], and the address is taken from the same
+     * parse; the page is handed two finished literals and does no parsing at
+     * all.
      */
-    private fun handleExtensionCallback(uri: Uri) {
+    private fun handleExtensionCallback(uri: Uri, requestId: String) {
         val dataParam = uri.getQueryParameter("data") ?: return
+        val callbackUri = callbackUriJson(dataParam)
+        if (callbackUri == null) {
+            // Logged without the payload, as the refusals in receiveCallbackIntent
+            // are: it belongs to a sign-in this app cannot read, and the log is
+            // readable by anything holding READ_LOGS on a developer device.
+            Logger.w(tag, "A sign-in callback carried no address this relay could read")
+            return
+        }
         Logger.i(tag, "Extension callback relay received")
-        val escaped = org.json.JSONObject.quote(dataParam)
+        val key = JSONObject.quote("vscode-web.url-callbacks[$requestId]")
+        val value = JSONObject.quote(callbackUri)
         webView?.evaluateJavascript("""
             (function() {
                 try {
-                    var d = JSON.parse(decodeURIComponent($escaped));
-                    var key = 'vscode-web.url-callbacks[' + d.id + ']';
-                    var value = JSON.stringify(d.uri);
+                    var key = $key;
+                    var value = $value;
                     localStorage.setItem(key, value);
                     // Dispatch synthetic StorageEvent: VS Code's workbench monitors
                     // localStorage via addEventListener("storage"), but that event only
@@ -2479,7 +2679,6 @@ class MainActivity : AppCompatActivity() {
                         key: key, newValue: value, oldValue: null,
                         storageArea: localStorage, url: window.location.href
                     }));
-                    console.log('[VSCodroid] Callback relay: injected token for id=' + d.id);
                 } catch(e) {
                     console.error('[VSCodroid] Callback relay error:', e);
                 }
@@ -2719,18 +2918,33 @@ internal fun applyMemoryPressure(tmpDir: File, level: Int): String {
  * business knowing Android's numbering, and when it did, it compared values
  * that are not ordered by severity.
  *
+ * The directory is created rather than assumed, which is the same rule
+ * `ProcessManager.startServer` already applies to this exact path. It is
+ * `cacheDir/tmp`, and the platform deletes an app's cache directory under
+ * storage pressure; the only three places that build it again are a server
+ * start, first-run setup, and the cache-clearing command. So on a device short
+ * of space the directory can go while the server is still running, and every
+ * write after that failed. `process-monitor.js` resolved its path once at start
+ * and went on finding nothing, so the idle-language-server kill never fired
+ * again for the life of that server: the channel that exists to keep this app
+ * under the memory and phantom-process ceilings went quiet on exactly the
+ * devices it was built for.
+ *
  * Failure is swallowed: the file is a hint for a monitor, and losing it is
- * worth less than the memory callback it is reporting on.
+ * worth less than the memory callback it is reporting on. Reported at warning
+ * level rather than debug, because `Logger.d` is compiled out of a release
+ * build, so a broken channel left no trace at all where it matters.
  */
 internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
     try {
+        if (!tmpDir.isDirectory) tmpDir.mkdirs()
         File(tmpDir, "vscodroid-memory-pressure").writeText(pressure)
     } catch (e: Exception) {
         // Not the Activity's tag: the application class calls this too, and the
         // write most likely to fail is the one that happens after the Activity
         // is gone. Naming a destroyed component sends the reader to the wrong
         // lifecycle.
-        Logger.d("MemoryPressure", "Failed to write memory pressure: ${e.message}")
+        Logger.w("MemoryPressure", "Failed to write memory pressure: ${e.message}")
     }
 }
 
@@ -2775,6 +2989,38 @@ internal fun callbackRequestId(data: String?): String? {
     if (data.isNullOrEmpty()) return null
     return try {
         JSONObject(data).optString("id").ifEmpty { null }
+    } catch (e: JSONException) {
+        null
+    }
+}
+
+/**
+ * The address a callback payload carries, as the JSON text the workbench stores.
+ *
+ * The workbench collects a callback by reading
+ * `vscode-web.url-callbacks[<id>]` and parsing it, and what `callback.html`
+ * writes there is `JSON.stringify(uri)`. So the value this returns is that same
+ * text, produced from the object the payload carries rather than from the
+ * payload's own bytes: the page then receives a finished literal and never
+ * parses anything, which is what keeps the id the timing gate approved and the
+ * id the value is written under from being decided by two different readers.
+ *
+ * Only an object counts. `callback.html` builds `uri` as
+ * `{ scheme, authority, path?, query?, fragment? }` and can build nothing else,
+ * so a payload whose `uri` is a string, a number or absent is not the message
+ * this relay is for, and answering null leaves it in the branch that injects
+ * nothing. That direction is deliberate: the filter is exported and BROWSABLE,
+ * so the payload is attacker-shaped by construction and every reading of it has
+ * to be total.
+ *
+ * Takes the already-extracted parameter rather than the `Uri`, for the reason
+ * [callbackRequestId] does: `Uri` is abstract with a private constructor, so it
+ * can be neither built nor mocked in a plain JVM test.
+ */
+internal fun callbackUriJson(data: String?): String? {
+    if (data.isNullOrEmpty()) return null
+    return try {
+        JSONObject(data).optJSONObject("uri")?.toString()
     } catch (e: JSONException) {
         null
     }

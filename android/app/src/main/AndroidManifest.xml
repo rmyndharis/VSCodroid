@@ -28,15 +28,38 @@
         tools:targetApi="34">
 
         <!-- Splash screen: shown during binary extraction and server startup -->
+        <!-- No android:noHistory, and its absence is load-bearing. It finishes an
+             activity whenever it is STOPPED, which the screen timing out and the
+             user pressing Home both do, and first-run extraction takes minutes
+             while nothing here holds the screen awake. Finishing destroys the
+             activity, which cancels the lifecycleScope runSetup() is launched in.
+             The extraction itself survives, because runSetupLocked's body is
+             blocking with no suspension point in it, so markSetupComplete() runs
+             and isFirstRun() goes false; what is lost is the continuation after
+             it, which is the only thing that ever calls showToolchainPicker().
+             toolchain_picker_shown stays false and the picker is unreachable for
+             the life of that install, because it is only offered inside the
+             isFirstRun() branch. The second cost is worse and needs no timing
+             argument: with the activity finished the process holds no component
+             at all, and it is in the middle of writing out ~810 MB. Reclaimed
+             there, the next launch starts the extraction from zero, since
+             extractAssetFile has no skip-if-present branch.
+
+             Nothing is left in the back stack by dropping it: launchMain() calls
+             finish() on every route that reaches MainActivity, and the one screen
+             that does not reach it, a failed setup, offers Retry and is better
+             kept than silently dismissed.
+
+             The screen is still free to time out, which is the other half of this
+             and lives in the layout rather than here. -->
         <!-- uiMode is in both lists below, and it is the only one of the eleven
              undeclared qualifiers that fires with no user interaction at all: a
              sunset-to-sunrise dark schedule and battery saver's forced dark both
              flip it while the app is in use. Here the cost is the worst in the
-             app. runSetup() runs inside lifecycleScope, and
-             FirstRunSetup.markSetupComplete() is the last statement of the same
-             block, so a relaunch cancels it before setup is ever marked
-             complete, isFirstRun() stays true, and the whole extraction starts
-             over. In MainActivity the cost is smaller but unattended: the fresh
+             app: runSetup() runs inside lifecycleScope, so a relaunch cancels the
+             coroutine mid-extraction, and the replacement instance has to wait on
+             setupMutex for a run it can no longer report progress for. In
+             MainActivity the cost is smaller but unattended: the fresh
              WebView holds only the data: placeholder, folderFromUrl refuses an
              opaque URI, and loadVSCode falls through to the default projects
              directory, so the user is silently moved out of their workspace.
@@ -72,7 +95,6 @@
         <activity
             android:name=".SplashActivity"
             android:exported="true"
-            android:noHistory="true"
             android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:theme="@style/Theme.VSCodroid">
             <intent-filter>
