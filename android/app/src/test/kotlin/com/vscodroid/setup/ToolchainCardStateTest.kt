@@ -104,6 +104,33 @@ class ToolchainCardStateTest {
             }
         }
 
+        /**
+         * The one status that had been left out of that list.
+         *
+         * Play emits REQUIRES_USER_CONFIRMATION for a pack it will not start
+         * without the user answering a system dialog, and then waits: dismissing
+         * the dialog leaves the pack queued for as long as the user leaves it.
+         * The card fell through to a plain Install for all of that time, which
+         * both says nothing is happening and withholds the only route this app
+         * has to `assetPackManager.cancel`. `isTerminalPackStatus`, the project's
+         * other predicate for the same question, has always counted it unsettled.
+         *
+         * NEGATIVE CONTROL: take REQUIRES_USER_CONFIRMATION back out of
+         * `ToolchainCardState.IN_FLIGHT` and this goes red. Measured.
+         */
+        @Test
+        fun `a pack waiting for the confirmation dialog still offers Cancel`() {
+            val state = manager()
+            state.updateState(go, AssetPackStatus.REQUIRES_USER_CONFIRMATION, 0)
+
+            val card = state.card(go)
+            assertEquals(
+                ToolchainAction.CANCEL, card.action,
+                "a pack Play is holding for confirmation offered no way to stop it",
+            )
+            assertEquals(ToolchainBadge.NONE, card.badge)
+        }
+
         @Test
         fun `a download in progress shows the percent last reported for it`() {
             val state = manager()

@@ -47,17 +47,30 @@ class ToolchainPickerAdapter(
      * MANAGER mode: replaces the downloads this screen was never told about.
      *
      * See [ToolchainCardState.setDownloading]. Called when the screen starts,
-     * because that is the moment a rebuilt one holds no reports at all.
+     * because that is the moment a rebuilt one holds no reports at all, and then
+     * once a second for as long as the screen is in front of a running transfer.
+     *
+     * A range with a payload rather than [notifyDataSetChanged], for the reason
+     * [PAYLOAD_REBIND] gives: at one push a second, the change animation the
+     * plain call runs was taking accessibility focus off the Cancel button as
+     * fast as the user could find it. The range covers every card because the
+     * item list is fixed ([ToolchainCardState.items] is the registry), so nothing
+     * here can add or remove a row.
      */
-    @SuppressLint("NotifyDataSetChanged")
     fun setDownloading(percentByPack: Map<String, Int>) {
         cards.setDownloading(percentByPack)
-        notifyDataSetChanged()
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
     }
 
     fun updateState(packName: String, status: Int, percent: Int) {
         val pos = cards.updateState(packName, status, percent)
-        if (pos >= 0) notifyItemChanged(pos)
+        // With a payload, exactly as the selection tap below rebinds: this is the
+        // channel that fires hardest. A download reports once per 8 KB read, so a
+        // 55 MB toolchain rebinds this card thousands of times, and without a
+        // payload every one of them runs the default change animation, swaps the
+        // item view and takes accessibility focus with it. The button that focus
+        // is taken from is Cancel, which is the only way to stop the transfer.
+        if (pos >= 0) notifyItemChanged(pos, PAYLOAD_REBIND)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -158,7 +171,7 @@ class ToolchainPickerAdapter(
             // accessibility focus with it, so the user who just double-tapped a card
             // is returned to the top of the list. RecyclerView skips that animation
             // when a payload is supplied, and the rebind below is the same work.
-            notifyItemChanged(holder.bindingAdapterPosition, PAYLOAD_SELECTION)
+            notifyItemChanged(holder.bindingAdapterPosition, PAYLOAD_REBIND)
             onSelectionChanged?.invoke(cards.selectedPackNames())
         }
     }
@@ -225,13 +238,18 @@ class ToolchainPickerAdapter(
 
     companion object {
         /**
-         * Marks a rebind that only changes selection.
+         * Marks a rebind that redraws a card where it stands.
          *
          * Its value is never read; supplying any payload is what makes RecyclerView
          * skip the change animation, and skipping it is what keeps accessibility
-         * focus on the card the user just tapped.
+         * focus on the card the user is standing on. One constant rather than one
+         * per caller because there is nothing to tell apart: no
+         * `onBindViewHolder(holder, position, payloads)` override exists, so every
+         * rebind here is the full one and the payload's only job is to suppress the
+         * animation. It was named for the selection tap when that was the only
+         * rebind that had been fixed; the download reports need it more.
          */
-        private const val PAYLOAD_SELECTION = "selection"
+        private const val PAYLOAD_REBIND = "rebind"
         private fun labelFor(action: ToolchainAction): Int = when (action) {
             ToolchainAction.INSTALL -> R.string.toolchain_install
             ToolchainAction.REMOVE -> R.string.toolchain_remove

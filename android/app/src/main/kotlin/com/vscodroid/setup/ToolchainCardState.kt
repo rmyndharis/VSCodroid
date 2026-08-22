@@ -224,12 +224,22 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
         /**
          * Reports that mean the download is still going somewhere, so the card
          * keeps offering Cancel rather than a second Install.
+         *
+         * REQUIRES_USER_CONFIRMATION belongs here for the same reason the other
+         * four do, and it is the one that was missing. Play emits it and then
+         * waits, indefinitely, for a dialog the user may have dismissed: the pack
+         * is queued and not moving, and this card's Cancel is the only route in
+         * the app to `assetPackManager.cancel`. Without it the card fell through
+         * to a plain Install, which says a download is neither running nor
+         * pending. `isTerminalPackStatus`, the other predicate in this project
+         * asking the same question, has always counted it as unsettled.
          */
         val IN_FLIGHT = listOf(
             AssetPackStatus.DOWNLOADING,
             AssetPackStatus.PENDING,
             AssetPackStatus.WAITING_FOR_WIFI,
             AssetPackStatus.TRANSFERRING,
+            AssetPackStatus.REQUIRES_USER_CONFIRMATION,
         )
     }
 }
