@@ -87,6 +87,65 @@ class ExtraKeyModifierSyncTest {
         )
     }
 
+    /**
+     * The bound the unconditional re-post gave up, put back where it costs the
+     * property above nothing.
+     *
+     * A tick that always re-posts is what survives an answer that never comes.
+     * On its own it also lets the ticks stack: a renderer slow to reply is sent
+     * a fresh query every 200 ms with nothing waiting on the last one, for as
+     * long as a modifier stays latched, where the old callback-anchored re-post
+     * had exactly one query outstanding at a time. Skipping the question while
+     * the previous answer is outstanding keeps the ticks and restores the bound.
+     *
+     * The claim is made against the injector the tick just read, which is what
+     * keeps the bound from outliving the page it bounds;
+     * [ExtraKeyQueryOwnershipTest] holds that half and runs it.
+     *
+     * NEGATIVE CONTROL: delete `if (!outstanding.claim(injector)) return` from
+     * the poll and this goes red.
+     */
+    @Test
+    fun `the poll asks again only once the last answer is in`() {
+        val body = pollBody()
+        val repost = body.indexOfFirst { it.contains("postDelayed(modifierSyncRunnable, 200)") }
+        val guard = body.indexOfFirst { it.contains("outstanding.claim(") }
+        val query = body.indexOfFirst { it.contains("queryModifierState") }
+        assertTrue(
+            repost >= 0 && guard > repost && guard < query,
+            "the tick re-posts with nothing between it and the next query, so a renderer " +
+                "that has not answered is sent another one five times a second for as " +
+                "long as the latch holds. It reads:\n${body.joinToString("\n")}",
+        )
+        assertTrue(
+            body[guard].contains("if (!outstanding.claim(injector)) return"),
+            "the claim decides nothing, so the query goes out whatever it found and every " +
+                "tick asks again. It reads:\n${body.joinToString("\n")}",
+        )
+    }
+
+    /**
+     * NEGATIVE CONTROL: delete `if (!outstanding.release(injector))` and its
+     * body from the answer and this goes red. That mutation is the worse half of
+     * the pair: the ticks would go on running and never ask anything again, so
+     * the row would keep a modifier lit that the page has already spent.
+     */
+    @Test
+    fun `an answer that arrives releases the guard it was waiting behind`() {
+        val body = pollBody()
+        val query = body.indexOfFirst { it.contains("queryModifierState") }
+        // After the query line, not merely present: a scan for the call alone
+        // could be satisfied from anywhere in the poll and would pass with
+        // nothing releasing the claim where the answer actually arrives.
+        val released = body.drop(query + 1).any { it.contains("outstanding.release(injector)") }
+        assertTrue(
+            released,
+            "the outstanding query is never released where the answer arrives, so the " +
+                "poll asks once and then ticks forever without asking again. It reads:" +
+                "\n${body.joinToString("\n")}",
+        )
+    }
+
     @Test
     fun `a poll with no injector clears the row instead of stopping quietly`() {
         val body = pollBody()

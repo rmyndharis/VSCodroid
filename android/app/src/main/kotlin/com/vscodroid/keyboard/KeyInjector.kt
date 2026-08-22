@@ -151,7 +151,9 @@ class KeyInjector(
      *
      * A Shift held on its own is not intercepted but is spent: the page keeps the
      * character it was about to insert, and the flag is cleared, so a latch cannot
-     * carry over into a key the user taps minutes later.
+     * carry over into a key the user taps minutes later. A Ctrl or Alt that meets
+     * input this listener has no chord for, a paste or an IME composition, is spent
+     * the same way and for the same reason.
      *
      * Call once after the page finishes loading.
      */
@@ -185,8 +187,10 @@ class KeyInjector(
                     // resolves it into a DIFFERENT character, so a Shift the
                     // user has forgotten turns a later tap on `/` into `?`,
                     // `;` into `:` and `[` into `{`. Ctrl and Alt are cleared
-                    // below on the same principle, one branch further on
-                    // because they are the two this listener acts on.
+                    // on every branch below, on the same principle: the two
+                    // this listener acts on spend them by acting, and the rest
+                    // spend them by reaching the end of the character they were
+                    // meant for.
                     if (!mod.ctrl && !mod.alt) {
                         mod.shift = false;
                         return;
@@ -221,7 +225,24 @@ class KeyInjector(
                         return;
                     }
 
-                    if (e.inputType !== 'insertText' || !e.data) return;
+                    // Everything else the page can insert: a paste, an IME
+                    // composition update, an autocorrect replacement, a word
+                    // delete. There is no chord to send for one, and cancelling
+                    // it would leave the tap producing nothing, so it is left to
+                    // the page exactly as a lone Shift is.
+                    //
+                    // The latch is still spent. A Ctrl that survives here does
+                    // not stay harmless: it attaches to whichever character is
+                    // typed next, and that character is then CANCELLED in favour
+                    // of a chord the user never asked for, so typing `a` after a
+                    // paste selects the document instead of inserting a letter,
+                    // and the keystroke after that replaces the selection.
+                    if (e.inputType !== 'insertText' || !e.data) {
+                        mod.ctrl = false;
+                        mod.alt = false;
+                        mod.shift = false;
+                        return;
+                    }
 
                     e.preventDefault();
                     e.stopImmediatePropagation();
