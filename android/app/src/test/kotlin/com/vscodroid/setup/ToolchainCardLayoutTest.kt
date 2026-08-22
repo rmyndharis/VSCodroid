@@ -85,6 +85,33 @@ class ToolchainCardLayoutTest {
     }
 
     /**
+     * The checkmark says nothing to a screen reader, because the card already
+     * does.
+     *
+     * `bindPickerMode` sets `isCheckable` and `isChecked` on the
+     * `MaterialCardView`, which forwards both into its accessibility node. The
+     * card is the focusable node here and this ImageView is not, and a
+     * non-focusable child's label is read out as part of its clickable container.
+     * Left important, a selected card stated selection twice -- once as the
+     * child's label and once as the node's checked state -- while an unselected
+     * one stated it once, so the two channels also disagreed about how selection
+     * is named. That is the spoken half of the double tick `checkedIcon = null`
+     * already took off the screen.
+     *
+     * Asserted on the attribute rather than on the absence of a label: the label
+     * is deliberately kept, so that a reader taking the flag off gets a described
+     * icon rather than an unlabelled one.
+     */
+    @Test
+    fun `the checkmark is not a second announcement of selection`() {
+        assertEquals(
+            "no", view("checkmark").getAttributeNS(androidNs, "importantForAccessibility"),
+            "the checkmark is announced alongside the card's own checked state, so a " +
+                "selected card says it is selected twice and an unselected one says it once",
+        )
+    }
+
+    /**
      * The button keeps its own place, which is what makes the pair safe in the
      * combinations where only one of them is on screen.
      *

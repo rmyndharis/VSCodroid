@@ -30,12 +30,29 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <!-- Checkmark (shown when selected in PICKER mode) -->
+        <!--
+            Checkmark (shown when selected in PICKER mode).
+
+            Decorative, and marked so. Selection is announced by the card
+            itself: bindPickerMode sets isCheckable and isChecked on the
+            MaterialCardView, which forwards both into its accessibility node,
+            and the card is the focusable node here while this ImageView is not.
+            A non-focusable child's label is read out as part of its clickable
+            container, so leaving this important gave a selected card two
+            statements of the same fact and an unselected one only the state,
+            which is the spoken half of the double tick that checkedIcon = null
+            already removed from the screen.
+
+            The label stays on the element rather than being deleted: it is
+            what an accessibility tool reports if the flag is ever taken off,
+            and it keeps the string reachable from the layout.
+        -->
         <ImageView
             android:id="@+id/checkmark"
             android:layout_width="20dp"
             android:layout_height="20dp"
             android:contentDescription="@string/toolchain_card_selected"
+            android:importantForAccessibility="no"
             android:src="@android:drawable/checkbox_on_background"
             android:visibility="gone"
             app:layout_constraintEnd_toEndOf="parent"

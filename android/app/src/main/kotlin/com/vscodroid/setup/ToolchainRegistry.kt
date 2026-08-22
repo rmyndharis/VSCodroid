@@ -35,6 +35,17 @@ object ToolchainRegistry {
          * the user is choosing about on mobile data, which is [downloadSize],
          * and telling them this number alone overstated every toolchain by
          * roughly three times.
+         *
+         * **Understating it is the direction that costs a user something.** Four
+         * readers key off this one number: both install pre-flights
+         * (`packInstallBytes` for Play, `toolchainInstallBytes` for HTTP), the
+         * `foreignBytes` that `FirstRunSetup.toolchainBytesFor` subtracts from
+         * the reusable credit in the setup pre-flight, and the card the user
+         * reads. A figure below the real tree eats the 50 MB buffer the
+         * reservations are built on, and credits occupied `usr/` as reusable,
+         * which admits a device the gate exists to refuse. Measure rather than
+         * estimate: `du -sk android/toolchain_<name>/src/main/assets/usr`, which
+         * is the tree `package-toolchains.sh` archives, and round up.
          */
         val estimatedSize: Long,
         /**
@@ -75,7 +86,10 @@ object ToolchainRegistry {
             displayName = "Ruby",
             shortLabel = "Ruby",
             descriptionRes = R.string.toolchain_ruby_description,
-            estimatedSize = 34_000_000,
+            // 34,868 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 35.7 MB. 2,276 files, so the block rounding is most of
+            // the gap between that and the 30.0 MB the file contents sum to.
+            estimatedSize = 36_000_000,
             downloadSize = 9_900_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
@@ -84,7 +98,14 @@ object ToolchainRegistry {
             displayName = "Java 17",
             shortLabel = "Java 17",
             descriptionRes = R.string.toolchain_java_description,
-            estimatedSize = 146_000_000,
+            // 151,812 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 155.5 MB; the file contents sum to 154.8 MB. This read
+            // 146,000,000 until the JDK grew past it: `download-java.sh` stopped
+            // deleting OpenJDK's `legal/` and began copying with `-RL`, which
+            // dereferences 208 symlinks, and the constant every gate reads did
+            // not move with it. Two comments in ToolchainManager were updated to
+            // say "about 155 MB" while this stayed at 146.
+            estimatedSize = 156_000_000,
             downloadSize = 55_400_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
@@ -94,7 +115,7 @@ object ToolchainRegistry {
     fun find(nameOrPack: String): ToolchainInfo? =
         available.find { it.packName == nameOrPack || it.packName == "toolchain_$nameOrPack" }
 
-    /** Format byte count as human-readable size (e.g. "146 MB"). */
+    /** Format byte count as human-readable size (e.g. "9 MB"). */
     fun formatSize(bytes: Long): String = when {
         bytes >= 1_000_000_000 -> "${bytes / 1_000_000_000} GB"
         bytes >= 1_000_000 -> "${bytes / 1_000_000} MB"

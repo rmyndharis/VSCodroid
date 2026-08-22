@@ -5,11 +5,13 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
+import java.io.File
 
 /**
  * Tests for [ToolchainRegistry]: catalog lookups and size formatting.
@@ -70,6 +72,51 @@ class ToolchainRegistryTest {
                         "(${tc.estimatedSize}); the ZIP cannot exceed what it unpacks to: ${tc.packName}"
                 }
             }
+        }
+
+        /**
+         * The recorded unpacked size is a floor, measured against the tree the
+         * release is built from, not an estimate.
+         *
+         * Four readers key off it, and an understatement is the direction that
+         * costs someone something: both install pre-flights shrink toward the
+         * 50 MB buffer they are built on, `FirstRunSetup.toolchainBytesFor`
+         * credits occupied `usr/` as reusable in the setup pre-flight, which
+         * admits a device that gate exists to refuse, and the card tells the user
+         * a smaller number than the install writes. It went wrong exactly that
+         * way once already: `download-java.sh` stopped deleting OpenJDK's
+         * `legal/` and began dereferencing symlinks on copy, and the constant
+         * every gate reads stayed at 146,000,000 for a tree that had grown to
+         * 154.8 MB of file bytes.
+         *
+         * ⚠️ This can only run where the packs have been built. `download-*.sh`
+         * populates them and they are not part of a source checkout, so a runner
+         * that has not built them skips rather than passing over nothing: the
+         * assumption below is what says which of the two happened. Read a green
+         * here as evidence only when the count it reports is not zero.
+         */
+        @Test
+        fun `no recorded size is under the tree its pack ships`() {
+            var measured = 0
+            for (tc in ToolchainRegistry.available) {
+                // Unit tests run with the module as the working directory, so the
+                // pack modules are one level up beside it.
+                val usr = File("../${tc.packName}/src/main/assets/usr")
+                if (!usr.isDirectory) continue
+                measured++
+                val onDisk = usr.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                assertTrue(
+                    tc.estimatedSize >= onDisk,
+                    "${tc.packName} records ${tc.estimatedSize} bytes for a tree of $onDisk; " +
+                        "every space gate and the card the user reads are built on that figure, " +
+                        "and understating it is the direction that admits a device it should refuse",
+                )
+            }
+            assumeTrue(
+                measured > 0,
+                "no toolchain pack has been built in this checkout, so nothing was measured; " +
+                    "run scripts/download-java.sh and scripts/download-ruby.sh to reach this",
+            )
         }
 
         @Test

@@ -7,6 +7,7 @@ import android.os.StatFs
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -297,6 +298,10 @@ class ToolchainDigestInstallTest {
     @AfterEach
     fun tearDown() {
         server.stop()
+        // Before unmockkAll, and not optional: the token map is process-wide, so
+        // an entry a failing case left behind declines the next install of that
+        // pack in this JVM and the failure names no cause.
+        outstanding().clear()
         unmockkAll()
     }
 
@@ -309,12 +314,31 @@ class ToolchainDigestInstallTest {
      * download is outstanding. Reached by reflection because the alternative is
      * exposing a download's bookkeeping on the public surface so a test can
      * watch it, which makes the class worse to make the test simpler.
+     *
+     * Process-wide rather than per manager, and read with a null receiver for
+     * that reason: a rotation builds a second manager while the first one's
+     * download carries on, and a token only the destroyed manager could see left
+     * the transfer uncancellable and let a tap start it again from the first
+     * byte.
+     *
+     * A manager is handed to `Field.get` even though the field is static, which
+     * ignores it: the same call reads an instance field too, so a change of
+     * placement shows up as a failed assertion rather than as reflection
+     * throwing.
      */
     @Suppress("UNCHECKED_CAST")
-    private fun outstandingOf(m: ToolchainManager): Map<String, Any> =
+    private fun outstanding(m: ToolchainManager = ToolchainManager(context)): MutableMap<String, Any> =
         ToolchainManager::class.java.getDeclaredField("httpDownloads")
             .apply { isAccessible = true }
-            .get(m) as Map<String, Any>
+            .get(m) as MutableMap<String, Any>
+
+    /** One download's cancellation token, as `downloadViaHttp` publishes one. */
+    private fun newDownloadToken(): Any =
+        Class.forName("com.vscodroid.setup.ToolchainManager\$HttpDownload")
+            .declaredConstructors
+            .first()
+            .apply { isAccessible = true }
+            .newInstance()
 
     private fun manager() = ToolchainManager(context).apply {
         onStateChange = { pack, status, pct, why ->
@@ -527,10 +551,10 @@ class ToolchainDigestInstallTest {
 
         // A cancellation reports no status, so the task's own bookkeeping is
         // what says it finished: downloadViaHttp drops its token in a finally.
-        val outstanding = outstandingOf(manager)
+        val tokens = outstanding()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (outstanding.isNotEmpty() && System.nanoTime() < deadline) Thread.sleep(20)
-        assertTrue(outstanding.isEmpty(), "the cancelled task never finished")
+        while (tokens.containsKey("toolchain_test") && System.nanoTime() < deadline) Thread.sleep(20)
+        assertFalse(tokens.containsKey("toolchain_test"), "the cancelled task never finished")
 
         assertEquals(0, timesRequested(manifestPath), "a cancelled install still fetched the manifest")
         assertEquals(0, timesRequested(zipPath), "a cancelled install still fetched the payload")
@@ -612,6 +636,165 @@ class ToolchainDigestInstallTest {
         )
         assertEquals(1, timesRequested(manifestPath), "the manifest was not fetched from the unpinned URL")
         assertEquals(1, timesRequested(zipPath), "the payload was not fetched from the unpinned URL")
+    }
+
+    // -- a pack already being fetched is not fetched again --
+
+    /**
+     * The rotation, from the other side of the claim that could not see it.
+     *
+     * `installsInFlight` is claimed only where the two delivery paths converge,
+     * once the archive has been downloaded and expanded, so for the whole of a
+     * transfer -- 56 MB for Java 17, minutes on a phone connection -- it reads
+     * free. `ToolchainActivity` declares no `configChanges`, so turning the phone
+     * destroys it and rebuilds it with a second manager whose card knows nothing
+     * of the download still running and offers Install again. The tap spent the
+     * whole download a second time; the claim further down then made exactly one
+     * of the two copies happen, so the disk was right and the data allowance was
+     * not.
+     *
+     * Arranged as the state that rotation leaves: a token in the process-wide map
+     * for a download this manager did not start. Removing the check in
+     * `downloadViaHttp` turns this red -- both files are requested.
+     */
+    @Test
+    fun `a pack with a download already outstanding is not downloaded again`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        outstanding()["toolchain_test"] = newDownloadToken()
+
+        // The decline happens on the calling thread, before anything is queued,
+        // so there is nothing to wait for.
+        manager().install("toolchain_test")
+
+        assertEquals(
+            listOf(AssetPackStatus.UNKNOWN), statuses(),
+            "a second request for a pack already downloading did not decline: $events",
+        )
+        assertEquals(0, timesRequested(manifestPath), "the manifest was fetched a second time")
+        assertEquals(0, timesRequested(zipPath), "the payload was downloaded a second time")
+    }
+
+    // -- which release an install is pinned to --
+
+    /**
+     * A build fetches from its own release when that release publishes the asset,
+     * and does not consult `latest` at all.
+     *
+     * `latest` names whichever release is newest at the moment of the request,
+     * which is not necessarily the one this app was built alongside. Measured on
+     * 2026-08-19 with `latest` naming v1.1.0: `releases/latest/download/
+     * toolchain_go.zip` answered 404 while `releases/download/v1.0.0/` answered
+     * 200 for the same asset, so an installed v1.0.0 could no longer fetch a
+     * payload its own release still carried.
+     *
+     * Only the falling-back direction was covered: the fixture never published
+     * anything under the app's own tag, so every case exercised the null return.
+     * A HEAD policy that started answering false -- a status outside 200..399, a
+     * broadened catch -- would have taken the feature out with nothing going red.
+     *
+     * The tag is derived here the way production derives it rather than written
+     * down, so a `versionNameSuffix` change cannot leave this asserting on a tag
+     * no build produces.
+     */
+    @Test
+    fun `an install fetches from its own release without asking latest`() {
+        publishFrom("/o/r/releases/latest/download")
+        val ownTag = appReleaseTag(BuildConfig.VERSION_NAME)
+        assertTrue(ownTag != null, "this build's version name yields no release tag")
+        val own = "/o/r/releases/download/$ownTag"
+
+        // Served ONLY under the app's own tag. Nothing under latest/download/,
+        // and no redirect for /o/r/releases/latest either, so an install can
+        // succeed only by pinning to its own release.
+        server.routes = mapOf(
+            "$own/toolchain_test.zip" to zipBytes,
+            "$own/toolchains.sha256" to "$zipDigest  toolchain_test.zip\n".toByteArray(),
+        )
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "the install did not take its own release: ${statuses()}",
+        )
+        assertEquals(
+            0, timesRequested("/o/r/releases/latest"),
+            "the alias was resolved even though this build's own release publishes the asset",
+        )
+        assertEquals(
+            1, timesRequested("$own/toolchains.sha256"),
+            "the manifest did not come from this build's own release",
+        )
+        // Two: the HEAD that asks whether the asset is published, then the GET.
+        assertEquals(
+            2, timesRequested("$own/toolchain_test.zip"),
+            "expected a HEAD and a GET against this build's own release",
+        )
+    }
+
+    /**
+     * And the fallback when the own-release probe says no.
+     *
+     * The asset is published only under a different tag, reached through the
+     * alias, so the own-release HEAD must 404 and the install must carry on to
+     * `latest` rather than refusing. Making `assetIsPublished` accept a 404 turns
+     * this red: the pin would name a release that does not carry the file and the
+     * install would fail on the manifest fetch.
+     */
+    @Test
+    fun `a release of this build that does not publish the asset falls back to latest`() {
+        publishFrom("/o/r/releases/latest/download")
+        val ownTag = appReleaseTag(BuildConfig.VERSION_NAME)
+        val tagged = "/o/r/releases/download/v9.9.9"
+
+        server.redirects = mapOf(
+            "/o/r/releases/latest" to "http://127.0.0.1:${server.port}/o/r/releases/tag/v9.9.9"
+        )
+        server.routes = mapOf(
+            "$tagged/toolchain_test.zip" to zipBytes,
+            "$tagged/toolchains.sha256" to "$zipDigest  toolchain_test.zip\n".toByteArray(),
+        )
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "an own release without the asset cost the install: ${statuses()}",
+        )
+        assertEquals(
+            1, timesRequested("/o/r/releases/download/$ownTag/toolchain_test.zip"),
+            "the own-release asset was never asked about",
+        )
+        assertEquals(1, timesRequested("/o/r/releases/latest"), "the alias was not resolved")
+        assertEquals(1, timesRequested("$tagged/toolchain_test.zip"), "the payload was not fetched")
+    }
+
+    // -- redirects on the payload itself --
+
+    /**
+     * The download follows a redirect, which is what every real fetch does:
+     * `releases/download/<tag>/<asset>` answers 302 to a signed CDN address.
+     *
+     * Here so that the hop resolution is exercised in production rather than only
+     * against inputs a test chooses. `nextRedirectUrl` is what the loop advances
+     * with, and a version of it that returned the URL it was given would spend
+     * MAX_REDIRECTS hops and fail the install rather than fetching anything.
+     */
+    @Test
+    fun `a payload served through a redirect is still fetched and verified`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        val moved = "/cdn/signed-toolchain_test.zip"
+        server.routes = server.routes + (moved to zipBytes)
+        server.redirects = mapOf(zipPath to "http://127.0.0.1:${server.port}$moved")
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "a redirected payload was not followed: $events",
+        )
+        assertEquals(1, timesRequested(zipPath), "the original URL was not asked for")
+        assertEquals(1, timesRequested(moved), "the redirect was not followed")
     }
 
     @Test

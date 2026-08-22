@@ -97,6 +97,24 @@ class ToolchainEnvFileTest {
         )
     }
 
+    /**
+     * A record whose `scriptWrappers` names [scripts], with `ruby` as the
+     * interpreter, exactly as `download-ruby.sh` writes one.
+     */
+    private fun installWithScripts(vararg scripts: String) {
+        val wrappers = scripts.joinToString(",") { """"$it":"usr/opt/ruby/bin/$it"""" }
+        val binaries = (listOf("ruby") + scripts)
+            .joinToString(",") { """"usr/opt/ruby/bin/$it"""" }
+        // `env` is not decoration here: the generator's per-toolchain loop reads
+        // it with `?: continue`, so a record without one is skipped whole and
+        // neither loop below it runs.
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby","binaries":[$binaries],""" +
+                """"env":{"GEM_HOME":"${'$'}FILESDIR/usr/opt/ruby/gems"},""" +
+                """"scriptWrappers":{"interpreter":"ruby","scripts":{$wrappers}}}]"""
+        )
+    }
+
     private fun regenerate() = ToolchainManager(context).regenerateDerivedFiles()
 
     private fun envLines() = envFile.readText().lines().map { it.trim() }
@@ -206,6 +224,70 @@ class ToolchainEnvFileTest {
             emptyList<String>(),
             envLines().filter { it.startsWith("ruby()") },
             "a wrapper was written for a binary that is not on disk",
+        )
+    }
+
+    /**
+     * A script wrapper is held to the same naming bar as a binary wrapper, and
+     * for the same reason.
+     *
+     * These names are not this repository's choice: `download-ruby.sh` takes each
+     * one from the `basename` of whatever upstream ships in the package's bin
+     * directory, splitting binaries from scripts by reading the file rather than
+     * by naming it. `.bashrc` sources this file unconditionally, and a name bash
+     * cannot use as a function is a parse error that costs every definition after
+     * it -- measured: sourcing `good() {...}`, `a=b() {...}`, `after() {...}`
+     * leaves `good` defined and `after` gone. The binaries loop refused such a
+     * name; the scripts loop beside it wrote it out.
+     *
+     * Dropping the [isShellFunctionName] check from the scripts loop turns this
+     * red on its first assertion.
+     */
+    @Test
+    fun `a script whose name bash cannot use as a function gets no wrapper`() {
+        every { Logger.w(any(), any()) } just Runs
+        elf("usr/opt/ruby/bin/ruby")
+        script("usr/opt/ruby/bin/gem")
+        script("usr/opt/ruby/bin/a=b")
+        installWithScripts("a=b", "gem")
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            envLines().filter { it.startsWith("a=b()") },
+            "a name that is a parse error was written into a file .bashrc sources, " +
+                "so every wrapper after it is lost in every new terminal:\n" +
+                envFile.readText(),
+        )
+        // The control, and the half that says the refusal is narrow: the usable
+        // name beside it still gets its wrapper, so this is not a generator that
+        // simply stopped emitting script wrappers.
+        assertTrue(
+            envLines().contains(
+                """gem() { ruby "${'$'}PREFIX/../usr/opt/ruby/bin/gem" "${'$'}@"; }"""
+            ),
+            "the usable script name lost its wrapper too:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * And a toolchain whose every script name is unusable writes no header for a
+     * section with nothing in it, which is what the binaries loop already does.
+     */
+    @Test
+    fun `a section with no usable script names is not written at all`() {
+        every { Logger.w(any(), any()) } just Runs
+        elf("usr/opt/ruby/bin/ruby")
+        script("usr/opt/ruby/bin/a;b")
+        installWithScripts("a;b")
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            envLines().filter { it.contains("script wrappers") },
+            "an empty script-wrapper section was announced:\n" + envFile.readText(),
         )
     }
 

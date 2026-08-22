@@ -1,6 +1,8 @@
 package com.vscodroid.setup
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -21,9 +23,11 @@ class ToolchainInstallSpaceTest {
     /**
      * The install holds the unpacked tree and the copy of it at the same moment,
      * so one tree's worth was never the requirement. Java 17 is the toolchain
-     * this was measured against: 146 MB unpacked, so 196 MB asked against about
-     * 342 MB needed, and every device between those two figures downloaded
-     * 55 MB before failing partway through the copy.
+     * this was measured against, at the 146 MB its registry entry recorded at the
+     * time: 196 MB asked against about 342 MB needed, and every device between
+     * those two figures downloaded 55 MB before failing partway through the copy.
+     * The figure below is that input, not the registry's, so the arithmetic stays
+     * pinned when the pack is rebuilt against a newer JDK.
      */
     @Test
     fun `the reservation covers both copies the install holds at once`() {
@@ -83,6 +87,97 @@ class ToolchainInstallSpaceTest {
                     "held twice; a device could pass the gate and fail during the copy",
             )
         }
+    }
+
+    // -- what the pre-flight is told a pack unpacks to --
+
+    /**
+     * A withdrawn pack still occupies its bytes, and this is the reason the
+     * function exists at all.
+     *
+     * `ToolchainRegistry.find` answers null for a retired pack, deliberately, so
+     * a caller spelling the lookup `find(...)?.estimatedSize ?: 0L` turns "I do
+     * not know" into "it needs nothing". The Play gate is built on the answer:
+     * with 0 the reservation collapses to the bare buffer, so a gate that asks
+     * for 50 MB before copying 155 MB passes exactly the devices it exists to
+     * refuse, and reports success while doing it.
+     *
+     * The withdrawn case is first because it is the one a device is most likely
+     * to be holding: `RETIRED_TOOLCHAINS` exists for installs made before a
+     * withdrawal, and the registry is precisely where those are not.
+     */
+    @Test
+    fun `a withdrawn pack still has a recorded size`() {
+        assertEquals(179_000_000L, packUnpackedBytes("toolchain_go"))
+    }
+
+    /** And under the short form a record may equally carry. */
+    @Test
+    fun `a withdrawn pack is found under either name`() {
+        assertEquals(179_000_000L, packUnpackedBytes("go"))
+    }
+
+    /**
+     * Null, not zero, and the distinction is the whole point: zero is a real
+     * answer meaning "this occupies nothing", which no pack does. The caller
+     * branches on null to say out loud that it is skipping the pre-flight, and a
+     * zero would make that branch unreachable and the skip silent.
+     */
+    @Test
+    fun `a pack nothing here has heard of yields no figure at all`() {
+        assertNull(packUnpackedBytes("toolchain_cobol"))
+    }
+
+    /** The control: an offered pack is read straight from the registry. */
+    @Test
+    fun `an offered pack is read from the registry`() {
+        for (info in ToolchainRegistry.available) {
+            assertEquals(
+                info.estimatedSize, packUnpackedBytes(info.packName),
+                "${info.packName} does not answer the size its registry row records",
+            )
+        }
+    }
+
+    // -- staging directories a download never cleaned up --
+
+    /**
+     * [toolchainTempDir] gives every request a directory of its own, which
+     * stopped two downloads deleting each other's work and turned an abandoned
+     * one from "overwritten by the next attempt" into "kept for ever". Nothing
+     * else removes them: `StorageManager.clearCaches` names four other
+     * directories, so the storage screen counts these bytes under "cache" and
+     * its Clear action does not free them, while every toolchain space
+     * pre-flight reads the free space they are occupying.
+     */
+    @Test
+    fun `a staging directory older than a day is abandoned`() {
+        val now = 10L * ABANDONED_DOWNLOAD_AGE_MS
+        assertTrue(isAbandonedDownload(now - ABANDONED_DOWNLOAD_AGE_MS - 1, now))
+    }
+
+    /**
+     * A running download must never have its staging directory taken away, so
+     * anything recent is left alone even though the timestamp is a weak witness:
+     * writing 56 MB into a file that already exists does not touch the directory.
+     * A day is far beyond any transfer this app performs.
+     */
+    @Test
+    fun `a staging directory touched recently is left alone`() {
+        val now = 10L * ABANDONED_DOWNLOAD_AGE_MS
+        assertFalse(isAbandonedDownload(now - ABANDONED_DOWNLOAD_AGE_MS + 1, now))
+        assertFalse(isAbandonedDownload(now, now))
+    }
+
+    /**
+     * Zero is what `File.lastModified` answers for a timestamp it could not
+     * read, and reading it as the epoch would make every such directory look
+     * abandoned. Deleting one a download is writing into is the failure worth
+     * avoiding; an extra day of disk is the price.
+     */
+    @Test
+    fun `a timestamp that cannot be read is not evidence of abandonment`() {
+        assertFalse(isAbandonedDownload(0L, 10L * ABANDONED_DOWNLOAD_AGE_MS))
     }
 
     @Test

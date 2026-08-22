@@ -24,7 +24,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 /**
@@ -60,10 +62,19 @@ class ToolchainManager(private val context: Context) {
     private val filesDir = context.filesDir.absolutePath
     private val homeDir = "$filesDir/home"
 
-    /** Single-thread executor for heavy file I/O (copy, chmod, symlink). */
-    private val ioExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "toolchain-io").apply { isDaemon = true }
-    }
+    /**
+     * Single-thread executor for heavy file I/O (copy, chmod, symlink).
+     *
+     * Built by [toolchainIoExecutor] rather than by `newSingleThreadExecutor`,
+     * whose thread is a core thread and is therefore never reclaimed. Nothing
+     * shuts this down and nothing can: five call sites each build their own
+     * [ToolchainManager] and none of them owns the object long enough to know
+     * when the work is finished. `SplashActivity.onCreate` alone builds two and
+     * submits on both, on every launch, into a process kept alive by the
+     * foreground service, so the parked threads accumulated for as long as the
+     * process lived.
+     */
+    private val ioExecutor = toolchainIoExecutor()
 
     /**
      * Progress and outcome for one pack.
@@ -150,22 +161,6 @@ class ToolchainManager(private val context: Context) {
      */
     private class MissingFromRelease(message: String) : IOException(message)
 
-    /**
-     * The token for each pack with a download outstanding, so [cancel] can find
-     * it by name.
-     *
-     * Entries are put in on the calling thread and removed by the task itself,
-     * which is what lets a cancellation arriving while the pack is still queued
-     * be seen once it starts.
-     *
-     * Ceiling: keyed by pack name, so asking for the same pack twice before the
-     * first finishes leaves the earlier task holding a token this map no longer
-     * points at, and cancelling then reaches only the later one. The UI does not
-     * offer that -- a pack showing DOWNLOADING has no install button -- and the
-     * earlier task still terminates on its own.
-     */
-    private val httpDownloads = ConcurrentHashMap<String, HttpDownload>()
-
     companion object {
         private const val HTTP_TIMEOUT_MS = 30_000     // 30s connect + read timeout
         private const val MAX_RETRIES = 2
@@ -248,6 +243,39 @@ class ToolchainManager(private val context: Context) {
          * `usr/` is outside this entirely, and nothing does today.
          */
         private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
+
+        /**
+         * The token for each pack with a download outstanding, so [cancel] can
+         * find it by name.
+         *
+         * Entries are put in on the calling thread and removed by the task
+         * itself, which is what lets a cancellation arriving while the pack is
+         * still queued be seen once it starts.
+         *
+         * On the companion for the reason [installsInFlight] is, and it is the
+         * same rotation that makes it reachable. `ToolchainActivity` declares no
+         * `configChanges`, so turning the phone mid-download destroys the
+         * Activity and builds a second manager. As an instance field this map
+         * went with the first one: the transfer carried on, and nothing left
+         * alive could reach its token. Cancelling was then impossible from
+         * anywhere -- not from the rebuilt screen, and not from `AndroidBridge`,
+         * whose own lazily built manager is a third instance again -- so the
+         * only way to stop a download on mobile data was to force-stop the app.
+         *
+         * It is also what lets [downloadViaHttp] recognise a pack that is
+         * already being fetched. [installsInFlight] cannot do that job: it is
+         * claimed only once the archive has been downloaded and expanded, so it
+         * reads free for the whole of the transfer, and a tap on the Install
+         * button the rebuilt card offers started the download again from the
+         * first byte.
+         *
+         * Ceiling: keyed by pack name. Two requests for one pack can still
+         * overlap in the window between the decline check and the publish below,
+         * which leaves the earlier task holding a token this map no longer points
+         * at; the earlier task still terminates on its own, and the two-argument
+         * `remove` in the download's `finally` keeps the later one cancellable.
+         */
+        private val httpDownloads = ConcurrentHashMap<String, HttpDownload>()
     }
 
     private val listener = AssetPackStateUpdateListener { state ->
@@ -343,6 +371,12 @@ class ToolchainManager(private val context: Context) {
         // Signals only this pack's download to stop (checked every 8KB in the
         // download loop). A pack with nothing outstanding has no token, and
         // cancelling it must not reach a download that is running for another.
+        //
+        // The map is process-wide, so this reaches the transfer whichever manager
+        // began it. That is the point rather than a side effect: a rotation
+        // rebuilds the screen with a second manager while the first one's
+        // download carries on, and a token only the destroyed manager could see
+        // made the transfer uncancellable from anywhere.
         httpDownloads[info.packName]?.cancelled = true
         assetPackManager.cancel(listOf(info.packName))
         // Play's cancel is a request to the download service and does nothing to a
@@ -661,12 +695,20 @@ class ToolchainManager(private val context: Context) {
                 return
             }
         }
-        // Released only by the call that did the install. A false here means
-        // another install of this pack is copying out of `assetsDir` at this
+        // False covers two situations, and `removePack` is wrong for both.
+        //
+        // Another install of this pack may be copying out of `assetsDir` at this
         // moment, and `removePack` is a real recursive delete of that directory:
         // releasing it would pull the source out from under the reader, which is
         // the hazard [cancel] documents from the other direction. The install
         // that holds the pack releases it when it is done with it.
+        //
+        // Or this install copied the tree and could not write the record. That
+        // is the space refusal above arriving one step later, and the same
+        // reasoning governs it: the user frees space, relaunches, and
+        // [reconcileDeliveredPacks] finishes the install from a delivery still in
+        // place. Deleting it here charged them the whole download again for a
+        // failure that had already done all the work.
         if (installFromDirectory(packName, assetsDir)) {
             releasePack(packName)
         }
@@ -716,49 +758,81 @@ class ToolchainManager(private val context: Context) {
                 // correct and would cost a file parse per toolchain.
                 val installed = getInstalledToolchains()
                 ToolchainRegistry.available.forEach { info ->
-                    // Play is asked first, and the record second. The order is the
-                    // whole of the repair below: asking the record first meant an
-                    // installed toolchain was never asked about, so a delivered pack
-                    // whose removal did not happen was passed over on every launch
-                    // for the life of the install.
-                    val location = try {
-                        assetPackManager.getPackLocation(info.packName)
+                    // Per pack, not around the loop. `installDeliveredPack`
+                    // reaches `JSONObject(...)` on a malformed manifest and
+                    // `copyDirectoryTree` on a directory it cannot list or a
+                    // disk that fills up, and either throw used to unwind out
+                    // of the whole `forEach`. Ruby is first in the registry, so
+                    // one throw on Ruby meant Java's delivery was never examined
+                    // -- neither installed if it was outstanding, nor reclaimed
+                    // if it was a whole toolchain of duplicate storage. Every
+                    // later launch repeated exactly that, so the reclaim that
+                    // could have made room for Ruby was the thing Ruby's failure
+                    // prevented. The pack is named here; the outer catch below
+                    // could only name the exception.
+                    try {
+                        reconcileOnePack(info, installed)
                     } catch (e: Exception) {
-                        Logger.w(tag, "Could not ask Play about ${info.packName}: ${e.message}")
-                        null
-                    } ?: return@forEach
-                    if (info.packName.removePrefix("toolchain_") in installed) {
-                        // The toolchain is already in `usr/`, so this delivery has
-                        // nothing left to give and is pure duplicate storage. It
-                        // reaches here when the release that should have followed the
-                        // install did not complete: `removePack` is asynchronous, and
-                        // the process can go away between the copy and the delete.
-                        //
-                        // Skipped while an install holds the pack, for the reason
-                        // [installDeliveredPack] gives: `removePack` is a recursive
-                        // delete of the directory that install is reading. A record
-                        // written by an earlier install of the same toolchain makes
-                        // that pair reachable.
-                        if (info.packName in installsInFlight) return@forEach
-                        Logger.i(
+                        Logger.w(
                             tag,
-                            "Reclaiming a delivered pack for an installed toolchain: " +
-                                info.packName,
+                            "Could not reconcile ${info.packName}: ${e.message}",
                         )
-                        releasePack(info.packName)
-                        return@forEach
                     }
-                    val assetsPath = location.assetsPath() ?: return@forEach
-                    Logger.i(
-                        tag,
-                        "Finishing a delivery nothing was listening for: ${info.packName}",
-                    )
-                    installDeliveredPack(info.packName, File(assetsPath))
                 }
             } catch (e: Exception) {
                 Logger.w(tag, "Could not reconcile delivered packs: ${e.message}")
             }
         }
+    }
+
+    /**
+     * One pack's half of [reconcileDeliveredPacks], so a failure can be contained
+     * to the pack it belongs to.
+     *
+     * @param installed what `toolchains.json` named when the pass began
+     */
+    private fun reconcileOnePack(
+        info: ToolchainRegistry.ToolchainInfo,
+        installed: List<String>,
+    ) {
+        // Play is asked first, and the record second. The order is the
+        // whole of the repair below: asking the record first meant an
+        // installed toolchain was never asked about, so a delivered pack
+        // whose removal did not happen was passed over on every launch
+        // for the life of the install.
+        val location = try {
+            assetPackManager.getPackLocation(info.packName)
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not ask Play about ${info.packName}: ${e.message}")
+            null
+        } ?: return
+        if (info.packName.removePrefix("toolchain_") in installed) {
+            // The toolchain is already in `usr/`, so this delivery has
+            // nothing left to give and is pure duplicate storage. It
+            // reaches here when the release that should have followed the
+            // install did not complete: `removePack` is asynchronous, and
+            // the process can go away between the copy and the delete.
+            //
+            // Skipped while an install holds the pack, for the reason
+            // [installDeliveredPack] gives: `removePack` is a recursive
+            // delete of the directory that install is reading. A record
+            // written by an earlier install of the same toolchain makes
+            // that pair reachable.
+            if (info.packName in installsInFlight) return
+            Logger.i(
+                tag,
+                "Reclaiming a delivered pack for an installed toolchain: " +
+                    info.packName,
+            )
+            releasePack(info.packName)
+            return
+        }
+        val assetsPath = location.assetsPath() ?: return
+        Logger.i(
+            tag,
+            "Finishing a delivery nothing was listening for: ${info.packName}",
+        )
+        installDeliveredPack(info.packName, File(assetsPath))
     }
 
     /**
@@ -818,10 +892,15 @@ class ToolchainManager(private val context: Context) {
      * knowing about any of this; the Play pack is not, which is why the return
      * value exists.
      *
-     * @return false when this call declined because another install holds the
-     *   pack. [installDeliveredPack] has to ask, because `removePack` is a real
-     *   recursive delete of the very directory the other install is copying out
-     *   of.
+     * @return whether Play's delivered copy may now be handed back. That is the
+     *   question [installDeliveredPack] is asking, and answering "did this call
+     *   own the claim" instead lost the one case where the two differ. False
+     *   covers a decline, because `removePack` is a real recursive delete of the
+     *   very directory the other install is copying out of, and it now also
+     *   covers a record that could not be written: freeing space and relaunching
+     *   is the repair for that, and [reconcileDeliveredPacks] can only perform it
+     *   while the delivery is still there. The HTTP path ignores the answer, and
+     *   correctly: its staging directory belongs to one download.
      */
     private fun installFromDirectory(packName: String, assetsDir: File): Boolean {
         if (!installsInFlight.add(packName)) {
@@ -852,7 +931,7 @@ class ToolchainManager(private val context: Context) {
             report(packName, AssetPackStatus.UNKNOWN, 0)
             return false
         }
-        try {
+        return try {
             installFromDirectoryHoldingPack(packName, assetsDir)
         } finally {
             // In a finally rather than at each exit: the body reports FAILED and
@@ -862,11 +941,22 @@ class ToolchainManager(private val context: Context) {
             // of the process.
             installsInFlight.remove(packName)
         }
-        return true
     }
 
-    /** The install itself, with the pack already claimed by the caller. */
-    private fun installFromDirectoryHoldingPack(packName: String, assetsDir: File) {
+    /**
+     * The install itself, with the pack already claimed by the caller.
+     *
+     * @return whether the delivery has nothing left to give. True for a finished
+     *   install and true for a `CORRUPT` refusal, which a retry has to
+     *   re-download anyway. False only for the record write failing, which is a
+     *   full disk at the last step of a copy that has already landed: the user
+     *   frees space, and the next launch's [reconcileDeliveredPacks] finishes the
+     *   install from the delivery still in place, with no download at all. That
+     *   is the same reasoning the space refusal in [installDeliveredPack]
+     *   already states, applied to the other outcome that reaches the user as
+     *   "free some space and try again".
+     */
+    private fun installFromDirectoryHoldingPack(packName: String, assetsDir: File): Boolean {
         // Both of these report FAILED before returning, and that is load-bearing
         // rather than tidy. Every other way out of this function ends in a state
         // being reported -- success at the end, and the caller's catch on a throw
@@ -878,7 +968,9 @@ class ToolchainManager(private val context: Context) {
         if (!manifestFile.exists()) {
             Logger.e(tag, "No $packName.json in asset pack $packName")
             fail(packName, ToolchainFailure.CORRUPT)
-            return
+            // Released: a delivery with no manifest in it is not something a
+            // later launch can finish, and a retry has to fetch it again.
+            return true
         }
 
         val manifest = JSONObject(manifestFile.readText())
@@ -886,7 +978,7 @@ class ToolchainManager(private val context: Context) {
         if (name.isEmpty()) {
             Logger.e(tag, "Invalid manifest.json in $packName: missing 'name'")
             fail(packName, ToolchainFailure.CORRUPT)
-            return
+            return true
         }
         Logger.i(tag, "Installing toolchain: $name (from $packName)")
 
@@ -1001,13 +1093,19 @@ class ToolchainManager(private val context: Context) {
                 // [reconcileDeliveredPacks] can reach this line at launch with no
                 // screen watching.
                 fail(packName, ToolchainFailure.STORAGE)
-                return
+                // Play's copy is KEPT, which is the whole of the return value
+                // above. The user is told to free space and try again, and the
+                // next launch's [reconcileDeliveredPacks] can finish this
+                // install from the delivery without downloading anything --
+                // but only while the delivery is still there.
+                return false
             }
             regenerateDerivedFilesLocked()
         }
 
         Logger.i(tag, "Toolchain $name installed successfully")
         report(packName, AssetPackStatus.COMPLETED, 100)
+        return true
     }
 
     // -- HTTP fallback (sideloaded installs) --
@@ -1054,6 +1152,27 @@ class ToolchainManager(private val context: Context) {
         // copy by the time the other starts.
         if (packName in installsInFlight) {
             Logger.i(tag, "Another install already holds $packName; not downloading it again")
+            report(packName, AssetPackStatus.UNKNOWN, 0)
+            return
+        }
+        // The same question one stage earlier, and it is the one that catches the
+        // case the check above cannot. [installsInFlight] is claimed only once the
+        // archive has been downloaded and expanded, so for the whole of a transfer
+        // -- 56 MB for Java 17, minutes on a phone connection -- it reads free.
+        // Rotating the toolchain screen destroys the Activity, rebuilds it with a
+        // second manager whose card knows nothing of the download still running,
+        // and offers Install again; a tap then spent the whole download a second
+        // time, and the claim further down made exactly one of the two copies
+        // happen. The disk was right and the data allowance was not.
+        //
+        // Declines rather than waits, the call [installFromDirectory] already
+        // makes for the same shape: the pack is being fetched, and the caller that
+        // declines has nothing to add to that.
+        //
+        // `containsKey`, not `in`: the Kotlin compiler refuses `in` on a
+        // ConcurrentHashMap, where it would resolve to `containsValue`.
+        if (httpDownloads.containsKey(packName)) {
+            Logger.i(tag, "A download of $packName is already outstanding; not starting another")
             report(packName, AssetPackStatus.UNKNOWN, 0)
             return
         }
@@ -1268,8 +1387,7 @@ class ToolchainManager(private val context: Context) {
                 if (responseCode in 300..399) {
                     val location = conn.getHeaderField("Location")
                         ?: throw IOException("Redirect with no Location header from $currentUrl")
-                    currentUrl = if (location.startsWith("http")) location
-                                 else URL(URL(currentUrl), location).toString()
+                    currentUrl = nextRedirectUrl(currentUrl, location)
                     redirects++
                     conn.disconnect()
                     continue
@@ -1794,12 +1912,33 @@ class ToolchainManager(private val context: Context) {
                 val interpreter = scriptWrappers.optString("interpreter", "")
                 val scripts = scriptWrappers.optJSONObject("scripts")
                 if (interpreter.isNotEmpty() && scripts != null) {
-                    sb.appendLine("# $name script wrappers (SELinux blocks exec under filesDir)")
+                    val lines = mutableListOf<String>()
                     for (scriptName in scripts.keys()) {
+                        // The same bar the binaries above are held to, and for
+                        // the same reason: these names are not this repository's
+                        // choice either. `download-ruby.sh` takes each one from
+                        // the `basename` of whatever upstream ships in the
+                        // package's bin directory, splitting binaries from
+                        // scripts by reading the file rather than by naming it,
+                        // so a future package can introduce a name nobody here
+                        // chose. This file is sourced by .bashrc, so a name bash
+                        // cannot use as a function costs every wrapper written
+                        // after it in every new terminal, not just this command.
+                        // The exec table below carries it regardless: a
+                        // trampoline symlink has no naming constraint.
+                        if (!isShellFunctionName(scriptName)) {
+                            Logger.w(tag, "No wrapper for $scriptName: not a name bash can " +
+                                "use as a function, so it would break every terminal")
+                            continue
+                        }
                         val scriptPath = scripts.getString(scriptName)
-                        sb.appendLine("$scriptName() { $interpreter \"\$PREFIX/../$scriptPath\" \"\$@\"; }")
+                        lines.add("$scriptName() { $interpreter \"\$PREFIX/../$scriptPath\" \"\$@\"; }")
                     }
-                    sb.appendLine()
+                    if (lines.isNotEmpty()) {
+                        sb.appendLine("# $name script wrappers (SELinux blocks exec under filesDir)")
+                        lines.forEach(sb::appendLine)
+                        sb.appendLine()
+                    }
                 }
             }
 
@@ -2145,6 +2284,13 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Could not remove a retired toolchain: ${e.message}")
             }
             try {
+                // Before the repair rather than after it, because what it
+                // reclaims is what the repair's own space pre-flights read.
+                sweepAbandonedDownloadsSync()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not sweep abandoned toolchain downloads: ${e.message}")
+            }
+            try {
                 repairInstalledToolchainsSync()
             } catch (e: Exception) {
                 // A failed repair leaves the marker unset, so the next launch
@@ -2176,6 +2322,42 @@ class ToolchainManager(private val context: Context) {
             } catch (e: Exception) {
                 Logger.w(tag, "Could not refresh the toolchain environment: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Deletes staging directories left behind by a download that never reached
+     * its `finally`.
+     *
+     * [toolchainTempDir] gives every request a directory of its own, which is
+     * what stopped two downloads deleting each other's work, and it moved the
+     * cost of an abandoned one from "overwritten by the next attempt" to "kept
+     * for ever". Nothing else removes them: `StorageManager.clearCaches` names
+     * four other directories, so the Clear action on the storage screen reports
+     * these bytes under "cache" and does not free them.
+     *
+     * The bytes are not idle. Every toolchain space pre-flight reads
+     * `StatFs(filesDir).availableBytes`, and `cacheDir` is on the same
+     * filesystem, so three attempts abandoned mid-transfer -- backgrounded and
+     * reclaimed, force-stopped, crashed -- leave roughly 170 MB apiece standing
+     * between the user and the retry, which then refuses for want of space.
+     *
+     * Only entries older than [ABANDONED_DOWNLOAD_AGE_MS] are touched, and a
+     * directory whose timestamp cannot be read is left alone. A running download
+     * must never have its staging directory pulled out from under it, and the
+     * cost of leaving one an extra day is a day of disk.
+     */
+    private fun sweepAbandonedDownloadsSync() {
+        val root = File(context.cacheDir, "toolchain-download")
+        val entries = root.listFiles() ?: return
+        val now = System.currentTimeMillis()
+        var removed = 0
+        for (entry in entries) {
+            if (!isAbandonedDownload(entry.lastModified(), now)) continue
+            if (entry.deleteRecursively()) removed++
+        }
+        if (removed > 0) {
+            Logger.i(tag, "Removed $removed abandoned toolchain download directories")
         }
     }
 
@@ -2340,6 +2522,64 @@ class ToolchainManager(private val context: Context) {
  */
 internal fun toolchainTempDir(cacheDir: File, packName: String): File =
     File(cacheDir, "toolchain-download/$packName-${System.nanoTime()}")
+
+/** How long an idle toolchain I/O thread is kept before it is given back. */
+internal const val IO_THREAD_KEEPALIVE_MS = 30_000L
+
+/**
+ * The single-thread executor each [ToolchainManager] does its file work on.
+ *
+ * One thread, an unbounded queue and therefore the same serialisation
+ * `Executors.newSingleThreadExecutor` gives, with one difference: the thread
+ * times out when it has been idle for [IO_THREAD_KEEPALIVE_MS] and is created
+ * again on the next submission. A core thread never times out, and that default
+ * is what made the lifetime a problem here, because nothing in this class or in
+ * any caller ever shuts one down: five call sites each construct their own
+ * manager, `SplashActivity.onCreate` constructs two of them per launch and
+ * submits on both, and the process outlives the screens because the server runs
+ * in a foreground service. Every launch therefore parked two more threads that
+ * had already finished their work.
+ *
+ * Shutting the executors down instead would need an owner for each manager, and
+ * there is none: `Environment` and `AndroidBridge` build one where they stand.
+ * Reclaiming an idle thread costs nothing and needs no owner.
+ *
+ * At file scope so the configuration can be asserted without reaching into a
+ * manager's private field.
+ */
+internal fun toolchainIoExecutor(
+    keepAliveMs: Long = IO_THREAD_KEEPALIVE_MS,
+): ThreadPoolExecutor = ThreadPoolExecutor(
+    1,
+    1,
+    keepAliveMs,
+    TimeUnit.MILLISECONDS,
+    LinkedBlockingQueue(),
+) { r -> Thread(r, "toolchain-io").apply { isDaemon = true } }
+    .apply { allowCoreThreadTimeOut(true) }
+
+/**
+ * How stale a toolchain staging directory has to be before it is swept.
+ *
+ * A day, and generously so. The only thing this has to be longer than is a
+ * download that is still running, and the directory's own timestamp is a weak
+ * witness of that: creating the archive and the extraction directory touches it,
+ * but writing 56 MB into a file that already exists does not. A day is far
+ * beyond any transfer this app performs and costs at most one day of disk.
+ */
+internal const val ABANDONED_DOWNLOAD_AGE_MS = 24L * 60 * 60 * 1000
+
+/**
+ * Whether a staging directory last touched at [lastModifiedMs] belongs to a
+ * download nothing is performing any more.
+ *
+ * Zero is `File.lastModified`'s answer for a timestamp it could not read, and it
+ * is treated as "cannot tell" rather than as the epoch: deleting a directory a
+ * download is writing into is the failure worth avoiding, and an extra day of
+ * disk is the price.
+ */
+internal fun isAbandonedDownload(lastModifiedMs: Long, nowMs: Long): Boolean =
+    lastModifiedMs > 0L && lastModifiedMs < nowMs - ABANDONED_DOWNLOAD_AGE_MS
 
 /** Free space asked for beyond what the install itself needs. */
 internal const val SPACE_BUFFER = 50_000_000L
@@ -2562,6 +2802,44 @@ internal fun isElfHeader(header: ByteArray): Boolean =
  */
 internal fun isCompleteTransfer(declaredBytes: Long, receivedBytes: Long): Boolean =
     declaredBytes <= 0L || receivedBytes == declaredBytes
+
+/**
+ * Where a redirect from [currentUrl] points, refusing one that would drop TLS.
+ *
+ * Redirects are followed by hand here (`instanceFollowRedirects = false`), and
+ * that is exactly what removes the platform's own refusal: `HttpURLConnection`
+ * will not automatically follow `https` to `http`, and a loop that reads
+ * `Location` itself never asks it to. `network_security_config.xml` permits
+ * cleartext app-wide, for the loopback server the editor runs on, so nothing
+ * below this refuses the hop either.
+ *
+ * Both artifacts that decide whether a toolchain ZIP may be installed come
+ * through this function: the payload, and the `sha256` manifest it is checked
+ * against, whose URL is derived beside it. A chain that drops to cleartext
+ * therefore carries the evidence and the thing it vouches for over the same
+ * unprotected hop, and an on-path answer supplies a hostile archive together
+ * with a manifest naming its digest. What installs is unpacked into
+ * `filesDir/usr` and turned into shell functions that `.bashrc` sources for
+ * every terminal.
+ *
+ * The origin sends no such redirect today, so this is a floor rather than a
+ * repair. Upgrades are left alone: an `http` start may go anywhere, which is
+ * what keeps a loopback fixture usable, and only a chain that began in `https`
+ * is held to it.
+ *
+ * @throws IOException when following the hop would leave TLS behind
+ */
+@Throws(IOException::class)
+internal fun nextRedirectUrl(currentUrl: String, location: String): String {
+    val next = if (location.startsWith("http")) location
+               else URL(URL(currentUrl), location).toString()
+    if (currentUrl.startsWith("https://", ignoreCase = true) &&
+        !next.startsWith("https://", ignoreCase = true)
+    ) {
+        throw IOException("Refusing a redirect from $currentUrl to cleartext $next")
+    }
+    return next
+}
 
 /**
  * Why an install failed, in the terms the person looking at the screen can act in.
