@@ -39,7 +39,66 @@ class PageSuppliedLoggingTest {
             bridge.isFile,
             "${bridge.absolutePath} is missing; this test would otherwise pass by reading nothing",
         )
-        return bridge.readText().split("@JavascriptInterface").drop(1)
+        return stripComments(bridge.readText()).split("@JavascriptInterface").drop(1)
+    }
+
+    /**
+     * [source] with its comments removed and its line structure kept.
+     *
+     * Everything below reads statements as text, and text a compiler never sees
+     * answers those questions just as readily as code does. Two of them turn on
+     * it. A trailing `// redactToken(uri)` beside a live `Logger.i(tag, "…$uri")`
+     * sits inside the span [statementFrom] returns, so it answers the redaction
+     * question for the call it is written next to, and a redaction taken off
+     * while debugging, the one shape this class exists to catch, stops being
+     * reported. The other is the vacuity counter: a commented-out `Logger` call
+     * is counted as one examined, so a file whose live log lines had all been
+     * disabled would still report that the scan looked at something.
+     *
+     * Newlines are kept, because [statementFrom] ends a statement on one and a
+     * comment removed together with its line break would join the statement above
+     * it to the one below.
+     *
+     * String literals are stepped over, raw strings included, so that a `//`
+     * inside a message or a URL does not read as the start of a comment and take
+     * the rest of the call with it. Character literals are not handled and this
+     * file has none.
+     */
+    private fun stripComments(source: String): String {
+        val out = StringBuilder()
+        var i = 0
+        while (i < source.length) {
+            when {
+                source.startsWith("\"\"\"", i) -> {
+                    val end = source.indexOf("\"\"\"", i + 3)
+                    val stop = if (end < 0) source.length else end + 3
+                    out.append(source, i, stop)
+                    i = stop
+                }
+                source[i] == '"' -> {
+                    var j = i + 1
+                    while (j < source.length && source[j] != '"' && source[j] != '\n') {
+                        if (source[j] == '\\') j++
+                        j++
+                    }
+                    val stop = (if (j < source.length && source[j] == '"') j + 1 else j)
+                        .coerceAtMost(source.length)
+                    out.append(source, i, stop)
+                    i = stop
+                }
+                source.startsWith("//", i) -> {
+                    while (i < source.length && source[i] != '\n') i++
+                }
+                source.startsWith("/*", i) -> {
+                    val end = source.indexOf("*/", i + 2)
+                    val stop = if (end < 0) source.length else end + 2
+                    for (k in i until stop) if (source[k] == '\n') out.append('\n')
+                    i = stop
+                }
+                else -> out.append(source[i++])
+            }
+        }
+        return out.toString()
     }
 
     /**
@@ -90,7 +149,7 @@ class PageSuppliedLoggingTest {
     private fun scan(source: String): Scan {
         val offenders = mutableListOf<String>()
         var examined = 0
-        for (chunk in source.split("@JavascriptInterface").drop(1)) {
+        for (chunk in stripComments(source).split("@JavascriptInterface").drop(1)) {
             val signature = Regex("""fun\s+(\w+)\s*\(([^)]*)\)""").find(chunk) ?: continue
             val name = signature.groupValues[1]
             // authToken is the session token the page already holds, and it is never
@@ -286,6 +345,93 @@ class PageSuppliedLoggingTest {
         assertTrue(
             result.offenders.isEmpty(),
             "the shape this class exists to ask for was reported as an offence: ${result.offenders}",
+        )
+    }
+
+    /**
+     * The scanner against a redaction that is only written in a comment.
+     *
+     * The span [statementFrom] returns runs to the end of the line the call
+     * closes on, so a trailing comment is part of the text every question below
+     * is asked of. `redactToken(uriString)` written there answers the redaction
+     * question for a call that does not make it, and the answer is the wrong one:
+     * this is what taking a redaction off and leaving a note about it looks like,
+     * which is the exact shape the class exists to report.
+     */
+    @Test
+    fun `a redaction named only in a comment does not answer for the call`() {
+        val fixture = """
+            @JavascriptInterface
+            fun openThing(uriString: String, authToken: String) {
+                Logger.i(tag, "Opening ${'$'}uriString") // redactToken(uriString)
+            }
+        """.trimIndent()
+
+        val result = scan(fixture)
+
+        assertEquals(1, result.examined, "the live call was not examined at all")
+        assertTrue(
+            result.offenders.any { it.contains("uriString") },
+            "a comment beside the call answered the redaction question for it: ${result.offenders}",
+        )
+    }
+
+    /**
+     * What the vacuity counter is allowed to count.
+     *
+     * `examined > 0` is the only thing standing between this class and reporting
+     * clean over a file it read nothing out of, and a counter that includes
+     * disabled calls reports coverage of exactly the lines that are no longer
+     * there. Both spellings, because commenting a line out and commenting a block
+     * out are the same act.
+     */
+    @Test
+    fun `a log call that is commented out is not counted as one`() {
+        val fixture = """
+            @JavascriptInterface
+            fun openThing(uriString: String, authToken: String) {
+                // Logger.i(tag, "Opening ${'$'}uriString")
+                /* Logger.w(tag, "Opening ${'$'}uriString") */
+                onOpen(uriString)
+            }
+        """.trimIndent()
+
+        val result = scan(fixture)
+
+        assertEquals(
+            0, result.examined,
+            "a disabled log call was counted as one the scan had looked at",
+        )
+        assertTrue(
+            result.offenders.isEmpty(),
+            "a disabled log call was reported as a leak: ${result.offenders}",
+        )
+    }
+
+    /**
+     * The control for dropping comments, and the reason it cannot be done on text
+     * alone.
+     *
+     * Two slashes are ordinary inside a message: any URL has them. Cutting at the
+     * first pair without knowing a literal was open would end this call at
+     * `http:`, and both the value and the closing quote would be gone before
+     * anything was asked about them.
+     */
+    @Test
+    fun `a slash pair inside a message does not hide the rest of the call`() {
+        val fixture = """
+            @JavascriptInterface
+            fun openThing(uriString: String, authToken: String) {
+                Logger.w(tag, "Opening http://example.com from ${'$'}uriString")
+            }
+        """.trimIndent()
+
+        val result = scan(fixture)
+
+        assertEquals(1, result.examined, "the call was lost with the message it carries")
+        assertTrue(
+            result.offenders.any { it.contains("uriString") },
+            "a URL in the message hid the value beside it: ${result.offenders}",
         )
     }
 
