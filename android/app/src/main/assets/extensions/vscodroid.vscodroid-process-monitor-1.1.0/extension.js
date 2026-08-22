@@ -138,7 +138,17 @@ function updateStatusBar(snapshot) {
     // than a reading of this tree, so it stays in the sentence and now comes from
     // the same place as everything else.
     if (total >= error && !criticalShownAtThreshold) {
+        // Both latches, because this count already meets the softer tier as
+        // well: error is above soft, and the three arms are one else-if chain
+        // over two independent flags. Setting only the critical one left the
+        // warning latch false, so the NEXT poll at an unchanged high count fell
+        // through to the soft arm and put 'above the target of 5' on top of the
+        // error already on screen -- two notifications about one reading, the
+        // second the less severe of the two, and both then permanent, since
+        // only a count below the idle baseline clears either. Measured on polls
+        // of 3, 20, 20, 20: nothing, the error, the warning, nothing.
         criticalShownAtThreshold = true;
+        warningShownAtThreshold = true;
         vscode.window.showErrorMessage(
             'Too many phantom processes; Android may start killing them. ' +
                 'The live count is in the status bar.',
@@ -159,9 +169,35 @@ function updateStatusBar(snapshot) {
             if (choice === 'Kill Idle Servers') killIdleLanguageServers();
             else if (choice === 'Show Details') showProcessTree();
         });
-    } else if (total < idle) {
-        warningShownAtThreshold = false;
+    } else if (total < soft) {
+        // Re-arming, and each latch comes back at the tier below the one that
+        // set it. This asked for `total < idle`, one BELOW the idle baseline,
+        // which is the count process-monitor.js measures for a cold session
+        // left untouched: five, the bootstrap, the server, the file watcher,
+        // the agent host and the chat backend, on API 33 and API 37 alike. A
+        // session with the workbench open never has fewer than the workbench
+        // costs, so nothing on a device cleared either flag and both tiers were
+        // one-shot for the life of the extension host. Only the prompt was
+        // lost, not the remedy: the status item recolours on every poll and
+        // 'Kill Idle Servers' stays a palette command that showProcessTree()
+        // names, which is why this is a quiet failure rather than a loud one.
+        //
+        // The gap between firing and re-arming is the point, so the count
+        // crossing one threshold cannot raise the same notification twice: the
+        // critical tier fires at the error budget and comes back only once the
+        // count is under the soft one, and the warning tier fires at the soft
+        // budget and comes back only once the count is at the idle baseline,
+        // which is the app doing nothing. `<=` and not `<` for that one: the
+        // baseline is the floor, not a count to get below.
+        //
+        // The two are separate on purpose. A recovery to 6 or 7 has left the
+        // busy range and deserves the error again if the count climbs back past
+        // 14, but it is still above the target the warning names, so repeating
+        // the warning there says nothing new. An escalation is not affected
+        // either way: a latched warning does not block the critical arm, which
+        // tests its own flag.
         criticalShownAtThreshold = false;
+        if (total <= idle) warningShownAtThreshold = false;
     }
 }
 
@@ -226,11 +262,15 @@ function killIdleLanguageServers() {
 // The other direction was 'ptyHost', an entry for a type classify() cannot
 // return: the pty host became a worker_thread and stopped being a process in
 // /proc at all, and the stale entry read as evidence that it still was.
+// 'safSync' left for the same reason and did more damage on the way: the SAF
+// sync engine is a thread inside the Android app process, so the type only ever
+// landed on processes that happened to run inside a folder opened from device
+// storage, and a language server among them was labelled 'storage' here while
+// being outside every reclaim path.
 const TYPE_LABELS = {
     bootstrap: 'system',
     server: 'system',
     fileWatcher: 'system',
-    safSync: 'storage',
     system: 'system',
     tmux: 'terminal',
     terminal: 'terminal',

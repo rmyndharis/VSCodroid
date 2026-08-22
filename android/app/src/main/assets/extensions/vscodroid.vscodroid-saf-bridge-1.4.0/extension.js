@@ -322,6 +322,35 @@ function activate(context) {
                         `${STORAGE_LABELS[picked.key] || picked.key} is not cached data ` +
                             'and cannot be cleared from here.'
                     );
+                } else {
+                    // The Total row, the only item built without a key. Every
+                    // other unactionable row explains itself above, and this one
+                    // is the first and largest thing on a screen a person opens
+                    // because they are out of space: with no arm of its own it
+                    // closed the picker in silence, which reads as a screen that
+                    // does not work rather than as a row with nothing to do.
+                    //
+                    // It is NOT the sum of the rows, which is what this sentence
+                    // said first: Total is every byte under the app's data and
+                    // cache directories, while the rows name the subtrees that
+                    // can be identified and acted on. The same change widened
+                    // that gap, narrowing the cache row to the four directories
+                    // the clear action reaches while leaving the whole cache
+                    // directory in Total. A person out of disk adds the rows up,
+                    // and is owed the two figures rather than an equality the
+                    // breakdown does not maintain.
+                    //
+                    // Both numbers, rather than a sentence about the difference.
+                    // A sentence would be one more claim to keep true as rows are
+                    // added and narrowed, which is exactly what went wrong here;
+                    // these are read off the same breakdown the rows are drawn
+                    // from and cannot disagree with them.
+                    const named = parts.reduce((sum, p) => sum + p.bytes, 0);
+                    vscode.window.showInformationMessage(
+                        `That is every byte this app is using: ${formatBytes(Number(b.total) || 0)}. ` +
+                            `The rows below account for ${formatBytes(named)} of it. ` +
+                            'Pick one of those to see what can be freed.'
+                    );
                 }
             } catch (/** @type {*} */ err) {
                 vscode.window.showErrorMessage(

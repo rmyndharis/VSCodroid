@@ -1045,10 +1045,17 @@ val checkPackOverlap = tasks.register<Exec>("checkPackOverlap") {
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/check-pack-overlap.py")
 
-    // Armed by the payload, the same predicate and the same reason as the Ruby
-    // sweep below: comparing an empty pack against the base module reports no
-    // overlap for the wrong reason.
-    onlyIf { rubyPackHoldsPayload() }
+    // Armed by ANY pack holding payload, because the script sweeps every pack
+    // rather than one. This asked whether the RUBY pack had been downloaded,
+    // borrowing the predicate from the Ruby-only sweep below without its
+    // subject, so a checkout that had run download-java.sh and not
+    // download-ruby.sh skipped the gate entirely and bundled the Java pack
+    // without ever comparing it against the base module. Both payload trees are
+    // gitignored, so that is an ordinary state to be in while working on one
+    // pack. The reason for arming on payload at all is unchanged: a pack holding
+    // only its tracked manifest overlaps nothing, and reporting that as no
+    // overlap answers a question nobody asked.
+    onlyIf { anyPackHoldsPayload() }
 
     isIgnoreExitValue = true
     val overlapResult = executionResult
@@ -1149,6 +1156,13 @@ val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
 
 fun rubyPackHoldsPayload(): Boolean =
     File(rootProject.projectDir, "toolchain_ruby/src/main/assets/usr").isDirectory
+
+// The same question of every pack, found the way check-pack-overlap.py finds
+// them, so a pack added later is covered here without this line being edited.
+fun anyPackHoldsPayload(): Boolean =
+    rootProject.projectDir.listFiles()
+        ?.any { it.isDirectory && it.name.startsWith("toolchain_") &&
+            File(it, "src/main/assets/usr").isDirectory } == true
 
 // The same question asked of the Ruby asset pack, which is in neither jniLibs
 // nor the app module's assets.

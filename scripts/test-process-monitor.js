@@ -18,7 +18,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const monitor = require('../android/app/src/main/assets/process-monitor.js');
+const MONITOR = require.resolve('../android/app/src/main/assets/process-monitor.js');
+const monitor = require(MONITOR);
 
 const UID = process.getuid();
 
@@ -48,7 +49,12 @@ const NODE = '/data/data/com.vscodroid/lib/arm64/libnode.so';
 // python.defaultInterpreterPath, which is what ms-python launches its server
 // with. Not every language server is a Node one, and the two rules differ there.
 const PY = '/data/user/0/com.vscodroid/files/usr/bin/python3';
-const REH = '/data/user/0/com.vscodroid/files/server/vscode-reh';
+// Taken from the monitor, not written out here. The chat-backend rule is
+// anchored to this directory, and the monitor derives it from where it sits, so
+// a fixture spelling the device's path itself would answer for a monitor whose
+// anchor had moved away from it. Which directory this is does not matter to any
+// case below; that they are the SAME directory is the whole of it.
+const REH = monitor.REH_ROOT;
 // Marketplace and bundled-by-us extensions are extracted here, which is a
 // different tree from the editor's own extensions under REH.
 const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
@@ -57,6 +63,10 @@ const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
 // is the argument that used to be the only thing the details view printed.
 const HEAP = '--max-old-space-size=488';
 const DATA = '/data/user/0/com.vscodroid/files/home/.vscodroid/data';
+// The local copy of one folder opened through the SAF picker, named by the hash
+// Environment.getSafMirrorDir builds. It is where the editor is pointed, so
+// every path under it is a workspace path the user chose.
+const MIRROR = '/data/user/0/com.vscodroid/files/saf-mirrors/a1b2c3';
 
 const MAIN_ACTIVITY = path.join(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
@@ -327,6 +337,257 @@ function checkPressureContract(tmp) {
     return { critical, moderate, filename };
 }
 
+/**
+ * The chat backend is found wherever the editor tree is, not where it once was.
+ *
+ * That rule is the only one in classify() anchored to a directory rather than to
+ * a program name, and the directory belongs to the Kotlin side, which names it
+ * in five places. Renaming the leaf is loud -- server.js builds the same leaf
+ * from __dirname and drops the app into its minimal health-check server -- but
+ * moving the PARENT, files/server to files/editor or under a versioned
+ * directory, leaves every __dirname-relative path in server.js working and would
+ * silently stop this rule matching. The 226 MB backend then returns to
+ * 'unknown', outside lsCpuTracker and outside the 'Kill Idle Servers' filter.
+ *
+ * Measured by moving it: a copy of the monitor is loaded from a directory of its
+ * own and asked about two processes, one under the copy's tree and one under the
+ * path the rule used to name. Both are the same command line otherwise, so what
+ * separates the answers is the anchor alone.
+ *
+ * NEGATIVE CONTROL: put the literal back -- `script.includes('/server/vscode-reh/')`
+ * in place of `script.startsWith(REH_PREFIX)` -- and the two assertions below
+ * swap answers, the moved tree going 'unknown' and the abandoned path
+ * 'langserver'.
+ */
+function checkRehAnchorFollowsTheTree(baseTmp) {
+    // A capital in the directory on purpose. classify() lower-cases the command
+    // line before comparing, so an anchor taken from a path and not lower-cased
+    // matches nothing on any checkout carrying one, which is every CI runner
+    // this repository builds on.
+    const moved = fs.mkdtempSync(path.join(baseTmp, 'Editor-Moved-'));
+    const copy = path.join(moved, 'process-monitor.js');
+    fs.copyFileSync(MONITOR, copy);
+    const relocated = require(copy);
+
+    // Resolved, because Node's loader hands a module a real path and macOS puts
+    // its temporary directories behind a symlink: comparing the two spellings
+    // would fail here for a reason that has nothing to do with the anchor.
+    assert.strictEqual(
+        relocated.REH_ROOT, path.join(fs.realpathSync(moved), 'vscode-reh'),
+        'the monitor does not take the editor tree from its own directory, so a copy of it ' +
+            'somewhere else still answers for wherever the original was unpacked',
+    );
+    assert.notStrictEqual(
+        relocated.REH_ROOT, monitor.REH_ROOT,
+        'the copy resolved the same tree as the original, so nothing below can tell an anchor ' +
+            'that moved with the monitor from one that stayed where it was written',
+    );
+
+    const proc = path.join(moved, 'proc');
+    const tail = 'node_modules/@github/copilot-android-arm64/index.js';
+    writeProc(proc, 2001, [NODE, `${relocated.REH_ROOT}/${tail}`, '--stdio']);
+    // The tree this rule used to name, now holding nothing this app unpacked.
+    writeProc(proc, 2002, [NODE, `/data/user/0/com.vscodroid/files/server/vscode-reh/${tail}`, '--stdio']);
+
+    const out = path.join(moved, 'tmp');
+    fs.mkdirSync(out);
+    process.env.TMPDIR = out;
+    relocated.start(2001, { procRoot: proc });
+    relocated.stop();
+
+    const snapshot = JSON.parse(fs.readFileSync(path.join(out, 'vscodroid-processes.json'), 'utf8'));
+    const type = (pid) => (snapshot.tree.find((e) => e.pid === pid) || {}).type;
+    assert.strictEqual(
+        type(2001), 'langserver',
+        "the chat agent's model backend under the tree the monitor was loaded from is " +
+            `${type(2001)}: the rule names a directory this build no longer uses, so the ` +
+            'largest process the app owns is in neither reclaim path',
+    );
+    assert.strictEqual(
+        type(2002), 'unknown',
+        'a backend under the directory the editor was moved OUT of is still claimed as ours, ' +
+            'so the anchor is a literal rather than the tree beside the monitor',
+    );
+    return relocated.REH_ROOT;
+}
+
+/**
+ * The snapshot comes back after the directory it is written into is reclaimed.
+ *
+ * TMPDIR is cacheDir/tmp, and Android deletes an app's cache directory under
+ * storage pressure while the app keeps running, so it can go mid-session. The
+ * write was a bare writeFileSync into a path resolved once at start(), inside a
+ * catch that only logs, and nothing here recreated the directory: one reclaim
+ * froze the status bar counter, its tooltip and the process tree on their last
+ * snapshot for the life of the server, and left 'Kill Idle Servers' SIGTERMing
+ * pids read out of it. Both Kotlin writers into that same directory recreate it
+ * on the way past; this one did not.
+ *
+ * NEGATIVE CONTROL: remove the `fs.mkdirSync(path.dirname(outputPath), ...)`
+ * line from scan() and the last assertion goes red, because no later scan can
+ * write the file again.
+ */
+function checkSnapshotSurvivesReclaim(baseTmp, proc) {
+    const out = path.join(baseTmp, 'reclaimed');
+    fs.mkdirSync(out);
+    process.env.TMPDIR = out;
+    const snapshotPath = path.join(out, 'vscodroid-processes.json');
+
+    monitor.start(1001, { procRoot: proc });
+    monitor.stop();
+    assert.ok(fs.existsSync(snapshotPath), 'the monitor wrote no snapshot at all, so this ' +
+        'check cannot tell a recreated directory from one that was never used');
+
+    fs.rmSync(out, { recursive: true, force: true });
+    assert.ok(!fs.existsSync(snapshotPath), 'the fixture directory did not go, so the write ' +
+        'below is not being asked the question this exists to ask');
+
+    monitor.start(1001, { procRoot: proc });
+    monitor.stop();
+    assert.ok(
+        fs.existsSync(snapshotPath),
+        'the snapshot was never written again after the directory holding it was reclaimed, ' +
+            'so the status bar counter, its tooltip and the process tree render the last one ' +
+            'for the life of the server and Kill Idle Servers signals pids out of it',
+    );
+}
+
+/**
+ * A language server that outlives its SIGTERM stays reclaimable, and the second
+ * signal is one it cannot refuse.
+ *
+ * The kill deleted its own tracker entry, and that entry was the only record
+ * that a signal had ever been sent. So a server that did not die was re-tracked
+ * by the next scan as a first sighting and bought itself another five idle
+ * minutes, over and over, while the warning the user reads had already said it
+ * was killed. Two things kept the delete from being harmless: scan()'s cleanup
+ * loop already drops the pids that really went, and runs before this in the same
+ * scan, so the delete only ever bit on a survivor; and answering a signal is
+ * itself CPU time, so the very act of ignoring a SIGTERM in a handler makes the
+ * idle test call the process busy.
+ *
+ * Driven with a stub process.kill, so nothing on the machine running this is
+ * ever signalled: what is asserted is which signal the monitor chose for which
+ * pid, and the fixture survives because it is a directory rather than a process.
+ *
+ * NEGATIVE CONTROLS, each measured:
+ *   - put `lsCpuTracker.delete(pid)` back after the successful kill: the row is
+ *     no longer idle at the third scan and no SIGKILL is ever sent.
+ *   - rebuild the entry in trackLangServer as `{ cpuTime, lastActive: now }`
+ *     instead of spreading `prev`: the pending signal is dropped the moment the
+ *     process burns a tick, same two failures.
+ *   - drop the `tracked.termSentAt` short-circuit from isIdle: the pending
+ *     signal is kept and then not read, same two failures.
+ *   - send 'SIGTERM' instead of 'SIGKILL' on the second pass: the escalation
+ *     assertion goes red.
+ *   - drop `|| cpuTime < prev.cpuTime` from trackLangServer: a recycled pid
+ *     inherits its predecessor's pending signal and is SIGKILLed on sight.
+ */
+function checkSurvivingServerStaysReclaimable(baseTmp, critical) {
+    const out = fs.mkdtempSync(path.join(baseTmp, 'idle-kill-'));
+    const proc = path.join(out, 'proc');
+    const VICTIM = 1500;
+    writeProc(proc, VICTIM, [
+        NODE, `${REH}/extensions/css-language-features/server/dist/node/cssServerMain`, '--node-ipc',
+    ]);
+    const statPath = path.join(proc, String(VICTIM), 'stat');
+    const setCpu = (utime, stime) => {
+        const before = fs.readFileSync(statPath, 'utf8');
+        fs.writeFileSync(statPath, `${VICTIM} (node) S 1 ${'0 '.repeat(9)}${utime} ${stime}\n`);
+        assert.notStrictEqual(
+            fs.readFileSync(statPath, 'utf8'), before,
+            `pid ${VICTIM}'s CPU reading did not move, so this step is not asking anything`,
+        );
+    };
+
+    process.env.TMPDIR = out;
+    const signals = [];
+    const realKill = process.kill;
+    const realNow = Date.now;
+    // Every signal is recorded and none is delivered. The stub is installed for
+    // the whole check rather than around each scan, so a pid the monitor picks
+    // that is not this fixture's is caught by the assertions rather than sent.
+    process.kill = (pid, signal) => { signals.push([pid, signal]); };
+    let sent = [];
+    try {
+        const scanAt = (offsetMs, pressure) => {
+            if (pressure) {
+                fs.writeFileSync(path.join(out, monitor.PRESSURE_FILENAME), `${critical}\n`);
+            }
+            Date.now = () => realNow() + offsetMs;
+            try {
+                monitor.start(VICTIM, { procRoot: proc });
+                monitor.stop();
+            } finally {
+                Date.now = realNow;
+            }
+            const snap = JSON.parse(
+                fs.readFileSync(path.join(out, 'vscodroid-processes.json'), 'utf8'),
+            );
+            return snap.tree.find((e) => e.pid === VICTIM) || {};
+        };
+
+        const IDLE = 6 * 60 * 1000;
+
+        // First sighting. It also purges every pid the scans above tracked,
+        // because the cleanup loop drops what this procRoot does not hold, which
+        // is what keeps the signals below attributable to this fixture alone.
+        const first = scanAt(0, false);
+        assert.strictEqual(
+            first.type, 'langserver',
+            `the fixture is classified ${first.type}, so it is never tracked and nothing below ` +
+                'is being measured',
+        );
+        assert.strictEqual(first.idle, false, 'a server seen once is reported idle');
+        assert.deepStrictEqual(signals, [], 'a scan without memory pressure signalled something');
+
+        // Five idle minutes and critical pressure: the first signal.
+        scanAt(IDLE, true);
+        assert.deepStrictEqual(
+            signals, [[VICTIM, 'SIGTERM']],
+            `the pressure kill signalled ${JSON.stringify(signals)} rather than one SIGTERM to ` +
+                'the idle server, so the escalation below would be measuring the wrong pass',
+        );
+
+        // The server is still there, and running its handler cost it a tick.
+        // That is the reading that used to hand it another five minutes.
+        setCpu(11, 5);
+        const after = scanAt(IDLE, false);
+        assert.strictEqual(
+            after.idle, true,
+            'a language server that outlived the SIGTERM sent to it is reported not idle again, ' +
+                'so the pressure kill leaves it alone for another five minutes and Kill Idle ' +
+                'Servers says none are idle, while the warning already told the user it was killed',
+        );
+
+        // The next pressure event, which must not be a repeat of a signal this
+        // process has already declined.
+        scanAt(IDLE, true);
+        assert.deepStrictEqual(
+            signals, [[VICTIM, 'SIGTERM'], [VICTIM, 'SIGKILL']],
+            'the second pass over a server that ignored SIGTERM sent ' +
+                `${JSON.stringify(signals)}: nothing here escalates, so the process holds its ` +
+                'slot against the 32-process limit for as long as it likes',
+        );
+
+        // A recycled pid is a different process, and CPU time that went
+        // backwards is how that shows. It must not inherit the signal its
+        // predecessor was refusing.
+        setCpu(3, 1);
+        scanAt(IDLE, true);
+        assert.strictEqual(
+            signals.length, 2,
+            `a freshly started server on a recycled pid was signalled ${JSON.stringify(signals[2])} ` +
+                "on the strength of its predecessor's record",
+        );
+        sent = signals.slice();
+    } finally {
+        process.kill = realKill;
+        Date.now = realNow;
+    }
+    return sent.length;
+}
+
 function main() {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-monitor-'));
     const proc = path.join(tmp, 'proc');
@@ -345,7 +606,26 @@ function main() {
         [1005, [NODE, '/data/user/0/com.vscodroid/files/home/projects/my-eslint-tool/index.js'], 'unknown'],
         [1006, [NODE, '/data/user/0/com.vscodroid/files/usr/share/reporter/index.js'], 'unknown'],
         [1007, [NODE, HEAP, `${REH}/out/bootstrap-fork`, '--type=fileWatcher'], 'fileWatcher'],
-        [1008, [NODE, '/data/user/0/com.vscodroid/files/saf-mirrors/a1b2c3/sync.js'], 'safSync'],
+        // A folder opened from device storage is copied under saf-mirrors, so
+        // everything below that path is the user's workspace. It used to be a
+        // classification of its own, matched on the whole command line, and the
+        // three fixtures here are the two directions of removing it. A script
+        // inside a copied folder is no more the sync engine than any other
+        // script the user runs; the engine is a thread inside the Android app
+        // process and never appears in /proc at all.
+        [1008, [NODE, `${MIRROR}/sync.js`], 'unknown'],
+        // The half that cost something. A language server whose own program
+        // path lies inside the copied folder returned 'safSync' before any
+        // pattern was read: the interpreter of a venv the user made there and
+        // selected, and the workspace TypeScript the built-in extension resolves
+        // under node_modules. Neither entered lsCpuTracker, so neither could be
+        // reclaimed under memory pressure or by 'Kill Idle Servers', while both
+        // held one of the 32 phantom slots and read as 'storage' in the tooltip.
+        [1034, [`${MIRROR}/.venv/bin/python`,
+            `${EXT}/ms-python.python-2026.4.0/python_files/run-jedi-language-server.py`],
+            'langserver'],
+        [1035, [NODE, `${MIRROR}/node_modules/typescript/lib/tsserver.js`,
+            '--useInferredProjectPerProjectRoot'], 'langserver'],
         // A marketplace language server, not one of the three bundled with the
         // editor, and the reason it is here: check-langserver-patterns.py globs
         // *ServerMain.js under vscode-reh/extensions and cannot see this file at
@@ -596,12 +876,24 @@ function main() {
     const labelled = checkLabelCoverage(snapshot);
     const named = checkCommandNames(snapshot, byPid);
 
+    // All three repoint TMPDIR, which start() resolves the snapshot and the
+    // pressure file from, so they run after everything that reads either. The
+    // kill check also empties the tracker of every pid above, since its own
+    // procRoot holds one process, which is what keeps the signals it counts
+    // attributable to its own fixture.
+    checkSnapshotSurvivesReclaim(tmp, proc);
+    const escalated = checkSurvivingServerStaysReclaimable(tmp, contract.critical);
+    const moved = checkRehAnchorFollowsTheTree(tmp);
+
     fs.rmSync(tmp, { recursive: true, force: true });
     console.log(
         `ok -- ${snapshot.total} processes counted, ${cases.length} classifications checked, ` +
         `${labelled.length} types all labelled by the status bar extension, ` +
         `${named} rows named after the program they run, ` +
-        `pressure contract agrees on ${JSON.stringify(contract.critical)} in ${contract.filename}`,
+        `pressure contract agrees on ${JSON.stringify(contract.critical)} in ${contract.filename}, ` +
+        `snapshot rewritten after its directory was reclaimed, ` +
+        `a server that outlived its SIGTERM took ${escalated} signals and no more, ` +
+        `chat backend still found under a tree moved to ${path.basename(path.dirname(moved))}`,
     );
 }
 

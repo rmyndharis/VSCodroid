@@ -58,6 +58,31 @@ const KILL_ON_PRESSURE = new Set(['critical']);
 // literals and refuses a disagreement in either direction.
 const PRESSURE_FILENAME = 'vscodroid-memory-pressure';
 
+// Where this app unpacks the editor, and the anchor the chat-backend rule in
+// classify() is written against.
+//
+// Derived rather than spelled out. server.js requires this module out of its own
+// directory and builds the server tree beside it the same way, from __dirname,
+// so this is the same path by construction instead of by agreement. It was a
+// hand-written copy of a location the Kotlin side owns in five places, and the
+// half of that which nothing would have caught is a move of the PARENT
+// directory: renaming the leaf drops the app into server.js's minimal
+// health-check server and is loud, while moving `server/` elsewhere leaves every
+// __dirname-relative path in server.js working and only stops this rule
+// matching -- and the chat agent's model backend, 226 MB and one of five
+// processes counted against the phantom budget, goes back to 'unknown', outside
+// the idle kill and outside the command that sheds language servers by hand.
+//
+// Exported for scripts/test-process-monitor.js, which loads a copy of this file
+// from a directory of its own and asks the same question there.
+const REH_ROOT = path.join(__dirname, 'vscode-reh');
+
+// classify() lower-cases the command line before comparing, so the needle is
+// lower-cased once here to meet it. The device's path has no capitals; a
+// checkout on a CI runner or a workstation does, and that is where this file's
+// own tests run.
+const REH_PREFIX = REH_ROOT.toLowerCase() + '/';
+
 // How an entry matches depends on its shape, which namesProgram() below reads:
 // a bare word has to name the program exactly (optionally with a .js, .mjs or
 // .cjs extension), while an entry carrying a separator is distinctive enough to
@@ -328,16 +353,25 @@ function classify(cmdline) {
     // names what it runs in one argument, and the directories above that name
     // are the user's to choose.
     //
-    // The paths below stay on the whole line deliberately: saf-mirrors and
-    // saf-writeback ARE directories rather than program names, so a basename
-    // would never see them.
+    // A 'safSync' rule used to stay on the whole line here, kept for being
+    // directories rather than program names, and it was 'vscode-eslint' again in
+    // another shape. Its subject is not a process: saf-writeback is a thread
+    // inside the Android app process (SafSyncEngine) and nothing under assets/
+    // is named safsync, so the only string it could ever reach was saf-mirrors,
+    // which is the root of the local copy of a folder opened through the SAF
+    // picker and therefore a directory the user chose. The cost was not a label.
+    // A language server whose own program path lies inside a device folder, a
+    // venv interpreter selected there or a workspace tsserver under its
+    // node_modules, returned here before the patterns below were read, so it
+    // never entered lsCpuTracker, never carried an idle verdict, and sat outside
+    // the pressure kill and outside 'Kill Idle Servers' alike while holding one
+    // of the 32 phantom slots. Where a process runs says nothing about what it
+    // is, mirrors included.
     const parts = cmd.split(' ').filter(Boolean);
     const names = parts.map((arg) => path.basename(arg));
 
     if (cmd.includes('server-main.js')) return 'server';
     if (cmd.includes('bootstrap-fork') && cmd.includes('filewatcher')) return 'fileWatcher';
-    // SAF sync engine: mirrors content:// URIs to local filesystem for VS Code access
-    if (cmd.includes('saf-mirrors') || cmd.includes('saf-writeback') || cmd.includes('safsync')) return 'safSync';
     // ptyHost is now a worker_thread: no longer visible in /proc
     if (names.includes('libtmux.so') || names.includes('tmux')) return 'tmux';
     if (names.includes('libbash.so') || names.includes('bash')) return 'terminal';
@@ -351,9 +385,9 @@ function classify(cmdline) {
     // above compares is `index.js`: that names the package's entry point and not
     // the program, so a bare word would miss it and a substring would claim every
     // index.js on the device, the user's own included. Matched on the package path
-    // instead, the exception the saf paths above already take, and the
-    // node_modules segment is what keeps the needle off a directory someone chose
-    // themselves.
+    // instead, the one rule here that reads a directory rather than a program
+    // name, and the node_modules segment is what keeps the needle off a directory
+    // someone chose themselves.
     //
     // Being unclassified was not cosmetic here. Measured idle on an API 33 and an
     // API 37 emulator, signed out, nothing but the Welcome tab open: 226 MB
@@ -375,11 +409,12 @@ function classify(cmdline) {
     // process eligible for the SIGTERM below.
     //
     // So the rule asks for the tree this app unpacks, in the one argument that
-    // names the program. filesDir/server/vscode-reh holds both alias sites
-    // FirstRunSetup.setupCopilotAndroidAliases builds, the agent host's and the
-    // session provider's, and a project directory cannot be inside it.
+    // names the program. REH_ROOT is that tree, derived above from where this
+    // file sits rather than written out here a second time. It holds both alias
+    // sites FirstRunSetup.setupCopilotAndroidAliases builds, the agent host's
+    // and the session provider's, and a project directory cannot be inside it.
     const script = scriptArgument(parts);
-    if (script.includes('/server/vscode-reh/') &&
+    if (script.startsWith(REH_PREFIX) &&
         script.includes('/node_modules/@github/copilot-')) return 'langserver';
 
     for (const pattern of LANG_SERVER_PATTERNS) {
@@ -479,6 +514,16 @@ function scan() {
             warnings
         };
 
+        // TMPDIR is cacheDir/tmp, and Android deletes an app's cache directory
+        // under storage pressure while the app keeps running, so the directory
+        // this writes into can go mid-session. Both Kotlin writers into that
+        // same path recreate it on the way past (ProcessManager.startServer,
+        // MainActivity.writeMemoryPressure); this one did not, and the write
+        // then threw ENOENT into a catch that only logs. Nothing else here
+        // recreates it, so the status bar counter, its tooltip and the process
+        // tree all froze on their last snapshot for the life of the server, and
+        // 'Kill Idle Servers' went on SIGTERMing pids read out of it.
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
         fs.writeFileSync(outputPath, JSON.stringify(snapshot), 'utf8');
     } catch (e) {
         log('error', `Scan failed: ${e.message}`);
@@ -499,7 +544,15 @@ function scan() {
  */
 function isIdle(pid, now) {
     const tracked = lsCpuTracker.get(pid);
-    return !!tracked && now - tracked.lastActive >= IDLE_KILL_THRESHOLD_MS;
+    if (!tracked) return false;
+    // A SIGTERM this process has not answered keeps it eligible whatever its CPU
+    // reading says. Answering a signal is itself work: a server that runs a
+    // handler and then does not exit spends CPU doing it, which moves lastActive
+    // on the next scan and would otherwise report a process that is refusing to
+    // go as busy for another five minutes. The record is dropped when the
+    // process really goes, by the cleanup loop in scan().
+    if (tracked.termSentAt) return true;
+    return now - tracked.lastActive >= IDLE_KILL_THRESHOLD_MS;
 }
 
 function trackLangServer(pid, now) {
@@ -507,14 +560,20 @@ function trackLangServer(pid, now) {
     if (cpuTime < 0) return;
 
     const prev = lsCpuTracker.get(pid);
-    if (!prev) {
+    // CPU time only ever goes up within one process, so a reading that went
+    // backwards is a different process wearing a recycled pid. It starts over
+    // rather than inheriting its predecessor's record: that record can carry a
+    // SIGTERM this process never received, and the escalation below would then
+    // SIGKILL a server that had just started.
+    if (!prev || cpuTime < prev.cpuTime) {
         lsCpuTracker.set(pid, { cpuTime, lastActive: now });
         return;
     }
 
     if (cpuTime !== prev.cpuTime) {
-        // CPU time changed: process is active
-        lsCpuTracker.set(pid, { cpuTime, lastActive: now });
+        // CPU time changed: process is active. Spread rather than rebuilt, so
+        // that an unanswered SIGTERM survives the update; see isIdle above.
+        lsCpuTracker.set(pid, { ...prev, cpuTime, lastActive: now });
     }
     // else: cpuTime unchanged, lastActive stays the same (idle)
 }
@@ -526,11 +585,28 @@ function killIdleLangServers(now) {
     // this does not need to have an answer to.
     for (const pid of [...lsCpuTracker.keys()]) {
         if (isIdle(pid, now)) {
+            const tracked = lsCpuTracker.get(pid);
+            // A pid still carrying the last SIGTERM is one that outlived it: the
+            // mark is only ever set by an earlier scan, so at least one scan
+            // interval has passed and the server has had its chance to exit.
+            // Escalate rather than repeat. A second SIGTERM to a process that
+            // ignored the first reclaims nothing, and this path runs only when
+            // Android has reported critical memory pressure over a server that
+            // has not moved in five minutes.
+            const escalate = !!tracked.termSentAt;
             try {
                 const cmdline = readCmdline(pid);
-                process.kill(pid, 'SIGTERM');
+                process.kill(pid, escalate ? 'SIGKILL' : 'SIGTERM');
                 killed.push({ pid, cmd: cmdline });
-                lsCpuTracker.delete(pid);
+                // The attempt is recorded rather than forgotten. Deleting here
+                // erased the only evidence that a signal was ever sent, so a
+                // process that survived it was re-tracked by the next scan as a
+                // first sighting and bought itself another five idle minutes,
+                // every time, while the warning above had already told the user
+                // it was killed. Removal belongs to the cleanup loop in scan(),
+                // which drops the pids that really went and runs before this in
+                // the same scan.
+                lsCpuTracker.set(pid, { ...tracked, termSentAt: now });
             } catch {
                 // Process already gone
                 lsCpuTracker.delete(pid);
@@ -548,4 +624,6 @@ function readMemoryPressure() {
     return content.trim();
 }
 
-module.exports = { start, stop, readMemoryPressure, KILL_ON_PRESSURE, PRESSURE_FILENAME };
+module.exports = {
+    start, stop, readMemoryPressure, KILL_ON_PRESSURE, PRESSURE_FILENAME, REH_ROOT,
+};

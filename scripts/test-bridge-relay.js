@@ -172,8 +172,10 @@ const bridgeCalls = [];
 // wants an answer has to post one.
 let listAnswer = '';
 let reclaimAnswer = '';
+let breakdownAnswer = '';
 const listCalls = [];
 const reclaimCalls = [];
+const breakdownCalls = [];
 
 const AndroidBridge = {
     openExternalUrl(url, token) {
@@ -187,6 +189,10 @@ const AndroidBridge = {
     reclaimSafMirror(token, hash, force, replyId) {
         reclaimCalls.push({ token, hash, force, replyId });
         return reclaimAnswer;
+    },
+    getStorageBreakdown(token, replyId) {
+        breakdownCalls.push({ token, replyId });
+        return breakdownAnswer;
     },
 };
 
@@ -625,6 +631,71 @@ async function main() {
     );
     quickPickChoice = null;
     warningChoice = null;
+
+    // The storage screen's Total row, which is the first and largest thing a
+    // person sees on the screen they open because they are out of disk.
+    //
+    // It is the one item built without a key, so it reaches the picker's final
+    // arm. That arm used to close the picker in silence, which reads as a screen
+    // that does not work; the sentence put there instead said Total was the sum
+    // of the rows below it, and it is not. Total is every byte under the app's
+    // data and cache directories, and the rows name the subtrees that can be
+    // identified: the cache row alone was narrowed to the four directories the
+    // clear action reaches, while the whole cache directory stays in Total.
+    //
+    // So this drives the real command with a breakdown whose rows deliberately
+    // do NOT add up, and asserts the two figures are BOTH named. Numbers rather
+    // than wording, because a check on the phrasing is one a synonym walks past.
+    //
+    // NEGATIVE CONTROL, measured: restore 'That is the sum of the rows below it.
+    // Pick one of those to see what can be freed.' and the second assertion goes
+    // red -- the sentence names neither figure.
+    const showStorageUsage = commands.get('vscodroid.showStorageUsage');
+    assert.ok(showStorageUsage, 'the bundled extension no longer registers vscodroid.showStorageUsage');
+
+    const MB = 1024 * 1024;
+    // Two rows of 512 MB inside a 3 GB total: the rows add to 1.0 GB, a figure
+    // that is neither the total nor any single row, so naming it cannot be
+    // satisfied by echoing something already on the screen.
+    const breakdown = {
+        vscode_server: 512 * MB,
+        extensions: 512 * MB,
+        total: 3 * 1024 * MB,
+        clearable: ['cache', 'logs'],
+    };
+    let offered = null;
+    quickPickChoice = (items) => { offered = items; return items[0]; };
+    shown.info.length = 0; shown.error.length = 0; breakdownCalls.length = 0;
+    const usage = showStorageUsage();
+    await settle();
+    assert.strictEqual(breakdownCalls.length, 1, 'the relay never reached getStorageBreakdown');
+    relayWindow.__vscodroidBridgeReply(
+        breakdownCalls[0].replyId, true, JSON.stringify(breakdown),
+    );
+    await usage;
+    quickPickChoice = null;
+
+    assert.ok(
+        offered && offered[0] && offered[0].key === undefined,
+        'the first item is no longer the keyless Total row, so this drove some other arm: ' +
+        JSON.stringify(offered),
+    );
+    assert.strictEqual(
+        shown.info.length, 1,
+        'the Total row said nothing at all, so the screen reads as one that does not work: ' +
+        JSON.stringify(shown),
+    );
+    const totalSaid = shown.info[0];
+    assert.ok(
+        totalSaid.includes('3.0 GB'),
+        'the Total row does not name the figure it is showing: ' + totalSaid,
+    );
+    assert.ok(
+        totalSaid.includes('1.0 GB'),
+        'the Total row does not say how much of itself the rows below account for. They add ' +
+        'to 1.0 GB of a 3.0 GB total, and a person out of disk adds them up: any claim that ' +
+        'the rows come to the total is one this breakdown does not support. Saw: ' + totalSaid,
+    );
 
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
