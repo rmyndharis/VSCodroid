@@ -158,10 +158,13 @@ class HardwareKeyboardTest {
         // uiMode joins them for the same reason and a worse consequence. It is the
         // only qualifier outside this list that fires with nobody touching the
         // device: a sunset-to-sunrise dark schedule, and battery saver's forced
-        // dark, both flip it mid-session. In MainActivity that silently moves the
-        // user out of their workspace, because the rebuilt WebView carries only
-        // the data: placeholder and loadVSCode falls through to the default
-        // projects directory. In SplashActivity it restarts the whole first-run
+        // dark, both flip it mid-session. In MainActivity that used to move the
+        // user out of their workspace outright, because the rebuilt WebView
+        // carries only the data: placeholder and loadVSCode fell through to the
+        // default projects directory; the folder is remembered now, so what a
+        // relaunch costs is the reload rather than the workspace, and the reason
+        // to declare the attribute is the teardown itself.
+        // In SplashActivity it restarts the whole first-run
         // extraction, because runSetup() lives in lifecycleScope and the relaunch
         // cancels it before markSetupComplete() runs.
         //

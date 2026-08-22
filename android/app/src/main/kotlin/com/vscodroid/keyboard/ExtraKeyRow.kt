@@ -62,7 +62,29 @@ class ExtraKeyRow @JvmOverloads constructor(
      */
     private val modifierSyncRunnable: Runnable = object : Runnable {
         override fun run() {
-            keyInjector?.queryModifierState { jsCtrl, jsAlt, jsShift ->
+            val injector = keyInjector
+            if (injector == null) {
+                // There is no page on the other side to be holding a modifier
+                // for. The injector is dropped when the renderer dies
+                // (MainActivity.recreateWebView), and the page that was told
+                // about this latch went with it, so a row still painted as
+                // latched is promising a modifier to a page that never heard of
+                // it. Clearing also ends the chain, at a place that decided to.
+                resetModifiersIfNeeded()
+                return
+            }
+            // Queued before the question is asked, never from inside its answer.
+            // That answer comes back through WebView.evaluateJavascript, and on
+            // the renderer-crash path the WebView being asked is destroyed before
+            // it can reply, so a re-post living in the callback ended the poll for
+            // good on precisely the event it exists to recover from: the
+            // replacement page starts with every flag clear while this row still
+            // shows Ctrl held, and nothing else clears a modifier while the
+            // keyboard is up. Ending the chain is now stated rather than implied,
+            // below and in startModifierSync and resetModifiersIfNeeded, which are
+            // the three places that know it should stop.
+            postDelayed(modifierSyncRunnable, 200)
+            injector.queryModifierState { jsCtrl, jsAlt, jsShift ->
                 if (ctrlActive && !jsCtrl) {
                     ctrlActive = false
                     Logger.d(tag, "Ctrl consumed by soft keyboard")
@@ -75,8 +97,8 @@ class ExtraKeyRow @JvmOverloads constructor(
                     shiftActive = false
                     Logger.d(tag, "Shift consumed by soft keyboard")
                 }
-                if (ctrlActive || altActive || shiftActive) {
-                    postDelayed(modifierSyncRunnable, 200)
+                if (!ctrlActive && !altActive && !shiftActive) {
+                    removeCallbacks(modifierSyncRunnable)
                 }
             }
         }
