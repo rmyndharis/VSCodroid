@@ -210,9 +210,9 @@ class TlsFailureNoticeTest {
         val said = mutableSetOf<TlsFailure>()
         val failure = TlsFailure("dev.example.com", TlsFailureReason.UNTRUSTED)
 
-        assertEquals(failure, tlsFailureToAnnounce(failure, said))
+        assertEquals(failure, tlsFailureToAnnounce(failure, said, now = 0L, lastAnnouncedAt = 0L))
         assertNull(
-            tlsFailureToAnnounce(failure, said),
+            tlsFailureToAnnounce(failure, said, now = 0L, lastAnnouncedAt = 0L),
             "a second image from the same host adds nothing the user can act on",
         )
     }
@@ -226,16 +226,16 @@ class TlsFailureNoticeTest {
     @Test
     fun `a different host or a different reason is still announced`() {
         val said = mutableSetOf<TlsFailure>()
-        tlsFailureToAnnounce(TlsFailure("dev.example.com", TlsFailureReason.UNTRUSTED), said)
+        tlsFailureToAnnounce(TlsFailure("dev.example.com", TlsFailureReason.UNTRUSTED), said, now = 0L, lastAnnouncedAt = 0L)
 
         assertEquals(
             TlsFailure("other.example.com", TlsFailureReason.UNTRUSTED),
-            tlsFailureToAnnounce(TlsFailure("other.example.com", TlsFailureReason.UNTRUSTED), said),
+            tlsFailureToAnnounce(TlsFailure("other.example.com", TlsFailureReason.UNTRUSTED), said, now = 0L, lastAnnouncedAt = 0L),
             "a different host is a fact the user has not been told",
         )
         assertEquals(
             TlsFailure("dev.example.com", TlsFailureReason.DATE),
-            tlsFailureToAnnounce(TlsFailure("dev.example.com", TlsFailureReason.DATE), said),
+            tlsFailureToAnnounce(TlsFailure("dev.example.com", TlsFailureReason.DATE), said, now = 0L, lastAnnouncedAt = 0L),
             "the same host failing a different way needs a different answer from the reader",
         )
     }
@@ -260,7 +260,7 @@ class TlsFailureNoticeTest {
 
         for (i in 0 until MAX_TLS_FAILURES_ANNOUNCED * 4) {
             tlsFailureToAnnounce(
-                TlsFailure("host$i.example.com", TlsFailureReason.UNTRUSTED), said,
+                TlsFailure("host$i.example.com", TlsFailureReason.UNTRUSTED), said, now = 0L, lastAnnouncedAt = 0L,
             )?.let { shown += it }
         }
 
@@ -275,13 +275,52 @@ class TlsFailureNoticeTest {
                 "count above a cap rather than a mute that started somewhere else",
         )
         assertNull(
-            tlsFailureToAnnounce(first, said),
+            tlsFailureToAnnounce(first, said, now = 0L, lastAnnouncedAt = 0L),
             "a host already announced was announced a second time, so the record was " +
                 "forgotten rather than closed",
         )
         assertTrue(
             said.size <= MAX_TLS_FAILURES_ANNOUNCED,
             "the record grew past the cap on hosts a remote page chooses: ${said.size}",
+        )
+    }
+
+    /**
+     * The reason the cap became an interval, and the property a hard cap did not have.
+     *
+     * The page is refused by `handler.cancel()` before any of this runs, so a notice
+     * nobody sees costs the explanation and not the protection. But a session here is
+     * a working day, not a page view, and eight is a number a developer with a few
+     * internal hosts reaches without anything hostile happening. A cap that never let
+     * go would leave the rest of that day silent, including the certificate fault the
+     * user walks into an hour later.
+     */
+    @Test
+    fun `a new fault after the burst has passed is still announced`() {
+        val said = mutableSetOf<TlsFailure>()
+        var last = 0L
+        for (i in 0 until MAX_TLS_FAILURES_ANNOUNCED * 4) {
+            tlsFailureToAnnounce(
+                TlsFailure("host$i.example.com", TlsFailureReason.UNTRUSTED),
+                said, now = 0L, lastAnnouncedAt = last,
+            )?.let { last = 0L }
+        }
+        val later = TlsFailure("much-later.example.com", TlsFailureReason.UNTRUSTED)
+
+        assertNull(
+            tlsFailureToAnnounce(later, said, now = 0L, lastAnnouncedAt = 0L),
+            "the burst is still arriving, so this is the wall of toasts the record exists " +
+                "to stop and the case below would prove nothing",
+        )
+        assertEquals(
+            later,
+            tlsFailureToAnnounce(later, said, now = TLS_NOTICE_INTERVAL_MS, lastAnnouncedAt = 0L),
+            "a fault met after the burst had passed was never explained, because the " +
+                "record had spent its budget on hosts a page chose",
+        )
+        assertTrue(
+            said.size <= MAX_TLS_FAILURES_ANNOUNCED,
+            "letting go of the budget also let go of the bound on the record: ${said.size}",
         )
     }
 

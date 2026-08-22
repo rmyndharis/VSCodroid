@@ -364,6 +364,21 @@ internal fun tlsHostLabel(url: String?): String? {
 internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
 
 /**
+ * How long the record goes on refusing once it is past the cap.
+ *
+ * A hard cap bounds the messages and never lets go, which is the wrong trade for
+ * a channel that is only ever advice: the page is refused by `handler.cancel()`
+ * before any of this runs, so what a muted notice costs is the explanation, and a
+ * session here is a working day rather than a page view. Eight is generous for one
+ * burst and mean for a day, so past it the record keeps refusing only until the
+ * failures stop arriving in a burst. The interval is the one the write-back notice
+ * already uses, and for the same reason: it is long enough that a wall of toasts
+ * cannot form and short enough that a fault the user has just walked into is still
+ * explained.
+ */
+internal const val TLS_NOTICE_INTERVAL_MS = 30_000L
+
+/**
  * The refusal worth putting on screen, or null when it has been said already.
  *
  * The same rule `reasonToAnnounce` applies to a failed toolchain download, for the
@@ -391,9 +406,22 @@ internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
 internal fun tlsFailureToAnnounce(
     failure: TlsFailure,
     alreadySaid: MutableSet<TlsFailure>,
+    now: Long,
+    lastAnnouncedAt: Long,
 ): TlsFailure? {
-    if (alreadySaid.size >= MAX_TLS_FAILURES_ANNOUNCED) return null
-    return if (alreadySaid.add(failure)) failure else null
+    if (failure in alreadySaid) return null
+    if (alreadySaid.size >= MAX_TLS_FAILURES_ANNOUNCED) {
+        // Past the cap, and the two bounds part company here. The record must stay
+        // bounded, because a remote page picks the hostnames that fill it; the
+        // messages must stay bounded, because each one holds the screen. Refusing
+        // until the burst has stopped answers both, and clearing only then means the
+        // set is emptied at most once per interval rather than once per fresh host,
+        // which is what let a page hand back the names it had already spent.
+        if (now - lastAnnouncedAt < TLS_NOTICE_INTERVAL_MS) return null
+        alreadySaid.clear()
+    }
+    alreadySaid.add(failure)
+    return failure
 }
 
 /**

@@ -105,6 +105,17 @@ class MainActivity : AppCompatActivity() {
     private val announcedTlsFailures = mutableSetOf<TlsFailure>()
 
     /**
+     * When the last certificate notice was shown, for the interval the record falls
+     * back on once it is past its cap.
+     *
+     * A plain field rather than an atomic, unlike the write-back throttle this
+     * borrows its shape from: that one is claimed from two threads, and this is read
+     * and written only inside the runOnUiThread below, which is the same reason the
+     * set beside it needs no synchronisation.
+     */
+    private var lastTlsNoticeAt = 0L
+
+    /**
      * The hand-off failures already put on screen, so a page driving many
      * navigations to a scheme nothing answers is one message rather than a stream
      * of them. See [handoffFailureToAnnounce], which owns the rule, explains why
@@ -1681,7 +1692,11 @@ class MainActivity : AppCompatActivity() {
             // platform guarantees about which thread the callback arrives on.
             onTlsFailure = { failure ->
                 runOnUiThread {
-                    tlsFailureToAnnounce(failure, announcedTlsFailures)?.let { reportTlsFailure(it) }
+                    val now = System.currentTimeMillis()
+                    tlsFailureToAnnounce(failure, announcedTlsFailures, now, lastTlsNoticeAt)?.let {
+                        lastTlsNoticeAt = now
+                        reportTlsFailure(it)
+                    }
                 }
             },
             onPageLoaded = { url ->
