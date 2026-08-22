@@ -134,7 +134,9 @@ class SafCreateIdempotencyTest {
         create("notes.txt", "brand new")
 
         verify(exactly = 1) {
-            DocumentsContract.createDocument(any(), any(), "text/plain", "notes.txt")
+            DocumentsContract.createDocument(
+                any(), any(), SafSyncEngine.CREATED_FILE_MIME_TYPE, "notes.txt"
+            )
         }
         assertEquals("brand new", written.toString())
     }

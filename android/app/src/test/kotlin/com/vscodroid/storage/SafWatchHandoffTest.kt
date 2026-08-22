@@ -46,6 +46,10 @@ import kotlin.concurrent.thread
  * Closing that needs the capture to move into the observer and be passed in, which
  * changes the signature every test in this package calls.
  *
+ * The offer that arrives once every drain has ended is not silent either. The stop's own
+ * count cannot reach that one: it reads the queue and clears it while the event is still
+ * inside the provider, so what is left to report is reported by the offer itself.
+ *
  * NEGATIVE CONTROL, run by hand: put the offer back on the mutable field
  * (`target.queue.offer` to `session.queue.offer`). The first case goes red on both
  * assertions and in opposite directions, the closing queue empty and the newly opened one
@@ -203,6 +207,45 @@ class SafWatchHandoffTest {
             emitted.any { it.contains("arrived after the drain ended") },
             "a save that never reached the device was dropped without a word, and a user " +
                 "asking why needs this line to exist in a bug report: $emitted",
+        )
+    }
+
+    /**
+     * The drop the capture itself creates, made visible where the count cannot see it.
+     *
+     * The count above reads a queue and clears it. On an ordinary folder switch the idle
+     * drain exits in microseconds while this event is still inside the provider, so the
+     * count runs first, reports nothing, and the save arrives afterwards into a queue with
+     * no worker: exactly the interleaving the capture produces, and the one the count is
+     * blind to. Nothing is destroyed, the mirror keeps the file, but the save is not on
+     * the device and only reopening the folder puts it there.
+     *
+     * NEGATIVE CONTROL, run by hand: delete the `if (target.abandoned)` warning at the
+     * offer in `handleMirrorEvent`, or stop `stopWatching`'s no-worker branch setting
+     * `abandoned`. This case goes red while the two above stay green, since neither reads
+     * a line that names a file.
+     */
+    @Test
+    fun `a save that arrives after the drain has ended says so`() {
+        File(mirror, "notes.txt").writeText("a save mid-flight")
+
+        val observer = thread(isDaemon = true) {
+            engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.txt"), mirror, treeUri)
+        }
+        assertTrue(
+            entered.await(5, TimeUnit.SECONDS),
+            "setup failed: the event never reached the provider, so the stop below did " +
+                "not land inside the window this case is about",
+        )
+
+        engine.stopWatching()
+        release.countDown()
+        observer.join(5_000)
+
+        assertTrue(
+            emitted.any { it.contains("Write-back of notes.txt arrived after the drain ended") },
+            "the save reached no device, nothing will retry it, and no line says so: " +
+                "$emitted",
         )
     }
 }

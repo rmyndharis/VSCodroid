@@ -27,6 +27,10 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * What a directory rename does to the upload records of the files beneath it.
@@ -52,12 +56,18 @@ import java.io.IOException
  * changes nothing about what is asserted here, because moving the records is a rewrite of
  * strings that reads no directory.
  *
+ * The last three cases are the same window with the write still streaming through it,
+ * which is where the two records of one write can come apart, the third of them with the
+ * journal rewrite refused; each carries its own control.
+ *
  * NEGATIVE CONTROL, run by hand: delete the single `renameUploadsUnder` call from
- * `handleMirrorEvent`'s claim. The first three cases go red on the journal assertions and
- * the last goes red with the mirror reading "TRUNC", while `a directory that simply
- * appears takes nothing with it` stays green, which is what makes it a control rather
- * than a second copy of the first case. A second control, for the decision not to
- * condition the move on the device: narrowing the guard to
+ * `handleMirrorEvent`'s claim. The three cases that follow a stranded line to its new
+ * path go red on the journal assertions, `a sync keeps the mirror of a file whose directory was
+ * renamed after a failed upload` goes red with the mirror reading "TRUNC", and `a write
+ * that fails during the rename keeps its record at the new path` goes red too, while
+ * `a directory that simply appears takes nothing with it` stays green, which is what makes
+ * it a control rather than a second copy of the first case. A second control, for the
+ * decision not to condition the move on the device: narrowing the guard to
  * `renamedFrom != null && renamedFromUri != null`, which is the mutation a developer
  * copying the neighbouring `forgetCachedSubtree` guard would make, reddens only
  * `the records move even when the device holds nothing under the old name`.
@@ -79,15 +89,32 @@ class SafRenamedUploadRecordTest {
     private val hash = "abc123def456"
 
     /** Set to have every write-back attempt fail the way a provider out of space does. */
+    @Volatile
     private var refuseWrites = false
 
     /** Document writes the provider accepted, so a case can count the ones it caused. */
     private var writesAccepted = 0
 
+    /** Set to park the next write inside the copy, so a rename can land while it streams. */
+    @Volatile
+    private var holdNextWrite = false
+
+    /** Set to have the parked write fail once it is let go rather than land. */
+    @Volatile
+    private var failHeldWrite = false
+
+    /** Counted down once a write-back thread is parked inside the provider. */
+    private val writeStarted = CountDownLatch(1)
+
+    /** Held closed until the test lets that write finish. */
+    private val releaseWrite = CountDownLatch(1)
+
     @BeforeEach
     fun setUp() {
         refuseWrites = false
         writesAccepted = 0
+        holdNextWrite = false
+        failHeldWrite = false
 
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
@@ -109,8 +136,13 @@ class SafRenamedUploadRecordTest {
         resolver = mockk(relaxed = true)
         every { resolver.openOutputStream(any(), any()) } answers {
             if (refuseWrites) throw IOException("no space left on device")
-            writesAccepted++
-            ByteArrayOutputStream()
+            if (holdNextWrite) {
+                holdNextWrite = false
+                heldStream()
+            } else {
+                writesAccepted++
+                ByteArrayOutputStream()
+            }
         }
 
         val context = mockk<Context>(relaxed = true)
@@ -125,7 +157,38 @@ class SafRenamedUploadRecordTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        // However the assertions ended, no case may leave a thread parked in the gate.
+        releaseWrite.countDown()
+        // Nor with the temporary directory still refusing writes: one case takes that
+        // away to refuse a journal rewrite, and the directory has to be deletable
+        // whatever that case's assertions did.
+        filesDir.setWritable(true)
+        unmockkAll()
+    }
+
+    /**
+     * A document stream that parks inside the copy until the test lets it go.
+     *
+     * The window it holds open is the one the fix is about: between the journal line this
+     * write took and the release that retires it, on the write-back thread, while the
+     * observer thread renames the directory the file sits in.
+     */
+    private fun heldStream(): OutputStream = object : OutputStream() {
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            writeStarted.countDown()
+            // Uninterruptible: the point is a write that is still in flight.
+            while (releaseWrite.count > 0L) {
+                try {
+                    releaseWrite.await()
+                } catch (_: InterruptedException) {
+                }
+            }
+            if (failHeldWrite) throw IOException("no space left on device")
+        }
+    }
 
     /** One child of a device folder, with the columns a sync reads as well as a lookup's. */
     private class Child(
@@ -399,6 +462,194 @@ class SafRenamedUploadRecordTest {
         assertEquals(
             1, writesAccepted,
             "the repair upload never reached the provider inside the sync",
+        )
+    }
+
+    /**
+     * A save of [path] parked inside the provider, with the write-back thread that owns
+     * it, so the caller can move the directory under it and then let it finish.
+     */
+    private fun startHeldWrite(path: String): Thread {
+        val file = File(mirror, path)
+        file.parentFile?.mkdirs()
+        file.writeText("the whole edit")
+        holdNextWrite = true
+        observe(FileObserver.MODIFY, path)
+        val writer = thread(isDaemon = true) { drain() }
+        assertTrue(
+            writeStarted.await(5, TimeUnit.SECONDS),
+            "setup failed: the save never reached the provider, so the rename below did " +
+                "not land inside a write that was still streaming",
+        )
+        assertTrue(
+            file.absolutePath in engine.uploadsInFlight(),
+            "setup failed: the write in flight recorded no line for the rename to move",
+        )
+        return writer
+    }
+
+    /**
+     * The rename lands while the write is streaming, and the write then lands.
+     *
+     * The journal line and the writer's own claim are two records of one write, and they
+     * are made on different threads' schedules: the rename runs on the observer thread
+     * while the copy runs on the write-back thread. Move only the line and the writer
+     * releases a name nothing is filed under, so a save that DID reach the device is
+     * recorded for ever as one that did not. That record is not inert: the storage screen
+     * calls the mirror unreclaimable and refuses the removal the user asks for, and the
+     * next open of the folder takes the interrupted-upload repair branch and writes the
+     * mirror over the device document with no timestamp compared.
+     *
+     * NEGATIVE CONTROL, run by hand: delete the `uploadClaims.forEach` that moves the
+     * claims in `renameUploadsUnder`. The landed write then retires a line spelled
+     * `src/App.kt` while the line stands at `lib/App.kt`, and both assertions go red,
+     * while every other case in this class stays green.
+     */
+    @Test
+    fun `a write that lands during the rename of its directory retires its own record`() {
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("src", isDirectory = true)),
+                "doc:src" to listOf(Child("App.kt")),
+            )
+        )
+        val writer = startHeldWrite("src/App.kt")
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "src")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        File(mirror, "src").renameTo(File(mirror, "lib"))
+
+        releaseWrite.countDown()
+        writer.join(5_000)
+
+        val listed = engine.uploadsInFlight()
+        assertTrue(
+            listed.isEmpty(),
+            "the save reached the device and could not retire its own record, because " +
+                "the rename moved the record and left the writer holding the old name: " +
+                "$listed",
+        )
+        assertTrue(
+            SafStorageManager.mayReclaim(hash, listed, mirrorsRoot.absolutePath),
+            "a mirror whose every write landed is refused the removal the user asks for",
+        )
+    }
+
+    /**
+     * The other half of that window, and why the answer is not "leave a line alone while
+     * someone is writing it".
+     *
+     * A write that FAILS across the rename must keep its protection, and it has to keep
+     * it under the NEW path: the file is there now, and the sync's repair branch is gated
+     * on finding the file the line names.
+     *
+     * NEGATIVE CONTROL, run by hand: make `renameUploadsUnder` skip any line a live claim
+     * names, which is the shape that fixes the case above by itself. The record then
+     * stands under `src/App.kt`, a path nothing can consume, and both assertions go red.
+     */
+    @Test
+    fun `a write that fails during the rename keeps its record at the new path`() {
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("src", isDirectory = true)),
+                "doc:src" to listOf(Child("App.kt")),
+            )
+        )
+        val writer = startHeldWrite("src/App.kt")
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "src")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        File(mirror, "src").renameTo(File(mirror, "lib"))
+
+        // Both the parked write and the retry that follows it fail, which is the state a
+        // provider out of space leaves: the edit exists in the mirror alone.
+        failHeldWrite = true
+        refuseWrites = true
+        releaseWrite.countDown()
+        writer.join(5_000)
+
+        val listed = engine.uploadsInFlight()
+        assertTrue(
+            File(mirror, "lib/App.kt").absolutePath in listed,
+            "the edit reached no device and its record did not follow the file, so the " +
+                "next sync copies the truncated device document over the only complete " +
+                "copy: $listed",
+        )
+        assertFalse(
+            File(mirror, "src/App.kt").absolutePath in listed,
+            "the record stands under a path that no longer exists, which no sync can " +
+                "consume and which refuses the removal the user asks for",
+        )
+    }
+
+    /**
+     * The same window with the journal rewrite refused, which is the one failure the two
+     * records can survive only by staying together.
+     *
+     * Moving the line is best effort by design and it is swallowed at warn level, and it
+     * fails in precisely the state that fills the journal in the first place:
+     * `rewriteJournal` writes a temporary file in `filesDir`, so internal storage that has
+     * run out refuses it. Move the claim regardless and the two records of one write end
+     * up under different names for good: the writer that lands retires a line nobody ever
+     * wrote, and the real line stands under a path that has gone, where nothing can ever
+     * consume it (a claimed departure never reaches `consumeStaleUploadsUnder`, and the
+     * sync's repair needs the file the line names to be there). `mayReclaim` then refuses
+     * that mirror for a save that did reach the device, so the storage screen describes it
+     * as holding work the device folder does not have and the launch pass keeps it.
+     *
+     * The refusal is injected by taking write permission off the directory rather than by
+     * mocking, so it does not depend on the temporary file's name; and the setup assertion
+     * below fails loudly if it did not take, rather than letting the case pass on a rewrite
+     * that quietly succeeded.
+     *
+     * NEGATIVE CONTROL, run by hand: move the `uploadClaims.forEach` in
+     * `renameUploadsUnder` back above the `try`, which is where it was. The claim then
+     * moves although the line did not, the landed write retires `lib/App.kt` which was
+     * never written, and both assertions below go red while every other case in this class
+     * stays green.
+     */
+    @Test
+    fun `a rename whose journal rewrite is refused leaves both records at the old name`() {
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("src", isDirectory = true)),
+                "doc:src" to listOf(Child("App.kt")),
+            )
+        )
+        val writer = startHeldWrite("src/App.kt")
+        val stranded = File(mirror, "src/App.kt").absolutePath
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "src")
+        assertTrue(
+            filesDir.setWritable(false),
+            "setup failed: the directory kept its write permission, so the journal " +
+                "rewrite below is not being refused",
+        )
+        try {
+            observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        } finally {
+            filesDir.setWritable(true)
+        }
+        File(mirror, "src").renameTo(File(mirror, "lib"))
+
+        assertTrue(
+            stranded in engine.uploadsInFlight(),
+            "setup failed: the journal rewrite was not refused after all, so the two " +
+                "records of this write never came apart and nothing below is measured",
+        )
+
+        releaseWrite.countDown()
+        writer.join(5_000)
+
+        val listed = engine.uploadsInFlight()
+        assertTrue(
+            listed.isEmpty(),
+            "the save reached the device and retired a record nothing had written, " +
+                "because its claim moved with a line that stayed behind: $listed",
+        )
+        assertTrue(
+            SafStorageManager.mayReclaim(hash, listed, mirrorsRoot.absolutePath),
+            "a mirror whose every write landed is refused the removal the user asks for",
         )
     }
 }

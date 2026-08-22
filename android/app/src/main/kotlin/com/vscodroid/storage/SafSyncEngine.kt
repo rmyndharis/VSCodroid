@@ -755,6 +755,10 @@ class SafSyncEngine(private val context: Context) {
             processWriteBack(session, remaining)
             remaining = session.queue.poll()
         }
+        // Said after the last poll rather than before it, so the flag is never set while
+        // this thread could still deliver: an event that reads it answers "nothing will
+        // take this now" only when that is already true.
+        session.abandoned = true
         if (interrupted) Thread.currentThread().interrupt()
     }
 
@@ -799,6 +803,7 @@ class SafSyncEngine(private val context: Context) {
             // asking why needs this line to exist in a bug report.
             val dropped = closing.queue.size
             closing.queue.clear()
+            closing.abandoned = true
             if (dropped > 0) {
                 Logger.w(tag, "$dropped write-back(s) arrived after the drain ended")
             }
@@ -812,7 +817,12 @@ class SafSyncEngine(private val context: Context) {
         // after this point: a MOVED_TO of the next folder must not be able to claim a
         // directory that left the previous one, which would rename a document in a folder
         // the user has closed.
-        synchronized(vanishedLock) { vanishedDirectories.clear() }
+        //
+        // Which is the same instant their upload records stop being able to move: a claim
+        // is the only thing that carries a line to the directory's new path. Retired here
+        // rather than left standing, because after this nothing can; see
+        // [consumeStaleUploadsUnder].
+        dropVanished { true }
         Logger.i(tag, "File watcher stopped")
     }
 
@@ -1057,7 +1067,11 @@ class SafSyncEngine(private val context: Context) {
                 }
             } ?: false
         } catch (e: Exception) {
-            Logger.w(tag, "Could not compare ${localFile.name} with its device copy: ${e.message}")
+            Logger.w(
+                tag,
+                "Could not compare ${localFile.name} with its device copy: " +
+                    e.javaClass.simpleName,
+            )
             false
         }
     }
@@ -1126,7 +1140,7 @@ class SafSyncEngine(private val context: Context) {
 
     /** The copy itself, with the document already claimed by the caller. */
     private fun writeLocalToSafHoldingDocument(localFile: File, safDocUri: Uri) {
-        markUploadInFlight(localFile.absolutePath)
+        val claim = markUploadInFlight(localFile.absolutePath)
         // Released in a finally rather than at each exit, and this is not style.
         // The claim taken above was originally dropped at the one exit its author
         // had in mind, and the failure exits added later each returned without it,
@@ -1140,7 +1154,10 @@ class SafSyncEngine(private val context: Context) {
         // The distinction the two paths draw is what the journal means, and it is
         // the reason there are two calls rather than one. The line records an edit
         // that has not reached the device, so a landed write retires it and a
-        // failed one must leave it standing for the next sync to retry.
+        // failed one leaves it standing for the next sync to retry. The one thing
+        // that leaves nothing to retry is the mirror file going away while this
+        // write ran, and the failing path retires the line for that alone; see
+        // [releaseUploadClaim].
         var landed = false
         try {
             var attempts = 0
@@ -1176,8 +1193,10 @@ class SafSyncEngine(private val context: Context) {
                 }
             }
         } finally {
-            if (landed) clearUploadInFlight(localFile.absolutePath)
-            else releaseUploadClaim(localFile.absolutePath)
+            // By the claim rather than by the path this opened with: a rename of the
+            // directory above it moves both records while the stream runs.
+            if (landed) clearUploadInFlight(claim)
+            else releaseUploadClaim(claim)
         }
     }
 
@@ -1287,53 +1306,91 @@ class SafSyncEngine(private val context: Context) {
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
 
-    /** Takes this writer's claim on [absolutePath] and records that a write began. */
-    private fun markUploadInFlight(absolutePath: String) = synchronized(uploadJournalLock) {
-        uploadWriters[absolutePath] = (uploadWriters[absolutePath] ?: 0) + 1
-        try {
-            val journal = uploadJournal()
-            val lines = if (journal.isFile) journal.readLines() else emptyList()
-            if (absolutePath !in lines) {
-                rewriteJournal(lines + absolutePath)
+    /**
+     * Takes this writer's claim on [absolutePath] and records that a write began.
+     *
+     * The claim is handed back rather than looked up again at the end, because the path
+     * it names can move while the stream runs; see [UploadClaim].
+     */
+    private fun markUploadInFlight(absolutePath: String): UploadClaim =
+        synchronized(uploadJournalLock) {
+            val claim = UploadClaim(absolutePath)
+            uploadClaims.add(claim)
+            try {
+                val journal = uploadJournal()
+                val lines = if (journal.isFile) journal.readLines() else emptyList()
+                if (absolutePath !in lines) {
+                    rewriteJournal(lines + absolutePath)
+                }
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not record the upload in flight: ${e.message}")
             }
-        } catch (e: Exception) {
-            Logger.w(tag, "Could not record the upload in flight: ${e.message}")
+            claim
         }
-    }
 
     /**
-     * Drops this writer's claim while leaving standing whatever its failure recorded.
+     * Drops this writer's claim, and with it the line only when the mirror file it names
+     * went away while the write ran.
      *
      * The counterpart to [clearUploadInFlight], and deliberately not the same
      * function. Both say "this writer is finished"; only one of them says "and the
      * device copy is current now". A failed write-back has to say the first without
      * the second, or the mirror edit it could not deliver is forgotten and the next
      * sync has no reason to retry it.
+     *
+     * The one line it does take is the one with nothing left to retry. Two retirements
+     * defer to a live claim rather than take it, [consumeStaleUploadRecord] for a delete
+     * or rename of the file itself and [consumeStaleUploadsUnder] for a directory that
+     * left the mirror, and each of them was the last pass that could reach that line
+     * while the file was gone. Deferring to a writer that then fails here left it
+     * standing, and a standing line is not inert: `SafStorageManager.mayReclaim` reads it
+     * as the mirror holding a write the device never received, so the launch pass keeps
+     * that mirror and the device-folder screen reports it as holding work the device
+     * folder does not have. So the test here is the one [consumeStaleUploadsUnder]
+     * applies, the file being there, asked at the moment this writer is the only party
+     * that knows the line is now unowned.
+     *
+     * How long that used to last is worth stating exactly, because the two deferrals
+     * differ and only one of them ever healed. A directory departure nobody claimed is
+     * never propagated to the device ([handleMirrorEvent] holds it back), so the device
+     * still holds the document: the next open of the folder copies it back into the
+     * mirror, and the open after that reaches [initialSync]'s repair and consumes the
+     * line. That is two whole reopens with the mirror mislabelled in between, and no
+     * repair at all where the copy cannot come back, which is a folder never opened
+     * again, a document past [MAX_FILE_SIZE], one outside the enumeration cap, or one
+     * whose stale old-named copy the user removed on the device first. A delete or rename
+     * of the file itself has no such second chance: that one IS propagated, so the device
+     * document goes with it and nothing can ever copy it back down.
+     *
+     * The other two branches are unchanged and both matter: a line whose file is still in
+     * the mirror stands, because that is the edit the next sync retries, and a line
+     * another writer holds a claim on is left to that writer's own release, for the
+     * reason [clearUploadInFlight] gives.
      */
-    private fun releaseUploadClaim(absolutePath: String) = synchronized(uploadJournalLock) {
-        val stillWriting = (uploadWriters[absolutePath] ?: 0) - 1
-        if (stillWriting > 0) uploadWriters[absolutePath] = stillWriting
-        else uploadWriters.remove(absolutePath)
+    private fun releaseUploadClaim(claim: UploadClaim) = synchronized(uploadJournalLock) {
+        uploadClaims.remove(claim)
+        if (!File(claim.path).exists() && uploadClaims.none { it.path == claim.path }) {
+            removeJournalLine(claim.path)
+        }
     }
 
     /**
-     * Releases this writer's claim on [absolutePath], and removes the journal line only
-     * when it was the last claim.
+     * Releases [claim] and removes the journal line only when no other writer holds the
+     * path it names now.
      *
      * Paired with [markUploadInFlight] and called by writers alone. A second writer of
      * the same path is reachable whenever a folder is reopened while a drain of the
      * previous session is still streaming: the mirror is named by a hash of the folder,
-     * so both writers address one file, and before the count the first to finish removed
+     * so both writers address one file, and before the claims the first to finish removed
      * the line the other was still inside.
+     *
+     * The line is named by the claim rather than by the path the writer opened, which is
+     * what makes a write that lands during a rename of the directory above it retire its
+     * own line: [renameUploadsUnder] moved both records while this one streamed.
      */
-    private fun clearUploadInFlight(absolutePath: String) = synchronized(uploadJournalLock) {
-        val stillWriting = (uploadWriters[absolutePath] ?: 0) - 1
-        if (stillWriting > 0) {
-            uploadWriters[absolutePath] = stillWriting
-            return@synchronized
-        }
-        uploadWriters.remove(absolutePath)
-        removeJournalLine(absolutePath)
+    private fun clearUploadInFlight(claim: UploadClaim) = synchronized(uploadJournalLock) {
+        uploadClaims.remove(claim)
+        if (uploadClaims.none { it.path == claim.path }) removeJournalLine(claim.path)
     }
 
     /**
@@ -1347,13 +1404,17 @@ class SafSyncEngine(private val context: Context) {
      *
      * Not the same operation as [clearUploadInFlight] and deliberately not spelled as
      * one. Treating either of those as releasing a claim would
-     * decrement a live writer to zero and remove the line while that writer was still
-     * streaming, which is the defect the count exists to prevent, arriving through a
+     * drop a live writer's claim and remove the line while that writer was still
+     * streaming, which is the defect the claims exist to prevent, arriving through a
      * different door. A path somebody is writing right now is left alone, and that
-     * writer's own clear removes the line when it lands.
+     * writer's own release retires the line: [clearUploadInFlight] when the write lands,
+     * and [releaseUploadClaim] when it fails onto a path the file has left, which is the
+     * state the [processWriteBack] caller defers in. The [initialSync] caller defers in
+     * the other one, where the file is there and about to be written out again, so the
+     * line it leaves is retired by that write landing.
      */
     private fun consumeStaleUploadRecord(absolutePath: String) = synchronized(uploadJournalLock) {
-        if (uploadWriters.containsKey(absolutePath)) return@synchronized
+        if (uploadClaims.any { it.path == absolutePath }) return@synchronized
         removeJournalLine(absolutePath)
     }
 
@@ -1393,21 +1454,119 @@ class SafSyncEngine(private val context: Context) {
      * because that is the last moment anything can still tell them apart. It survives a
      * process death for the same reason the rename does: both are on disk before
      * anything else happens.
+     *
+     * The live writers' claims move with the lines, in the same critical section, because
+     * they are two records of one write and this runs on a thread of its own: a directory
+     * can be renamed in the editor while a write below it is still streaming. Moving only
+     * the line would leave that write releasing a name nothing is filed under, so a write
+     * that landed would be recorded for ever as one that never reached the device.
+     *
+     * Which is why the claims move *after* the lines, and not at all when moving the
+     * lines threw. The journal half is best effort by design, and it fails in exactly the
+     * state that fills the journal in the first place: [rewriteJournal] writes a temporary
+     * file in `filesDir`, so internal storage that has run out refuses it. A claim that
+     * moved on its own is the same defect from the other side, and permanent rather than
+     * retried: the writer would retire a line nobody ever wrote and leave the real one
+     * standing under a path that has gone, which nothing can consume afterwards
+     * ([consumeStaleUploadsUnder] never sees a claimed departure, and [initialSync]'s
+     * repair needs the file the line names to be there), so `SafStorageManager.mayReclaim`
+     * would refuse that mirror for a save that did reach the device. Both records staying
+     * at the old name is the recoverable half of the pair: the writer's release still
+     * names the line it is filed under.
      */
     internal fun renameUploadsUnder(from: File, to: File) {
+        synchronized(uploadJournalLock) {
+            val old = from.absolutePath + File.separator
+            val new = to.absolutePath + File.separator
+            try {
+                val journal = uploadJournal()
+                // A journal that is not there, and a rewrite with nothing to move, are
+                // both moves that succeeded: there is no line to disagree with the claim.
+                // A writer whose own record could not be written is exactly that case,
+                // and its claim still has to follow the file.
+                if (journal.isFile) {
+                    val all = journal.readLines()
+                    val moved =
+                        all.map { if (it.startsWith(old)) new + it.removePrefix(old) else it }
+                    if (moved != all) rewriteJournal(moved)
+                }
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not move the upload records of ${from.name}: ${e.message}")
+                return
+            }
+            uploadClaims.forEach {
+                if (it.path.startsWith(old)) it.path = new + it.path.removePrefix(old)
+            }
+        }
+    }
+
+    /**
+     * Retires the journal lines under [directory] whose mirror file is no longer there.
+     *
+     * The directory-shaped counterpart to [consumeStaleUploadRecord], and it exists
+     * because the delete that retires a line never arrives for the files under a
+     * directory that leaves the mirror. [handleMirrorEvent] holds that departure back for
+     * a rename to claim rather than queueing anything, inotify raises no event at all for
+     * the entries beneath a directory that moved, and [consumeStaleUploadRecord] matches
+     * one exact path, so it would not reach them even if it ran. Nothing else could:
+     * [initialSync]'s call is guarded by the file still existing, and [clearUploadsUnder]
+     * runs only once the whole mirror is going away. One write-back that gave up followed
+     * by a directory move no rename claimed therefore left a line standing for the life of
+     * the install, and a stranded line is not inert: `SafStorageManager.mayReclaim` reads
+     * any line under a mirror as that mirror holding a write the device never received, so
+     * the launch pass kept it and the device-folder screen described it as holding work
+     * the device folder does not have.
+     *
+     * A line whose file is still there is left alone, and that is the whole distinction:
+     * something is at that path again, a directory recreated under the same name or a
+     * checkout that restored it, and the line still records that the mirror holds an edit
+     * the device never received. So is a line some writer holds a claim on, for the reason
+     * [consumeStaleUploadRecord] gives, and taking it here is the defect [UploadClaim]
+     * exists to prevent. That deferral is not a hand-off into nothing: the writer applies
+     * this same test when it releases, so a write that fails onto the path this pass
+     * skipped retires the line itself ([releaseUploadClaim]), and one that lands retires
+     * it through [clearUploadInFlight].
+     */
+    private fun consumeStaleUploadsUnder(directory: File) {
         synchronized(uploadJournalLock) {
             try {
                 val journal = uploadJournal()
                 if (!journal.isFile) return
-                val old = from.absolutePath + File.separator
-                val new = to.absolutePath + File.separator
+                val prefix = directory.absolutePath + File.separator
                 val all = journal.readLines()
-                val moved = all.map { if (it.startsWith(old)) new + it.removePrefix(old) else it }
-                if (moved != all) rewriteJournal(moved)
+                val kept = all.filter { line ->
+                    !line.startsWith(prefix) || File(line).exists() ||
+                        uploadClaims.any { it.path == line }
+                }
+                if (kept.size != all.size) rewriteJournal(kept)
             } catch (e: Exception) {
-                Logger.w(tag, "Could not move the upload records of ${from.name}: ${e.message}")
+                Logger.w(
+                    tag,
+                    "Could not retire the upload records under ${directory.name}: ${e.message}"
+                )
             }
         }
+    }
+
+    /**
+     * Drops every vanished directory [predicate] answers for, and retires the upload
+     * records the files beneath them left behind.
+     *
+     * One function for all three removals of an *unclaimed* departure, so that the
+     * retirement cannot be forgotten at one of them. The fourth removal is deliberately
+     * not here: [claimVanishedDirectory] takes an entry precisely because a rename is
+     * about to move its records to the new path, which [renameUploadsUnder] does.
+     *
+     * The journal is touched outside [vanishedLock], because it has a lock of its own
+     * and this is the only path that would otherwise hold both.
+     */
+    private fun dropVanished(predicate: (VanishedDirectory) -> Boolean) {
+        val gone = synchronized(vanishedLock) {
+            val taken = vanishedDirectories.filter(predicate)
+            vanishedDirectories.removeAll(predicate)
+            taken
+        }
+        gone.forEach { consumeStaleUploadsUnder(File(it.localPath)) }
     }
 
     /**
@@ -1527,11 +1686,11 @@ class SafSyncEngine(private val context: Context) {
                 val mimeType = if (localFile.isDirectory) {
                     DocumentsContract.Document.MIME_TYPE_DIR
                 } else {
-                    guessMimeType(localFile.name)
+                    CREATED_FILE_MIME_TYPE
                 }
                 DocumentsContract.createDocument(
                     context.contentResolver, parentSafUri, mimeType, localFile.name
-                )
+                )?.also { warnIfNameNotHonoured(it, localFile.name) }
             } ?: return null
 
             if (localFile.isFile) {
@@ -1570,8 +1729,60 @@ class SafSyncEngine(private val context: Context) {
             }
             docUri
         } catch (e: Exception) {
-            Logger.w(tag, "Failed to create ${localFile.name} in SAF: ${e.message}")
+            // The class rather than the message, for the reason [copyDocumentToLocal]
+            // spells out: a provider quotes the document URI in its own exception, and
+            // the platform provider builds that URI out of the user's own directory path.
+            Logger.w(tag, "Failed to create ${localFile.name} in SAF: ${e.javaClass.simpleName}")
             null
+        }
+    }
+
+    /**
+     * Says so when the provider stored a document under a name other than the one it was
+     * asked for.
+     *
+     * The name is the only thing tying a mirror file to its device document: every lookup
+     * here is [findChildDocId] by display name, and the cache below is keyed by the
+     * mirror's own path. A provider that renames on create therefore leaves the device
+     * holding the bytes under a name the next [initialSync] reads as a second file, so the
+     * editor shows both and the next edit of the original creates a third.
+     *
+     * Said and not repaired, and both halves are deliberate. What made this happen was the
+     * type this app asked for, which [CREATED_FILE_MIME_TYPE] settles for every extension.
+     * What is left is a provider normalising the name itself, as the platform one does for
+     * characters FAT cannot hold, and a rename back would be handed to the same
+     * normaliser; deleting the document it did make would take the user's bytes off the
+     * device to tidy up a name, which is the wrong way round. So the bytes stay where the
+     * provider put them and this is the line that explains the duplicate in a bug report.
+     *
+     * A provider that will not answer for the document it just made proves nothing either
+     * way, and this stays quiet: the create itself succeeded.
+     */
+    private fun warnIfNameNotHonoured(docUri: Uri, requestedName: String) {
+        val stored = try {
+            context.contentResolver.query(
+                docUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null, null, null,
+            )?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                )
+                if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else null
+            }
+        } catch (e: Exception) {
+            Logger.d(
+                tag,
+                "Could not read back the name of $requestedName: ${e.javaClass.simpleName}",
+            )
+            null
+        }
+        if (stored != null && stored != requestedName) {
+            Logger.w(
+                tag,
+                "The device folder stored $requestedName as $stored; the editor will show " +
+                    "both the next time the folder is opened",
+            )
         }
     }
 
@@ -1679,7 +1890,7 @@ class SafSyncEngine(private val context: Context) {
     private fun renameInSaf(safDocUri: Uri, newName: String): Boolean = try {
         DocumentsContract.renameDocument(context.contentResolver, safDocUri, newName) != null
     } catch (e: Exception) {
-        Logger.w(tag, "Could not rename a document to $newName: ${e.message}")
+        Logger.w(tag, "Could not rename a document to $newName: ${e.javaClass.simpleName}")
         false
     }
 
@@ -1705,7 +1916,7 @@ class SafSyncEngine(private val context: Context) {
             context.contentResolver, safDocUri, sourceParentUri, targetParentUri
         )
     } catch (e: Exception) {
-        Logger.w(tag, "Could not move a document between directories: ${e.message}")
+        Logger.w(tag, "Could not move a document between directories: ${e.javaClass.simpleName}")
         null
     }
 
@@ -1716,7 +1927,7 @@ class SafSyncEngine(private val context: Context) {
         try {
             DocumentsContract.deleteDocument(context.contentResolver, safDocUri)
         } catch (e: Exception) {
-            Logger.w(tag, "Failed to delete from SAF: ${e.message}")
+            Logger.w(tag, "Failed to delete from SAF: ${e.javaClass.simpleName}")
         }
     }
 
@@ -1773,10 +1984,13 @@ class SafSyncEngine(private val context: Context) {
                 // editor was enough to strand a line for ever, and a stranded line is
                 // not inert: `SafStorageManager.mayReclaim` reads any line under a
                 // mirror as "this mirror holds a write that never reached the device",
-                // so the launch pass kept the mirror, the storage screen described it
-                // as holding work the device does not, and the removal the user asked
-                // for was refused, all on the strength of a file that is not there.
-                // The claim count is what keeps this off a path somebody is streaming
+                // so the launch pass kept the mirror and the storage screen described
+                // it as holding work the device does not, all on the strength of a file
+                // that is not there. Not that the removal is refused: the bridge
+                // extension sends `force` for exactly the rows this mislabels, so what
+                // the user gets is a modal saying the copy holds files that exist
+                // nowhere else and then the deletion they asked for.
+                // The claims are what keep this off a path somebody is streaming
                 // into right now; see [consumeStaleUploadRecord].
                 consumeStaleUploadRecord(job.localPath)
             }
@@ -1893,8 +2107,10 @@ class SafSyncEngine(private val context: Context) {
         // starts a worker and it opens with a stop that clears that queue again. A save
         // offered there went nowhere and said nothing. Read at entry, a late offer lands
         // in the queue the closing folder's drain is still emptying, which is what the
-        // grace period exists for; if that drain has already finished, the stop's own
-        // clear says so.
+        // grace period exists for; if that drain has already finished, the offer below
+        // says so, because the stop's own count cannot. That count is read and the queue
+        // cleared in microseconds on an idle folder, while this event is still inside the
+        // provider, so the one job it can see is one that was already queued.
         //
         // A capture rather than a liveness re-check, because the answer has to be the
         // same object for the whole event: two threads polling one queue is what the
@@ -2000,9 +2216,11 @@ class SafSyncEngine(private val context: Context) {
         // in the editor propagates, because an outright delete arrives as DELETE and is
         // still acted on; nothing removes it on the user's behalf.
         if (isDirectory && (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_FROM) {
+            dropVanished { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
             synchronized(vanishedLock) {
-                vanishedDirectories.removeAll { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
-                vanishedDirectories.add(VanishedDirectory(relativePath, now))
+                vanishedDirectories.add(
+                    VanishedDirectory(relativePath, now, localFile.absolutePath)
+                )
             }
             Logger.i(
                 tag,
@@ -2059,9 +2277,11 @@ class SafSyncEngine(private val context: Context) {
         // unclaimed one falls back to createInSaf, which writes every child out again
         // and brackets each write with the journal itself.
         //
-        // The in-memory writer claims are deliberately not moved with it. Each writer
-        // releases the key it took, in its own finally, so renaming those keys would
-        // strand a claim for ever, which is the defect the count exists to prevent.
+        // This runs on the observer thread while write-backs run on their own, so a save
+        // can be streaming out of the directory that is moving. Its claim travels with
+        // the lines, which is why [UploadClaim] carries a path rather than being found by
+        // one: a writer that released the name it opened with would leave the moved line
+        // standing for a write that landed.
         if (renamedFrom != null) renameUploadsUnder(File(rootDir, renamedFrom), localFile)
         // Resolved after the claim rather than when the directory vanished, so that the
         // provider is only asked on the events that turn out to be renames. Null means
@@ -2097,6 +2317,20 @@ class SafSyncEngine(private val context: Context) {
         // which is what an unclaimed move has always fallen back to, and leaves the old
         // copy standing on the device where the user can see it.
         val pairedRename = renamedFromUri != null && !(crossesDirectories && sourceParentUri == null)
+
+        // Asked before the offer, never after. A session that has stopped being polled
+        // never starts again, so an answer taken here cannot go stale in the two
+        // instructions that follow, while the other order would report a job the drain
+        // had already taken as lost. Still offered: the queue is the honest record of
+        // what was asked for, and the mirror keeps the file either way. What is missing
+        // is the user knowing, and that is what this line is.
+        if (target.abandoned) {
+            Logger.w(
+                tag,
+                "Write-back of $relativePath arrived after the drain ended; the save is " +
+                    "in the mirror only until the folder is opened again",
+            )
+        }
 
         target.queue.offer(
             SyncJob(
@@ -2151,10 +2385,16 @@ class SafSyncEngine(private val context: Context) {
      * inotify event for the whole mirror. Pruning here as well as on the add is what
      * stops it: the verdict is unchanged, since [renameSourceFor] applies the same
      * window, and the walk it saves is the point.
+     *
+     * Pruning through [dropVanished] rather than off the list here, so that a departure
+     * expiring at this reader retires the upload records left under it exactly as one
+     * expiring at any other does. That reads the journal, one small file in `filesDir`,
+     * and only when something did expire, which is a fraction of the binder walk this
+     * check exists to keep off the observer thread.
      */
-    internal fun hasVanishedCandidate(now: Long): Boolean = synchronized(vanishedLock) {
-        vanishedDirectories.removeAll { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
-        vanishedDirectories.isNotEmpty()
+    internal fun hasVanishedCandidate(now: Long): Boolean {
+        dropVanished { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
+        return synchronized(vanishedLock) { vanishedDirectories.isNotEmpty() }
     }
 
     /**
@@ -2213,12 +2453,41 @@ class SafSyncEngine(private val context: Context) {
         return DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocId)
     }
 
-    private fun guessMimeType(filename: String): String =
-        Companion.guessMimeType(filename)
-
     companion object {
         private const val COPY_BUFFER_SIZE = 8192
         private const val WRITEBACK_POLL_MS = 200L
+
+        /**
+         * The type every file is created on the device with, and the file's NAME is the
+         * reason it is this one.
+         *
+         * `createDocument` takes a name and a type, and the platform provider settles a
+         * disagreement between them by rewriting the name. Measured on an API 33
+         * emulator's own `framework.jar` rather than read from a source tree:
+         * `FileSystemProvider.createDocument` (classes4.dex) calls
+         * `FileUtils.buildValidFatFilename` and then `FileUtils.buildUniqueFile(parent,
+         * mimeType, displayName)`, whose `splitFileName` (classes2.dex, source lines
+         * 1216-1217) keeps the requested extension only while the type is the one the
+         * platform's own table gives that extension, or the extension is the one it gives
+         * that type, and otherwise sets `name = displayName; ext = extFromMimeType`.
+         *
+         * A table of guesses therefore decided what the user's file was called. `.kt`,
+         * `.java` and `.md` were all claimed to be `text/plain`, whose extension is `txt`
+         * (`res/android.mime.types:85`), while those tables give `md` to `text/markdown`,
+         * `java` to `text/x-java` and have no `kt` entry at all, so both tests failed and
+         * `Main.kt` was stored on the device as `Main.kt.txt`. Nothing noticed: the name
+         * was never read back, and every reopen enumerated the mangled name into the
+         * mirror beside the original and made one more.
+         *
+         * This is the one value that cannot do that, whatever the extension. The same
+         * method maps `ContentResolver.MIME_TYPE_DEFAULT` to a null `extFromMimeType`
+         * (0x0033-0x003b in the same disassembly), so a mismatch takes `name =
+         * displayName` with nothing to append, and `buildFile` appends no dot for an empty
+         * extension. It costs nothing where the type is read back either: the same
+         * provider reports `COLUMN_MIME_TYPE` from the file's own extension
+         * (`getDocumentType`, classes4.dex), not from what a create asked for.
+         */
+        internal const val CREATED_FILE_MIME_TYPE = "application/octet-stream"
 
         /** How long [stopWatching] waits for queued writes to reach the device. */
         private const val DRAIN_GRACE_MS = 2000L
@@ -2241,8 +2510,8 @@ class SafSyncEngine(private val context: Context) {
         private val uploadJournalLock = Any()
 
         /**
-         * How many write-backs are streaming into each mirror path right now, across
-         * engine instances and guarded by [uploadJournalLock].
+         * The write-backs streaming into a mirror path right now, one entry per writer,
+         * across engine instances and guarded by [uploadJournalLock].
          *
          * The journal line means "an upload of this path did not finish", and one line
          * cannot carry two writers: [initialSync] writes a newer mirror copy back on the
@@ -2253,11 +2522,17 @@ class SafSyncEngine(private val context: Context) {
          * what makes the two paths identical, because the mirror is named by a hash of
          * the folder rather than by the session.
          *
+         * A claim per writer rather than a count per path, because the two records of one
+         * write have to move together. [renameUploadsUnder] moves the journal line when
+         * the directory above it is renamed mid-stream, and a count keyed by the name the
+         * writer opened with could no longer name the line that writer has to retire.
+         * Each writer releases its own [UploadClaim], whatever its path is called by then.
+         *
          * In memory rather than in the file, because the writers are threads of one
          * process. A process that dies mid-write leaves the line behind, which is exactly
          * what the journal is for.
          */
-        private val uploadWriters = mutableMapOf<String, Int>()
+        private val uploadClaims = mutableListOf<UploadClaim>()
 
         /**
          * Documents a write is streaming into right now, keyed by document URI.
@@ -2270,7 +2545,7 @@ class SafSyncEngine(private val context: Context) {
          * drain on the same document.
          *
          * In this object rather than on the engine, next to [uploadJournalLock] and
-         * [uploadWriters] and for the reason those give: the engine is one per
+         * [uploadClaims] and for the reason those give: the engine is one per
          * [SafStorageManager] and the manager one per activity, while
          * [SafSyncEngine.stopWatching] waits [DRAIN_GRACE_MS] and then deliberately
          * leaves a drain it could not join to finish on its own. The two writers above
@@ -2787,22 +3062,6 @@ class SafSyncEngine(private val context: Context) {
             if (segments.dropLast(1).any { shouldSkip(it, isDir = true) }) return false
             return !shouldSkip(name, isDirectory)
         }
-
-        /** Testable: heuristic MIME type detection from filename extension. */
-        internal fun guessMimeType(filename: String): String {
-            return when {
-                filename.endsWith(".txt") || filename.endsWith(".md") -> "text/plain"
-                filename.endsWith(".html") -> "text/html"
-                filename.endsWith(".js") || filename.endsWith(".ts") -> "text/javascript"
-                filename.endsWith(".json") -> "application/json"
-                filename.endsWith(".py") -> "text/x-python"
-                filename.endsWith(".kt") || filename.endsWith(".java") -> "text/plain"
-                filename.endsWith(".xml") -> "text/xml"
-                filename.endsWith(".css") -> "text/css"
-                filename.endsWith(".sh") -> "text/x-shellscript"
-                else -> "application/octet-stream"
-            }
-        }
     }
 }
 
@@ -2872,8 +3131,31 @@ internal data class UploadPlan(val entries: List<File>, val truncated: Boolean)
  */
 internal data class VanishedDirectory(
     val relativePath: String,
-    val atMillis: Long
+    val atMillis: Long,
+    /**
+     * Where it was in the mirror, absolutely, which is the only spelling the upload
+     * journal answers to: its lines are absolute paths because one engine serves every
+     * folder in turn, while [relativePath] is what the device side needs. Carried on the
+     * record rather than rebuilt from a mirror root, because the readers that retire
+     * those lines ([SafSyncEngine.dropVanished]'s callers) run where no root is in hand.
+     */
+    val localPath: String
 )
+
+/**
+ * One write-back's claim on the mirror path it is streaming into, held from the moment
+ * its journal line is written until that write ends.
+ *
+ * [path] is a var because the directory above it can be renamed in the editor while the
+ * stream runs, and the claim and the line are two records of one write:
+ * [SafSyncEngine.renameUploadsUnder] moves both together, so the writer's release names
+ * the line as it is spelled then rather than as it was spelled when the stream opened.
+ * Identity is what a writer releases, so this is deliberately not a data class: two
+ * writers of one path hold two claims and each must retire only its own.
+ *
+ * Read and written only under the journal lock, which is what makes a plain var safe here.
+ */
+private class UploadClaim(var path: String)
 
 /**
  * One folder's write-back: the jobs its observers produced, and the thread sending them.
@@ -2889,6 +3171,20 @@ internal class WatchSession {
 
     /** Cleared by [SafSyncEngine.stopWatching]; the loop's own termination condition. */
     @Volatile var running = true
+
+    /**
+     * Whether [queue] has stopped being polled, which no session ever comes back from:
+     * a worker is started once, by the [SafSyncEngine.startWatching] that installed the
+     * session, and never again.
+     *
+     * What it buys is a sentence in a bug report. An event observed while the folder was
+     * open can finish its provider round trips after the drain has taken its last look,
+     * and the save it carries then reaches no device and nothing retries it. The stop's
+     * own count cannot see that one: on an ordinary folder switch the idle drain exits in
+     * microseconds, so the queue is counted and cleared while the event is still inside
+     * the provider, and the offer that follows is what has to say so.
+     */
+    @Volatile var abandoned = false
 
     /** The thread draining [queue], or null before one is started and once it is joined. */
     @Volatile var worker: Thread? = null
