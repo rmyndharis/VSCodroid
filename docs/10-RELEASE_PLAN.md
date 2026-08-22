@@ -97,13 +97,6 @@ jobs:
     runs-on: ubuntu-latest
 ```
 
-### 2.4 Scheduled Compatibility Jobs
-
-| Workflow | Schedule | Purpose | Failure Action |
-|----------|----------|---------|----------------|
-| `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies every patch in `patches/` to an upstream VS Code tag, cumulatively and in glob order, the way the build does. Not `git apply --check`: two patches touch the same server source, so checking them independently would judge the second against a tree the first was supposed to have changed | Rebase the patch set before the next version bump |
-| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. A pull request is filtered to the files that configure the shrinkers; a push to main also covers the app sources they run over, so a change to Kotlin alone reaches a minified build when it lands rather than at the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
-
 ### 2.3 Caching Strategy
 
 `build.yml` keeps two caches, both keyed by `hashFiles` over everything that shapes their contents.
@@ -123,6 +116,13 @@ unconditionally, so a change to `build-native-addons.sh` reaches the artifact wh
 cache hits.
 
 Gradle's own dependency and build caches are handled by `gradle/actions/setup-gradle`.
+
+### 2.4 Scheduled Compatibility Jobs
+
+| Workflow | Schedule | Purpose | Failure Action |
+|----------|----------|---------|----------------|
+| `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies every patch in `patches/` to an upstream VS Code tag, cumulatively and in glob order, the way the build does. Not `git apply --check`: two patches touch the same server source, so checking them independently would judge the second against a tree the first was supposed to have changed | Rebase the patch set before the next version bump |
+| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. A pull request is filtered to the files that configure the shrinkers; a push to main also covers the app sources they run over, so a change to Kotlin alone reaches a minified build when it lands rather than at the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
 
 ---
 
@@ -384,6 +384,35 @@ Notes:
 6. Upload to Play Store with expedited review request
 7. 100% rollout immediately (critical fix)
 ```
+
+### 6.5 Release Checklist
+
+The hotfix process above is this list compressed. The first step is the one
+nothing else performs: the published release notes are generated from commits
+(`generate_release_notes: true` in `release.yml`), so nothing reads `CHANGELOG.md`
+and a tag taken with the heading still reading Unreleased leaves the repository
+with no section naming the version a user installed.
+
+```
+1. Rename the CHANGELOG's `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD`,
+   open a fresh empty `## [Unreleased]` above it, and move the link definitions
+   at the foot of the file with it: `[Unreleased]` now compares vX.Y.Z...HEAD,
+   and a new `[X.Y.Z]` line compares the previous tag with vX.Y.Z
+2. Bump versionName and versionCode together in android/app/build.gradle.kts.
+   release.yml refuses a tag that disagrees with versionName, and refuses a
+   versionCode that is not greater than the previous v* tag's
+3. Land both on main. The tag is taken from main, so there is one line of
+   history and nothing to cherry-pick afterwards
+4. Tag vX.Y.Z from main and push it. release.yml signs the AAB and the APK,
+   attaches the toolchain ZIPs and the build manifest, and publishes the release
+5. Upload the AAB to Play and start the staged rollout in 6.2
+```
+
+No gate is planned for step 1. The only moment the heading is wrong is the
+moment a tag is taken, so a check on a pull request would fail every branch
+that correctly leaves the section open. Its one honest home is the tag path,
+beside the existing "Check the tag matches the app version" step, which
+already has the version in hand.
 
 ---
 

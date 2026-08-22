@@ -103,7 +103,7 @@ flowchart TD
       end
     end
 
-    LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so, libgit-remote-curl.so,<br/>libbash.so, libtmux.so, libmake.so, libripgrep.so,<br/>libssh.so, libssh-keygen.so, libldmusl.so"]
+    LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so, libgit-remote-curl.so,<br/>libbash.so, libtmux.so, libmake.so, libripgrep.so,<br/>libssh.so, libssh-keygen.so, libldmusl.so, libexec-trampoline.so"]
   end
 
   EXTRAROW --> WEBVIEW
@@ -428,6 +428,7 @@ flowchart TD
   D --> D7["libripgrep.so"]
   D --> D8["libssh.so, libssh-keygen.so"]
   D --> D9["libldmusl.so (musl loader)"]
+  D --> D10["libexec-trampoline.so (starts a toolchain command)"]
   B --> E["assets/"]
   E --> E1["vscode-reh/ (Code - OSS server, and the web client it serves)"]
   E --> E2["usr/lib/ (libpython3.x.so, ICU, OpenSSL, libc++_shared.so and the rest of Node's dependencies)"]

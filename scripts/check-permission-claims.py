@@ -24,6 +24,12 @@ is not always available:
     drift the source half cannot see by construction. It is wired to the release
     manifest task in `android/app/build.gradle.kts`, so a real build always runs
     it; a checkout with no build output runs the first half alone and says so.
+    Not every merged manifest on disk is this app's. AGP writes one for the
+    instrumentation APK too, and `debugAndroidTest` declares REORDER_TASKS and
+    none of ours, so taking the newest file failed on a developer machine that
+    had just built it, and told the maintainer to publish a permission the
+    shipped app does not hold. Test variants are dropped, release wins over any
+    other however fresh, and the verdict names the variant it read.
 
 Names are compared on their last dot-separated segment. That is not laziness
 about `android.permission.` prefixes: the app-defined receiver permission is
@@ -45,6 +51,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE_MANIFEST = ROOT / "android/app/src/main/AndroidManifest.xml"
 POLICY = ROOT / "docs/PRIVACY_POLICY.md"
 MERGED_GLOB = "android/app/build/intermediates/merged_manifest/*/*/AndroidManifest.xml"
+# The variant whose manifest ships, and so the one a Play listing is a view of.
+# Preferred over every other on disk however fresh, because which Gradle task a
+# developer ran last must not decide what this check is a verdict about.
+SHIPPING_VARIANT = "release"
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 TOOLS_NS = "http://schemas.android.com/tools"
@@ -152,11 +162,73 @@ _POLICY_CONTROLS = (
     ("a permission named only in prose", "requires the INTERNET permission", set()),
 )
 
+# The third reader run against controls on every invocation, for the reason the
+# two above give: this one decides WHICH manifest the verdict is about, and it
+# had no opinion at all. The items are their own labels, so a case reads as the
+# order it asserts. Triples are (variant, mtime, item).
+_ORDER_CONTROLS = (
+    (
+        "the instrumentation APK built last",
+        (("release", 1.0, "release"), ("debugAndroidTest", 9.0, "androidTest")),
+        ["release"],
+    ),
+    (
+        "a debug build newer than the release one",
+        (("release", 1.0, "release"), ("debug", 9.0, "debug")),
+        ["release", "debug"],
+    ),
+    (
+        "no release build on disk",
+        (("debug", 1.0, "debug"), ("debugAndroidTest", 9.0, "androidTest")),
+        ["debug"],
+    ),
+)
+
+_PATH_CONTROL = (
+    pathlib.PurePosixPath(
+        "android/app/build/intermediates/merged_manifest/debugAndroidTest/"
+        "mergeDebugAndroidTestManifest/AndroidManifest.xml"
+    ),
+    "debugAndroidTest",
+)
+
+
+def variant_of(path) -> str:
+    """merged_manifest/<variant>/<task>/AndroidManifest.xml -> <variant>."""
+    return path.parent.parent.name
+
+
+def app_variant(variant: str) -> bool:
+    """Whether that variant directory holds a manifest of the app itself.
+
+    AGP merges one for its test components too, and theirs describes a different
+    APK. The suffix is AGP's own naming for those, so this also covers
+    `releaseAndroidTest` and the unit-test variants without listing them; this
+    project declares no product flavours, so no variant of the app can end that
+    way.
+    """
+    return not variant.endswith("Test")
+
+
+def in_judging_order(candidates):
+    """(variant, mtime, item) triples, the one worth judging first.
+
+    Test variants are dropped, then the shipping variant is put ahead of the
+    rest, which stay newest first. Preferring release even when it is the older
+    file is deliberate: under Gradle this runs finalizing the task that has just
+    written it, and everywhere else the printed variant lets the reader see how
+    old the tree they are judging is.
+    """
+    app = [c for c in candidates if app_variant(c[0])]
+    app.sort(key=lambda c: (c[0] != SHIPPING_VARIANT, -c[1]))
+    return [c[2] for c in app]
+
 
 def merged_manifests():
-    """Every merged manifest a build has left behind, newest first."""
-    found = sorted(ROOT.glob(MERGED_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)
-    return found
+    """Every merged manifest of the app itself, the one that ships first."""
+    return in_judging_order(
+        (variant_of(p), p.stat().st_mtime, p) for p in ROOT.glob(MERGED_GLOB)
+    )
 
 
 def main() -> int:
@@ -171,6 +243,19 @@ def main() -> int:
             return fail(
                 f"the policy reader answers {named_in_policy(text)} for {label}, so "
                 "its verdict on the real document cannot be trusted"
+            )
+    path_control, expected_variant = _PATH_CONTROL
+    if variant_of(path_control) != expected_variant:
+        return fail(
+            f"a merged-manifest path reads as variant "
+            f"'{variant_of(path_control)}', so the selection below is filtering "
+            "and ordering on the wrong part of the path"
+        )
+    for label, candidates, expected in _ORDER_CONTROLS:
+        if in_judging_order(candidates) != expected:
+            return fail(
+                f"manifest selection answers {in_judging_order(candidates)} for "
+                f"{label}, so the verdict below would be about the wrong build"
             )
 
     for path in (SOURCE_MANIFEST, POLICY):
@@ -226,13 +311,14 @@ def main() -> int:
         # Not a pass for the half that did not run. The source manifest cannot
         # see a library's permissions at all, so saying nothing here would let a
         # reader take the line above for a verdict on the installed app.
-        print("  note   no merged manifest on disk, so the two above were not "
-              "checked against a build.")
-        print("         Build once (any variant) and re-run to cover the "
+        print("  note   no merged manifest of the app on disk, so the two above "
+              "were not checked against a build.")
+        print("         Build once (debug or release) and re-run to cover the "
               "libraries as well.")
         return 0
 
     path = merged_paths[0]
+    variant = variant_of(path)
     try:
         merged = declared_in(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ET.ParseError) as exc:
@@ -244,15 +330,21 @@ def main() -> int:
             f"the manifest merger no longer adds what this check records.\n"
             f"         recorded: {', '.join(sorted(MERGED_IN)) or '(none)'}\n"
             f"         measured: {', '.join(sorted(added)) or '(none)'}\n"
-            f"         read from {path.relative_to(ROOT)}\n"
+            f"         read from the {variant} manifest, "
+            f"{path.relative_to(ROOT)}\n"
             "         A dependency changed what the installed app asks for. "
             "Update MERGED_IN\n         here and say so in "
             "docs/PRIVACY_POLICY.md and docs/06-SECURITY.md, which are\n"
             "         what a user and a Play reviewer read."
         )
 
-    print(f"  ok     {path.relative_to(ROOT)} adds exactly the "
+    if variant != SHIPPING_VARIANT:
+        print(f"  note   judged the {variant} manifest; there is no "
+              f"{SHIPPING_VARIANT} build on disk, and that is the one a Play "
+              "listing shows")
+    print(f"  ok     the {variant} merged manifest adds exactly the "
           f"{len(added)} recorded above")
+    print(f"         {path.relative_to(ROOT)}")
     return 0
 
 

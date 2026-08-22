@@ -129,6 +129,21 @@ jobs:
             echo "previous tag : $previous (versionCode ${previous_code:-unknown})"
           fi
 
+          # The published release notes come from `generate_release_notes: true`
+          # below, so nothing on the release path reads CHANGELOG.md and a tag
+          # taken with the heading still saying Unreleased leaves the repository
+          # with no section naming the version a user installed. Checked here
+          # rather than on a pull request because a branch that correctly leaves
+          # the section open would fail every such check; the tag is the one
+          # moment the heading has to have been renamed, and this step already
+          # holds the version to look for.
+          if ! grep -q "^## \[$version_name\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$version_name]' section." \
+                 "Rename the Unreleased heading to this version before tagging," \
+                 "and open a fresh empty Unreleased above it."
+            exit 1
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
@@ -400,6 +415,13 @@ jobs:
             exit 1
           fi
 
+      # Reads the packaged jniLibs, so it belongs here rather than with the
+      # source-only checks: the directory is empty until the download scripts
+      # above have run, and the gate refuses an empty one rather than passing
+      # over it. Deliberately not in lint.yml, which stubs the tree with a single
+      # four-byte libnode.so so Gradle will run.
+      - name: Check the documented binary lists match what is packaged
+        run: python3 scripts/check-binary-lists.py
       # Needs the assets in place, so it runs here rather than with the checks
       # above: it walks the packaged extensions tree.
       - name: Check the monitor recognises the language servers that ship

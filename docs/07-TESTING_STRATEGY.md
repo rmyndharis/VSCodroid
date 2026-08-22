@@ -22,8 +22,8 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 
 ```mermaid
 flowchart TD
-  E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>37 tests, run by hand on a device"]
-  INT --> UNIT["Unit Tests<br/>1360 Kotlin tests in 210 classes (JVM)<br/>8 node:assert scripts for the bundled JavaScript"]
+  E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>run by hand on a device"]
+  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>8 node:assert scripts for the bundled JavaScript"]
 ```
 
 ---
@@ -46,11 +46,31 @@ flowchart TD
 | SafSyncEngine | Mirror reconciliation, write-back filtering, rename pairing | `SafSyncEngineTest`, `SafWriteBackFilterTest`, `SafRenamePairingTest` |
 | VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceResolutionTest`, `DownloadCoordinatorTest` |
 
-The suite is **1360 tests in 210 classes**, and it is green. Both figures come from
-the XML a run writes under `app/build/test-results/testDebugUnitTest/`, one file per
-class, rather than from a figure carried forward. A test that needs a
-filesystem builds its tree under a JUnit `@TempDir` rather than touching the
-checkout.
+The suite is green. Its size is deliberately not written down here: both
+figures, tests and classes, come from the XML a run writes under
+`app/build/test-results/testDebugUnitTest/`, one file per class. This
+paragraph used to carry the pair as well, and the pyramid above carried a
+second copy of it, so the suite grew past both: a number written where it is
+not measured has nothing holding it, and saying it comes from the XML never
+said how to get it out. Read it:
+
+```bash
+cd android && ./gradlew testDebugUnitTest
+ls app/build/test-results/testDebugUnitTest/*.xml | wc -l                 # classes
+grep -ho 'tests="[0-9]*"' app/build/test-results/testDebugUnitTest/*.xml \
+  | cut -d'"' -f2 | paste -sd+ - | bc                                     # tests
+```
+
+A filtered run leaves the XML of earlier runs beside the new files, so the
+file count then answers a different question; delete the directory first if
+the last run was filtered. The instrumented layer in the pyramid is the same
+kind of claim and is read the same way, from the source rather than from
+here: `grep -rn "@Test" android/app/src/androidTest --include="*.kt" | wc -l`,
+which counts annotations and so equals the number of executed tests only
+while nothing there is parameterised or `@Ignore`d.
+
+A test that needs a filesystem builds its tree under a JUnit `@TempDir` rather
+than touching the checkout.
 
 **Run**: `./gradlew testDebugUnitTest` from `android/`. CI runs it in the
 `Unit Tests` job of `build.yml`, on every pull request and on every push to

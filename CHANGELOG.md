@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The translatable-text check reports the test it actually applied instead of claiming no user-facing text sits outside the string resources.
 - Two tests pinning the write-back notice no longer pass when its wiring is commented out rather than deleted.
 - The Kotlin plugin's own build directory is ignored, so a build no longer leaves compiler scratch sitting in the working tree.
+- The release plan carries a checklist for an ordinary release, and tagging refuses a version this file has no section for.
+- Packaging checks that the documented list of bundled binaries matches what ships, so a binary added without its documentation fails the build.
+- The testing document gives the command that measures the suite instead of a figure that goes stale the next time a test is added.
 
 ### Fixed
 - The setup screen now keeps the display awake while it unpacks the app, so a screen timeout can no longer strand a first run part-way through an 800 MB extraction.
@@ -206,6 +209,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delivered toolchain pack the store did not actually delete is reclaimed at the next launch, instead of occupying a toolchain's worth of storage for good.
 - Certificate and link failure notices stop after eight in a session, so a page failing many hosts can no longer bury the editor under them.
 - The status badge and the action button on a toolchain card no longer draw over each other when a long label makes both wide.
+- Saving a download to a slow storage provider no longer freezes the app. The write held a lock that closing the editor had to wait on.
+- Managing device folder storage no longer freezes the editor while it measures the copies on disk.
+- Renaming a folder inside a device folder keeps the record of edits that never reached the device, which could otherwise let a part-written device copy overwrite the complete one.
+- A save made as a device folder closes now reaches the queue being emptied instead of one nothing drains, where it waited until the folder was next opened.
+- Choosing where to save a download no longer reloads the editor out from under the transfer when the picker is left open a long time.
+- Reopening the app after Android reclaims its window returns to the folder that was open, rather than to the default projects directory.
+- The first-run toolchain picker shows which toolchains are already installed instead of offering them as fresh downloads that would be fetched and unpacked again.
+- Toolchain download progress keeps moving after the screen is rebuilt, and the card becomes Installed when the transfer ends rather than staying on Cancel.
+- Cancelling a toolchain reinstall no longer hides Remove for a toolchain that is still fully installed.
+- A toolchain name supplied by the editor page no longer reaches the log in full when it names nothing the app offers.
+- Uninstalling a bundled extension is no longer undone by the next app update when a newer copy of it was installed at the time.
+- The custom memory limit is bounded by a share of the device's own memory below three gigabytes, where it previously allowed three times what that device is given by default.
+- A first launch after the app process is killed adopts the editor server still holding its port instead of starting a second one behind it.
+- A foreground start the system refuses now stops the service, rather than leaving a server running with no notification and no way to stop it.
+- Kill Idle Servers kills only idle ones. It ended every language server, including one in the middle of answering.
+- A project of your own that depends on a Copilot package is no longer treated as a language server and shed when memory runs short.
+- The process counter's warning and its status bar change colour at the same count, instead of the warning arriving two processes early.
+- The screen stays awake while a toolchain downloads, which is the longest wait of a first run and the one it was missing.
+- A modifier latched on the key row is cleared when the editor page is rebuilt after a crash, instead of staying held for a page that never heard of it.
+- Running out of space during setup says how much to free rather than how much the whole unpack needs.
+- The storage check no longer counts an installed toolchain's files as space the unpack can reuse, which let a full device through a gate meant to refuse it.
 
 ### Security
 - Symbolic links inside a device folder's local copy are no longer written out to the device, where they arrived as ordinary files carrying whatever their target held.
