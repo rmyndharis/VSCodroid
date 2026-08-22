@@ -3,6 +3,7 @@ package com.vscodroid.storage
 import android.content.ContentResolver
 import android.content.Context
 import android.content.SharedPreferences
+import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 import io.mockk.every
@@ -13,6 +14,7 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -161,6 +163,108 @@ class SafFolderPathLoggingTest {
     }
 
     /**
+     * A device folder holding one document, whose id is what the platform provider makes
+     * it: the user's own path, `primary:Documents/<folder>/<file>`.
+     *
+     * The case above proves nothing about the copy, and that is how two leaks survived a
+     * guard written for exactly this. With `query` answering null the walk gives up
+     * before phase 2 exists, so `copyDocumentToLocal` is never reached and the gate's
+     * coverage became the reviewer's coverage.
+     */
+    private fun deviceHoldingOneFile() {
+        val docId = "primary:Documents/$folderName/notes.txt"
+        val docUri = mockk<Uri>(relaxed = true)
+        every { docUri.lastPathSegment } returns docId
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } returns docUri
+
+        val cursor = mockk<Cursor>(relaxed = true)
+        var row = -1
+        every { cursor.moveToNext() } answers { ++row == 0 }
+        every { cursor.getColumnIndexOrThrow(any()) } answers {
+            when (firstArg<String>()) {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                else -> 3
+            }
+        }
+        every { cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+        every { cursor.isNull(any()) } returns false
+        every { cursor.getString(0) } returns docId
+        every { cursor.getString(1) } returns "notes.txt"
+        every { cursor.getString(2) } returns "text/plain"
+        every { cursor.getLong(3) } returns 12L
+        every { cursor.getLong(4) } returns 1_700_000_000_000L
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            row = -1
+            cursor
+        }
+    }
+
+    private fun syncOneFolder() {
+        val mirrorDir = File(filesDir, "saf-mirrors/abc123def456").apply { mkdirs() }
+        runBlocking { SafSyncEngine(context).initialSync(folderUri, mirrorDir) { _, _ -> } }
+    }
+
+    @Test
+    fun `a document that cannot be copied does not name the user's directory`() {
+        deviceHoldingOneFile()
+        every { resolver.openInputStream(any()) } returns null
+
+        syncOneFolder()
+
+        assertFolderNotNamed()
+    }
+
+    /**
+     * The half a dropped interpolation does not cover. The stream comes from the
+     * provider, and `FileNotFoundException` and `SecurityException` routinely quote the
+     * document URI in their own message, so a line that stops naming the document and
+     * still repeats `e.message` puts the same string in logcat by the other route.
+     */
+    @Test
+    fun `a copy that throws does not repeat the provider's own message`() {
+        deviceHoldingOneFile()
+        every { resolver.openInputStream(any()) } throws java.io.FileNotFoundException(
+            "open failed for $treeUri/document/primary%3ADocuments%2FClientProject%2Fnotes.txt"
+        )
+
+        syncOneFolder()
+
+        assertFolderNotNamed()
+    }
+
+    @Test
+    fun `an enumeration that fails does not name the document it failed on`() {
+        every { DocumentsContract.getTreeDocumentId(any()) } returns
+            "primary:Documents/$folderName"
+        every { resolver.query(any(), any(), any(), any(), any()) } throws
+            IllegalStateException("provider died")
+
+        syncOneFolder()
+
+        assertFolderNotNamed()
+    }
+
+    /**
+     * The control for the copy path, in the same spirit as the one below it: a bug report
+     * still has to be able to say which file could not be copied.
+     */
+    @Test
+    fun `the copy failure still says which file it was`() {
+        deviceHoldingOneFile()
+        every { resolver.openInputStream(any()) } returns null
+
+        syncOneFolder()
+
+        assertSawSomething()
+        assertTrue(
+            emitted.any { it.contains("notes.txt") },
+            "the redaction removed the record rather than the secret",
+        )
+    }
+
+    /**
      * The control. Redaction that leaves nothing behind is not redaction, it is deletion,
      * and a bug report still has to be able to line these lines up with the folder they
      * are about. The mirror's own name is what does that.
@@ -177,6 +281,41 @@ class SafFolderPathLoggingTest {
             emitted.none { it.contains(hash) },
             "no line named the folder at all, so the redaction removed the record " +
                 "rather than the secret",
+        )
+    }
+
+    /**
+     * The channel redacting log lines cannot reach.
+     *
+     * `MainActivity.openSafFolder` catches this exception and hands the throwable
+     * itself to `Logger.e`, which prints its message, so an interpolation here
+     * arrives in release logcat whatever the line beside it says. Asserted on the
+     * message rather than through the caller because the message is the leak: any
+     * `Logger.w`/`Logger.e` that is given this throwable repeats it, and that set
+     * is open.
+     *
+     * Negative control: restore `"Permission revoked for: $safUri"` in
+     * `SafStorageManager.syncToLocal` and the first assertion goes red while the
+     * second stays green, which is the pair that distinguishes redaction from
+     * deletion.
+     */
+    @Test
+    fun `the revoked-permission failure does not name the user's folder`() {
+        val manager = SafStorageManager(context)
+        val hash = manager.getMirrorDir(folderUri).name
+
+        val thrown = assertThrows(SecurityException::class.java) {
+            runBlocking { manager.syncToLocal(folderUri) }
+        }
+
+        val message = thrown.message ?: ""
+        assertFalse(
+            message.contains(folderName) || message.contains("tree/primary"),
+            "the user's device folder reached the exception message: $message",
+        )
+        assertTrue(
+            message.contains(hash),
+            "the failure names no folder at all, so a report cannot be tied to one: $message",
         )
     }
 }

@@ -173,7 +173,14 @@ class SafStorageManager(private val context: Context) {
      * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
      * alone now.
      */
-    fun getPersistedFolders(): List<SafFolderInfo> {
+    fun getPersistedFolders(): List<SafFolderInfo> =
+        synchronized(recentFoldersLock) { readAndPruneRecentFolders() }
+
+    /**
+     * The body of [getPersistedFolders]. Caller must hold [recentFoldersLock]: the
+     * prune below is itself a read-modify-write of the list.
+     */
+    private fun readAndPruneRecentFolders(): List<SafFolderInfo> {
         val json = prefs.getString(KEY_RECENT_FOLDERS, "[]") ?: "[]"
         val array = JSONArray(json)
         val result = mutableListOf<SafFolderInfo>()
@@ -591,7 +598,9 @@ class SafStorageManager(private val context: Context) {
                     Logger.d(tag, "Grant for $hash was already gone")
                 }
             }
-        saveRecentFolders(getPersistedFolders().filterNot { getMirrorDir(it.uri).name == hash })
+        synchronized(recentFoldersLock) {
+            saveRecentFolders(getPersistedFolders().filterNot { getMirrorDir(it.uri).name == hash })
+        }
     }
 
     /**
@@ -700,7 +709,14 @@ class SafStorageManager(private val context: Context) {
         onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): File {
         if (!hasPersistedPermission(safUri)) {
-            throw SecurityException("Permission revoked for: $safUri")
+            // Named by its mirror, like every other line about this folder. The
+            // interpolation here is the one channel redacting the log lines could
+            // not close: `MainActivity.openSafFolder` catches this and passes the
+            // throwable itself to `Logger.e`, which prints the message, and none
+            // of the three severities is gated on a debuggable build. Redacting
+            // the caller alone would have left the same tree URI arriving by the
+            // other route.
+            throw SecurityException("Permission revoked for ${getMirrorDir(safUri).name}")
         }
 
         val mirrorDir = getMirrorDir(safUri)
@@ -764,25 +780,30 @@ class SafStorageManager(private val context: Context) {
     // -- Internal --
 
     private fun addToRecentFolders(uri: Uri) {
-        val folders = getPersistedFolders().toMutableList()
-
-        // Remove existing entry for this URI (will re-add with updated timestamp)
-        folders.removeAll { it.uri == uri }
-
+        // Resolved before the lock: it is a provider round trip, and a network or MTP
+        // provider can make it a long one. Nothing in the list is read to compute it.
         val name = getDisplayName(uri)
-        folders.add(
-            0,
-            SafFolderInfo(
-                uri = uri,
-                displayName = name,
-                lastOpened = System.currentTimeMillis(),
-                mirrorPath = getMirrorDir(uri).absolutePath
-            )
-        )
+        val dropped = synchronized(recentFoldersLock) {
+            val folders = getPersistedFolders().toMutableList()
 
-        // Keep at most MAX_RECENT entries
-        val (trimmed, dropped) = splitRecent(folders, MAX_RECENT)
-        saveRecentFolders(trimmed)
+            // Remove existing entry for this URI (will re-add with updated timestamp)
+            folders.removeAll { it.uri == uri }
+
+            folders.add(
+                0,
+                SafFolderInfo(
+                    uri = uri,
+                    displayName = name,
+                    lastOpened = System.currentTimeMillis(),
+                    mirrorPath = getMirrorDir(uri).absolutePath
+                )
+            )
+
+            // Keep at most MAX_RECENT entries
+            val (trimmed, evicted) = splitRecent(folders, MAX_RECENT)
+            saveRecentFolders(trimmed)
+            evicted
+        }
 
         // The grant goes with the list entry, and until it did there was no way
         // out at all: the reclaim pass judges a mirror by whether a permission is
@@ -818,7 +839,7 @@ class SafStorageManager(private val context: Context) {
         }
     }
 
-    private fun updateLastOpened(uri: Uri) {
+    private fun updateLastOpened(uri: Uri) = synchronized(recentFoldersLock) {
         val folders = getPersistedFolders().toMutableList()
         val index = folders.indexOfFirst { it.uri == uri }
         if (index >= 0) {
@@ -843,6 +864,26 @@ class SafStorageManager(private val context: Context) {
         private const val PREFS_NAME = "vscodroid_saf"
         private const val KEY_RECENT_FOLDERS = "recent_folders"
         private const val MAX_RECENT = 10
+
+        /**
+         * Serialises every read-modify-write of the recent list.
+         *
+         * The list is one JSON string in one preference, and four operations rewrite it
+         * from a value they read first: the prune inside [getPersistedFolders],
+         * [addToRecentFolders], [updateLastOpened] and [releaseGrantFor]. Three threads
+         * reach those. The UI thread picks a folder, a Dispatchers.IO thread finishes a
+         * sync, and the WebView's bridge thread asks for the recent list and removes
+         * device-folder copies. Interleaved, the later writer saves a list it read
+         * before the earlier one wrote: a folder just picked drops out of Open Recent,
+         * or a folder whose mirror has just been removed keeps a row pointing at a
+         * directory that is not there.
+         *
+         * In the companion, like [SafSyncEngine]'s journal lock and for the reason given
+         * there: this class is one per Activity, a recreated Activity builds a second one
+         * while the first one's sync is still finishing on the IO dispatcher, and both
+         * address the one preferences file.
+         */
+        private val recentFoldersLock = Any()
 
         /**
          * Whether a mirror with no live permission may be deleted, given the writes

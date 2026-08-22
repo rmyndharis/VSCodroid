@@ -791,11 +791,22 @@ class SafSyncEngine(private val context: Context) {
             // "wt", which truncates at open, so the two interleave inside one document.
             Logger.w(tag, "Write-back still draining after ${DRAIN_GRACE_MS}ms; leaving it to finish")
         } else {
+            // Anything still here arrived after the drain took its last look, which is
+            // the one window an event observed while the folder was open can still fall
+            // into. Counted rather than dropped in silence: the mirror keeps the file and
+            // the record cannot vouch for it, so nothing is destroyed, but the save is
+            // not on the device and only reopening the folder puts it there. A user
+            // asking why needs this line to exist in a bug report.
+            val dropped = closing.queue.size
             closing.queue.clear()
+            if (dropped > 0) {
+                Logger.w(tag, "$dropped write-back(s) arrived after the drain ended")
+            }
         }
         // docIdCache is deliberately not cleared here. A drain that outlived the wait
         // still needs the mappings of the folder it is finishing, and [initialSync]
-        // clears the cache itself before anything reads it for the next one.
+        // clears the cache itself before anything reads it for the next one, as does an
+        // event that finds the cache speaking for a different tree.
         //
         // The half-renames are cleared, and the difference is that nothing consumes them
         // after this point: a MOVED_TO of the next folder must not be able to claim a
@@ -931,7 +942,15 @@ class SafSyncEngine(private val context: Context) {
                 }
             } ?: return false  // the provider refused to answer at all
         } catch (e: Exception) {
-            Logger.w(tag, "Failed to enumerate children of $parentDocId: ${e.message}")
+            // The path inside the folder, not the document id, which the platform
+            // provider spells as the user's own directory; and the exception's class,
+            // because a provider quotes the document URI in its message.
+            Logger.w(
+                tag,
+                "Failed to enumerate " +
+                    (if (parentRelPath.isEmpty()) "the folder root" else parentRelPath) +
+                    ": ${e.javaClass.simpleName}",
+            )
             return false
         }
         return complete
@@ -963,7 +982,10 @@ class SafSyncEngine(private val context: Context) {
         try {
             val source = context.contentResolver.openInputStream(docUri)
             if (source == null) {
-                Logger.w(tag, "No stream for ${docUri.lastPathSegment}")
+                // By the mirror file's own name, never the document id: a provider
+                // composes that from the user's own path, and this level ships. See
+                // SafStorageManager.persistPermission for the whole of that reasoning.
+                Logger.w(tag, "No stream for ${dest.name}")
                 return false
             }
             source.use { input ->
@@ -982,7 +1004,12 @@ class SafSyncEngine(private val context: Context) {
             return true
         } catch (e: Exception) {
             partial.delete()
-            Logger.w(tag, "Failed to copy ${docUri.lastPathSegment} → ${dest.name}: ${e.message}")
+            // The class rather than the message, and it takes both halves to be
+            // redaction at all: the document id names the user's directory, and a
+            // provider stream's own exception quotes the URI in its message, so
+            // dropping the interpolation alone would put the same string in logcat by
+            // the other route.
+            Logger.w(tag, "Failed to copy into ${dest.name}: ${e.javaClass.simpleName}")
             return false
         }
     }
@@ -1345,8 +1372,14 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Moves the upload records of [from] to [to], so they follow the directory a
-     * removal has just renamed out of the way.
+     * Moves the upload records of [from] to [to], so they follow a directory that has
+     * moved.
+     *
+     * Two callers, and the same one fact makes both necessary: the records are keyed by
+     * absolute mirror path, so a path that moves takes its meaning with it. A removal
+     * renames a whole mirror out of the way; a rename in the editor moves one directory
+     * inside it, which nothing else in the write-back carries across, because a claimed
+     * rename deliberately re-uploads nothing.
      *
      * The journal is keyed by absolute path, and a mirror's directory name is a hash
      * of the tree URI rather than of the session, so the path a removal frees is the
@@ -1853,10 +1886,42 @@ class SafSyncEngine(private val context: Context) {
      * decided here.
      */
     internal fun handleMirrorEvent(event: Int, localFile: File, rootDir: File, safTreeUri: Uri) {
+        // The session this event belongs to, read here rather than at the offer at the
+        // end. Everything in between is provider round trips, a query per path segment
+        // and several of them, and a stop can run to completion inside that window: it
+        // installs a fresh session that nothing drains, since only [startWatching]
+        // starts a worker and it opens with a stop that clears that queue again. A save
+        // offered there went nowhere and said nothing. Read at entry, a late offer lands
+        // in the queue the closing folder's drain is still emptying, which is what the
+        // grace period exists for; if that drain has already finished, the stop's own
+        // clear says so.
+        //
+        // A capture rather than a liveness re-check, because the answer has to be the
+        // same object for the whole event: two threads polling one queue is what the
+        // session split exists to prevent, and this offers into a queue exactly one
+        // worker was ever started for.
+        val target = session
         // Set before anything resolves: every fill below belongs to this tree, and
         // a processing-time reader uses the field to know whether the cache it is
         // about to read still speaks for the tree its job carries.
-        cacheTree = safTreeUri
+        //
+        // Adopting the tree means adopting its entries, which is why the label is not
+        // repointed on its own. The entries and the label are one object: an event that
+        // was still inside its provider round trips when the folder was switched arrives
+        // here after the next folder's sync has refilled the cache, and moving the label
+        // alone leaves this tree's lookups answered with another tree's documents. Where
+        // one granted folder sits inside another, those documents are reachable, and the
+        // write opens them with "wt", which truncates at open.
+        //
+        // Clearing costs the other folder its warm cache, which is a provider walk per
+        // path on the slow path that already exists for new files, and costs a drain
+        // that outlived its folder nothing at all: its one cache read is guarded by this
+        // same field (see [processWriteBack]'s late-parent resolution), and
+        // [createOneInSaf]'s reverse lookup simply misses and skips caching.
+        if (cacheTree != safTreeUri) {
+            docIdCache.clear()
+            cacheTree = safTreeUri
+        }
         val relativePath = localFile.relativeTo(rootDir).path
 
         val type = when (event and FileObserver.ALL_EVENTS) {
@@ -1976,6 +2041,28 @@ class SafSyncEngine(private val context: Context) {
                 hasVanishedCandidate(now) &&
                 (safDocUri == null || !providerHoldsDocument(safTreeUri, relativePath))
             ) claimVanishedDirectory(relativePath, now) else null
+        // The upload records follow the directory, and the claim is the only point that
+        // can move them: it is the one place holding both names. The job carries only
+        // the old base name, and a RENAME job can be superseded by a newer one, cleared
+        // by a stop, or never run at all, while this has to be true from the instant the
+        // disk changed.
+        //
+        // Nothing here is conditioned on what the device does. A line records that the
+        // MIRROR holds an edit the device never received, so a provider that refuses the
+        // rename, or an old name that resolves to no document, changes nothing about
+        // where those files now are. Left behind, the line names a path that no longer
+        // exists: the next sync cannot consume it (its repair branch needs the file to
+        // be there), so it copies the device's own truncated upload over the mirror's
+        // only complete copy, and until then it refuses the removal the user asked for.
+        //
+        // Only a claimed pair, because only a claimed pair re-uploads nothing. An
+        // unclaimed one falls back to createInSaf, which writes every child out again
+        // and brackets each write with the journal itself.
+        //
+        // The in-memory writer claims are deliberately not moved with it. Each writer
+        // releases the key it took, in its own finally, so renaming those keys would
+        // strand a claim for ever, which is the defect the count exists to prevent.
+        if (renamedFrom != null) renameUploadsUnder(File(rootDir, renamedFrom), localFile)
         // Resolved after the claim rather than when the directory vanished, so that the
         // provider is only asked on the events that turn out to be renames. Null means
         // the device has no document under the old name, there is nothing to rename and
@@ -2011,7 +2098,7 @@ class SafSyncEngine(private val context: Context) {
         // copy standing on the device where the user can see it.
         val pairedRename = renamedFromUri != null && !(crossesDirectories && sourceParentUri == null)
 
-        session.queue.offer(
+        target.queue.offer(
             SyncJob(
                 type = if (pairedRename) SyncType.RENAME else type,
                 localPath = localFile.absolutePath,

@@ -390,6 +390,39 @@ class SafDirectoryRenameTest {
     }
 
     /**
+     * The other half of the same fact, on the producer's side rather than the drain's.
+     *
+     * The cache and the label naming the tree it was resolved against are one object, and
+     * the label used to be repointed on its own: an event still inside its provider round
+     * trips when the folder was switched arrives after the next folder's sync has refilled
+     * the cache, sets the label back to the old tree and then answers this tree's lookups
+     * with the other one's documents. Where one granted folder sits inside another, which
+     * is an ordinary thing for a user to do, those documents are reachable, and the write
+     * opens them with `"wt"`, which truncates at open.
+     *
+     * NEGATIVE CONTROL: drop the `docIdCache.clear()` from the branch while keeping
+     * `cacheTree = safTreeUri`. This case goes red and the one above stays green, which
+     * shows the two bind different halves, the entries and the label, rather than one.
+     */
+    @Test
+    fun `an event for another folder does not let this folder's cache answer for it`() {
+        deviceTree(mapOf("root" to listOf("notes.txt")))
+        File(mirror, "notes.txt").writeText("x")
+        // Seeds the cache for the folder being watched.
+        observe(FileObserver.MODIFY, "notes.txt")
+
+        // The next folder: a different tree, and it does not hold that name.
+        val otherTree = mockk<Uri>(relaxed = true)
+        deviceTree(mapOf("root" to emptyList()))
+        engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.txt"), mirror, otherTree)
+        drain()
+
+        verify(exactly = 1) {
+            DocumentsContract.createDocument(any(), any(), any(), "notes.txt")
+        }
+    }
+
+    /**
      * `moveDocument` sits behind `FLAG_SUPPORTS_MOVE`, which a provider may withhold while
      * still offering rename. The fallback has to be what the code did before there was a
      * move at all: build the new name from the mirror and leave the old copy alone, rather
