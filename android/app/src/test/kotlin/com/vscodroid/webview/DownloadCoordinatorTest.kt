@@ -127,12 +127,21 @@ class DownloadCoordinatorTest {
         }
     }
 
+    /**
+     * Every warning the coordinator logged, in order.
+     *
+     * `Logger.w` is not gated on a debuggable build, so these ship, and logcat is
+     * readable by anything holding `READ_LOGS`.
+     */
+    private val warnings = mutableListOf<String>()
+
     @BeforeEach
     fun setUp() {
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
-        every { Logger.w(any(), any()) } just Runs
-        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
+        every { Logger.w(any(), any(), any()) } answers { warnings += secondArg<String>() }
+        warnings.clear()
         asked.clear()
         pickerIds.clear()
         documents.clear()
@@ -589,6 +598,64 @@ class DownloadCoordinatorTest {
 
         assertEquals(listOf(target), discarded)
         assertEquals(listOf(DownloadOutcome.FAILED to FALLBACK_DOWNLOAD_NAME), reported)
+    }
+
+    /**
+     * The file name is the page's to write, and every statement here that prints
+     * one has to say so.
+     *
+     * `MainActivity`'s `DownloadHost.report` redacts the same value where it
+     * reports the outcome, and the comment there says why: the page on the other
+     * side of the bridge is the workbench, which holds the connection token, and
+     * these lines are not gated on a debuggable build. The three sites in this
+     * class hold the same string, so redacting only at the reporting site left it
+     * in logcat by another route while the code read as if it were contained.
+     *
+     * All three paths are driven in one case because the value and the reason are
+     * one: a guard covering two of them is the shape that let this through.
+     */
+    @Test
+    fun `the name the page chose does not reach the log in the clear`() {
+        val secret = "3f9a1c77-not-a-real-token"
+        val named = "notes tkn=$secret.txt"
+
+        // No picker opened for it.
+        pickerOpens = false
+        coordinator.onDownloadNamed("blob:a", named)
+        coordinator.onDownloadStart("blob:a", null)
+
+        // The page went away with a transfer in flight.
+        pickerOpens = true
+        coordinator.onDownloadNamed("blob:b", named)
+        startAndChoose("blob:b")
+        coordinator.onPageGone()
+
+        // And one more download than the queue will hold.
+        repeat(10) {
+            coordinator.onDownloadNamed("blob:q$it", named)
+            coordinator.onDownloadStart("blob:q$it", null)
+        }
+
+        listOf("No create-document picker started", "Abandoning the download", "Refusing")
+            .forEach { site ->
+                assertTrue(
+                    warnings.any { it.contains(site) },
+                    "no line was logged for \"$site\", so nothing about it was checked. " +
+                        "Logged:\n" + warnings.joinToString("\n") { "  $it" },
+                )
+            }
+        val leaks = warnings.filter { it.contains(secret) }
+        assertTrue(
+            leaks.isEmpty(),
+            "a name the page chose reached a shipping log line in the clear:\n" +
+                leaks.joinToString("\n") { "  $it" },
+        )
+        assertTrue(
+            warnings.count { it.contains("tkn=<redacted>") } >= 3,
+            "the name is not in the lines at all, so this case would pass on statements " +
+                "that dropped it rather than ones that redacted it:\n" +
+                warnings.joinToString("\n") { "  $it" },
+        )
     }
 
     /** Binary content survives the encode and decode unchanged, byte for byte. */

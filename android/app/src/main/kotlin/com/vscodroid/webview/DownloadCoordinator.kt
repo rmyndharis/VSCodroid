@@ -174,6 +174,14 @@ class DownloadCoordinator(private val host: DownloadHost) {
      * Recorded rather than acted on. The platform decides whether a click
      * becomes a download, and this runs before it has, so the name is put
      * somewhere [onDownloadStart] can find it and nothing else happens.
+     *
+     * The name is the page's to write, and every statement in this class that
+     * prints one goes through `redactToken` first for that reason. They are all
+     * `Logger.w`, which is not gated on a debuggable build and therefore ships,
+     * and the page on the other side of the bridge is the workbench, which holds
+     * the connection token. `MainActivity`'s `DownloadHost.report` redacts the
+     * same value where it reports the outcome; these three sites hold it too, so
+     * redacting only there left the value in logcat by another route.
      */
     @Synchronized
     fun onDownloadNamed(url: String, fileName: String) {
@@ -199,7 +207,11 @@ class DownloadCoordinator(private val host: DownloadHost) {
                 // already waiting were asked for first, and a queue that
                 // silently forgets its tail is the failure this class exists to
                 // rule out.
-                Logger.w(tag, "Refusing $fileName; ${waiting.size} downloads already waiting")
+                Logger.w(
+                    tag,
+                    "Refusing ${redactToken(fileName)}; " +
+                        "${waiting.size} downloads already waiting"
+                )
                 host.report(DownloadOutcome.FAILED, fileName, "too many downloads at once")
                 return
             }
@@ -243,7 +255,7 @@ class DownloadCoordinator(private val host: DownloadHost) {
             startNextIfIdle()
             return
         }
-        Logger.w(tag, "No create-document picker started for ${request.fileName}")
+        Logger.w(tag, "No create-document picker started for ${redactToken(request.fileName)}")
         fail(request, "no picker")
     }
 
@@ -373,7 +385,10 @@ class DownloadCoordinator(private val host: DownloadHost) {
     fun onPageGone() {
         waiting.clear()
         val request = pending ?: return
-        Logger.w(tag, "Abandoning the download of ${request.fileName}: the page went away")
+        Logger.w(
+            tag,
+            "Abandoning the download of ${redactToken(request.fileName)}: the page went away"
+        )
         pending = null
         closeAndDiscard(request)
     }

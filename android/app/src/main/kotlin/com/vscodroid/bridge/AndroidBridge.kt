@@ -18,6 +18,7 @@ import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
 import com.vscodroid.webview.redactToken
+import com.vscodroid.webview.urlLogLabel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -427,17 +428,21 @@ class AndroidBridge(
             AuthTabWindow.disarm(armed)
             // The URL is page supplied and this line is not gated on a debuggable
             // build, so it ships. That is the same reasoning [logToNative] gives,
-            // and it carries here for the same reason: the workbench holds the
-            // connection token and a URL it hands over can carry it.
+            // and it carries here twice over: the workbench holds the connection
+            // token and a URL it hands over can carry it, and the destination of
+            // an "Open in Browser" is routinely a sign-in whose query holds an
+            // OAuth code or an API key. So the address is reduced to a scheme and
+            // a host by `urlLogLabel`, which is the same thing the notice for a
+            // failed hand-off is allowed to say.
             //
             // The throwable is deliberately not passed. It is printed with its
             // message, and both exceptions this realistically catches put the
             // whole URI there: ActivityNotFoundException names the Intent it
             // could not match, FileUriExposedException names the file it refused.
-            // Redacting the interpolation while handing the same URL to logcat
-            // inside the trace would only look like redaction. The frames behind
+            // Reducing the interpolation while handing the same URL to logcat
+            // inside the trace would only look like a redaction. The frames behind
             // it are all framework, so the class name is what was being read for.
-            Logger.e(tag, "Failed to open URL: ${redactToken(url)} (${e.javaClass.simpleName})")
+            Logger.e(tag, "Failed to open a URL at ${urlLogLabel(url)} (${e.javaClass.simpleName})")
             if (e is ActivityNotFoundException) OPEN_URL_NO_HANDLER
             else OPEN_URL_FAILED_PREFIX + e.javaClass.simpleName
         }

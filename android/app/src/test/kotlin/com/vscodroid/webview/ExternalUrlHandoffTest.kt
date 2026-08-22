@@ -104,6 +104,19 @@ class ExternalUrlHandoffTest {
         const val DOCS_NUMBER = "1234"
 
         /**
+         * A sign-in return address of the shape the editor routinely hands over,
+         * with the credential in its query.
+         *
+         * It carries no `vscode-reqid`, so nothing about it is armed and the
+         * cases using it need no rollback.
+         */
+        const val CREDENTIAL_BEARING =
+            "https://dev.example.com:8443/callback?code=4%2F0AdCredential&state=xyz"
+
+        /** The half of [CREDENTIAL_BEARING] that must not reach a log line. */
+        const val CREDENTIAL = "4%2F0AdCredential"
+
+        /**
          * The clock reading every launch below is armed with. Distinctive so that
          * [AuthTabWindow.armedReadings] can be asked whether a launch recorded
          * anything at all, whatever key it might have chosen.
@@ -159,12 +172,21 @@ class ExternalUrlHandoffTest {
     /** Every hand-off failure the client announced, in order. */
     private val announced = mutableListOf<Pair<String?, String>>()
 
+    /**
+     * Every message the client logged, in order.
+     *
+     * At the shipping levels: `Logger.i` and `Logger.e` are not gated on a
+     * debuggable build, so whatever they carry reaches logcat on a user's device.
+     */
+    private val logged = mutableListOf<String>()
+
     @BeforeEach
     fun setUp() {
         announced.clear()
+        logged.clear()
         mockkObject(Logger)
-        every { Logger.i(any(), any()) } just Runs
-        every { Logger.e(any(), any(), any()) } just Runs
+        every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
+        every { Logger.e(any(), any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.d(any(), any()) } just Runs
 
         mockkConstructor(Intent::class)
@@ -471,6 +493,65 @@ class ExternalUrlHandoffTest {
         )
 
         assertTrue(announced.isEmpty(), "announced $announced for a link that opened")
+    }
+
+    /**
+     * What the log keeps of an address this app hands to another app.
+     *
+     * The rule is already written down one type away: `TlsFailure` says the host
+     * and never the address, because the failing URL is whatever the open page
+     * asked for and a dev server or a sign-in carries an OAuth code or an API key
+     * in its query. The same value arrives here, on a statement at `Logger.i`
+     * that is not gated on a debuggable build, and the redaction it used to carry
+     * is keyed on `tkn=`, this app's own parameter, which never appears on an
+     * address bound for a browser.
+     *
+     * The host assertion is what keeps this from passing on a line that dropped
+     * the address altogether: a reader still has to be able to tell where the tap
+     * went.
+     */
+    @Test
+    fun `a followed link is logged by host, without the query it carried`() {
+        client.shouldOverrideUrlLoading(
+            view, request("https", "dev.example.com", 8443, CREDENTIAL_BEARING)
+        )
+
+        val line = logged.lastOrNull().orEmpty()
+        assertTrue(line.isNotEmpty(), "the hand-off was not logged at all, so nothing was checked")
+        assertTrue(
+            line.contains("dev.example.com:8443"),
+            "the line does not say where the tap went, so this case would pass on a " +
+                "statement that dropped the address rather than one that reduced it: $line",
+        )
+        assertFalse(
+            line.contains("code=") || line.contains(CREDENTIAL) || line.contains("callback"),
+            "the query a page chose reached a shipping log line: $line",
+        )
+    }
+
+    /** And the same address on the failing path, which logs at `Logger.e`. */
+    @Test
+    fun `a hand-off that failed is logged by host, without the query it carried`() {
+        every { context.startActivity(any()) } throws ActivityNotFoundException("no handler")
+
+        client.shouldOverrideUrlLoading(
+            view, request("https", "dev.example.com", 8443, CREDENTIAL_BEARING)
+        )
+
+        val line = logged.lastOrNull().orEmpty()
+        assertTrue(line.isNotEmpty(), "the failure was not logged at all, so nothing was checked")
+        assertTrue(
+            line.contains("dev.example.com:8443"),
+            "the line does not say where the tap went: $line",
+        )
+        assertTrue(
+            line.contains("ActivityNotFoundException"),
+            "the exception type is the part of the trace worth keeping: $line",
+        )
+        assertFalse(
+            line.contains("code=") || line.contains(CREDENTIAL),
+            "the query a page chose reached a shipping log line: $line",
+        )
     }
 
     /**

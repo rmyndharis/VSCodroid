@@ -284,6 +284,12 @@ class ConnectionTokenLoggingTest {
      * on a statement at `Logger.e`, which is not gated on a debuggable build and
      * therefore ships.
      *
+     * The message itself keeps only the scheme and the host, which is the rule
+     * `TlsFailure` states for the same value: the address is the page's to choose
+     * and its query is where a sign-in puts an OAuth code, while `redactToken` is
+     * keyed on `tkn=`, a parameter that never appears on an address bound for
+     * another app.
+     *
      * The absence of the throwable is asserted at the argument rather than by
      * capturing it, because a captured null and an argument that was never recorded
      * look identical in a list. The message assertions above it are what make that
@@ -332,9 +338,15 @@ class ConnectionTokenLoggingTest {
 
         assertNothingLeaked()
         assertTrue(
-            logged.last().contains("tkn=<redacted>"),
-            "the URL is not in the line at all, so this case would pass on a statement that " +
-                "dropped it rather than one that redacted it: " + logged.last(),
+            logged.last().contains("dev.example.com"),
+            "the address is not named in the line at all, so this case would pass on a " +
+                "statement that dropped it rather than one that reduced it to its host: " +
+                logged.last(),
+        )
+        assertTrue(
+            !logged.last().contains("preview") && !logged.last().contains("tkn="),
+            "the line repeats the address the page chose, query and all, and its query is " +
+                "where a sign-in puts an OAuth code: " + logged.last(),
         )
         assertTrue(
             logged.last().contains("ActivityNotFoundException"),

@@ -325,6 +325,61 @@ class TlsFailureNoticeTest {
     }
 
     /**
+     * A burst that does not stop, which is the only shape the two cases above
+     * cannot see.
+     *
+     * Both of them hold the clock at one reading, so neither ever crosses an
+     * interval boundary while failures are still arriving. Past the cap the
+     * recovery ran on the interval since the last message rather than since the
+     * last failure, and it emptied the whole record, which put the set back under
+     * the cap and made the eight hosts after every boundary sayable again: a page
+     * minting a fresh hostname every few milliseconds got eight toasts per
+     * interval, about twenty-eight seconds of the thirty covered, for as long as
+     * it carried on.
+     *
+     * Driven the way the presenter drives it: the reading advances, and
+     * `lastAnnouncedAt` is moved to it on every announcement, which is what
+     * `MainActivity.onTlsFailure` does inside `runOnUiThread`.
+     */
+    @Test
+    fun `a burst spanning several intervals is throttled, not restarted`() {
+        val said = mutableSetOf<TlsFailure>()
+        val shown = mutableListOf<TlsFailure>()
+        var lastAnnouncedAt = 0L
+        val windows = 4
+        val step = 100L
+
+        var now = 0L
+        while (now < TLS_NOTICE_INTERVAL_MS * windows) {
+            tlsFailureToAnnounce(
+                TlsFailure("host$now.example.com", TlsFailureReason.UNTRUSTED),
+                said, now = now, lastAnnouncedAt = lastAnnouncedAt,
+            )?.let {
+                shown += it
+                lastAnnouncedAt = now
+            }
+            now += step
+        }
+
+        assertTrue(
+            shown.size <= MAX_TLS_FAILURES_ANNOUNCED + windows,
+            "the page got ${shown.size} toasts over $windows intervals; past the cap the " +
+                "budget must be one message per interval, not a fresh cap per interval, " +
+                "since each toast holds the bottom of the editor for about three and a " +
+                "half seconds",
+        )
+        assertTrue(
+            shown.size >= MAX_TLS_FAILURES_ANNOUNCED,
+            "only ${shown.size} were announced, so the bound above is met by a mute " +
+                "rather than by a throttle and the first burst went unexplained",
+        )
+        assertTrue(
+            said.size <= MAX_TLS_FAILURES_ANNOUNCED,
+            "the record grew past the cap on hosts a remote page chooses: ${said.size}",
+        )
+    }
+
+    /**
      * The non-recoverable half of TLS failure, which reached nothing at all.
      *
      * `onReceivedSslError` is never called for it. It arrives here instead, and the

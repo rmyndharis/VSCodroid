@@ -15,8 +15,16 @@ internal const val FALLBACK_DOWNLOAD_NAME = "download"
 /**
  * Longest name offered to the picker, chosen against the 255-byte limit most
  * filesystems impose rather than against anything Android checks.
+ *
+ * Bytes, and the unit is the whole point of the constant. Kotlin's `take` counts
+ * UTF-16 units, so a cut at 200 of those answers a byte question with a character
+ * count: 200 CJK characters are 600 bytes and 200 emoji are 800, three to four
+ * times the limit this number exists to respect, on a name a page chooses. What a
+ * documents provider then does with it is the provider's decision, and both of
+ * the ones it realistically makes (truncating the name the user just typed, or
+ * refusing to create the document at all) are failures the user cannot read.
  */
-private const val MAX_NAME_LENGTH = 200
+private const val MAX_NAME_BYTES = 200
 
 /** Space is the first printable character; DEL is the one that follows them. */
 private const val FIRST_PRINTABLE = 0x20
@@ -92,10 +100,41 @@ internal fun safeFileName(candidate: String?): String? {
     val cleaned = basename
         .filter { it.code >= FIRST_PRINTABLE && it.code != DELETE_CHAR }
         .trim()
-        .take(MAX_NAME_LENGTH)
+        .takeBytes(MAX_NAME_BYTES)
         .trim()
     if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") return null
     return cleaned
+}
+
+/**
+ * The longest prefix of this string that fits in [maxBytes] bytes of UTF-8.
+ *
+ * Whole characters only, and that is not a nicety. Cutting inside a multi-byte
+ * sequence produces a name whose bytes are not UTF-8 at all, and cutting between
+ * the halves of a surrogate pair produces one that encodes to a replacement
+ * character, so the user is offered a name with a broken glyph where the emoji
+ * they typed was. Stepping by code point costs one pass and rules out both.
+ *
+ * An ASCII name is unchanged by this, which is the ordinary case: it is one byte
+ * per character, so the prefix is the same one a character count would have
+ * taken.
+ */
+private fun String.takeBytes(maxBytes: Int): String {
+    var bytes = 0
+    var index = 0
+    while (index < length) {
+        val codePoint = codePointAt(index)
+        val width = when {
+            codePoint < 0x80 -> 1
+            codePoint < 0x800 -> 2
+            codePoint < 0x10000 -> 3
+            else -> 4
+        }
+        if (bytes + width > maxBytes) break
+        bytes += width
+        index += Character.charCount(codePoint)
+    }
+    return substring(0, index)
 }
 
 private fun fileNameFromContentDisposition(header: String?): String? {

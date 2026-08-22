@@ -349,6 +349,41 @@ internal fun tlsHostLabel(url: String?): String? {
 }
 
 /**
+ * A page-chosen address reduced to what a log statement may repeat: its scheme
+ * and its host, and never its query.
+ *
+ * The rule [TlsFailure] states for a notice is the same rule logcat needs, and
+ * the same value arrives on both channels: the address a page asks this app to
+ * hand away is whatever that page chose, and a sign-in, a share link or a dev
+ * server preview carries an OAuth `code`, a `state` or an API key in its query.
+ * [redactToken] is keyed on `tkn=`, which is this app's own parameter and never
+ * appears on an address bound for another app, so a statement built on it printed
+ * the credential whole at `Logger.i` and `Logger.e`, neither of which is gated on
+ * a debuggable build.
+ *
+ * The scheme is kept, and it is the fallback when there is no host, because it is
+ * the part of a failed hand-off a reader acts on: `ssh:` with no app to answer it
+ * is a different problem from a browser that refused an `https:` launch. It is
+ * read lexically rather than through `java.net.URI`, which throws on addresses
+ * `android.net.Uri` accepts, and a label on the way to a log line must not throw.
+ *
+ * Everything unreadable reaches a phrase rather than an empty string, so a
+ * sentence built on this never comes out with a hole in it.
+ */
+internal fun urlLogLabel(url: String?): String {
+    val host = tlsHostLabel(url)
+    val scheme = url?.substringBefore(':', "")?.takeIf { candidate ->
+        candidate.isNotEmpty() && candidate.all { it.isLetterOrDigit() || it in "+-." }
+    }
+    return when {
+        scheme != null && host != null -> "$scheme://$host"
+        host != null -> host
+        scheme != null -> "$scheme:"
+        else -> "an unreadable address"
+    }
+}
+
+/**
  * How many refusals are put on screen, and with them how many are remembered.
  *
  * The hosts that end up in the record are chosen by whatever page is open, and one
@@ -370,8 +405,10 @@ internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
  * a channel that is only ever advice: the page is refused by `handler.cancel()`
  * before any of this runs, so what a muted notice costs is the explanation, and a
  * session here is a working day rather than a page view. Eight is generous for one
- * burst and mean for a day, so past it the record keeps refusing only until the
- * failures stop arriving in a burst. The interval is the one the write-back notice
+ * burst and mean for a day, so past it the record lets one failure through per
+ * interval and no more: a burst that does not stop is throttled to that rate
+ * rather than muted, and a fault the user walks into after a quiet stretch is
+ * explained the moment it happens. The interval is the one the write-back notice
  * already uses, and for the same reason: it is long enough that a wall of toasts
  * cannot form and short enough that a fault the user has just walked into is still
  * explained.
@@ -392,11 +429,11 @@ internal const val TLS_NOTICE_INTERVAL_MS = 30_000L
  * the same fact and adds nothing to act on; a second host, or the same host
  * failing a different way, is a new fact and still gets through.
  *
- * Past [MAX_TLS_FAILURES_ANNOUNCED] distinct failures nothing more is said. The
- * record is what counts them, so the same test bounds the toasts and the set at
- * once. Eight refusals is already more than a reader acts on, and the ninth is the
- * point at which the page, not the user, is choosing how long the editor stays
- * covered.
+ * Past [MAX_TLS_FAILURES_ANNOUNCED] distinct failures the rate is what is bounded
+ * rather than the total: one more failure is announced per
+ * [TLS_NOTICE_INTERVAL_MS], and the record stays full at the cap. Eight refusals
+ * is already more than a reader acts on, and the ninth is the point at which the
+ * page, not the user, is choosing how long the editor stays covered.
  *
  * [alreadySaid] belongs to the presenter, which keeps this class free of mutable
  * state, and its lifetime falls out of that: it survives a renderer crash, because
@@ -414,11 +451,24 @@ internal fun tlsFailureToAnnounce(
         // Past the cap, and the two bounds part company here. The record must stay
         // bounded, because a remote page picks the hostnames that fill it; the
         // messages must stay bounded, because each one holds the screen. Refusing
-        // until the burst has stopped answers both, and clearing only then means the
-        // set is emptied at most once per interval rather than once per fresh host,
-        // which is what let a page hand back the names it had already spent.
+        // until the interval has passed answers both.
         if (now - lastAnnouncedAt < TLS_NOTICE_INTERVAL_MS) return null
-        alreadySaid.clear()
+        // One entry, never the whole record, and that is what keeps the second
+        // bound. Emptying it put the set back under the cap, so the eight failures
+        // after every interval were all announced back to back: a page minting a
+        // fresh hostname every few milliseconds was refused for thirty seconds and
+        // then given eight more toasts, about twenty-eight seconds of screen, for
+        // as long as it cared to carry on. Evicting the eldest leaves the set full,
+        // so a burst that does not stop costs one notice per interval instead of
+        // eight, while a fault met after a quiet period is still explained at once.
+        //
+        // Eldest first: the caller's set is a `LinkedHashSet`, so its iterator
+        // yields insertion order. A set with another order still evicts and stays
+        // bounded; only which host becomes sayable again would change.
+        with(alreadySaid.iterator()) {
+            next()
+            remove()
+        }
     }
     alreadySaid.add(failure)
     return failure
@@ -597,24 +647,30 @@ class VSCodroidWebViewClient(
                 )
             }
             view.context.startActivity(intent)
-            Logger.i(tag, "Opened external URL: ${redactToken(url.toString())}")
+            // The address itself is not repeated, for the reason [urlLogLabel]
+            // gives: it is the page's to choose and its query is where a sign-in
+            // puts an OAuth code. This line is at `Logger.i`, which is not gated on
+            // a debuggable build, so it ships.
+            Logger.i(tag, "Opened an external URL at ${urlLogLabel(url.toString())}")
         } catch (e: Exception) {
             AuthTabWindow.disarm(armed)
-            // The throwable is deliberately not passed, and leaving it in was a
-            // redaction that only looked like one. `Log.e(tag, msg, tr)` prints
-            // the throwable with its message, and both exceptions this
-            // realistically catches put the whole address there:
+            // Two channels, and both of them are closed here rather than one. The
+            // address is reduced to a scheme and a host by [urlLogLabel], because
+            // it is the page's to choose and its query is where a sign-in puts an
+            // OAuth code. And the throwable is deliberately not passed: leaving it
+            // in was a redaction that only looked like one, since
+            // `Log.e(tag, msg, tr)` prints the throwable with its message and both
+            // exceptions this realistically catches put the whole address there.
             // ActivityNotFoundException quotes the Intent it could not match,
             // `dat=` and all, and FileUriExposedException names the file it
-            // refused. So the URL [redactToken] had just taken out of the message
-            // arrived in logcat two lines below it, on a statement that is not
-            // gated on a debuggable build and therefore ships. The frames behind
-            // it are all framework, so the class name is what the trace was being
-            // read for anyway. Same shape and same reasoning as
-            // `AndroidBridge.openExternalUrl`.
+            // refused, so whatever the message had left out arrived in logcat two
+            // lines below it on a statement that is not gated on a debuggable build
+            // and therefore ships. The frames behind it are all framework, so the
+            // class name is what the trace was being read for anyway. Same shape
+            // and same reasoning as `AndroidBridge.openExternalUrl`.
             Logger.e(
                 tag,
-                "Failed to open external URL: ${redactToken(url.toString())} " +
+                "Could not open an external URL at ${urlLogLabel(url.toString())} " +
                     "(${e.javaClass.simpleName})"
             )
             // The launch above is attempted for every frame, and that stays true:
@@ -906,18 +962,33 @@ class VSCodroidWebViewClient(
                 )
             }
 
-            val path = uri.path ?: return null
+            // Past the host test at the top of this function, null is no longer an
+            // answer this arm may give. Null is the platform's instruction to load
+            // the resource itself, and for a `*.vscode-cdn.net` address that means a
+            // DNS lookup and a TLS connection to a host the interception exists to
+            // keep this app away from: the CDN URLs are hardcoded in `workbench.js`
+            // and cannot be reached through `product.json`, so this function is the
+            // only thing standing between them and the network. Every exit below
+            // therefore answers with a response, the way the resource arm above
+            // does.
+            val path = uri.path ?: return notFound("No path")
             val localUrl = rewriteCdnUrl(path, uri.query, port, token)
 
             if (localUrl == null) {
-                // The whole URI, so its query comes with it -- and the workbench
+                // The whole URI, so its query comes with it, and the workbench
                 // appends the token to requests of its own. At `Logger.w`, so this
                 // one shipped too.
                 Logger.w(TAG, "CDN URL could not be rewritten: ${redactToken(uri.toString())}")
-                return null
+                return notFound("CDN path too short to rewrite")
             }
 
+            // The proxy answers null when the local server did not answer, which is
+            // the ordinary case for the seconds around a server restart: the port is
+            // ours and unbound, and the connection is refused. The asset is lost
+            // either way, so 404 costs nothing that null did not, and null would
+            // send the page out to the real CDN for it.
             return proxyToLocalhost(localUrl, request.method, "$host${uri.path}")
+                ?: notFound("the local server did not answer")
         }
 
         /**

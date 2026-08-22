@@ -2,6 +2,7 @@ package com.vscodroid.webview
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -185,6 +186,45 @@ class DownloadNamingTest {
         val name = downloadFileName("https://host/x", null, "a".repeat(500) + ".txt")
 
         assertEquals(200, name.length)
+    }
+
+    /**
+     * The same limit for a name that is not ASCII, which is where a character
+     * count stops answering the question.
+     *
+     * The limit is about bytes, because that is what a filesystem counts: 200 CJK
+     * characters are 600 bytes and 200 emoji are 800, so a cut at 200 characters
+     * hands the picker a name three to four times over the limit the constant
+     * exists to respect. What a documents provider does with one is its own
+     * decision, and both of the realistic ones (truncating the name the user just
+     * typed, or refusing to create the document) are failures they cannot read.
+     *
+     * The round trip is the second half and it is not decoration. Cutting inside a
+     * character, or between the halves of a surrogate pair, yields a name whose
+     * bytes are not the name: it comes back with a replacement character where the
+     * user's own text was.
+     */
+    @Test
+    fun `an overlong multibyte name is cut by bytes, not by characters`() {
+        val cjk = downloadFileName("https://host/x", null, "\u6f22".repeat(300) + ".txt")
+
+        assertTrue(
+            cjk.toByteArray(Charsets.UTF_8).size <= 200,
+            "the name is ${cjk.toByteArray(Charsets.UTF_8).size} bytes, past the limit most " +
+                "filesystems impose",
+        )
+        assertTrue(cjk.isNotEmpty(), "the whole name was cut away, which is not a name")
+
+        val emoji = downloadFileName("https://host/x", null, "\uD83D\uDE00".repeat(200))
+
+        assertTrue(
+            emoji.toByteArray(Charsets.UTF_8).size <= 200,
+            "the name is ${emoji.toByteArray(Charsets.UTF_8).size} bytes",
+        )
+        assertEquals(
+            emoji, String(emoji.toByteArray(Charsets.UTF_8), Charsets.UTF_8),
+            "the cut landed inside a character, so the name does not survive being written",
+        )
     }
 
     /**

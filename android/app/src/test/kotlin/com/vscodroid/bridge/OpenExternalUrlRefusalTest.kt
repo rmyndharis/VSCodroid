@@ -384,11 +384,15 @@ class OpenExternalUrlRefusalTest {
      * connection token, so a URL it hands over can carry it. That is the same
      * reasoning `logToNative` states for redacting there.
      *
-     * The throwable is asserted absent for the same reason the redaction is
-     * present. `ActivityNotFoundException` quotes the whole Intent it could not
-     * match, so passing it to `Logger.e` would print the unredacted URL inside the
-     * trace right under a message that had just been redacted, and the redaction
-     * would only look like one.
+     * The message keeps the scheme and the host and nothing else, which is the
+     * rule `TlsFailure` states for the same class of value: what the page hands
+     * over is the page's to choose, and the query is where a sign-in puts its
+     * credential.
+     *
+     * The throwable is asserted absent for the same reason. `ActivityNotFoundException`
+     * quotes the whole Intent it could not match, so passing it to `Logger.e` would
+     * print the address inside the trace right under a message that had just left
+     * it out, and the containment would only look like one.
      */
     @Test
     fun `the failure log carries neither the token nor the throwable that repeats it`() {
@@ -413,9 +417,15 @@ class OpenExternalUrlRefusalTest {
             "the connection token was written to logcat verbatim: " + line,
         )
         assertTrue(
-            line.contains("tkn=<redacted>"),
-            "the URL is not in the line at all, so this case would pass on a line that " +
-                "dropped it rather than one that redacted it: " + line,
+            line.contains("127.0.0.1:41003"),
+            "the address is not named in the line at all, so this case would pass on a " +
+                "line that dropped it rather than one that reduced it to its host: " + line,
+        )
+        assertFalse(
+            line.contains("folder=") || line.contains("tkn="),
+            "the line repeats the query the page chose. `redactToken` only takes out this " +
+                "app's own parameter, and an address handed to a browser is routinely a " +
+                "sign-in carrying an OAuth code or an API key in that same query: " + line,
         )
         // Asserted at the argument rather than by capturing it, because a captured
         // null and an argument that was never recorded look the same in a list.
