@@ -65,6 +65,12 @@ class ToolchainInstallClaimTest {
 
     private val pack = "toolchain_java"
 
+    /**
+     * The install parked inside the guarded region, held so [tearDown] can wait
+     * for it to leave rather than only waking it.
+     */
+    private var heldInstall: Thread? = null
+
     @BeforeEach
     fun setUp() {
         mockkObject(Logger)
@@ -102,12 +108,35 @@ class ToolchainInstallClaimTest {
 
     @AfterEach
     fun tearDown() {
-        // Before unmockking, so a failed assertion cannot leave a thread parked on
+        // Two steps, both before unmockking, and neither does the other's job.
+        //
+        // Released first, so a failed assertion cannot leave a thread parked on
         // the latch holding a claim that outlives this test: the set is process
         // wide, and a claim never released refuses every later install of that
         // pack for the life of the JVM.
         letFirstProceed.countDown()
+        // Then waited out, because the claim comes back when that thread returns
+        // from `installFromDirectory`, not when it wakes. Until then the pack is
+        // still held, and the next test to touch it, in this class or any other,
+        // is declined by a claim whose owner has already finished: the install
+        // reports UNKNOWN, `downloadViaHttp` returns before it downloads
+        // anything, and both fail on assertions that name no cause. Measured with
+        // a copy of a few seconds, which is a short one for a toolchain tree: the
+        // next class began within milliseconds of the failure here and its first
+        // test failed with "the HTTP task never reported an outcome".
+        //
+        // Joining before `unmockkAll` also leaves Logger and the pack manager
+        // stubbed for the rest of that install rather than pulling them out from
+        // under it midway.
+        heldInstall?.join(TimeUnit.SECONDS.toMillis(10))
+        val stillHolding = heldInstall?.isAlive == true
+        heldInstall = null
         unmockkAll()
+        assertFalse(
+            stillHolding,
+            "an install is still inside the guarded region and still holds $pack, " +
+                "so later installs of that pack in this JVM will be declined",
+        )
     }
 
     /** A pack whose `usr/` tree has one file, so a copy leaves a trace. */
@@ -126,6 +155,18 @@ class ToolchainInstallClaimTest {
         onStateChange = { _, status, _, _ -> events.add(status) }
     }
 
+    /**
+     * Starts the install that will be held inside the guarded region, recording
+     * it so [tearDown] can wait for the claim to be given back. Every install
+     * that can still be inside that region when a test ends has to start here.
+     */
+    private fun startHeldInstall(dir: File, events: MutableList<Int>): Thread =
+        Thread({ installFromDirectory(manager(events), dir) }, "first-install")
+            .also {
+                heldInstall = it
+                it.start()
+            }
+
     /** Private, and the point at which both delivery routes converge. */
     private fun installFromDirectory(m: ToolchainManager, dir: File) =
         ToolchainManager::class.java
@@ -139,8 +180,7 @@ class ToolchainInstallClaimTest {
         val firstEvents = Collections.synchronizedList(mutableListOf<Int>())
         val secondEvents = Collections.synchronizedList(mutableListOf<Int>())
 
-        val first = Thread({ installFromDirectory(manager(firstEvents), dir) }, "first-install")
-        first.start()
+        val first = startHeldInstall(dir, firstEvents)
         assertTrue(
             firstIsHolding.await(10, TimeUnit.SECONDS),
             "the first install never reached the copy, so nothing was being raced",
@@ -189,8 +229,7 @@ class ToolchainInstallClaimTest {
         val dir = packDirectory()
         val events = Collections.synchronizedList(mutableListOf<Int>())
 
-        val first = Thread({ installFromDirectory(manager(events), dir) }, "first-install")
-        first.start()
+        val first = startHeldInstall(dir, events)
         assertTrue(firstIsHolding.await(10, TimeUnit.SECONDS), "the first install never started")
         letFirstProceed.countDown()
         first.join(TimeUnit.SECONDS.toMillis(10))
