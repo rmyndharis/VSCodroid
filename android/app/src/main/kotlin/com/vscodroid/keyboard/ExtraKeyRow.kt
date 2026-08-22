@@ -46,10 +46,19 @@ class ExtraKeyRow @JvmOverloads constructor(
     private val dots = mutableListOf<ImageView>()
     private lateinit var adapter: KeyPageAdapter
 
+    /** The alternates window, while one is open. See [showLongPressPopup]. */
+    private var longPressPopup: LongPressPopup? = null
+
     /**
      * Polls JS modifier flags to detect when the soft keyboard consumed a modifier.
      * When the JS interceptor handles Ctrl+key from the soft keyboard, it resets the
      * JS flags. This runnable detects that and syncs the Kotlin visual state.
+     *
+     * Shift is spent by the same listener without being intercepted, so it arrives
+     * here too. It has to: nothing else clears a Shift while the keyboard is up,
+     * and the poll only stops once every modifier is idle, so a latch that never
+     * came back false would leave this round trip running for as long as the
+     * keyboard was open.
      */
     private val modifierSyncRunnable: Runnable = object : Runnable {
         override fun run() {
@@ -163,6 +172,12 @@ class ExtraKeyRow @JvmOverloads constructor(
                     marginStart = dpToPx(4)
                     marginEnd = dpToPx(4)
                 }
+                // Five 8dp circles that say which page is showing in colour and
+                // in nothing else. A screen reader stopped on each of them in
+                // turn and had nothing to read out, so the row ended in five
+                // silent stops. The page they encode is published once, on the
+                // container, by [updateDots].
+                importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             dots.add(dot)
             dotContainer.addView(dot)
@@ -178,12 +193,23 @@ class ExtraKeyRow @JvmOverloads constructor(
                 if (i == selectedPosition) activeColor else inactiveColor
             )
         }
+        dotContainer.contentDescription = pageIndicatorText(selectedPosition)
     }
+
+    /** How many pages the row has and which one it is showing, as a sentence. */
+    private fun pageIndicatorText(position: Int): String =
+        context.getString(R.string.key_page_indicator, position + 1, dots.size)
 
     private fun setupPageChangeCallback() {
         viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
                 updateDots(position)
+                // A swipe replaces every key on the row and moves accessibility
+                // focus nowhere, so the description written above is only read
+                // by someone who goes looking for the dots. Said out loud, it
+                // is the only signal that the keys under the finger changed.
+                // The call is inert when no service is listening.
+                dotContainer.announceForAccessibility(pageIndicatorText(position))
             }
         })
     }
@@ -216,10 +242,24 @@ class ExtraKeyRow @JvmOverloads constructor(
     }
 
     private fun showLongPressPopup(button: ExtraKeyButton, alternates: List<AlternateKey>) {
-        LongPressPopup(context, alternates) { selectedKey ->
+        // Held rather than discarded, because the popup is a window and not a
+        // child of this row: nothing tears it down with the view it is anchored
+        // to. A row detached with one open, which is what an activity being
+        // finished or recreated does, leaves a window on a dead token, and the
+        // only other way to close it is the user touching outside it. Keeping
+        // the last one also means a second long press replaces the popup rather
+        // than stacking a window over it.
+        longPressPopup?.dismiss()
+        longPressPopup = LongPressPopup(context, alternates) { selectedKey ->
             keyInjector?.injectKey(selectedKey, ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
             resetModifiersIfNeeded()
-        }.show(button)
+        }.also { it.show(button) }
+    }
+
+    override fun onDetachedFromWindow() {
+        longPressPopup?.dismiss()
+        longPressPopup = null
+        super.onDetachedFromWindow()
     }
 
     /** Push current Kotlin modifier state to the JS interceptor. */

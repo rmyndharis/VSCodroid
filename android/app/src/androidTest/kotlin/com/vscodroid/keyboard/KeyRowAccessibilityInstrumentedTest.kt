@@ -214,7 +214,7 @@ class KeyRowAccessibilityInstrumentedTest {
             ExtraKeyButton(ctx).apply {
                 keyValue = "'"
                 contentDescription = "Apostrophe"
-                alternates = listOf(AlternateKey("\\", "\\"))
+                alternates = listOf(AlternateKey("\\", "\\", R.string.key_desc_backslash))
                 onLongPressAction = { _, alts -> opened = alts }
             }
         }) { button, node ->
@@ -234,7 +234,7 @@ class KeyRowAccessibilityInstrumentedTest {
             assertTrue("the long click was refused", handled)
             assertEquals(
                 "long pressing through a service did not open the alternates",
-                listOf(AlternateKey("\\", "\\")),
+                listOf(AlternateKey("\\", "\\", R.string.key_desc_backslash)),
                 opened,
             )
         }

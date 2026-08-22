@@ -36,6 +36,13 @@ class LongPressPopup(
         for (alt in alternates) {
             val button = TextView(context).apply {
                 text = alt.label
+                // Named, not spelled. Without this the only accessible text on
+                // an alternate is its glyph, so the two entries under the quote
+                // key are announced as `'` and `` ` `` and a user who cannot see
+                // them has nothing to tell an apostrophe from a backtick. The
+                // keys on the row itself have been named since they were built;
+                // this is the layer that was not.
+                contentDescription = context.getString(alt.contentDescriptionRes)
                 gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                 typeface = Typeface.MONOSPACE

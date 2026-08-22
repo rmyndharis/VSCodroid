@@ -350,4 +350,71 @@ class KeyMappingTest {
             assertEquals(2 * entries, strings, "each entry is exactly one key and one code")
         }
     }
+
+    /**
+     * What a latched Shift resolves a key to, read here rather than only through
+     * [KeyInjector.injectKey].
+     *
+     * That caller writes `shiftedForm(key) ?: key`, so a key returned unchanged
+     * and a null produce the same character and every case below is invisible
+     * from it. Measured: the arm for an already-shifted key can be made to
+     * return null and the whole suite stays green, including the injector case
+     * written to pin it. A second caller without that elvis, and the
+     * soft-keyboard path [KeyMapping.toJsLookup] feeds is the obvious candidate,
+     * would then insert nothing for `{` where the row inserts `{`.
+     */
+    @Nested
+    inner class ShiftedFormTest {
+
+        @Test
+        fun `Shift over an unshifted key resolves to its shifted twin`() {
+            // `?`, `+` and `}` are the three the row reaches no other way: no
+            // page carries them, and each has an unshifted mate that is on one.
+            assertEquals("?", KeyMapping.shiftedForm("/"))
+            assertEquals("+", KeyMapping.shiftedForm("="))
+            assertEquals("}", KeyMapping.shiftedForm("]"))
+            assertEquals(":", KeyMapping.shiftedForm(";"))
+            assertEquals("{", KeyMapping.shiftedForm("["))
+            assertEquals("~", KeyMapping.shiftedForm("`"))
+            assertEquals("|", KeyMapping.shiftedForm("\\"))
+            assertEquals("\"", KeyMapping.shiftedForm("'"))
+            assertEquals("<", KeyMapping.shiftedForm(","))
+            assertEquals(">", KeyMapping.shiftedForm("."))
+            assertEquals("_", KeyMapping.shiftedForm("-"))
+        }
+
+        @Test
+        fun `a key that already carries Shift resolves to itself`() {
+            // Not null, and the difference is the whole of this case: null is
+            // "no such character", and a caller that takes it literally types
+            // nothing at all for a key the user can see on the row.
+            for (key in listOf("{", "}", "(", ")", ":", "\"", "|", "~", "!", "#", "@", "&", "_", "<", ">")) {
+                assertEquals(
+                    key,
+                    KeyMapping.shiftedForm(key),
+                    "Shift over '$key' must resolve to '$key'; it is already the shifted half of its pair",
+                )
+            }
+        }
+
+        @Test
+        fun `a letter is its uppercase`() {
+            assertEquals("A", KeyMapping.shiftedForm("a"))
+            assertEquals("Z", KeyMapping.shiftedForm("z"))
+            assertEquals("A", KeyMapping.shiftedForm("A"))
+        }
+
+        @Test
+        fun `a key Shift does not change has no shifted form`() {
+            // Null is what keeps the elvis in injectKey load-bearing: Shift+Tab
+            // is a chord the workbench resolves, not a character to type, and
+            // the key has to survive the lookup unchanged.
+            for (key in listOf("Tab", "Escape", "Enter", "F7", "PageDown", "ArrowLeft", " ")) {
+                assertNull(
+                    KeyMapping.shiftedForm(key),
+                    "'$key' has no shifted character on this layout",
+                )
+            }
+        }
+    }
 }

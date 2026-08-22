@@ -3,7 +3,23 @@ package com.vscodroid.keyboard
 import androidx.annotation.StringRes
 import com.vscodroid.R
 
-data class AlternateKey(val label: String, val value: String)
+/**
+ * One entry in a key's long-press popup, on the same terms as [KeyItem.Button].
+ *
+ * [contentDescriptionRes] carries no default for the reason the button's does
+ * not: the popup drew each alternate with its glyph and nothing else, so the
+ * only thing a screen reader could announce was the character itself. That is
+ * the failure the row's descriptions exist to prevent, and this layer is the
+ * one place it survived; `'` and `\` are on no page at all, so the popup is
+ * their only route and the popup said nothing about them. Requiring the
+ * resource makes an unnamed alternate a compile error rather than a silent one,
+ * and puts the words where a translator can reach them.
+ */
+data class AlternateKey(
+    val label: String,
+    val value: String,
+    @StringRes val contentDescriptionRes: Int,
+)
 
 sealed class KeyItem {
     /**
@@ -51,21 +67,30 @@ object KeyPages {
             KeyItem.Button("Shift", "Shift", R.string.key_desc_shift, isToggle = true),
             KeyItem.GesturePad,
             KeyItem.Button("{}", "{", R.string.key_desc_curly_braces,
-                alternates = listOf(AlternateKey("[", "["), AlternateKey("<", "<"))),
+                alternates = listOf(
+                    AlternateKey("[", "[", R.string.key_desc_left_bracket),
+                    AlternateKey("<", "<", R.string.key_desc_less_than),
+                )),
             KeyItem.Button("()", "(", R.string.key_desc_parentheses,
-                alternates = listOf(AlternateKey("]", "]"), AlternateKey(">", ">"))),
+                alternates = listOf(
+                    AlternateKey("]", "]", R.string.key_desc_right_bracket),
+                    AlternateKey(">", ">", R.string.key_desc_greater_than),
+                )),
         )),
         // Page 2: Common symbols
         KeyPage(listOf(
             KeyItem.Button(";", ";", R.string.key_desc_semicolon),
             KeyItem.Button(":", ":", R.string.key_desc_colon),
             KeyItem.Button("\"", "\"", R.string.key_desc_double_quote,
-                alternates = listOf(AlternateKey("'", "'"), AlternateKey("`", "`"))),
+                alternates = listOf(
+                    AlternateKey("'", "'", R.string.key_desc_apostrophe),
+                    AlternateKey("`", "`", R.string.key_desc_backtick),
+                )),
             KeyItem.Button("/", "/", R.string.key_desc_forward_slash,
-                alternates = listOf(AlternateKey("\\", "\\"))),
+                alternates = listOf(AlternateKey("\\", "\\", R.string.key_desc_backslash))),
             KeyItem.Button("|", "|", R.string.key_desc_pipe),
             KeyItem.Button("`", "`", R.string.key_desc_backtick,
-                alternates = listOf(AlternateKey("~", "~"))),
+                alternates = listOf(AlternateKey("~", "~", R.string.key_desc_tilde))),
             KeyItem.Button("&", "&", R.string.key_desc_ampersand),
             KeyItem.Button("_", "_", R.string.key_desc_underscore),
         )),

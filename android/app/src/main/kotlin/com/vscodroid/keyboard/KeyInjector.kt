@@ -149,6 +149,10 @@ class KeyInjector(
      * letters and digits, where the character's own code point happens to equal the
      * keyCode; for punctuation the two differ and VS Code matches no binding.
      *
+     * A Shift held on its own is not intercepted but is spent: the page keeps the
+     * character it was about to insert, and the flag is cleared, so a latch cannot
+     * carry over into a key the user taps minutes later.
+     *
      * Call once after the page finishes loading.
      */
     fun setupModifierInterceptor() {
@@ -171,7 +175,22 @@ class KeyInjector(
                     // cancelling it in favour of a synthetic keydown leaves the
                     // tap producing nothing. Shift exists here for the row's own
                     // keys, which arrive by injectKey with the modifier set.
-                    if (!mod.ctrl && !mod.alt) return;
+                    //
+                    // It is still SPENT here, and that is not the same thing as
+                    // acting on it: no preventDefault, so the page's own
+                    // insertion is untouched, and the only change is that the
+                    // latch does not outlive the character it was meant for.
+                    // Nothing else clears it while the keyboard is up, and a
+                    // latch that survives no longer produces nothing: injectKey
+                    // resolves it into a DIFFERENT character, so a Shift the
+                    // user has forgotten turns a later tap on `/` into `?`,
+                    // `;` into `:` and `[` into `{`. Ctrl and Alt are cleared
+                    // below on the same principle, one branch further on
+                    // because they are the two this listener acts on.
+                    if (!mod.ctrl && !mod.alt) {
+                        mod.shift = false;
+                        return;
+                    }
 
                     var target = document.activeElement || document.body;
                     var init;

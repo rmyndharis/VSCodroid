@@ -60,21 +60,74 @@ class KeyInjectorShiftTest {
         return script.captured
     }
 
+    /**
+     * The branch a `beforeinput` takes when Shift is the only modifier held.
+     *
+     * Delimited by its own braces rather than searched for across the script: the
+     * two things asserted about it, that nothing is cancelled and that the latch
+     * is dropped, both appear elsewhere in the listener for the Ctrl and Alt
+     * paths, and a whole-script search is satisfied by either of those copies
+     * while this branch does neither.
+     */
+    private fun shiftOnlyBranch(): String {
+        KeyInjector(webView).setupModifierInterceptor()
+        val installed = script.captured
+        val guard = "if (!mod.ctrl && !mod.alt) {"
+        val start = installed.indexOf(guard)
+        assertTrue(
+            start >= 0,
+            "the listener no longer guards on Ctrl or Alt being held, so this test is " +
+                "reading nothing and its verdict is worth nothing. It reads:\n$installed"
+        )
+        val end = installed.indexOf("}", start + guard.length)
+        assertTrue(end > start, "the guard's block is never closed")
+        return installed.substring(start, end + 1)
+    }
+
     @Test
     fun `typing with only Shift active is left to the page`() {
-        // The interceptor's own doc scopes it to Ctrl and Alt, and the guard is
-        // what has to say so. Admitting Shift cancels the soft keyboard's
-        // insertText and dispatches a synthetic keydown in its place, and Monaco
-        // types through the input event that was just cancelled: tap Shift, type
-        // s, and nothing appears. The row's Shift exists for the row's own keys,
-        // which arrive by injectKey with the modifier already on the event.
-        KeyInjector(webView).setupModifierInterceptor()
+        // The interceptor's own doc scopes what it ACTS on to Ctrl and Alt, and
+        // the guard is what has to say so. Admitting Shift cancels the soft
+        // keyboard's insertText and dispatches a synthetic keydown in its place,
+        // and Monaco types through the input event that was just cancelled: tap
+        // Shift, type s, and nothing appears. The row's Shift exists for the
+        // row's own keys, which arrive by injectKey with the modifier already on
+        // the event.
+        val branch = shiftOnlyBranch()
 
-        val script = script.captured
+        assertFalse(
+            branch.contains("preventDefault"),
+            "the soft keyboard's own insertion is cancelled while only Shift is held, " +
+                "so the tap types nothing at all. It reads: $branch"
+        )
+        assertFalse(
+            branch.contains("dispatchEvent"),
+            "a synthetic keystroke is sent in place of the character the page was " +
+                "about to insert. It reads: $branch"
+        )
         assertTrue(
-            script.contains("if (!mod.ctrl && !mod.alt) return;"),
-            "the interceptor must not act on Shift alone; it exists for the " +
-                "chords a soft keyboard cannot type, not for capital letters"
+            branch.contains("return;"),
+            "the branch falls through into the Ctrl and Alt handling. It reads: $branch"
+        )
+    }
+
+    @Test
+    fun `a Shift the page has answered is not left latched`() {
+        // Nothing else clears it while the keyboard is up: the row un-latches on
+        // its own key presses, on the end of a trackpad drag and when the IME
+        // hides, and none of those is typing on the soft keyboard. What a
+        // surviving latch costs changed with the character mapping: it used to
+        // add a shiftKey nobody read, and it now decides WHICH character the
+        // next row key types, so a Shift the user has forgotten turns `/` into
+        // `?`. The row's own poll reads this flag back, so clearing it here is
+        // also what un-lights the button and stops that poll.
+        val branch = shiftOnlyBranch()
+
+        assertTrue(
+            branch.contains("mod.shift = false;"),
+            "a Shift held while the page takes text of its own stays latched forever, " +
+                "and the next key tapped on the row types a different character than " +
+                "the one on it. It reads: $branch"
         )
     }
 

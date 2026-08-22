@@ -132,7 +132,7 @@
 
     <!-- Toolchain picker (first-run) -->
     <string name="picker_title">What do you code in?</string>
-    <string name="picker_subtitle">Optional \u2014 touch and hold the app icon to add or remove these later.</string>
+    <string name="picker_subtitle">Optional. Touch and hold the app icon to add or remove these later.</string>
     <string name="picker_included">Node.js, Python, and Git are already included.</string>
     <string name="picker_continue">Continue</string>
     <string name="picker_skip">Skip</string>
@@ -414,6 +414,18 @@
     <string name="key_desc_page_up">Page up</string>
     <string name="key_desc_page_down">Page down</string>
 
+    <!-- The three characters that exist only as long-press alternates. Every
+         other alternate is a key on some page and reuses that key's name, so
+         the popup and the row say the same thing about the same character. -->
+    <string name="key_desc_apostrophe">Apostrophe</string>
+    <string name="key_desc_backslash">Backslash</string>
+    <string name="key_desc_tilde">Tilde</string>
+
+    <!-- Which of the key row's pages is showing. The dots below the keys carry
+         this in colour alone, which leaves a screen reader nothing to read and
+         a swipe with nothing to announce. -->
+    <string name="key_page_indicator">Key page %1$d of %2$d</string>
+
     <!-- What a screen reader says after the name of a latched modifier. Kept to
          one word each because the platform reads them straight after the key's
          own description, and anything longer turns every Ctrl into a sentence. -->
@@ -429,4 +441,17 @@
     <string name="trackpad_action_right">Move cursor right</string>
     <string name="trackpad_action_up">Move cursor up</string>
     <string name="trackpad_action_down">Move cursor down</string>
+    <!-- Saving a file the editor downloaded. These three are the whole
+         user-visible outcome of the download feature, and they were written in
+         Kotlin, so a values-xx/strings.xml could not reach any of them: the
+         message is built into a local before it reaches the Toast, which is the
+         shape check-translatable-strings.py names as the hole it cannot see. -->
+    <string name="download_saved">Saved %1$s</string>
+    <string name="download_cancelled">Download cancelled</string>
+    <string name="download_not_saved">Could not save %1$s</string>
+
+    <!-- Stands in for a version the package manager would not report, the way
+         tls_unknown_host stands in for an address. Written in Kotlin before, so
+         one English word survived inside an otherwise translated About dialog. -->
+    <string name="about_version_unknown">unknown</string>
 </resources>

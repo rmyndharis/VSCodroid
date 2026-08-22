@@ -2,6 +2,7 @@ package com.vscodroid.keyboard
 
 import com.vscodroid.R
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -178,6 +179,206 @@ class KeyRowAccessibilityTest {
                 "the action no longer ends the drag, so a modifier latched before it " +
                     "stays latched afterwards, unlike every ordinary key on the row. " +
                     "It reads: $actionBody",
+            )
+        }
+    }
+
+    /**
+     * That the alternates layer names its entries, as every key on the row does.
+     *
+     * `KeyPageConfigTest` pins that rule for the top-level keys and stops there.
+     * The popup was the one surface in this package whose spoken text was the
+     * glyph itself, so the two entries under the quote key were announced as `'`
+     * and `` ` ``, and `'`, `\` and `~` are on no page at all: the popup is their
+     * only route, and no translation could ever reach them.
+     */
+    @Nested
+    inner class AlternateLabels {
+
+        private val buttons = KeyPages.defaults.flatMap { it.items }
+            .filterIsInstance<KeyItem.Button>()
+
+        private val alternates = buttons.flatMap { it.alternates }
+
+        @Test
+        fun `an alternate that is also a key on some page is named the same way`() {
+            assertTrue(
+                alternates.size >= 8,
+                "the row came back with ${alternates.size} alternates; this case would " +
+                    "prove nothing about a layer that is nearly empty",
+            )
+            val byValue = buttons.associate { it.value to it.contentDescriptionRes }
+
+            var shared = 0
+            for (alt in alternates) {
+                val onAPage = byValue[alt.value] ?: continue
+                shared++
+                assertEquals(
+                    onAPage,
+                    alt.contentDescriptionRes,
+                    "the alternate '${alt.label}' is described differently from the key " +
+                        "of the same character on another page, so the same character is " +
+                        "two different things to a screen reader",
+                )
+            }
+            assertTrue(
+                shared >= 5,
+                "only $shared alternates matched a key on a page, so the comparison above " +
+                    "ran on almost nothing",
+            )
+        }
+
+        @Test
+        fun `every alternate names a string that exists and is not its own glyph`() {
+            val config = File(mainSources, "KeyPageConfig.kt")
+            assertTrue(config.isFile, "KeyPageConfig.kt is not at ${config.absolutePath}")
+            val stringsXml = File("src/main/res/values/strings.xml")
+            assertTrue(stringsXml.isFile, "strings.xml is not at ${stringsXml.absolutePath}")
+
+            val text = Regex("<string name=\"([^\"]+)\">(.*?)</string>", RegexOption.DOT_MATCHES_ALL)
+                .findAll(stringsXml.readText())
+                .associate { it.groupValues[1] to it.groupValues[2] }
+
+            // The label may carry Kotlin escapes: the backslash alternate is
+            // written "\\" and has to be compared as the one character it is.
+            val declared = Regex(
+                """AlternateKey\("((?:[^"\\]|\\.)*)",\s*"(?:[^"\\]|\\.)*",\s*R\.string\.(\w+)"""
+            ).findAll(config.readText()).map { m ->
+                m.groupValues[1].replace("\\\"", "\"").replace("\\\\", "\\") to m.groupValues[2]
+            }.toList()
+
+            // The control. A scan that stopped matching would find no pairs and
+            // report every alternate described, which reads like a clean tree.
+            assertEquals(
+                alternates.size, declared.size,
+                "the scan found ${declared.size} alternate declarations in KeyPageConfig.kt, " +
+                    "not the ${alternates.size} the pages hold, so its verdict below is worth nothing",
+            )
+
+            for ((label, resource) in declared) {
+                val described = text[resource]
+                assertNotNull(
+                    described,
+                    "the alternate '$label' names R.string.$resource, which strings.xml does " +
+                        "not hold, so a translator has nothing to translate",
+                )
+                assertNotEquals(
+                    label, described,
+                    "the alternate '$label' is described as \"$described\", which is the glyph " +
+                        "itself; that is what the popup already said before it was named",
+                )
+            }
+        }
+
+        @Test
+        fun `the popup puts that name on the entry it builds`() {
+            val lines = code("LongPressPopup.kt")
+            val entry = lines.indexOfFirst { it.contains("TextView(context).apply {") }
+            assertTrue(
+                entry >= 0,
+                "the popup no longer builds its entries where this test looks, so nothing " +
+                    "it reports about their labels is about the popup",
+            )
+            val body = lines.drop(entry).take(12).joinToString("\n")
+
+            assertTrue(
+                body.contains("text = alt.label"),
+                "the window found is not the one that draws an alternate, so its verdict " +
+                    "below means nothing. It reads:\n$body",
+            )
+            assertTrue(
+                body.contains("contentDescription = context.getString(alt.contentDescriptionRes)"),
+                "the popup no longer labels its entries, so every AlternateKey description " +
+                    "is declared, translated and unspoken while a reader announces the raw " +
+                    "character. It reads:\n$body",
+            )
+        }
+    }
+
+    /**
+     * That the row says which of its pages is showing.
+     *
+     * Read off a running device: every key carried a description and the five
+     * page-indicator dots carried neither text nor description, so a swipe
+     * replaced eight keys and nothing announced it. The dots encode the page in
+     * colour, which is a channel a screen reader has no access to at all.
+     */
+    @Nested
+    inner class PageIndicator {
+
+        @Test
+        fun `the indicator publishes the page it draws`() {
+            val lines = code("ExtraKeyRow.kt")
+            val start = lines.indexOfFirst { it.contains("private fun updateDots(") }
+            assertTrue(start >= 0, "updateDots is no longer where this test looks")
+
+            val body = lines.drop(start).takeWhile { !it.contains("private fun pageIndicatorText(") }
+            assertTrue(
+                body.any { it.contains("colorExtraKeyActive") },
+                "the window found is not the method that paints the dots, so its verdict " +
+                    "below is worth nothing. It reads:\n${body.joinToString("\n")}",
+            )
+            assertTrue(
+                body.any { it.contains("dotContainer.contentDescription = pageIndicatorText(") },
+                "the page is drawn and not published, so it exists in colour only. It " +
+                    "reads:\n${body.joinToString("\n")}",
+            )
+        }
+
+        @Test
+        fun `the dots are not five silent stops of their own`() {
+            val lines = code("ExtraKeyRow.kt")
+            val start = lines.indexOfFirst { it.contains("private fun setupDots()") }
+            assertTrue(start >= 0, "setupDots is no longer where this test looks")
+
+            val body = lines.drop(start).takeWhile { !it.contains("private fun updateDots(") }
+            assertTrue(
+                body.any { it.contains("ImageView(context)") },
+                "the window found does not build the dots. It reads:\n${body.joinToString("\n")}",
+            )
+            assertTrue(
+                body.any { it.contains("importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO") },
+                "each dot is a node of its own again, so a reader stops on five images that " +
+                    "have nothing to say. It reads:\n${body.joinToString("\n")}",
+            )
+        }
+
+        @Test
+        fun `a swipe says the page changed`() {
+            val lines = code("ExtraKeyRow.kt")
+            val start = lines.indexOfFirst { it.contains("private fun setupPageChangeCallback()") }
+            assertTrue(start >= 0, "setupPageChangeCallback is no longer where this test looks")
+
+            val body = lines.drop(start).takeWhile { !it.contains("private fun handleKeyAction(") }
+            assertTrue(
+                body.any { it.contains("override fun onPageSelected(") },
+                "the window found is not the page callback. It reads:\n${body.joinToString("\n")}",
+            )
+            assertTrue(
+                body.any { it.contains("announceForAccessibility(pageIndicatorText(position))") },
+                "a swipe replaces every key on the row and moves focus nowhere, so without " +
+                    "this nothing tells a reader the keys changed. It reads:\n" +
+                    body.joinToString("\n"),
+            )
+        }
+
+        @Test
+        fun `the indicator string carries both numbers`() {
+            val stringsXml = File("src/main/res/values/strings.xml")
+            assertTrue(stringsXml.isFile, "strings.xml is not at ${stringsXml.absolutePath}")
+            val declared = Regex("<string name=\"key_page_indicator\">(.*?)</string>")
+                .find(stringsXml.readText())
+                ?.groupValues?.get(1)
+
+            assertNotNull(
+                declared,
+                "strings.xml no longer holds key_page_indicator, so the row formats a " +
+                    "resource that does not exist",
+            )
+            assertTrue(
+                declared!!.contains("%1\$d") && declared.contains("%2\$d"),
+                "the indicator reads \"$declared\", which does not take both the page and " +
+                    "the count; a user is told one number and cannot place it",
             )
         }
     }
