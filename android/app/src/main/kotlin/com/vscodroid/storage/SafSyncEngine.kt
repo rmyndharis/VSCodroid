@@ -1515,7 +1515,7 @@ class SafSyncEngine(private val context: Context) {
      * Creates everything under [localDir] on the device, beneath [dirSafUri].
      *
      * Iterative rather than recursive through [createInSaf], and that is deliberate:
-     * [uploadableEntries] already returns parents before children, so each entry's
+     * [uploadPlan] already returns parents before children, so each entry's
      * parent document exists by the time it is reached, and the URI of every
      * directory created along the way is remembered here. Recursing instead would
      * re-query the provider for a parent it had just made.
@@ -2524,17 +2524,6 @@ class SafSyncEngine(private val context: Context) {
             return UploadPlan(if (truncated) found.take(limit) else found, truncated)
         }
 
-        /**
-         * The entries [uploadPlan] found, for a caller with no use for its answer about
-         * truncation.
-         *
-         * Separate because the two questions have separate consequences: the list
-         * decides what is created on the device, while the flag decides whether the user
-         * is told the copy came out short, and deriving the second from the first is the
-         * mistake [UploadPlan] exists to prevent.
-         */
-        internal fun uploadableEntries(root: File, limit: Int): List<File> =
-            uploadPlan(root, limit).entries
 
         /**
          * Whether [file] is a symbolic link, without following it.
@@ -2568,7 +2557,7 @@ class SafSyncEngine(private val context: Context) {
          * ones, which is where a person edits, rather than on wherever a depth-first
          * descent happened to reach first.
          *
-         * Symbolic links are not followed, for the same reason [uploadableEntries]
+         * Symbolic links are not followed, for the same reason [uploadPlan]
          * refuses them and with the same words: a mirror is routinely a checked-out
          * repository, so a link inside one is attacker-supplied in the ordinary
          * case, and inotify follows a symlinked path. Watching through one spends

@@ -9,7 +9,7 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * Tests for [SafSyncEngine.uploadableEntries], which decides what gets created on the
+ * Tests for [SafSyncEngine.uploadPlan], which decides what gets created on the
  * device when a directory appears in the mirror.
  *
  * The case that matters is a rename. inotify reports it as MOVED_FROM on the old name
@@ -39,7 +39,7 @@ class SafUploadPlanTest {
         val root = File(tmp, "helpers").apply { mkdirs() }
         tree(root)
 
-        val names = SafSyncEngine.uploadableEntries(root, limit = 1000)
+        val names = SafSyncEngine.uploadPlan(root, limit = 1000).entries
             .map { it.relativeTo(root).path }
 
         // Every file that existed under the old name has to be created under the new
@@ -59,7 +59,7 @@ class SafUploadPlanTest {
         val root = File(tmp, "helpers").apply { mkdirs() }
         tree(root)
 
-        val names = SafSyncEngine.uploadableEntries(root, limit = 1000)
+        val names = SafSyncEngine.uploadPlan(root, limit = 1000).entries
             .map { it.relativeTo(root).path }
 
         // A document cannot be created before the directory that holds it exists, so
@@ -80,7 +80,7 @@ class SafUploadPlanTest {
         File(root, "node_modules/left-pad/index.js").writeText("x")
         File(root, "keep.txt").writeText("k")
 
-        val names = SafSyncEngine.uploadableEntries(root, limit = 1000)
+        val names = SafSyncEngine.uploadPlan(root, limit = 1000).entries
             .map { it.relativeTo(root).path }
 
         assertTrue(names.contains("keep.txt"))
@@ -96,7 +96,7 @@ class SafUploadPlanTest {
         File(root, "own.txt").writeText("o")
         Files.createSymbolicLink(File(root, "escape").toPath(), outside.toPath())
 
-        val names = SafSyncEngine.uploadableEntries(root, limit = 1000)
+        val names = SafSyncEngine.uploadPlan(root, limit = 1000).entries
             .map { it.relativeTo(root).path }
 
         assertTrue(names.contains("own.txt"))
@@ -114,7 +114,7 @@ class SafUploadPlanTest {
         File(root, "deep").mkdirs()
         repeat(20) { File(root, "deep/f$it.txt").writeText("$it") }
 
-        val names = SafSyncEngine.uploadableEntries(root, limit = 3)
+        val names = SafSyncEngine.uploadPlan(root, limit = 3).entries
             .map { it.relativeTo(root).path }
 
         assertEquals(3, names.size)
@@ -172,7 +172,7 @@ class SafUploadPlanTest {
         File(root, "session.tmp").writeText("x")
         File(root, "copy.vscodroid-partial").writeText("x")
 
-        val names = SafSyncEngine.uploadableEntries(root, limit = 1000)
+        val names = SafSyncEngine.uploadPlan(root, limit = 1000).entries
             .map { it.name }
 
         assertTrue(names.contains("real.kt"), "the real file must still go: $names")
@@ -198,7 +198,7 @@ class SafUploadPlanTest {
 
         assertTrue(link.isDirectory, "fixture check: the link does look like a directory")
         assertTrue(
-            SafSyncEngine.uploadableEntries(link, limit = 1000).isEmpty(),
+            SafSyncEngine.uploadPlan(link, limit = 1000).entries.isEmpty(),
             "a symlinked root must not be walked; its target is outside the folder " +
                 "the user granted",
         )
@@ -207,8 +207,8 @@ class SafUploadPlanTest {
     @Test
     fun `a file, a missing directory and a zero cap all yield nothing`(@TempDir tmp: File) {
         val file = File(tmp, "plain.txt").apply { writeText("x") }
-        assertTrue(SafSyncEngine.uploadableEntries(file, 1000).isEmpty())
-        assertTrue(SafSyncEngine.uploadableEntries(File(tmp, "gone"), 1000).isEmpty())
-        assertTrue(SafSyncEngine.uploadableEntries(tmp, 0).isEmpty())
+        assertTrue(SafSyncEngine.uploadPlan(file, 1000).entries.isEmpty())
+        assertTrue(SafSyncEngine.uploadPlan(File(tmp, "gone"), 1000).entries.isEmpty())
+        assertTrue(SafSyncEngine.uploadPlan(tmp, 0).entries.isEmpty())
     }
 }
