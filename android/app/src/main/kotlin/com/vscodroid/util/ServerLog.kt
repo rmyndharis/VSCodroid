@@ -178,7 +178,7 @@ internal class ServerLog(private val file: File) {
 }
 
 /**
- * [line] with the credential shapes that are not the connection token taken out.
+ * [text] with the credential shapes that are not the connection token taken out.
  *
  * `redactToken` covers exactly one secret, the server's own connection token, and
  * says so. That was the whole exposure while this file held only the bootstrap's
@@ -194,15 +194,38 @@ internal class ServerLog(private val file: File) {
  * still see which header or which key was involved, which is most of what the
  * line was worth diagnostically.
  *
+ * One line at a time, whatever the caller hands over. Every pattern below is
+ * written against a single line and several of them cross a newline when they
+ * are given one: the header rule's value class excludes quotes, commas and
+ * braces but not newlines, and the `\s+` in the scheme rule and the `\s*` in the
+ * header and named-key rules match a newline like any other space, so either can
+ * reach past the end of a line and take the first word of the next one. That was
+ * invisible while every caller held one line, and [CrashReporter] hands whole
+ * crash files here, where
+ * one `authorization:` in a throwable's message takes the stack trace under it
+ * as far as the next quote, comma or brace, none of which a Java stack trace
+ * contains. A report whose crash section is one truncated line is worse than one
+ * carrying the credential, because it still reads as a complete crash log under
+ * a header that counts it. Settled here rather than inside each pattern, so the
+ * next pattern added cannot forget it.
+ *
  * The containment is worth stating as plainly as `redactToken`'s is. This catches
  * a credential that travels next to a name that suggests it, or that carries a
  * vendor prefix. A secret printed bare, with no name and no prefix, is
- * indistinguishable from any other word and passes through. Widening it further
- * would start eating the diagnostics the file exists for; narrowing what is
- * mirrored in the first place is the other direction, and it would throw away the
- * extension-host output that is often the only account of what went wrong.
+ * indistinguishable from any other word and passes through. So is a name with a
+ * letter welded onto the front of the keyword, because the absence of a boundary
+ * there is the same thing that keeps `mytoken=` out; `PGPASSWORD` is the one name
+ * of that shape common enough to be listed by hand, and another vendor's spelling
+ * of it would need listing too. Widening it further would start eating the
+ * diagnostics the file exists for; narrowing what is mirrored in the first place
+ * is the other direction, and it would throw away the extension-host output that
+ * is often the only account of what went wrong.
  */
-internal fun redactSecrets(line: String): String {
+internal fun redactSecrets(text: String): String =
+    if ('\n' !in text) redactOneLine(text)
+    else text.split('\n').joinToString("\n") { redactOneLine(it) }
+
+private fun redactOneLine(line: String): String {
     var out = line
     for ((pattern, replacement) in SECRET_PATTERNS) {
         out = out.replace(pattern, replacement)
@@ -213,23 +236,73 @@ internal fun redactSecrets(line: String): String {
 /**
  * The patterns [redactSecrets] applies, each with what it leaves behind.
  *
- * Order matters in one place: the header rule runs before the bare-scheme rule so
- * that `Authorization: Bearer x` is consumed whole. Reversed, the scheme rule
- * would take `Bearer x` and leave the header rule matching nothing, which is
- * harmless here but stops being harmless for any scheme that is not recognised.
+ * Order matters in one place: the header rule runs before the bare-scheme rule.
+ * Not because `Authorization: Bearer x` needs consuming whole, which either order
+ * does: the scheme rule leaves `Authorization: Bearer <redacted>`, and the header
+ * value class still matches `Bearer <redacted>` and still collapses it. The reason
+ * is that the scheme rule's token class accepts letters, so it can eat the word
+ * the header rule anchors on where the two abut. Run first, it turns
+ * `Bearer authorization:Bearer` into `Bearer <redacted>:Bearer` and leaves the
+ * trailing credential standing; run second, that line ends `<redacted>:<redacted>`.
  *
  * The header value runs to the end of the line or to the next quote, comma or
  * brace, rather than to the next space: an authorization value has a space in it
  * by construction (`Bearer `, `Basic `), and stopping at the space leaves the
- * secret itself in the file.
+ * secret itself in the file. The end of the line is where it stops because
+ * [redactSecrets] never hands a pattern more than one line, not because this
+ * class excludes a newline. It does not.
+ *
+ * The named-key rule reads its keyword as one segment of a name, not as a whole
+ * word. `\b` is defined over `[A-Za-z0-9_]`, so an underscore is a word character
+ * and no boundary exists inside `DB_PASSWORD` or `AWS_SECRET_ACCESS_KEY`: anchored
+ * that way the rule fired on `password=` and on almost nothing an environment
+ * variable is ever called, which is the shape a Node server prints and the shape
+ * an extension leaks. The lookbehind is over letters and digits only, so a `_` or
+ * `-` before the keyword is a boundary while a letter is not, and `mytoken=` or
+ * `InvalidTokenError:` is still left alone. `pgpassword` is spelled out for that
+ * same reason: libpq's variable welds its prefix on with no separator, so the
+ * lookbehind refuses it exactly as it refuses `mytoken`, and it is the one name
+ * of that shape common enough on this stream to be worth naming.
+ *
+ * The rest of the name is one optional class, `(?:[_-][A-Za-z0-9_-]*)?`, and not
+ * a repeated group. java.util.regex compiles a quantified group into a `Loop`
+ * that recurses once per repetition, so `(?:[_-][A-Za-z0-9]+)*` raises
+ * StackOverflowError on a long enough run of segments: measured here at 2000 of
+ * them on a 1 MiB stack. That is an `Error`, so it passes through the
+ * `IOException` catch in [ServerLog.append] and the `Exception` catch in
+ * `ProcessManager.startOutputReader`, reaching the default handler, which kills
+ * the process the editor runs in. A character class repeats iteratively and has
+ * no such limit to find: 500000 segments on the same stack return normally.
+ * Nothing guards the right-hand end of the name, because nothing has to: whatever
+ * follows it has to be the `[:=]` this rule is built around, and no separator is
+ * a letter, so a keyword with letters welded onto its right (`Tokenizer: 12
+ * tokens`) cannot reach one.
+ *
+ * A quoted value is taken whole, closing quote included, and is tried before the
+ * unquoted alternative. Unquoted, the value has to stop at the first space or it
+ * would eat the rest of the line, and that leaves a passphrase written down from
+ * its second word on, beside a `<redacted>` telling the reader it was handled. A
+ * closing quote says where the value ends without guessing, so
+ * `DB_PASSWORD="correct horse battery staple"` goes as far as that quote. An
+ * unterminated quote matches no alternative of that kind and falls through to the
+ * unquoted one, which is what it did before.
+ *
+ * The cost of accepting the name's remaining segments is that an ordinary
+ * segmented word in front of a `:` or an `=` loses what follows it, on both
+ * separators and after a flag: `secret-storage: initialised`,
+ * `password_hash_algorithm: bcrypt` and `--secret-file=/etc/k.pem` each lose the
+ * word after the separator. The value class excludes whitespace but not `:`, so
+ * what goes is the whole space-delimited run and any punctuation inside it, which
+ * is one word rather than one line, but is more than the name alone suggests.
  */
 private val SECRET_PATTERNS: List<Pair<Regex, String>> = listOf(
     Regex("""(?i)(\bauthorization\b\s*["']?\s*[:=]\s*)["']?[^"',}]+""") to "\$1<redacted>",
     Regex("""(?i)(\b(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}""") to "\$1<redacted>",
     Regex(
-        """(?i)(\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token""" +
-            """|client[_-]?secret|password|passwd|secret|token)\b\s*["']?\s*[:=]\s*)""" +
-            """["']?[^\s"',}&]+"""
+        """(?i)((?<![A-Za-z0-9])(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
+            """|auth[_-]?token|client[_-]?secret|pgpassword|password|passwd|secret|token)""" +
+            """(?:[_-][A-Za-z0-9_-]*)?\s*["']?\s*[:=]\s*)""" +
+            """(?:"[^"]*"|'[^']*'|["']?[^\s"',}&]+)"""
     ) to "\$1<redacted>",
     // Vendor-prefixed keys, which are the ones that travel with no name beside
     // them at all: an npm or GitHub token pasted into a URL, or a key echoed by a

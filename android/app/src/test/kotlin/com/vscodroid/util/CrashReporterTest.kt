@@ -184,6 +184,100 @@ class CrashReporterTest {
             assertTrue(shown.contains("tkn=<redacted>"), "the parameter stays visible:\n$shown")
             assertTrue(shown.contains("java.io.IOException"), "the failure itself has to survive:\n$shown")
         }
+
+        /**
+         * The token is not the only credential this text can carry, and the two
+         * places it lands, the dialog and `AndroidBridge.getLastCrash`, are the
+         * same places the report goes.
+         *
+         * NEGATIVE CONTROL: put `getLastCrash` back to `redactToken(it.readText())`
+         * without [redactSecrets] and the password below is handed to the page.
+         */
+        @Test
+        fun `the crash offered on screen carries no named credential`() {
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText(
+                "Thread: main (id=1)\n" +
+                    "java.lang.IllegalStateException: spawn failed for " +
+                    "DB_PASSWORD=hunter2hunter2\n"
+            )
+
+            val shown = CrashReporter.getLastCrash()
+
+            assertNotNull(shown, "there is a crash log on disk to read")
+            assertFalse(
+                shown!!.contains("hunter2hunter2"),
+                "the page can call this method, and the dialog offers it to be pasted:\n$shown",
+            )
+            assertTrue(
+                shown.contains("java.lang.IllegalStateException"),
+                "the failure itself has to survive:\n$shown",
+            )
+        }
+
+        /**
+         * The directory is listed and then the newest entry is read, and those are
+         * two operations. `cacheDir` is evictable by the OS at any moment, and the
+         * app's own `clearCaches` and `clearCrashLogs` empty it from other threads
+         * with no lock shared with this reader, so the entry can be gone by the
+         * time it is read. `MainActivity.checkPreviousCrash` calls this on the main
+         * thread from `onCreate` with no try anywhere on the path, so the throw
+         * used to kill the process.
+         *
+         * A directory stands in for the vanished file, because both arrive here the
+         * same way: an IOException out of `readText` on something `listFiles`
+         * handed back, and unlike a race it happens on every run.
+         *
+         * NEGATIVE CONTROL: inline `readOrNull` back to `it.readText()` and this
+         * case reddens with FileNotFoundException rather than returning null.
+         */
+        @Test
+        fun `a crash log that cannot be read answers instead of throwing`() {
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").mkdirs()
+
+            assertNull(
+                CrashReporter.getLastCrash(),
+                "an unreadable entry has to read as no crash, not as an exception on " +
+                    "the main thread",
+            )
+        }
+
+        /**
+         * A crash log is many lines and [redactSecrets] is written against one, so
+         * the text handed to the dialog and to `AndroidBridge.getLastCrash` is
+         * where a rule that crosses a newline is first noticed by a user: the
+         * dialog offers a preview cut at 500 characters, and a trace that stops at
+         * its first frame reads as a crash with nothing to say.
+         *
+         * NEGATIVE CONTROL: make `redactSecrets` one pass over the whole text
+         * again (`redactOneLine(text)` with no split) and everything from
+         * `Authorization:` to the end of the file becomes one `<redacted>`, so
+         * both frames below are gone and this case reddens.
+         */
+        @Test
+        fun `the crash offered on screen keeps the frames under a redaction`() {
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText(
+                "Thread: main (id=1)\n" +
+                    "java.io.IOException: Authorization: Bearer rejected by the proxy\n" +
+                    "\tat com.vscodroid.service.ProcessManager.startServer(ProcessManager.kt:119)\n" +
+                    "Caused by: java.net.SocketException: Socket is closed\n"
+            )
+
+            val shown = CrashReporter.getLastCrash()
+
+            assertNotNull(shown, "there is a crash log on disk to read")
+            assertFalse(
+                shown!!.contains("Bearer rejected"),
+                "the header value still has to go:\n$shown",
+            )
+            assertTrue(
+                shown.contains("ProcessManager.startServer(ProcessManager.kt:119)") &&
+                    shown.contains("Caused by: java.net.SocketException"),
+                "the trace under the match was swallowed:\n$shown",
+            )
+        }
     }
 
     @Nested
@@ -388,6 +482,115 @@ class CrashReporterTest {
             )
         }
 
+        /**
+         * The crash section crosses the same boundary as the server section: it is
+         * put on the clipboard for the user to paste somewhere public. What has to
+         * be taken out of a text follows from where the text is going, so both
+         * sections take both scrubbers.
+         *
+         * NEGATIVE CONTROL: drop [redactSecrets] from the crash-log branch of
+         * `generateBugReport`, leaving `redactToken(text)`, and the password below
+         * is copied to the clipboard verbatim.
+         */
+        @Test
+        fun `a named credential in a crash log does not reach the report`() {
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText(
+                "Thread: main (id=1)\n" +
+                    "java.lang.IllegalStateException: env was NPM_TOKEN=npm_AAAABBBBCCCCDDDD\n" +
+                    "\tat com.vscodroid.service.ProcessManager.startServer(ProcessManager.kt:119)\n"
+            )
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertFalse(
+                report.contains("npm_AAAABBBBCCCCDDDD"),
+                "the clipboard is readable by anything the user pastes into:\n$report",
+            )
+            assertTrue(
+                report.contains(
+                    "at com.vscodroid.service.ProcessManager.startServer(ProcessManager.kt:119)"
+                ),
+                "this is the only diagnostic channel there is; the trace has to survive:\n$report",
+            )
+        }
+
+        /**
+         * The section the count above promises, kept whole.
+         *
+         * The crash text goes through the same scrubbers as the server section
+         * now, and it is the one that arrives as a whole file. A rule that spans
+         * a newline turns the promised log into a single truncated line under a
+         * header that still reads `--- Crash Logs (1) ---`, which is worse than a
+         * missing section: it reads as a complete crash log that had nothing to
+         * say, and the clipboard is the only diagnostic channel there is.
+         *
+         * NEGATIVE CONTROL: make `redactSecrets` one pass over the whole text
+         * again (`redactOneLine(text)` with no split). Everything from
+         * `Authorization:` onwards collapses into one `<redacted>`, since a Java
+         * stack trace carries no quote, comma or brace to stop at, and this case
+         * reddens on the first frame.
+         */
+        @Test
+        fun `a redaction in a crash log does not swallow the trace under it`() {
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText(
+                "Thread: main (id=1)\n" +
+                    "java.io.IOException: Authorization: Bearer rejected by the proxy\n" +
+                    "\tat com.vscodroid.webview.DownloadCoordinator.hold(DownloadCoordinator.kt:214)\n" +
+                    "\tat com.vscodroid.service.ProcessManager.startServer(ProcessManager.kt:119)\n" +
+                    "Caused by: java.net.SocketException: Socket is closed\n"
+            )
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertFalse(
+                report.contains("Bearer rejected"),
+                "the credential shape still has to go:\n$report",
+            )
+            for (kept in listOf(
+                "at com.vscodroid.webview.DownloadCoordinator.hold(DownloadCoordinator.kt:214)",
+                "at com.vscodroid.service.ProcessManager.startServer(ProcessManager.kt:119)",
+                "Caused by: java.net.SocketException: Socket is closed",
+            )) {
+                assertTrue(
+                    report.contains(kept),
+                    "\"$kept\" was swallowed by the redaction, and the header still " +
+                        "promises a whole crash log:\n$report",
+                )
+            }
+        }
+
+        /**
+         * The same two-step read as `getLastCrash`, on the path that runs on the
+         * main thread behind the dialog's Copy Report button, where an exception
+         * kills the process and loses the report the user was trying to send.
+         *
+         * NEGATIVE CONTROL: inline `readOrNull` back to `log.readText()` and this
+         * case reddens with FileNotFoundException instead of producing a report.
+         */
+        @Test
+        fun `a crash log that cannot be read leaves the rest of the report intact`() {
+            val crashDir = initCrashDir()
+            val readable = File(crashDir, "crash_20260214_120000.txt")
+            readable.writeText("the crash that can still be read")
+            readable.setLastModified(1000L)
+            val unreadable = File(crashDir, "crash_20260214_120001.txt")
+            unreadable.mkdirs()
+            unreadable.setLastModified(2000L)
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(
+                report.contains("the crash that can still be read"),
+                "one unreadable entry took the whole section with it:\n$report",
+            )
+            assertTrue(
+                report.contains("(crash_20260214_120001.txt could not be read)"),
+                "the count above promised this log, so a silent hole reads as no crash:\n$report",
+            )
+        }
+
         @Test
         fun `the crash section says so when there is nothing to report`() {
             initCrashDir()
@@ -454,6 +657,52 @@ class CrashReporterTest {
                 boom, chained.get(),
                 "the handler that was there before still has to run, or the process never dies",
             )
+        }
+
+        /**
+         * A cascade is two threads faulting in quick succession, and the file name
+         * only resolves to a second.
+         *
+         * This handler is the process-wide default and runs before the chain to the
+         * handler that kills the process, so nothing about dying serializes two
+         * threads that fault together. Both crashes used to compute the same name
+         * and `writeText` truncates, so what was lost was the first one: the crash
+         * that started the cascade, leaving the report holding only the downstream
+         * symptom.
+         *
+         * Aligned to the start of a wall-clock second first, so both writes land
+         * inside one second, which is the state the defect needs. Without that a
+         * run that straddled the boundary would pass on a broken build by picking
+         * two names honestly.
+         *
+         * NEGATIVE CONTROL: put `writeCrashLog` back to
+         * `val file = File(crashDir, "crash_$timestamp.txt")` with no
+         * `createNewFile` loop; the directory then holds one file and this case
+         * reddens on the count, and on the first exception being gone.
+         */
+        @Test
+        fun `a second crash in the same second does not overwrite the first`() {
+            val intoTheSecond = System.currentTimeMillis() % 1000
+            if (intoTheSecond > 500) Thread.sleep(1000 - intoTheSecond)
+            Thread.setDefaultUncaughtExceptionHandler { _, _ -> }
+            val context = mockk<Context>(relaxed = true)
+            every { context.cacheDir } returns tempDir
+
+            CrashReporter.init(context)
+
+            val installed = Thread.getDefaultUncaughtExceptionHandler()!!
+            installed.uncaughtException(Thread("worker-1"), IllegalStateException("the cause"))
+            installed.uncaughtException(Thread("worker-2"), IllegalStateException("the symptom"))
+
+            val written = File(tempDir, "crash-logs").listFiles()?.toList().orEmpty()
+            assertEquals(2, written.size, "two crashes, two logs: $written")
+            val all = written.joinToString("\n") { it.readText() }
+            assertTrue(
+                all.contains("the cause"),
+                "the crash that started the cascade was overwritten by the one it " +
+                    "caused, which is the only one worth reading:\n$all",
+            )
+            assertTrue(all.contains("the symptom"), "the second crash is missing:\n$all")
         }
     }
 }

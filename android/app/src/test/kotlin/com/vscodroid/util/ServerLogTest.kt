@@ -361,6 +361,84 @@ class ServerLogTest {
     }
 
     /**
+     * The name beside the credential is almost never the bare keyword.
+     *
+     * A Node server prints environment variables, an extension dumps its own
+     * configuration, and a dotenv parse error quotes the line it choked on, so
+     * what reaches this file is `NPM_TOKEN=`, `DB_PASSWORD:` or
+     * `AWS_SECRET_ACCESS_KEY=`. The rule was anchored with `\b`, which
+     * java.util.regex defines over `[A-Za-z0-9_]`: an underscore is a word
+     * character, so the boundary never held next to one and every name in this
+     * case was written to disk verbatim and copied into a bug report.
+     *
+     * NEGATIVE CONTROL: put the `\b` back around the keyword alternation in the
+     * third entry of `SECRET_PATTERNS` (`\b(?:api[_-]?key|...|token)\b` in place
+     * of the two lookarounds). Every line below is then written unchanged and this
+     * case reddens on the first of them.
+     */
+    @Test
+    fun `a credential named like an environment variable is redacted too`() {
+        val file = logFile()
+        val log = ServerLog(file)
+        val secrets = mapOf(
+            "<4242><stderr> NPM_TOKEN=npm_AAAABBBBCCCCDDDDEEEE" to "npm_AAAABBBBCCCCDDDDEEEE",
+            "<4242><stderr> DB_PASSWORD: hunter2hunter2" to "hunter2hunter2",
+            "<4242><stderr>   \"DB_PASSWORD\": \"correct-horse\"" to "correct-horse",
+            "<4242><stderr> MY_API_KEY=AKIAIOSFODNN7EXAMPLE" to "AKIAIOSFODNN7EXAMPLE",
+            "<4242><stderr> AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfi" to
+                "wJalrXUtnFEMI/K7MDENG/bPxRfi",
+            "<4242><stderr> VSCODE_AGENT_TOKEN=1234567890abcdef" to "1234567890abcdef",
+            "<4242><stderr> export user_token=abc123def456" to "abc123def456",
+        )
+        secrets.keys.forEach { log.append(it) }
+
+        val written = file.readText()
+        for ((line, secret) in secrets) {
+            assertFalse(
+                secret in written,
+                "\"$secret\" survived from \"$line\", so a bug report carries it:\n$written",
+            )
+        }
+        assertEquals(
+            secrets.size,
+            written.lines().count { "<redacted>" in it },
+            "one line was left with nothing replaced:\n$written",
+        )
+    }
+
+    /**
+     * The other side of the same boundary: the keyword has to be a segment of the
+     * name, not any occurrence of those letters.
+     *
+     * Widening the rule until it fires wherever `token` or `secret` appears would
+     * eat the diagnostics this file exists for, and an exception class or a
+     * source file is exactly where those letters turn up innocently.
+     *
+     * NEGATIVE CONTROL: one mutation per boundary, because two different things
+     * hold these lines. Drop `(?<![A-Za-z0-9])` from the third entry of
+     * `SECRET_PATTERNS` and the last line reddens, `notasecret=` and `mytoken=`
+     * both read as names. Make the separator optional in the same entry, `[:=]?`
+     * for `[:=]`, and the middle two redden instead: nothing else stops a keyword
+     * with letters welded onto its right, because it can then reach a value with
+     * no separator in between. The first line takes both mutations together,
+     * which is what makes it the one worth keeping when the rule is next widened.
+     */
+    @Test
+    fun `a keyword welded into a longer word is not a credential name`() {
+        val file = logFile()
+        val log = ServerLog(file)
+        val lines = listOf(
+            "<4242><stderr> InvalidTokenError: unexpected end of input",
+            "<4242><stderr> SecretStorageService: initialised",
+            "<4242> at Tokenizer.scan (/data/user/0/x/tokenizer.js:12:3)",
+            "<4242> notasecret=1 mytoken=diagnostic",
+        )
+        lines.forEach { log.append(it) }
+
+        assertEquals(lines, file.readLines(), "diagnostics were eaten by the redaction")
+    }
+
+    /**
      * The control for the case above. A redaction wide enough to swallow the
      * output makes the file useless for the one thing it exists for, and a
      * `<redacted>` in place of every line would satisfy that test perfectly.
@@ -379,6 +457,204 @@ class ServerLogTest {
         lines.forEach { log.append(it) }
 
         assertEquals(lines, file.readLines(), "diagnostics were eaten by the redaction")
+    }
+
+    /**
+     * The table this rule set is meant to satisfy, in one case: what has to go,
+     * what has to survive, and what the multi-word and segmented shapes do.
+     *
+     * Kept as one table because the rules are one rule set. A case per shape
+     * hides the thing that goes wrong here, which is that widening the pattern
+     * for a name in the first column quietly moves a line out of the second.
+     *
+     * NEGATIVE CONTROL: three mutations of the third entry of `SECRET_PATTERNS`,
+     * two for the first column and one for the second. Drop `pgpassword|` and the
+     * `PGPASSWORD` row survives; put the value back to `["']?[^\s"',}&]+` with no
+     * quoted alternative and `DB_PASSWORD="correct horse battery staple"` keeps
+     * everything after its first word. Drop `(?<![A-Za-z0-9])` and the second
+     * column's `notasecret=1 mytoken=diagnostic` is redacted instead. Measured:
+     * each of the three reddens this case on its own.
+     */
+    @Test
+    fun `the redaction table holds in both directions`() {
+        val mustGo = mapOf(
+            "<4242><stderr> request failed: {\"authorization\":\"Bearer abcd1234efgh5678\"}" to
+                "abcd1234efgh5678",
+            "<4242> GET /v1/models api_key=super-secret-value" to "super-secret-value",
+            "<4242><stderr> NPM_TOKEN=npm_AAAABBBBCCCCDDDDEEEE" to "npm_AAAABBBBCCCCDDDDEEEE",
+            "<4242><stderr> AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG" to "wJalrXUtnFEMI",
+            "<4242><stderr> x_api_key_v2: abcdef0123456789" to "abcdef0123456789",
+            "<4242><stderr> PGPASSWORD=s3cr3tpassword psql -h db" to "s3cr3tpassword",
+            "<4242><stderr> DB_PASSWORD=\"correct horse battery staple\"" to "battery staple",
+            "<4242><stderr> export MY_SECRET='hunter 2 three'" to "2 three",
+            "<4242> using key sk-abcdefghijklmnopqrstuvwxyz" to "sk-abcdefghijklmnopqrstuvwxyz",
+        )
+        val mustSurvive = listOf(
+            "Extension host agent listening on 41003",
+            "[error] Error: listen EADDRINUSE: address already in use 127.0.0.1:41003",
+            "Authorization failed for a request that carried no header",
+            "FATAL ERROR: JavaScript heap out of memory",
+            "<4242><stderr> InvalidTokenError: unexpected end of input",
+            "<4242><stderr> SecretStorageService: initialised",
+            "<4242> at Tokenizer.scan (/data/user/0/x/tokenizer.js:12:3)",
+            "<4242> notasecret=1 mytoken=diagnostic",
+        )
+
+        for ((line, secret) in mustGo) {
+            val redacted = redactSecrets(line)
+            assertFalse(
+                secret in redacted,
+                "\"$secret\" survived from \"$line\", so a bug report carries it: $redacted",
+            )
+            assertTrue("<redacted>" in redacted, "nothing was replaced in \"$line\"")
+        }
+        for (line in mustSurvive) {
+            assertEquals(line, redactSecrets(line), "a diagnostic was eaten by the redaction")
+        }
+    }
+
+    /**
+     * What accepting a name's remaining segments costs, pinned to the character.
+     *
+     * The note above `SECRET_PATTERNS` bounds the cost, and a bound nobody
+     * measures drifts: it said "a hyphenated ordinary word ending in a colon"
+     * loses "the one word after it", while the rule also fires on `_` segments
+     * and after a flag's `=`, and the value class does not stop at a `:`, so the
+     * punctuation goes with the value. Asserting the exact output is what makes
+     * the next widening of that rule visible instead of silent.
+     *
+     * NEGATIVE CONTROL: drop `(?:[_-][A-Za-z0-9_-]*)?` from the third entry of
+     * `SECRET_PATTERNS`. All three lines are then returned unchanged, which
+     * reddens here and reddens `x_api_key_v2` in the table above, and those two
+     * together are the trade being made.
+     */
+    @Test
+    fun `a segmented ordinary name costs exactly the run after its separator`() {
+        val file = logFile()
+        val log = ServerLog(file)
+        val lines = listOf(
+            "<4242><stderr> secret-storage: initialised at 12:00",
+            "<4242><stderr> password_hash_algorithm: bcrypt",
+            "<4242><stderr> fatal: --secret-file=/etc/k.pem: no such file",
+        )
+        lines.forEach { log.append(it) }
+
+        assertEquals(
+            listOf(
+                "<4242><stderr> secret-storage: <redacted> at 12:00",
+                "<4242><stderr> password_hash_algorithm: <redacted>",
+                "<4242><stderr> fatal: --secret-file=<redacted> no such file",
+            ),
+            file.readLines(),
+            "the cost of the segment rule is not what the note beside it says",
+        )
+    }
+
+    /**
+     * A crash log is a whole file, and every pattern here is written against one
+     * line.
+     *
+     * `CrashReporter` now runs this over the text of a crash log rather than over
+     * one line of server output, and the header rule's value class excludes
+     * quotes, commas and braces but not newlines, while the `\s*` and `\s+` in
+     * the header and scheme rules match a newline like any other space. Given a
+     * whole file, one `authorization:` in a throwable's message took everything
+     * under it as far as the next quote, comma or brace, and a Java stack trace
+     * has none of those, so the report kept five lines of eleven while still
+     * announcing a complete crash log.
+     *
+     * NEGATIVE CONTROL: make `redactSecrets` one pass over the whole text again
+     * (`redactOneLine(text)` with no split). The trace below collapses to the
+     * `IOException` line and this case reddens on the first frame.
+     */
+    @Test
+    fun `redaction of a whole crash log keeps the trace under the match`() {
+        val crash = listOf(
+            "Crash at 2026-08-22 10:02:11 +0700",
+            "Thread: main (id=2)",
+            "",
+            "java.io.IOException: Authorization: Bearer rejected by the proxy",
+            "\tat com.vscodroid.service.ProcessManager.startServer(ProcessManager.kt:119)",
+            "Caused by: java.net.SocketException: Socket is closed",
+            "\tat java.net.Socket.getOutputStream(Socket.java:1030)",
+        ).joinToString("\n", postfix = "\n")
+
+        val redacted = redactSecrets(crash)
+
+        assertEquals(
+            crash.count { it == '\n' },
+            redacted.count { it == '\n' },
+            "the redaction swallowed lines of the trace:\n$redacted",
+        )
+        assertFalse(
+            "Bearer rejected" in redacted,
+            "the header value still has to go:\n$redacted",
+        )
+        for (kept in listOf(
+            "ProcessManager.startServer(ProcessManager.kt:119)",
+            "Caused by: java.net.SocketException: Socket is closed",
+            "java.net.Socket.getOutputStream(Socket.java:1030)",
+        )) {
+            assertTrue(kept in redacted, "\"$kept\" was eaten:\n$redacted")
+        }
+    }
+
+    /**
+     * The other cross-line shape, which excluding a newline from one value class
+     * would not have closed: the scheme rule's `\s+` and the named rule's `\s*`
+     * match a newline, so both could reach into the line below and replace its
+     * first word.
+     *
+     * NEGATIVE CONTROL: the same mutation as the case above. Both lines then lose
+     * their first frame to a `<redacted>` and this reddens.
+     */
+    @Test
+    fun `a keyword at the end of a line does not reach the frame below it`() {
+        val text = "java.lang.IllegalStateException: basic\n" +
+            "\tat com.vscodroid.util.Thing.doIt(Thing.kt:1)\n" +
+            "java.lang.IllegalStateException: password:\n" +
+            "\tat com.vscodroid.MainActivity.onCreate(MainActivity.kt:1)\n"
+
+        assertEquals(text, redactSecrets(text), "a rule reached across a newline")
+    }
+
+    /**
+     * A pathological name cannot take the process with it.
+     *
+     * java.util.regex compiles a quantified group into a `Loop` that recurses
+     * once per repetition, so the segment suffix written as `(?:[_-][A-Za-z0-9]+)*`
+     * raised StackOverflowError on a long enough name. That is an `Error`: it
+     * passes through the `IOException` catch in `append` and the `Exception` catch
+     * in `ProcessManager.startOutputReader`, reaches the default handler and kills
+     * the process the editor runs in, with the log line never written.
+     *
+     * Run on a thread with a 1 MiB stack, which is the order of the drain thread's
+     * own, because the default stack of whatever JVM runs the suite is not the
+     * property under test.
+     *
+     * NEGATIVE CONTROL: put `(?:[_-][A-Za-z0-9]+)*` back in place of
+     * `(?:[_-][A-Za-z0-9_-]*)?` in the third entry of `SECRET_PATTERNS`. Measured:
+     * this case then fails with StackOverflowError, at 2000 segments as well as at
+     * the 20000 below, and no other case in this file changes.
+     */
+    @Test
+    fun `a name made of thousands of segments does not overflow the stack`() {
+        val line = "<4242><stderr> token" + "_a".repeat(20_000) + "=hunter2"
+        var thrown: Throwable? = null
+        var out: String? = null
+
+        val worker = Thread(null, {
+            try {
+                out = redactSecrets(line)
+            } catch (t: Throwable) {
+                thrown = t
+            }
+        }, "redaction-1m-stack", 1L shl 20)
+        worker.start()
+        worker.join()
+
+        assertEquals(null, thrown, "the redaction threw on a long name, killing the process")
+        assertFalse("hunter2" in out!!, "the long name is still a credential name: $out")
     }
 
     /**

@@ -39,7 +39,9 @@ object StorageManager {
             put("logs", dirSize(File(filesDir, "home/.vscodroid/data/logs")))
             put("tools", dirSize(File(filesDir, "usr")))
             put("saf_mirrors", dirSize(File(filesDir, "saf-mirrors")))
-            put("cache", dirSize(cacheDir))
+            put("cache", CLEARABLE_CACHE_DIRS.sumOf { dirSize(File(cacheDir, it)) })
+            // The whole cache directory, unlike the row above it: this is the disk
+            // the app occupies rather than a figure anyone is offered a button for.
             put("total", dirSize(filesDir) + dirSize(cacheDir))
             // Which of the keys above the clear action can reach. Sent rather
             // than duplicated on the JavaScript side: the two live in different
@@ -62,9 +64,39 @@ object StorageManager {
     internal val CLEARABLE_KEYS = setOf("logs", "cache")
 
     /**
+     * The subtrees of `cacheDir` this app writes, which is what the `cache` row
+     * measures and what [clearCaches] empties.
+     *
+     * The row used to be the whole cache directory, and that directory is not this
+     * app's alone. The platform WebView keeps its own store in it, under the name
+     * `WebView.setDataDirectorySuffix("vscodroid")` gives it, and Chromium holds
+     * that store open in a live renderer, so it is neither ours to delete nor
+     * something the clear action has ever touched. Measured on a debug install
+     * after one short editor session: 9428 KiB in the cache directory, of which
+     * 9356 KiB was `webview_vscodroid` and 40 KiB was reachable by the action.
+     * [CLEARABLE_KEYS] offers this row to that action, so a user out of disk tapped
+     * Clear, was told a small number had been freed, and watched the figure they
+     * had picked stay where it was: the same "the report is not about the row you
+     * picked" failure that set survives inside the one row still offered.
+     *
+     * Those bytes are not hidden: `total` still counts the whole directory, because
+     * that question is how much disk the app occupies rather than what a button can
+     * give back.
+     */
+    internal val CLEARABLE_CACHE_DIRS =
+        listOf("npm-cache", "tmp", "crash-logs", "toolchain-download")
+
+    /**
      * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs, and the
      * toolchain staging directories no download is using.
      * Returns the number of bytes freed.
+     *
+     * The cache directories below are spelled out rather than looped over
+     * [CLEARABLE_CACHE_DIRS], because each is emptied differently: `tmp` is
+     * recreated because the runtime needs it, and the toolchain staging tree keeps
+     * whatever a running download owns. They are still the same four, and
+     * `ClearableStorageTest` fails if the row starts counting one this does not
+     * reach.
      */
     fun clearCaches(context: Context): Long {
         var freed = 0L

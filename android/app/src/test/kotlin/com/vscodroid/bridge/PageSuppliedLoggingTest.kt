@@ -20,6 +20,13 @@ import java.io.File
  * missed because a reader sweeping for `url` and `uri` does not match `name` or
  * `uriString`. A list would have been written from the same sweep and inherited
  * the same blind spot.
+ *
+ * What the scan asks has since been widened twice, both times because a live leak
+ * satisfied it. It asked whether the value opened an interpolation, so a value
+ * sitting INSIDE one read as not logged; and it accepted the presence of
+ * `redactToken` as a treatment, which for an address is a call that changes
+ * nothing. `openRecentFolder` was both at once, and this file was already reading
+ * that line. See [treated] for the distinction that replaced the second question.
  */
 class PageSuppliedLoggingTest {
 
@@ -139,6 +146,35 @@ class PageSuppliedLoggingTest {
     private data class Scan(val offenders: List<String>, val examined: Int)
 
     /**
+     * What may stand between a page-supplied value and the log, and for which values.
+     *
+     * [REDACTION] takes one thing out of a string it is otherwise happy to print:
+     * `redactToken` replaces the `tkn=` parameter and nothing else. That is the whole
+     * treatment a page's own free text needs, which is what `logToNative` carries.
+     *
+     * [REDUCERS] answer a different question. They do not clean a value up, they
+     * replace it with something that names the same thing without spelling it out:
+     * `urlLogLabel` reduces an address to a scheme and a host, `getMirrorDir(…).name`
+     * to the digest the mirror is named after.
+     *
+     * The distinction is load-bearing rather than tidy, and it is why this file no
+     * longer accepts `redactToken` everywhere. A SAF tree URI is the user's directory
+     * spelled out and carries no `tkn=` at all, so wrapping one satisfies a scan
+     * looking for the call while changing nothing about what ships. That is exactly
+     * how `openRecentFolder` printed the user's folder past a guard written about it.
+     */
+    private val REDACTION = listOf("redactToken")
+    private val REDUCERS = listOf("urlLogLabel", "getMirrorDir")
+
+    /**
+     * Whether [text] hands [value] to the log through something that makes it
+     * printable. An address can only be reduced; redacting it changes nothing.
+     */
+    private fun treated(value: String, text: String, isAddress: Boolean): Boolean =
+        (if (isAddress) REDUCERS else REDUCERS + REDACTION)
+            .any { Regex("""$it\(\s*$value\b""").containsMatchIn(text) }
+
+    /**
      * Every page-supplied value that reaches a log call in [source] unredacted,
      * and every redacted call that hands over the exception beside it.
      *
@@ -167,11 +203,26 @@ class PageSuppliedLoggingTest {
             // right-hand side is read to the end of the statement rather than the
             // end of the line, for the reason [statementFrom] gives.
             val tainted = params.toMutableSet()
+            // The values that ARE an address rather than text that might contain one.
+            // A local parsed out of one is an address, and so is the string it was
+            // parsed from: the two spell out the same place on the device, and
+            // neither has a `tkn=` for a redaction to take out.
+            val addresses = mutableSetOf<String>()
             for (m in Regex("""val\s+(\w+)\s*=""").findAll(chunk)) {
+                val local = m.groupValues[1]
                 val rhs = statementFrom(chunk, m.range.last + 1)
-                if (tainted.any { Regex("""\b$it\b""").containsMatchIn(rhs) }) {
-                    tainted += m.groupValues[1]
+                val carried = tainted.filter { Regex("""\b$it\b""").containsMatchIn(rhs) }
+                if (carried.isEmpty()) continue
+                if (rhs.contains("Uri.parse(")) {
+                    addresses += local
+                    addresses += carried
                 }
+                // A local assigned the value itself carries its taint; one assigned
+                // the result of treating it carries the treatment instead, which is
+                // what `logToNative`'s `safeTag` and `safeMessage` are. Without that
+                // the rule below would report the two lines in this file that do
+                // exactly what it asks for.
+                if (carried.any { !treated(it, rhs, it in addresses) }) tainted += local
             }
             // What a catch binds. A throwable is the second channel a log line has,
             // and redacting the first while handing over the second only looks like
@@ -186,13 +237,23 @@ class PageSuppliedLoggingTest {
                 val text = statementFrom(chunk, call.range.last)
                 examined++
                 for (value in tainted) {
-                    val interpolated = Regex("""\$\{?$value\b""").containsMatchIn(text)
-                    val redacted = Regex("""redactToken\(\s*$value\b""").containsMatchIn(text)
-                    if (interpolated && !redacted) {
-                        offenders += "$name logs $value unredacted: ${text.trim()}"
+                    // Any appearance in the statement, not only `$value` and
+                    // `${value`. The shape that got past this was
+                    // `${redactToken(uri.toString())}`, where the value is inside the
+                    // interpolation rather than at the start of it, so the narrower
+                    // pattern answered "not logged" for a line that logs it.
+                    if (!Regex("""\b$value\b""").containsMatchIn(text)) continue
+                    val isAddress = value in addresses
+                    if (treated(value, text, isAddress)) continue
+                    offenders += if (isAddress) {
+                        "$name logs $value in full, and it is an address: redactToken " +
+                            "only takes out tkn=, so the user's own path ships whether " +
+                            "or not it is wrapped in one: ${text.trim()}"
+                    } else {
+                        "$name logs $value unredacted: ${text.trim()}"
                     }
                 }
-                if (text.contains("redactToken(")) {
+                if ((REDUCERS + REDACTION).any { text.contains("$it(") }) {
                     for (binding in caught) {
                         if (Regex(""",\s*$binding\s*\)""").containsMatchIn(text)) {
                             offenders += "$name redacts its message and then hands over " +
@@ -289,6 +350,89 @@ class PageSuppliedLoggingTest {
             result.offenders.any { it.contains("logs uri ") },
             "the local built from a page-supplied parameter over two lines was not " +
                 "tainted, so the log below it looked clean: ${result.offenders}",
+        )
+    }
+
+    /**
+     * The scanner against a redaction that redacts nothing.
+     *
+     * `redactToken` replaces `tkn=…` and touches nothing else, so wrapping a SAF tree
+     * URI in it is a call, not a treatment: the string that reaches logcat is the
+     * user's own directory, spelled out, on a level that ships. This is the live
+     * defect that stood in `openRecentFolder` while this very file scanned the line,
+     * because the old questions were "is the value interpolated at the start of a
+     * `${'$'}{…}`" and "does the word redactToken appear beside it", and the line
+     * answered no and yes.
+     */
+    @Test
+    fun `an address wrapped in redactToken is not treated as redacted`() {
+        val fixture = """
+            @JavascriptInterface
+            fun openThing(uriString: String, authToken: String) {
+                val uri = Uri.parse(uriString)
+                Logger.i(tag, "Opening: ${'$'}{redactToken(uri.toString())}")
+            }
+        """.trimIndent()
+
+        val result = scan(fixture)
+
+        assertEquals(1, result.examined, "the call was not examined at all")
+        assertTrue(
+            result.offenders.any { it.contains("logs uri ") },
+            "a tree URI passed through redactToken counted as redacted, which is what " +
+                "let the user's device folder ship in release logcat: ${result.offenders}",
+        )
+    }
+
+    /**
+     * The control for the case above, and the reason it is not "never call
+     * redactToken". The same URI named by its mirror is what the app is asked to do,
+     * and a rule that reported it would push the next author back to printing the URI.
+     */
+    @Test
+    fun `an address named by its mirror is left alone`() {
+        val fixture = """
+            @JavascriptInterface
+            fun openThing(uriString: String, authToken: String) {
+                val uri = Uri.parse(uriString)
+                val mirror = safManager?.getMirrorDir(uri)?.name
+                Logger.i(tag, "Opening recent device folder ${'$'}mirror")
+            }
+        """.trimIndent()
+
+        val result = scan(fixture)
+
+        assertEquals(1, result.examined, "the call was not examined at all")
+        assertTrue(
+            result.offenders.isEmpty(),
+            "the shape this rule exists to ask for was reported as an offence: " +
+                "${result.offenders}",
+        )
+    }
+
+    /**
+     * And free text a page chose to log is still redactable, which is the other half
+     * of the same distinction. `logToNative` takes whatever the workbench decided to
+     * print, and the workbench holds the connection token, so `tkn=` is the likely
+     * case there rather than a theoretical one.
+     */
+    @Test
+    fun `a page-supplied message redacted into a local is left alone`() {
+        val fixture = """
+            @JavascriptInterface
+            fun logIt(authToken: String, tag: String, message: String) {
+                val safeTag = redactToken(tag)
+                val safeMessage = redactToken(message)
+                Logger.i(safeTag, safeMessage)
+            }
+        """.trimIndent()
+
+        val result = scan(fixture)
+
+        assertEquals(1, result.examined, "the call was not examined at all")
+        assertTrue(
+            result.offenders.isEmpty(),
+            "the redaction this file asks for was reported as an offence: ${result.offenders}",
         )
     }
 

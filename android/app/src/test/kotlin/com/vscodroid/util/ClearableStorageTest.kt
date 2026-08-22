@@ -165,6 +165,82 @@ class ClearableStorageTest {
         assertTrue(!abandoned.exists(), "$abandoned belongs to no download and should have gone")
     }
 
+    /**
+     * The row's arithmetic, which the two behavioural cases above do not touch: they
+     * plant the `cache` sample inside `npm-cache`, so they pin the row's name rather
+     * than what it adds up.
+     *
+     * Every directory the row counts has to be one the action empties. The row is
+     * offered to that action by [StorageManager.CLEARABLE_KEYS], and a figure that
+     * counts bytes the action cannot reach is the same "the report is not about the row
+     * you picked" failure that set exists to end, surviving inside the one row still
+     * offered.
+     *
+     * Negative control, measured: add a name to `CLEARABLE_CACHE_DIRS` that
+     * `clearCaches` does not delete and this goes red.
+     */
+    @Test
+    fun `every directory the cache row counts is one the clear empties`() {
+        assertTrue(
+            StorageManager.CLEARABLE_CACHE_DIRS.isNotEmpty(),
+            "the row counts nothing, so this proves nothing",
+        )
+        for (name in StorageManager.CLEARABLE_CACHE_DIRS) {
+            val planted = File(cacheDir, "$name/planted.bin").apply {
+                parentFile?.mkdirs()
+                writeText("x".repeat(4096))
+            }
+            val counted = StorageManager.getStorageBreakdown(context).getLong("cache")
+            assertTrue(counted >= 4096, "'$name' is not even counted, so this proves nothing")
+
+            StorageManager.clearCaches(context)
+
+            assertTrue(
+                !planted.exists(),
+                "the cache row counts $planted, which the clear it is offered to leaves " +
+                    "behind, so the figure the user picked does not move",
+            )
+        }
+    }
+
+    /**
+     * And the other half: the cache directory is not this app's alone.
+     *
+     * The platform WebView keeps its own store there, named after
+     * `WebView.setDataDirectorySuffix("vscodroid")`, and on a debug install after one
+     * short editor session that was 9356 KiB of the 9428 KiB in the directory, against
+     * 40 KiB the action could reach. Counting it made a user out of disk tap a button
+     * that could not move the figure it had just shown them.
+     *
+     * The second assertion is the reason the fix is on the row rather than on the
+     * action: Chromium holds that store open in a live renderer, so emptying it is not
+     * this app's to do.
+     *
+     * Negative control, measured: restore `put("cache", dirSize(cacheDir))` and the
+     * first assertion goes red.
+     */
+    @Test
+    fun `the cache row leaves out the bytes the clear cannot free`() {
+        val webview = File(cacheDir, "webview_vscodroid/Default/HTTP Cache/data_0").apply {
+            parentFile?.mkdirs()
+            writeText("x".repeat(8192))
+        }
+
+        assertEquals(
+            0L, StorageManager.getStorageBreakdown(context).getLong("cache"),
+            "the cache row counts the WebView's own store, which the clear action it is " +
+                "offered to cannot free",
+        )
+
+        StorageManager.clearCaches(context)
+
+        assertTrue(
+            webview.exists(),
+            "the clear deleted the platform WebView's store, which a live renderer holds " +
+                "open and which this app does not own",
+        )
+    }
+
     @Test
     fun `the breakdown carries the set the screen has to branch on`() {
         val json = StorageManager.getStorageBreakdown(context)

@@ -663,12 +663,26 @@ class AndroidBridge(
 
     /**
      * Opens a previously selected SAF folder by its URI string.
+     *
+     * Named by its mirror, and [redactToken] is not an alternative here: it takes
+     * out the `tkn=` parameter and nothing else, so a tree URI passed through it
+     * arrives whole. A tree URI spells out the user's own directory
+     * (`.../tree/primary%3ADocuments%2F<folder>`), `Logger.i` is not gated on a
+     * debuggable build, and this is the ordinary success path, so every reopen from
+     * Open Recent put a client, an employer or a project name into release logcat
+     * and into any bug report the device produces. The mirror name is the six-byte
+     * digest of that same URI: stable, not reversible, and what every other line
+     * about this folder already uses. See `SafStorageManager.persistPermission`.
      */
     @JavascriptInterface
     fun openRecentFolder(authToken: String, uriString: String) {
         if (!security.validateToken(authToken)) return
         val uri = Uri.parse(uriString)
-        Logger.i(tag, "Opening recent SAF folder: ${redactToken(uri.toString())}")
+        // Null, and printed as such, only for a bridge built with no SAF manager,
+        // which is also a bridge whose open callback defaults to doing nothing.
+        // Production has no such caller: `MainActivity` passes both together.
+        val mirror = safManager?.getMirrorDir(uri)?.name
+        Logger.i(tag, "Opening recent device folder $mirror")
         onOpenRecentFolder(uri)
     }
 
