@@ -24,8 +24,8 @@ import java.nio.file.Files
  * be there.
  *
  * The walk had no test at all. [isElfHeader] was covered, which is the cheapest
- * part; what decided the outcome — which files are visited, which are skipped, and
- * whether the bit is actually set — was not.
+ * part; what decided the outcome (which files are visited, which are skipped, and
+ * whether the bit is actually set) was not.
  *
  * The symlink predicate is injected because the production one uses `Os.lstat`,
  * which cannot run in a JVM test: it throws, the catch reads that as "not a link",

@@ -30,7 +30,7 @@ import java.io.File
  * executable's *basename*: `bash` selects `["--init-file", …]` and `libbash.so`
  * matches no case at all, so the injection is skipped without a word. Command
  * decorations, cwd detection and command duration all quietly stop working, and
- * the terminal still opens and still runs commands — there is nothing to notice.
+ * the terminal still opens and still runs commands; there is nothing to notice.
  *
  * `getTerminalShellPath` exists for that single reason and had no test, while
  * `getBashPath`, which returns the `.so` and has no caller in production at all,

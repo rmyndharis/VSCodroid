@@ -8,12 +8,12 @@ import org.junit.jupiter.api.Test
  * Which command names may be written into `toolchain-env.sh` as shell functions.
  *
  * `.bashrc` sources that file unconditionally, and one unusable name does not cost
- * one command — it costs the rest of the file. Measured by sourcing a file holding
+ * one command: it costs the rest of the file. Measured by sourcing a file holding
  * `good() {...}`, `a=b() {...}`, `after() {...}`: `good` is defined and `after` is
  * gone. A toolchain manifest carrying a bad name would therefore take out every
  * wrapper written after it, in every new terminal.
  *
- * Every expectation below was checked against real bash — define the function,
+ * Every expectation below was checked against real bash: define the function,
  * then ask `declare -F` whether that name exists. That mattered: the first version
  * of this predicate applied the rule for shell *variables*
  * (`[A-Za-z_][A-Za-z0-9_]*`) and would have refused `grpc-tool`, `2to3` and

@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
  * log, and the workbench holds the token. A page logging its own URL is ordinary.
  *
  * The session-token check on the method says the call came from our page. It says
- * nothing about whether what it carries is safe to print — and `warn` and `error`
+ * nothing about whether what it carries is safe to print, and `warn` and `error`
  * reach `Logger` methods that are not gated on a debuggable build, so they ship.
  *
  * Both arguments are covered. `tag` is page-supplied too, and nothing stops it

@@ -5,7 +5,7 @@
   Written as an allowlist with no exclusions, and the absence of <exclude> is the
   design rather than an omission. Under <include> semantics anything not named is
   already out, so the seven exclusions this file used to carry named paths that
-  were never in scope to begin with — which is what lint reported, once per line.
+  were never in scope to begin with, which is what lint reported, once per line.
 
   Fail-closed matters more here than the tidiness. The app's private storage holds
   an SSH key generated without a passphrase (`Environment.getSshDir`) and the
@@ -17,17 +17,17 @@
 
   Everything omitted, and why:
 
-  - `home/.ssh`, `home/.vscodroid/data/token` — credentials. The SSH key has no
+  - `home/.ssh`, `home/.vscodroid/data/token`: credentials. The SSH key has no
     passphrase because that is the right trade for a phone keyboard while the key
     stays inside the app sandbox; copying it to a cloud is what breaks that trade.
-  - `server`, `usr`, the toolchains — hundreds of megabytes, and first-run setup
+  - `server`, `usr`, the toolchains: hundreds of megabytes, and first-run setup
     extracts them again from the APK anyway.
-  - `external` — the projects directory. A source tree with `node_modules` in it
+  - `external`: the projects directory. A source tree with `node_modules` in it
     would exceed any backup quota on its own, and this is the one thing users
     already keep in git.
-  - `saf-mirrors` — local copies of folders the user picked through SAF. The
+  - `saf-mirrors`: local copies of folders the user picked through SAF. The
     originals are the documents; these are rebuilt on reopening.
-  - `sharedpref` — load-bearing, and the least obvious entry on this list.
+  - `sharedpref`: load-bearing, and the least obvious entry on this list.
     `FirstRunSetup.isFirstRun()` answers from `setup_version` and
     `setup_version_code` in those preferences. Restore them onto a device whose `filesDir` is empty and the app
     concludes setup has already run, skips extraction entirely, and starts a
@@ -36,7 +36,7 @@
     device. Leaving the domain out is what keeps a restored install honest.
 
   What is included is `data/Machine`, where the workbench reads its settings from
-  on this side — see `Environment.getMachineSettingsPath`, which explains why it
+  on this side; see `Environment.getMachineSettingsPath`, which explains why it
   is that path and not the `User/` one it looks like it should be. The directory
   rather than the file, so machine-scoped state added later travels with it.
   Restoring it is worth doing because `FirstRunSetup.createDefaultSettings()`

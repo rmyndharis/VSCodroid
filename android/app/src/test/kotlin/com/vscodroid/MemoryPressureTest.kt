@@ -76,8 +76,8 @@ class MemoryPressureTest {
  * The wire between that mapping and the file the process monitor reads.
  *
  * Every test above pins [memoryPressureOf] and none of them touched the code
- * that calls it. Replacing the call with the `>=` comparison it replaced — the
- * original defect, restored verbatim — left the whole suite green, because the
+ * that calls it. Replacing the call with the `>=` comparison it replaced (the
+ * original defect, restored verbatim) left the whole suite green, because the
  * decision sat inside `onTrimMemory`, which cannot be invoked without an
  * Activity, and the recording sat in a private method that reached `cacheDir`
  * for the one thing it needed.

@@ -59,7 +59,7 @@ flowchart TD
 
 ## 3. C4 Model
 
-### 3.1 Level 1 — System Context
+### 3.1 Level 1: System Context
 
 ```mermaid
 flowchart TD
@@ -80,7 +80,7 @@ Termux's package repository is a build-time source, not a runtime one: `scripts/
 `download-python.sh` and `download-termux-tools.sh` fetch the runtime and the tools from it while the
 APK is being built, and nothing in the app contacts it on device.
 
-### 3.2 Level 2 — Container Diagram
+### 3.2 Level 2: Container Diagram
 
 ```mermaid
 flowchart TD
@@ -115,7 +115,7 @@ flowchart TD
   LIBS --> VSS
 ```
 
-### 3.3 Level 3 — Component Diagram (Server Container)
+### 3.3 Level 3: Component Diagram (Server Container)
 
 ```mermaid
 flowchart TD

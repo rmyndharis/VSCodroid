@@ -23,7 +23,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 
 /**
- * Tests for [FirstRunSetup.updateSettingsNativeLibPaths] — the call site, not the
+ * Tests for [FirstRunSetup.updateSettingsNativeLibPaths], the call site, not the
  * decision.
  *
  * [refreshManagedPaths] and [writeAtomically] are both covered on their own, and both
@@ -95,7 +95,7 @@ class UpdateSettingsPathsTest {
      * The profile has to name the `usr/bin/bash` symlink, not the `.so` it points at:
      * the ptyHost decides whether to inject shell integration by switching on the
      * executable's basename, and `libbash.so` matches nothing. Asserting on the
-     * basename rather than the whole string is deliberate — the directory is allowed
+     * basename rather than the whole string is deliberate: the directory is allowed
      * to move, the name is not.
      */
     @Test
@@ -112,7 +112,7 @@ class UpdateSettingsPathsTest {
      *
      * This also underwrites the failure test below. If the fixture were already
      * current, `refreshManagedPaths` would return null and the method would return
-     * before writing anything — and a test asserting "the file was not modified"
+     * before writing anything, and a test asserting "the file was not modified"
      * would pass without the write ever being reached.
      */
     @Test
@@ -122,7 +122,7 @@ class UpdateSettingsPathsTest {
         FirstRunSetup(context).updateSettingsNativeLibPaths()
 
         val written = settingsFile.readText()
-        assertNotEquals(before, written, "the fixture was already current — the write path was never reached")
+        assertNotEquals(before, written, "the fixture was already current: the write path was never reached")
         assertFalse(
             written.contains(oldNativeLibDir),
             "the previous install directory survived the refresh",
@@ -134,7 +134,7 @@ class UpdateSettingsPathsTest {
     /**
      * settings.json belongs to the user. When the write cannot be completed the file
      * must keep what it had, rather than being truncated and left empty or half
-     * written — the workbench reads an empty settings.json as "no settings" rather
+     * written: the workbench reads an empty settings.json as "no settings" rather
      * than as an error, so the loss is silent.
      *
      * The failure is arranged by putting a directory where [writeAtomically] wants to
@@ -163,7 +163,7 @@ class UpdateSettingsPathsTest {
     }
 
     /**
-     * A refresh with nothing to change must not rewrite the file at all —
+     * A refresh with nothing to change must not rewrite the file at all:
      * `refreshManagedPaths` returns null and the method returns before writing.
      * Asserting only on the contents would pass either way, since rewriting the same
      * text leaves the same bytes; the log line is what distinguishes them.

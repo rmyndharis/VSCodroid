@@ -16,7 +16,7 @@ VSCodroid uses the **Open VSX** extension registry (https://open-vsx.org), not t
 
 VSCodroid incorporates the following open source projects. We are grateful to the developers and communities behind each of them.
 
-Versions are given only where this repository actually pins one. Most bundled tools are installed from the Termux package index at build time, so the version a given release shipped is a property of that build, not of this file — stating a number here would only go stale silently. Where a version is pinned, the entry names the file that pins it.
+Versions are given only where this repository actually pins one. Most bundled tools are installed from the Termux package index at build time, so the version a given release shipped is a property of that build, not of this file; stating a number here would only go stale silently. Where a version is pinned, the entry names the file that pins it.
 
 ### Code - OSS (VS Code)
 
@@ -49,7 +49,7 @@ SOFTWARE.
 ### Node.js
 
 - **Project**: https://nodejs.org
-- **Version**: not pinned here — the `nodejs-lts` package from the Termux index, installed by `scripts/download-node.sh`. The line it must track is set by `remote/.npmrc` at the VS Code tag in `VSCODE_VERSION`, since that is what the server's native modules are built against
+- **Version**: not pinned here, the `nodejs-lts` package from the Termux index, installed by `scripts/download-node.sh`. The line it must track is set by `remote/.npmrc` at the VS Code tag in `VSCODE_VERSION`, since that is what the server's native modules are built against
 - **License**: MIT License (Node.js core), with additional licenses for bundled dependencies
 - **Copyright**: Copyright Node.js contributors. All rights reserved.
 - **Full license**: https://github.com/nodejs/node/blob/main/LICENSE
@@ -59,7 +59,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 ### Python
 
 - **Project**: https://www.python.org
-- **Version**: not pinned here — resolved from the Termux package index at build time by `scripts/download-python.sh`
+- **Version**: not pinned here, resolved from the Termux package index at build time by `scripts/download-python.sh`
 - **License**: Python Software Foundation License (PSF-2.0)
 - **Copyright**: Copyright (c) 2001-2024 Python Software Foundation. All rights reserved.
 - **Full license**: https://docs.python.org/3/license.html
@@ -75,7 +75,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 ### Bash
 
 - **Project**: https://www.gnu.org/software/bash/
-- **Version**: not pinned here — from the Termux package index at build time (`scripts/download-termux-tools.sh`)
+- **Version**: not pinned here, from the Termux package index at build time (`scripts/download-termux-tools.sh`)
 - **License**: GNU General Public License v3.0 (GPL-3.0-or-later)
 - **Copyright**: Copyright (c) Free Software Foundation, Inc.
 - **Full license**: `licenses/COPYING.GPLv3`, which ships in the app at **About > Licenses > License Texts**; also https://www.gnu.org/licenses/gpl-3.0.html
@@ -91,7 +91,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 ### tmux
 
 - **Project**: https://github.com/tmux/tmux
-- **Version**: not pinned here — from the Termux package index at build time (`scripts/download-termux-tools.sh`)
+- **Version**: not pinned here, from the Termux package index at build time (`scripts/download-termux-tools.sh`)
 - **License**: ISC License
 - **Copyright**: Copyright (c) Nicholas Marriott and contributors
 - **Full license**: https://github.com/tmux/tmux/blob/master/COPYING
@@ -99,7 +99,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 ### GNU Make
 
 - **Project**: https://www.gnu.org/software/make/
-- **Version**: not pinned here — from the Termux package index at build time (`scripts/download-termux-tools.sh`)
+- **Version**: not pinned here, from the Termux package index at build time (`scripts/download-termux-tools.sh`)
 - **License**: GNU General Public License v3.0 (GPL-3.0-or-later)
 - **Copyright**: Copyright (c) Free Software Foundation, Inc.
 - **Full license**: `licenses/COPYING.GPLv3`, which ships in the app at **About > Licenses > License Texts**; also https://www.gnu.org/licenses/gpl-3.0.html
@@ -276,7 +276,7 @@ licence that asks for the notice to travel with the copy.
 ### npm
 
 - **Project**: https://www.npmjs.com
-- **Version**: 11.16.0 — declared as `NPM_VERSION` in `scripts/download-npm.sh` and asserted against the nodejs.org tarball, which is the release the bundled Node runtime comes from
+- **Version**: 11.16.0, declared as `NPM_VERSION` in `scripts/download-npm.sh` and asserted against the nodejs.org tarball, which is the release the bundled Node runtime comes from
 - **License**: Artistic License 2.0
 - **Copyright**: Copyright (c) npm, Inc. and Contributors
 - **Full license**: https://github.com/npm/cli/blob/latest/LICENSE
@@ -378,7 +378,7 @@ Not listed here, because they are not third-party code: `libglibc-shim.so` and t
 stubs beside it (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`,
 `librt.so.1`, `libutil.so.1`, `libresolv.so.2`, `libcrypt.so.1`, `libgcc_s.so.1`,
 `ld-linux-aarch64.so.1`). They carry glibc's names so a glibc-linked binary can
-resolve against them, but contain none of glibc's code — they are built from
+resolve against them, but contain none of glibc's code; they are built from
 `scripts/glibc-shim.c` and `scripts/gen-glibc-forwarders.py` in this repository and
 are covered by the root `LICENSE`.
 
@@ -433,7 +433,7 @@ are covered by the root `LICENSE`.
 The built-in GitHub Copilot Chat extension depends on GitHub's `@github/copilot` package. Unlike everything listed above, this component is **not open source**: it is redistributed under GitHub's own terms.
 
 - **Publisher**: GitHub, Inc.
-- **License**: GitHub Copilot CLI License — the full text ships with every copy in the server tree; read it at `extensions/copilot/node_modules/@github/copilot/LICENSE.md`. It is not reproduced here.
+- **License**: GitHub Copilot CLI License. The full text ships with every copy in the server tree; read it at `extensions/copilot/node_modules/@github/copilot/LICENSE.md`. It is not reproduced here.
 - **Versions**: whatever the Copilot extension pins at the Code - OSS tag in `VSCODE_VERSION`. These are not all the same number; see below.
 
 **What is redistributed.** Three copies, at two versions, all produced by the Code - OSS build:
@@ -441,26 +441,26 @@ The built-in GitHub Copilot Chat extension depends on GitHub's `@github/copilot`
 | Location in the server tree | Version | What it is |
 |---|---|---|
 | `node_modules/@github/copilot` | 1.0.79-6 | The three-file npm loader (`npm-loader.js`, `package.json`, `LICENSE.md`) |
-| `node_modules/@github/copilot-linux-arm64` | 1.0.79-6 | The runtime itself — 104 files, ~175 MB |
+| `node_modules/@github/copilot-linux-arm64` | 1.0.79-6 | The runtime itself, 104 files, ~175 MB |
 | `extensions/copilot/node_modules/@github/copilot` | 1.0.73 | The SDK copy the extension resolves, 67 files |
 
-The CLI **application** is among them: `index.js` is a `#!/usr/bin/env node` launcher and `app.js` is the 9 MB program it runs. What is *not* shipped is the standalone single-executable build — `build/lib/copilot.ts:212-213` excludes `copilot` and `copilot.exe`, and `:214-215` excludes the optional native payloads (`foundry-local-sdk`, `webview`, `clipboard`, `pvrecorder`) along with the non-target `prebuilds`. So the accurate statement is that VSCodroid ships the CLI as JavaScript executed by the bundled Node, not as a self-contained binary.
+The CLI **application** is among them: `index.js` is a `#!/usr/bin/env node` launcher and `app.js` is the 9 MB program it runs. What is *not* shipped is the standalone single-executable build: `build/lib/copilot.ts:212-213` excludes `copilot` and `copilot.exe`, and `:214-215` excludes the optional native payloads (`foundry-local-sdk`, `webview`, `clipboard`, `pvrecorder`) along with the non-target `prebuilds`. So the accurate statement is that VSCodroid ships the CLI as JavaScript executed by the bundled Node, not as a self-contained binary.
 
 **Why we believe redistribution is permitted.** Section 1 of the license grants the right to reproduce and redistribute unmodified copies of the Software as part of an application or service, subject to the five conditions in Section 2. Our position on each:
 
 | Condition (§2) | Assessment |
 |---|---|
-| Distributed only in unmodified form | **Judgment call — see below.** |
+| Distributed only in unmodified form | **Judgment call (see below).** |
 | Redistributed solely as part of an application providing material functionality beyond the Software | Met. VSCodroid is a full IDE; the Copilot runtime is a dependency of one built-in extension. |
-| Not distributed standalone or as a primary product | Met. It is not separately installable, not advertised, and not reachable except through the extension — the standalone executable form is the one thing the build excludes. |
+| Not distributed standalone or as a primary product | Met. It is not separately installable, not advertised, and not reachable except through the extension; the standalone executable form is the one thing the build excludes. |
 | A copy of the license is included and notices retained | Met. `LICENSE.md` travels with every copy in the tree (all copies byte-identical), and `NOTICE.md` attributes the component. |
 | The application is licensed independently of the Software | Met. VSCodroid's own source is MIT; the root `LICENSE` covers only that. |
 
-**The judgment call on "unmodified form".** The question is not whether the tree matches npm exactly — it does not — but what the differences actually are. Measured file by file against the upstream tarballs:
+**The judgment call on "unmodified form".** The question is not whether the tree matches npm exactly (it does not) but what the differences actually are. Measured file by file against the upstream tarballs:
 
 *The loader copy* (`@github/copilot@1.0.79-6`): byte-identical in all three files it ships. Only `README.md` is omitted.
 
-*The runtime copy* (`@github/copilot-linux-arm64@1.0.79-6`): 99 of its 104 files are byte-identical to upstream. The remaining five — `app.js`, `sdk/index.js`, and the three `voice-*` workers — differ by exactly one thing: a trailing `//# sourceMappingURL=` comment has been removed. No `.map` files ship, so the removed lines pointed at files that are not there. The change is 32 to 41 bytes per file and alters no behavior.
+*The runtime copy* (`@github/copilot-linux-arm64@1.0.79-6`): 99 of its 104 files are byte-identical to upstream. The remaining five (`app.js`, `sdk/index.js`, and the three `voice-*` workers) differ by exactly one thing: a trailing `//# sourceMappingURL=` comment has been removed. No `.map` files ship, so the removed lines pointed at files that are not there. The change is 32 to 41 bytes per file and alters no behavior.
 
 *The SDK copy* (`@github/copilot@1.0.73`): 67 files, five of them re-rooted under `sdk/`. Its content differences from the upstream platform package are `package.json`, rewritten by the extension's own `postinstall` (renamed, given an `exports` map, platform constraints dropped), and the bundled `ripgrep` binary, replaced with the editor's own by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`, which also writes a `shims.txt` marker. That replacement is byte-identical to `@vscode/ripgrep-universal`'s `rg`, sha256 `e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda`, measured in the shipped tree.
 
@@ -468,7 +468,7 @@ Pruning in both copies follows the upstream build's own `build/.moduleignore` an
 
 Every one of these transformations is performed by GitHub's or Microsoft's own build tooling, which VSCodroid runs unmodified; none is a VSCodroid intervention. The single patch this project applies to that area, `patches/0010-moduleignore-keep-copilot-sdk-entry.patch`, *removes* a pruning rule, so the result is closer to the published package than a default build would produce, not further from it.
 
-We read "unmodified form" as directed at the redistributor altering the Software, not at the vendor's own build tooling producing the embedded shape it was designed to produce. To be precise about which mode of that tooling is in play: Microsoft's own CI does **not** compile this extension — it downloads it as a VSIX from an internal feed, and `compile-copilot-extension-build` is described upstream as the path "used by non-CI local builds where copilot is not downloaded as a VSIX" (`gulpfile.extensions.ts:288`). That is the path this build takes, and it is a mode Microsoft ships for building from source; it is not the identical pipeline behind their released desktop binaries.
+We read "unmodified form" as directed at the redistributor altering the Software, not at the vendor's own build tooling producing the embedded shape it was designed to produce. To be precise about which mode of that tooling is in play: Microsoft's own CI does **not** compile this extension; it downloads it as a VSIX from an internal feed, and `compile-copilot-extension-build` is described upstream as the path "used by non-CI local builds where copilot is not downloaded as a VSIX" (`gulpfile.extensions.ts:288`). That is the path this build takes, and it is a mode Microsoft ships for building from source; it is not the identical pipeline behind their released desktop binaries.
 
 The weakest point in our reading is the `ripgrep` substitution, because a binary component is replaced rather than merely omitted. The `sourceMappingURL` stripping is the next weakest, though it is hard to characterise a dangling reference to an unshipped file as a modification of substance.
 
@@ -522,11 +522,11 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **Git** (GPL-2.0): Source available at https://github.com/termux/termux-packages (package: `git`)
 - **GNU Make** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `make`)
 - **readline** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `readline`)
-- **libiconv** (LGPL-2.1 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libiconv`) — linked by Bash and by every Git executable
-- **gdbm** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `gdbm`) — linked by Python's `dbm` and `gdbm` modules
-- **xz / liblzma** (LGPL-2.1 / GPL-2.0 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `liblzma`) — linked by Python's `lzma` module
-- **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`) — linked by Python's `zstd` module
-- **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`) — shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
+- **libiconv** (LGPL-2.1 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libiconv`), linked by Bash and by every Git executable
+- **gdbm** (GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `gdbm`), linked by Python's `dbm` and `gdbm` modules
+- **xz / liblzma** (LGPL-2.1 / GPL-2.0 / GPL-3.0): Source available at https://github.com/termux/termux-packages (package: `liblzma`), linked by Python's `lzma` module
+- **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`), linked by Python's `zstd` module
+- **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`). Shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
 - **OpenJDK 17** (GPL-2.0 with the Classpath Exception): Source available at https://github.com/termux/termux-packages (package: `openjdk-17`), built from https://github.com/openjdk/jdk17u. Shipped inside the Java toolchain pack, not the base app, so it reaches only devices where Java was installed. The Classpath Exception grants an additional permission and removes none of the obligations above.
 
 Every entry after readline reaches the app as a dependency of something else
@@ -568,7 +568,7 @@ only the audience is smaller.
 
 `scripts/check-library-attribution.py` reads these from the toolchain manifests in
 `android/toolchain_*/src/main/assets/`, rather than from disk, because the packs
-are built by CI and are absent from a working tree — a disk scan would find
+are built by CI and are absent from a working tree; a disk scan would find
 nothing and report success.
 
 | Component | Licence | Shipped with | Source |

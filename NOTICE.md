@@ -8,7 +8,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 
 | Software | License | Source |
 |----------|---------|--------|
-| Code - OSS (VS Code Server + Web) | MIT — `LICENSE.txt` and `ThirdPartyNotices.txt` ship inside the server tree | Built from https://github.com/microsoft/vscode at the commit pinned in `VSCODE_COMMIT`, with the patches in `patches/` and the branding in `branding/` applied before the build |
+| Code - OSS (VS Code Server + Web) | MIT; `LICENSE.txt` and `ThirdPartyNotices.txt` ship inside the server tree | Built from https://github.com/microsoft/vscode at the commit pinned in `VSCODE_COMMIT`, with the patches in `patches/` and the branding in `branding/` applied before the build |
 | GitHub Copilot Chat extension | See the license files inside `extensions/copilot/` in the server tree; its `@github/copilot` SDK dependency carries GitHub, Inc.'s own `LICENSE.md` | Produced by the same Code - OSS build |
 | Node.js | MIT | Termux build of `nodejs-lts`, https://github.com/nodejs/node |
 | npm | Artistic License 2.0 | https://github.com/npm/cli |
@@ -20,8 +20,8 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | tmux | ISC | Termux build, https://github.com/tmux/tmux |
 | GNU Make | GPL v3 | Termux build, https://www.gnu.org/software/make |
 | OpenSSH | BSD | Termux build, https://www.openssh.com |
-| node-pty | MIT | https://github.com/microsoft/node-pty — native addon rebuilt for Android/Bionic |
-| @parcel/watcher | MIT | https://github.com/parcel-bundler/watcher — native addon rebuilt for Android/Bionic |
+| node-pty | MIT | https://github.com/microsoft/node-pty, native addon rebuilt for Android/Bionic |
+| @parcel/watcher | MIT | https://github.com/parcel-bundler/watcher, native addon rebuilt for Android/Bionic |
 | @vscode/sqlite3 | BSD-3-Clause (SQLite itself is public domain) | https://github.com/microsoft/vscode-node-sqlite3, native addon rebuilt for Android/Bionic |
 | @vscode/native-watchdog | MIT | https://github.com/microsoft/node-native-watchdog, bundled by the Code - OSS build |
 | @vscode/deviceid | MIT | https://github.com/microsoft/vscode-deviceid, bundled by the Code - OSS build |
@@ -37,7 +37,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | PSReadLine | BSD-2-Clause | https://github.com/PowerShell/PSReadLine. Prebuilt .NET assemblies carried by the terminal's PowerShell shell integration; they have no use on Android and are listed because they are redistributed |
 | distlib | PSF-2.0 | https://github.com/pypa/distlib, vendored inside the bundled pip. Ships six prebuilt Windows launchers, redistributed unused |
 | @github/copilot (GitHub Copilot CLI) | GitHub Copilot CLI License, proprietary | Redistributed under GitHub, Inc.'s own terms as a dependency of the Copilot extension. The full text ships in the server tree; the reasoning is in `docs/LEGAL_NOTICES.md` |
-| musl (dynamic loader) | MIT | Alpine Linux package, https://musl.libc.org — bundled so the Claude Code CLI can run; the CLI itself is installed by the user and is not redistributed here |
+| musl (dynamic loader) | MIT | Alpine Linux package, https://musl.libc.org, bundled so the Claude Code CLI can run; the CLI itself is installed by the user and is not redistributed here |
 
 ## Bundled Native Components
 

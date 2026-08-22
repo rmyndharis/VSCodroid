@@ -36,7 +36,7 @@ import kotlin.concurrent.thread
  * Tests for [ProcessManager]'s start guard and port allocation.
  *
  * Regression coverage for issue #3: the guard tested `serverProcess != null`,
- * but only `stopServer()` ever cleared that field — the crash path left the
+ * but only `stopServer()` ever cleared that field: the crash path left the
  * dead Process referenced. Every automatic restart after an unexpected exit
  * was therefore refused, and the app stayed wedged until it was relaunched.
  *
@@ -125,8 +125,8 @@ class ProcessManagerTest {
     @Test
     fun `a file sitting where TMPDIR belongs is reported rather than ignored`() {
         // `exists()` answers "something is here" and the code meant "a usable
-        // directory is here". They agree in every case anyone pictures — the path
-        // is absent, or it is the directory we made last time — and part company
+        // directory is here". They agree in every case anyone pictures (the path
+        // is absent, or it is the directory we made last time), and part company
         // when a file is there, at which point `mkdirs()` cannot succeed and its
         // false was being discarded.
         //
@@ -1017,7 +1017,7 @@ private var ProcessManager.portField: Int
  * Reaches `ProcessManager.cachedToken`, which is private production state.
  *
  * Needed because the token is cached on first read and deliberately never
- * invalidated — correct in production, since the server reuses the file rather
+ * invalidated, correct in production, since the server reuses the file rather
  * than regenerating it, and inconvenient in a test that wants to change what the
  * file says after something has already read it.
  */
@@ -1057,7 +1057,7 @@ private fun field(name: String) =
  *
  * The two were the same question to every caller until they were not.
  * `MainActivity` navigated its WebView the moment `isRunning()` was true, and
- * that is true from the instant the process is spawned — while the editor server
+ * that is true from the instant the process is spawned, while the editor server
  * inside it is still seconds away from binding its port, and for the whole of a
  * restart after a crash. The user got a connection-refused page, and
  * `onReceivedError` only logs, so nothing took it away again.
@@ -1321,7 +1321,7 @@ class ServerReadinessTest {
  * Adopting a server this instance did not start.
  *
  * The case: `assets/server.js` forks the editor server and forwards SIGTERM, but
- * a SIGKILLed `server.js` — routine here — forwards nothing and `fork()` sets no
+ * a SIGKILLed `server.js` (routine here) forwards nothing and `fork()` sets no
  * PDEATHSIG, so the child outlives its parent still holding the port. Measured
  * on an emulator, spawning anyway produces a parent whose own child prints
  * EADDRINUSE and never exits: this class ends up watching a process whose death
@@ -1937,7 +1937,7 @@ class AdoptionTest {
  * A loopback HTTP server small enough to have no dependencies.
  *
  * `com.sun.net.httpserver` is not on the Android unit-test compile classpath, and
- * the probe under test needs so little — a status line and a framed empty body —
+ * the probe under test needs so little (a status line and a framed empty body)
  * that a raw socket says it in fewer lines than working around that would take.
  *
  * It records the request line so a test can assert *which* route was asked for,

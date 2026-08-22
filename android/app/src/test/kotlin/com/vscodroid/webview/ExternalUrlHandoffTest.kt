@@ -42,8 +42,8 @@ import org.junit.jupiter.api.Test
  * used to disagree: an allow-list there permitted `https:`, `mailto:` and `http:`
  * to localhost only, so the same click on the same URL opened or silently did
  * nothing depending on whether VS Code routed it as a navigation or through
- * `window.open`. The list is gone — see `UrlAllowlistWiringTest`, which now pins
- * its absence — and the two exits answer the same way.
+ * `window.open`. The list is gone (see `UrlAllowlistWiringTest`, which now pins
+ * its absence) and the two exits answer the same way.
  *
  * Change the rule here and the cases below invert; that is the point of them
  * being written down rather than assumed.
@@ -52,8 +52,8 @@ import org.junit.jupiter.api.Test
  * it. Handing `intent://…` here is NOT the intent-redirection hazard it looks
  * like: `Intent(ACTION_VIEW, uri)` sets an action and a data URI and does not
  * decode the component and extras that `Intent.parseUri` would. So what this
- * grants is what any browser grants — the ability to launch whatever app has
- * registered for a scheme — rather than the ability to aim an Intent inside this
+ * grants is what any browser grants (the ability to launch whatever app has
+ * registered for a scheme) rather than the ability to aim an Intent inside this
  * app. Reasoned from the two APIs, not measured. What is measured is below.
  *
  * The first case is the control and it is what makes the rest a measurement: the
@@ -274,7 +274,7 @@ class ExternalUrlHandoffTest {
         assertTrue(handled, "returning true is what stops the WebView navigating to it")
     }
 
-    /** Any external host at all — the load-bearing case. */
+    /** Any external host at all: the load-bearing case. */
     @Test
     fun `an arbitrary external host is handed to an activity with no allow-list`() {
         val handled = client.shouldOverrideUrlLoading(view, request("https", "evil.example.com", -1))

@@ -18,7 +18,7 @@ import java.io.File
  * skipping: a skipped test reports zero failures, and zero failures is what a
  * passing run also reports.
  *
- * Run separately from the fast Activity UI tests — these have 60s+ timeouts.
+ * Run separately from the fast Activity UI tests: these have 60s+ timeouts.
  */
 @RunWith(AndroidJUnit4::class)
 class ServerHealthTest {

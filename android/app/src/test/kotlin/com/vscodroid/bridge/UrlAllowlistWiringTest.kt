@@ -25,8 +25,8 @@ import org.junit.jupiter.params.provider.ValueSource
  *
  * This file used to pin the opposite. `SecurityManager.isAllowedUrl` permitted
  * https, mailto, and http only to localhost, and the cases here were a
- * host-confusion suite — `http://evil.com`, `http://localhost.evil.com`,
- * `http://127.0.0.1.evil.com`, `http://localhost@evil.com` — written to stop a
+ * host-confusion suite (`http://evil.com`, `http://localhost.evil.com`,
+ * `http://127.0.0.1.evil.com`, `http://localhost@evil.com`), written to stop a
  * lookalike host slipping past. That was careful work against the wrong
  * requirement.
  *
@@ -38,8 +38,8 @@ import org.junit.jupiter.params.provider.ValueSource
  * `window.open`, which `MainActivity` relays to `openExternalUrl`. Same gesture,
  * same URL, two outcomes, one of them saying nothing at all.
  *
- * So the allow-list is gone rather than widened — a dead one is what somebody
- * re-wires later — and these cases pin its absence, including for the shapes it
+ * So the allow-list is gone rather than widened (a dead one is what somebody
+ * re-wires later), and these cases pin its absence, including for the shapes it
  * used to refuse most confidently. If a destination filter is ever wanted again
  * it needs a product decision, and these tests are what will fail first to say
  * there was not one.
@@ -76,7 +76,7 @@ class UrlAllowlistWiringTest {
 
         // Intent is a stub too, and openExternalUrl builds one inside a try/catch:
         // without this the constructor throws, the catch swallows it, and
-        // startActivity is never reached — which reads exactly like a URL being
+        // startActivity is never reached, which reads exactly like a URL being
         // refused. The first run of these cases failed that way, on a fixture
         // fault rather than on the code.
         mockkConstructor(Intent::class)

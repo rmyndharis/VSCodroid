@@ -20,7 +20,7 @@ flowchart TD
 Boundary C is one-way for the pipe: `ProcessManager` closes the child's stdin at spawn
 (`start().also { it.outputStream.close() }`) and only ever reads stdout. Nothing is
 written to the process. This said "stdin/stdout/HTTP", which invites a design that
-sends the server a command down the pipe — there is no reader on the other end. Kotlin
+sends the server a command down the pipe; there is no reader on the other end. Kotlin
 asks the server things over HTTP on the loopback port, and learns of its death from
 `Process.waitFor()`.
 
@@ -37,7 +37,7 @@ wv.addJavascriptInterface(bridge, "AndroidBridge")
 
 The injected name is `AndroidBridge` and that part was always right. The construction
 was not: `AndroidBridge(this)` does not compile. The real constructor takes fourteen
-parameters, five of them required —
+parameters, five of them required:
 
 ```kotlin
 AndroidBridge(
@@ -51,7 +51,7 @@ AndroidBridge(
 )
 ```
 
-— and `security` being one of them is the point of the next section rather than a
+And `security` being one of them is the point of the next section rather than a
 detail. A one-argument sketch shows a bridge built without the `SecurityManager` that
 §2.2 describes as the whole access-control mechanism, which is the opposite of what the
 code does.
@@ -81,7 +81,7 @@ compare.
    `openExternalUrl(url, authToken)`, `installToolchain(name, authToken)`,
    `removeToolchain(name, authToken)` and `cancelToolchainInstall(name, authToken)`.
    Read the signature before calling; the position is not a convention you can rely on.
-3. **No URL filtering.** `openExternalUrl()` hands any URL to the platform — any
+3. **No URL filtering.** `openExternalUrl()` hands any URL to the platform: any
    scheme, any host, including one that is wrong. This is a development tool, and a
    developer opening `http://192.168.1.5:3000`, a custom scheme, or a typo is doing
    something ordinary; the app is not the right place to have an opinion about it.
@@ -89,7 +89,7 @@ compare.
    did. There is no scheme list and no host list to keep in step with anything.
 
    Citations in this section name symbols rather than line numbers on purpose. All
-   three used to carry ranges and all three had rotted — one of them pointed into a
+   three used to carry ranges and all three had rotted; one of them pointed into a
    file that is not even at the path it named. `file:line` does not survive a day in
    this repository; a symbol you can grep for does.
 
@@ -128,7 +128,7 @@ target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
 ```
 
-`eventInit` carries the fields a `KeyboardEvent` takes — `key`, `code`,
+`eventInit` carries the fields a `KeyboardEvent` takes: `key`, `code`,
 `keyCode`, and the `ctrlKey`/`altKey`/`shiftKey`/`metaKey` modifiers. They are
 the DOM's own names, not an interface this project defines.
 
@@ -140,12 +140,12 @@ window.__vscodroid.onLowMemory(level: number); // Android trim-memory level
 ```
 
 This is the only hook Kotlin calls on the page, and the page supplies its own
-consumer — `MainActivity` installs one, rather than the workbench providing it.
+consumer: `MainActivity` installs one, rather than the workbench providing it.
 
 There is no `onServerReady`, `onServerRestarting`, `onOAuthCallback` or
 `onOAuthError` on this object. Server readiness is a Kotlin-side callback on
 `NodeService`; the page learns about it by being navigated, not by being called.
-The OAuth pair described a flow this app does not implement — see §2.5.
+The OAuth pair described a flow this app does not implement; see §2.5.
 
 ### 2.4 JavaScript → Kotlin Methods
 
@@ -178,7 +178,7 @@ list of **14** command names. Grep `d.cmd ===` in `MainActivity.kt` for the curr
 > `openToolchainSettings`, `reclaimSafMirror`, `showAboutDialog`
 
 A method absent from that list is unreachable from any extension however correctly it is
-registered — which is the whole of why the toolchain management calls have no callers.
+registered, which is the whole of why the toolchain management calls have no callers.
 Adding a method to `AndroidBridge` does not publish it; the relay branch is a second,
 separate edit, and nothing fails if you forget it.
 
@@ -254,7 +254,7 @@ fun openFolderPicker(authToken: String)
 ```
 
 There is no `openFilePicker` and no `requestStoragePermission`. Individual files are
-not opened through a picker at all — a `content://` URI has no POSIX path and the
+not opened through a picker at all: a `content://` URI has no POSIX path and the
 server only ever sees POSIX paths. And there is no `MANAGE_EXTERNAL_STORAGE` in the
 manifest to request: external storage is reached through SAF, one user-granted folder
 at a time.
@@ -432,7 +432,7 @@ sequenceDiagram
 ```
 
 The scheme is `vscodroid://callback`, not `vscodroid://oauth/<provider>`, and the
-payload is a single `data` parameter carrying the workbench's own JSON — no
+payload is a single `data` parameter carrying the workbench's own JSON: no
 provider, code or state is parsed on the Kotlin side.
 
 **Four gates, and all of them refuse rather than relay.** The VIEW filter is
@@ -442,7 +442,7 @@ intent:
 | Gate | Where | What it rejects |
 |---|---|---|
 | `isExtensionCallback(scheme, host)` | `MainActivity.kt` | Anything that is not exactly scheme `vscodroid` **and** host `callback` |
-| `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast rather than injecting — deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
+| `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast rather than injecting, deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
 | `AuthTabWindow.armedAt(callbackRequestId(data))` | `MainActivity.kt` | A callback whose payload cannot be parsed, or whose `vscode-reqid` this app never launched a browser for. Logged only; a message here would be one an outside caller could raise at will |
 | `authCallbackIsExpected(armedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback for a request this app did launch, arriving more than `AUTH_TAB_WINDOW_MILLIS` (10 minutes, `AndroidBridge.kt`) after that launch. Shows a fixed "sign-in took too long" toast, since a slow consent screen or second factor otherwise fails in silence, and takes the launch record back as it does so |
 
@@ -564,9 +564,9 @@ fun listSshKeys(authToken: String): String
 // Every *.pub in ~/.ssh/, as a JSON array. Returns "[]" if the directory
 // does not exist. A key whose file cannot be read is skipped, not reported.
 // Each entry: { name, type, comment }
-//   name    — filename without the .pub suffix
-//   type    — first field of the public key line, e.g. "ssh-ed25519"
-//   comment — third field, "" when absent
+//   name:    filename without the .pub suffix
+//   type:    first field of the public key line, e.g. "ssh-ed25519"
+//   comment: third field, "" when absent
 // NOT a fingerprint: nothing here computes one. The KDoc on this method
 // said "fingerprint" while the code wrote "comment".
 ```
@@ -630,13 +630,13 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 | ------------------------- | ------ | -------------------------------------------- |
 | `/`                       | GET    | Serve vscode-web index.html. Answers **403** until the connection token is supplied |
 | `/static/**`              | GET    | Serve static assets (JS, CSS, fonts, images) |
-| `/version`                | GET    | Answered before the token check — which is what makes it the readiness probe |
+| `/version`                | GET    | Answered before the token check, which is what makes it the readiness probe |
 | `/vscode-remote-resource` | GET    | Serve workspace files to web client          |
 
 **There is no `/healthz` on the server this app runs.** This table listed one for a
 long time. The only thing that has ever served it is the fallback stub in
 `assets/server.js`, which runs *instead of* VS Code when `vscode-reh/out/server-main.js`
-is missing — a tree that was never built. On any real install that path is not taken,
+is missing: a tree that was never built. On any real install that path is not taken,
 and a probe of `/healthz` gets whatever the REH server does with an unknown route.
 
 ### 3.2 WebSocket Connection
@@ -645,12 +645,12 @@ and a probe of `/healthz` gets whatever the REH server does with an unknown rout
 | ------------------------ | ---------------------------------------------- |
 | `ws://localhost:PORT/ws` | Main RPC channel between web client and server |
 
-**Protocol**: VS Code's `IExtHostRpcProtocol` — binary-framed messages with JSON-RPC semantics.
+**Protocol**: VS Code's `IExtHostRpcProtocol`, binary-framed messages with JSON-RPC semantics.
 
 > **Unverified, and flagged rather than reworded.** The `/ws` path and the protocol name
 > above come from the original design notes. Neither can be checked from this repository:
 > the server tree is a build artifact fetched by `scripts/fetch-vscode-oss.sh` and is not
-> committed, and nothing on the Kotlin side names a WebSocket path — the WebView is
+> committed, and nothing on the Kotlin side names a WebSocket path; the WebView is
 > pointed at the root URL and VS Code's own client opens the socket. Confirm against
 > `src/vs/server/node/` at the pinned tag before relying on either. The rest of this
 > section was checked against shipped code; this table was not.
@@ -699,7 +699,7 @@ and then forwards a **whitelist of exactly four keys**:
 Added by `server.js` itself, not passed from Kotlin:
 
 - `--accept-server-license-terms`
-- `--disable-workspace-trust` — without it every folder opens in Restricted Mode and
+- `--disable-workspace-trust`: without it every folder opens in Restricted Mode and
   most extensions never activate. The `security.workspace.trust.enabled` setting
   cannot substitute: it is APPLICATION-scoped and the remote side contributes only
   machine/window/resource scopes, so the flag is the only route that works.
@@ -722,7 +722,7 @@ not only the spawn in `ProcessManager`.
 > and `getServerPid` exist on `ProcessManager`; `killServer` does not, and the
 > parameter lists below were written before the code. `isServerHealthy` is corrected
 > in place because it is the readiness probe and getting it wrong has cost this
-> project a release. Read `ProcessManager` for the rest — nothing gates this block.
+> project a release. Read `ProcessManager` for the rest; nothing gates this block.
 
 ```kotlin
 interface ProcessManager {
@@ -763,7 +763,7 @@ interface ProcessManager {
 ```
 GET http://127.0.0.1:PORT/version
 
-Response 200        : ready — and ONLY 200
+Response 200        : ready, and ONLY 200
 Anything else       : not ready. 403 in particular means the server is up and
                       demanding its connection token, which is not readiness
 Response timeout/err: not ready or crashed
@@ -773,7 +773,7 @@ Two details that are the whole reason this endpoint and not another. `/version` 
 answered **before** the token check, so it stays a pure liveness probe and needs no
 token. And the accepted set is exactly `200`: it was once "anything below 500",
 which was correct while every route answered 200 and became wrong the moment the
-server began requiring a token — `/` then answers 403, and a readiness check
+server began requiring a token; `/` then answers 403, and a readiness check
 counting 403 as healthy reports a successful start for a server that will serve the
 user nothing but Forbidden.
 
@@ -785,9 +785,9 @@ Startup: poll every 200ms for up to 30 seconds   (waitForReady defaults)
 
 That is the only polling there is. This block used to add "Running: poll every 5
 seconds (background watchdog)" and "After crash: poll every 200ms for up to 10
-seconds", and neither exists: the watchdog does not poll at all — it is a daemon
+seconds", and neither exists: the watchdog does not poll at all. It is a daemon
 thread blocked in `Process.waitFor()`, which costs nothing and learns of an exit
-immediately — and the post-crash wait is the same `waitForReady`, so its ceiling is
+immediately, and the post-crash wait is the same `waitForReady`, so its ceiling is
 30 seconds, not 10.
 
 ### 4.3 Process Death Handling
@@ -824,7 +824,7 @@ end state exists.
 ### 5.1 Open VSX Gallery API (used by VS Code UI)
 
 VS Code's built-in extension marketplace UI uses these endpoints. **Configured at
-runtime by `assets/server.js`, not at build time** — this section used to say
+runtime by `assets/server.js`, not at build time**. This section used to say
 "product.json", which points at the one place changing it does not work:
 
 ```js
@@ -842,12 +842,12 @@ Two things a reader editing this needs, both of which the old rendering hid:
 
 - **`branding/product.json` deliberately does not set the gallery**, and its own comment
   says why: at build time the gallery named in `product.json` is where the bundled
-  js-debug extensions are fetched from, and pointing that at Open VSX breaks the build —
+  js-debug extensions are fetched from, and pointing that at Open VSX breaks the build:
   Open VSX serves repackaged copies whose checksums no longer match the ones
   `product.json` pins. Left unset, they come from each extension's own GitHub release.
 - **All five keys must be listed together.** `server.js` applies `productOverrides` with
   a shallow `Object.assign`, so `extensionsGallery` replaces the built object whole.
-  Dropping `controlUrl` or `nlsBaseUrl` from this block does not inherit them — it
+  Dropping `controlUrl` or `nlsBaseUrl` from this block does not inherit them; it
   removes them.
 
 > The request *methods* are not stated here on purpose. VS Code's gallery client decides
@@ -880,14 +880,14 @@ Deactivate:
 Extensions reach a device from **two** places, and conflating them is why this section
 was wrong for a long time.
 
-**1. Code - OSS builtins** — 96 directories inside the built server tree at
+**1. Code - OSS builtins**: 96 directories inside the built server tree at
 `assets/vscode-reh/extensions/`. Themes and basic language support come from here:
 `theme-defaults`, `theme-monokai`, a `python` grammar extension, and so on. They are
 part of the server build, not of `assets/extensions/`, and nothing in this repository
-lists them — count them with
+lists them; count them with
 `ls android/app/src/main/assets/vscode-reh/extensions/`.
 
-**2. `assets/extensions/`** — nine directories, extracted to `~/.vscodroid/extensions/`
+**2. `assets/extensions/`**: nine directories, extracted to `~/.vscodroid/extensions/`
 on first run:
 
 ```mermaid
@@ -908,7 +908,7 @@ flowchart TD
 ⚠️ **`git ls-files` answers a different question than `ls` here, and the gap is
 deliberate.** `.gitignore` ignores `assets/extensions/*` and un-ignores only
 `vscodroid.vscodroid-*/`, because this project's own extensions are source and the rest
-are downloads. So a worktree shows **four** directories and a built tree shows **nine** —
+are downloads. So a worktree shows **four** directories and a built tree shows **nine**:
 the five Open VSX ones are fetched by `scripts/download-extensions.sh`, whose
 `EXTENSIONS` array is the tracked, authoritative list of what a build pulls. Read that
 array plus the four `vscodroid.*` directories; do not enumerate this set from git.
@@ -924,7 +924,7 @@ install on the old copy. `supersededExtensionDirs` is what removes the stale one
 
 ### 6.1 Internal API
 
-> **Sketch, not the shipped API.** None of these five methods exists in this form —
+> **Sketch, not the shipped API.** None of these five methods exists in this form:
 > the real one is `ToolchainManager` in Kotlin, and `ToolchainRegistry.available` is
 > what lists the toolchains. Kept as a record of the intended shape; do not write
 > against it.
@@ -971,7 +971,7 @@ interface Toolchain {
 > directory at all**, and nothing in `jniLibs/arm64-v8a/` is named for it. Every
 > occurrence of `vscodroid pkg` in this repository is in a document.
 >
-> Checked against a built tree rather than a worktree, with a control — `libnode.so`
+> Checked against a built tree rather than a worktree, with a control: `libnode.so`
 > resolves on the same path, so the absence below is a real absence and not a missing
 > build. Tier 3 of the bundling strategy remains a plan; the toolchains that do ship
 > arrive through `ToolchainManager`, not through this.
@@ -1007,9 +1007,9 @@ Exit codes:
 > document. There is no `E001`, no `SERVER_OOM`, no `WEBVIEW_TOO_OLD` constant anywhere
 > in the Kotlin, the JS or the resources.
 >
-> What the app actually surfaces is a small set of user-facing strings —
+> What the app actually surfaces is a small set of user-facing strings:
 > `error_server_start`, `error_server_timeout`, `error_storage_full`,
-> `error_setup_failed`, `status_server_slow_start` — plus log lines. Errors are not
+> `error_setup_failed`, `status_server_slow_start`, plus log lines. Errors are not
 > classified by code, so nothing can be filed, matched or triaged by one.
 >
 > One row is worth naming because it describes detection that does not exist rather than
@@ -1024,7 +1024,7 @@ Exit codes:
 > design record like the rest of the table.
 >
 > Kept as a design record. Do not write code that expects to receive these, and do not
-> cite a code in a bug report — no log line will contain one.
+> cite a code in a bug report; no log line will contain one.
 
 ### 7.1 Server Errors
 

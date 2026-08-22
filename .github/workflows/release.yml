@@ -261,7 +261,7 @@ jobs:
       #
       # See build.yml: the .deb entry pointed one directory above the files and
       # cached nothing, so every release refetched all 72 packages against a
-      # freshly resolved index — which is most of why re-running a tag could
+      # freshly resolved index, which is most of why re-running a tag could
       # ship different binaries. The path list below is a literal block: a `#`
       # line inside it is a path, not a comment.
       - name: Cache download intermediates
@@ -414,7 +414,7 @@ jobs:
       # agree: download-*.sh fills android/toolchain_*/src/main/assets, which is
       # what bundleRelease packs into the AAB for Play Asset Delivery, and
       # package-toolchains.sh zips those same directories for the GitHub Release
-      # that non-Play installs download from. Fetched separately they can differ —
+      # that non-Play installs download from. Fetched separately they can differ:
       # the versions come from the Termux index at fetch time, so one app version
       # could ship Go 1.24 through Play and Go 1.25 through GitHub.
       - name: Download toolchain assets
@@ -479,8 +479,8 @@ jobs:
 
       # Built here rather than on a maintainer's machine. While the server was a
       # pre-built download the host made no difference; building Code - OSS from
-      # source, it decides the contents — @vscode/ripgrep's postinstall branches on
-      # os.platform() and node-gyp takes its flavour from the host — so an AAB
+      # source, it decides the contents (@vscode/ripgrep's postinstall branches on
+      # os.platform() and node-gyp takes its flavour from the host), so an AAB
       # produced on macOS could differ from the APK that passed CI with no step
       # anywhere failing.
       - name: Build signed AAB

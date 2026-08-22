@@ -14,7 +14,7 @@ import androidx.core.view.WindowInsetsCompat
  * For plain screens only. The editor keeps its own listener
  * ([com.vscodroid.keyboard.ExtraKeyRow.setupWithRootView]) because it also
  * folds the IME inset in. Never attach this to a WebView: the render engine
- * ignores the view's own padding — pad its container instead.
+ * ignores the view's own padding; pad its container instead.
  */
 fun View.padForSystemBars(basePx: Int = 0) {
     ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->

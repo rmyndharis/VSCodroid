@@ -244,7 +244,7 @@ function namesProgram(name, needle) {
 function classify(cmdline) {
     const cmd = cmdline.toLowerCase();
 
-    // Main Android app process — not a phantom, managed by Activity Manager.
+    // Main Android app process: not a phantom, managed by Activity Manager.
     // Its cmdline is just the package name. Other processes also have the package
     // name in their binary PATH (e.g. /data/app/.../com.vscodroid.debug-.../lib/...)
     // so we must check for exact match, not substring.
@@ -267,7 +267,7 @@ function classify(cmdline) {
     if (cmd.includes('bootstrap-fork') && cmd.includes('filewatcher')) return 'fileWatcher';
     // SAF sync engine: mirrors content:// URIs to local filesystem for VS Code access
     if (cmd.includes('saf-mirrors') || cmd.includes('saf-writeback') || cmd.includes('safsync')) return 'safSync';
-    // ptyHost is now a worker_thread — no longer visible in /proc
+    // ptyHost is now a worker_thread: no longer visible in /proc
     if (names.includes('libtmux.so') || names.includes('tmux')) return 'tmux';
     if (names.includes('libbash.so') || names.includes('bash')) return 'terminal';
     // No "and not bash" guard needed once this is an exact name rather than a
@@ -376,7 +376,7 @@ function trackLangServer(pid, now) {
     }
 
     if (cpuTime !== prev.cpuTime) {
-        // CPU time changed — process is active
+        // CPU time changed: process is active
         lsCpuTracker.set(pid, { cpuTime, lastActive: now });
     }
     // else: cpuTime unchanged, lastActive stays the same (idle)

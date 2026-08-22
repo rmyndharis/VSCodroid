@@ -7,7 +7,7 @@ import java.io.File
 /**
  * The workbench ships as an ES module and no AMD loader is packaged with it, so
  * `window.require` does not exist in the page. Injected JavaScript that reaches for it
- * throws on its first line — and because those injections retry on a timer inside an
+ * throws on its first line, and because those injections retry on a timer inside an
  * empty catch, the failure leaves nothing behind: no command, no log, no error.
  *
  * Four commands were advertised for a year on that basis. This test is the thing that
@@ -20,7 +20,7 @@ class InjectedScriptApiTest {
     @Test
     fun `injected JavaScript does not reach for the AMD loader`() {
         check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath} — this test would " +
+            "MainActivity.kt not found at ${mainActivity.absolutePath}; this test would " +
                 "otherwise pass by looking at nothing"
         }
 

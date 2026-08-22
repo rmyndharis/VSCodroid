@@ -404,7 +404,7 @@ When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can p
 
 The page opens in an editor tab with back, forward and reload buttons, and an icon to
 hand the page to your device's browser if you would rather see it full screen. Edit,
-save, tap reload — without leaving the app.
+save, tap reload, all without leaving the app.
 
 Any loopback port works, whatever port your dev server picked.
 
@@ -498,7 +498,7 @@ Either way they land in the app's own storage and survive app updates.
 ### Installing After Setup
 
 The Language Picker is shown only once, but the screen it offers stays reachable.
-**Touch and hold the VSCodroid icon** — on the home screen or in the app drawer — and
+**Touch and hold the VSCodroid icon** (on the home screen or in the app drawer) and
 choose **Manage toolchains**. Installing and removing work exactly as they do during
 setup, so a language you skipped is not lost.
 
@@ -524,7 +524,7 @@ java Main
 
 ### Removing Toolchains
 
-Removing an installed toolchain is not reachable from the editor yet — see
+Removing an installed toolchain is not reachable from the editor yet; see
 [Installing After Setup](#installing-after-setup).
 
 ---
@@ -819,7 +819,7 @@ du -sh ~/.vscodroid/extensions/*
 ```
 
 To remove an installed toolchain, touch and hold the app icon and choose
-**Manage toolchains**. It is not reachable from inside the editor, deliberately —
+**Manage toolchains**. It is not reachable from inside the editor, deliberately;
 see [Installing After Setup](#installing-after-setup).
 
 ### App Crashes or Restarts Unexpectedly

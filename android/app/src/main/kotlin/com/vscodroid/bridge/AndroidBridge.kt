@@ -500,7 +500,7 @@ class AndroidBridge(
      * redaction matches the `tkn=` parameter, so a page that prints a bare token,
      * or one re-encoded as `tkn%3D` inside another parameter, passes through. See
      * [redactToken]. Closing that would mean redacting by the token's value, which
-     * this class could do and the webview call sites could not — worth knowing
+     * this class could do and the webview call sites could not, worth knowing
      * before anyone assumes parity between them.
      */
     @JavascriptInterface
@@ -936,7 +936,7 @@ class AndroidBridge(
      * Returns JSON: {success: boolean, publicKey?: string, error?: string}
      *
      * Uses the bundled ssh-keygen binary (libssh-keygen.so) via ProcessBuilder.
-     * Empty passphrase for mobile UX — keys are protected by app sandbox.
+     * Empty passphrase for mobile UX: keys are protected by app sandbox.
      */
     @JavascriptInterface
     fun generateSshKey(authToken: String, comment: String): String {

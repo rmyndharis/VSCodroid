@@ -24,7 +24,7 @@ import org.junit.jupiter.api.TestMethodOrder
  * It used to walk `src/test/kotlin` and require an `unmockk` call in every file
  * that installs a mock. That measured how well it searched. Deleting the
  * `@AfterEach` annotation from a teardown leaves the call in the file, so the text
- * still matched and the method never ran — the guard passed while the thing it
+ * still matched and the method never ran; the guard passed while the thing it
  * guarded was gone.
  *
  * The cleanup is now mockk's own `io.mockk.junit5.MockKExtension`, which the mockk
@@ -35,7 +35,7 @@ import org.junit.jupiter.api.TestMethodOrder
  * none can forget, and there is no annotation whose deletion matters.
  *
  * What is left worth testing is whether the mechanism is actually in force, which
- * is what these two cases do — and unlike a source scan, they fail if that
+ * is what these two cases do, and unlike a source scan, they fail if that
  * property is removed or set to false. Confirmed by doing exactly that before
  * trusting them.
  *
@@ -69,7 +69,7 @@ class StaticMockCleanupTest {
     @Order(2)
     fun `the mock is gone by the time the next test runs`() {
         // If the cleanup extension is not registered, PortFinder is still mocked here
-        // and isPortAvailable answers false for everything — which is exactly the
+        // and isPortAvailable answers false for everything, which is exactly the
         // cross-class contamination this guards against, observed within one class
         // so it does not depend on how the runner orders classes.
         val stillMocked = !PortFinder.isPortAvailable(0)

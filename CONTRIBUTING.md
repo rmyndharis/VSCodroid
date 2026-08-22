@@ -58,7 +58,7 @@ Before you can build the APK, the `android/app/src/main/assets/` and `android/ap
 
 Run the download scripts in this order:
 
-This is the order CI uses, and the order matters — each step below notes why.
+This is the order CI uses, and the order matters: each step below notes why.
 
 ```bash
 # 0. Prerequisites. Checks node, git and python3, and exits on a missing
@@ -208,7 +208,7 @@ VSCodroid/
 │   ├── device-launch.sh              # Launch on device, dismissing first-run dialogs
 │   ├── build-aab.sh                  # Build a signed AAB outside CI
 │   └── generate-branding-icons.py    # Regenerate the web client's PWA icons
-├── toolchains/                    # Work dir for the download scripts — gitignored,
+├── toolchains/                    # Work dir for the download scripts, gitignored,
 │                                  #   cached by CI, safe to delete (costs a re-download)
 ├── patches/                       # Unified diffs applied to the VS Code source
 │   ├── NNNN-<description>.patch      # Flat, applied in filename order, before gulp
@@ -227,7 +227,7 @@ VSCodroid/
 | `SplashActivity.kt` | First-run asset extraction, progress UI, the toolchain picker, and the per-launch repairs that run on every start |
 | `VSCodroidApp.kt` | Application class, WebView pre-warm, CrashReporter init |
 | `bridge/AndroidBridge.kt` | JS interface: clipboard, file picker, OAuth, SSH, storage, toolchains |
-| `bridge/SecurityManager.kt` | The bridge session token: issues it, and validates it on every `@JavascriptInterface` call. It judges the caller, never the destination — there is no URL allow-list, and WebView navigation is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading` |
+| `bridge/SecurityManager.kt` | The bridge session token: issues it, and validates it on every `@JavascriptInterface` call. It judges the caller, never the destination: there is no URL allow-list, and WebView navigation is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading` |
 | `keyboard/ExtraKeyRow.kt` | Multi-page key bar with ViewPager2 and dot indicators |
 | `keyboard/GestureTrackpad.kt` | 3-speed drag-to-cursor-navigate widget: touch plumbing and drawing |
 | `keyboard/TrackpadGesture.kt` | The gears and the arrows a drag earns, with no Android types, so it can be tested on the JVM |
@@ -243,14 +243,14 @@ VSCodroid/
 
 The download scripts place pre-built binaries under `android/app/src/main/`. Listed with them are the checkers, patchers and self-checks that run beside those downloads, from a workflow, from another script, or from a Gradle verification task. The scripts a contributor invokes directly are in [Preparing Assets](#preparing-assets), [The on-device test suite](#the-on-device-test-suite) and [Quick Deploy Script](#quick-deploy-script).
 
-**To find out which version of something ships, read the script — never the
+**To find out which version of something ships, read the script, never the
 assets tree.** The downloaded trees under `android/app/src/main/assets/`, which are
 `vscode-reh/`, `usr/` and the marketplace extensions, are gitignored build output
 filled by whichever run of these scripts happened last; a checkout can be weeks
 stale and still hold a well-formed file that answers confidently. That has
 produced a wrong number in a published issue: `node_modules/npm/package.json`
 was read from a working tree, parsed cleanly, and reported a version the app had
-already stopped shipping. The rule is not "read the assets tree carefully" — the
+already stopped shipping. The rule is not "read the assets tree carefully"; the
 assets tree is never the answer, even on the days it happens to be right, and
 two people reading it the same way got different results only because their
 checkouts differed.
@@ -262,11 +262,11 @@ checkouts differed.
 | `generate-branding-icons.py` | Renders the web client's PWA icon set from the Android launcher icon. Run **by hand** when the launcher icon changes, never by CI, and its outputs are committed: `build-vscode-oss.sh` copies them into the server tree, so the build consumes the committed files and not this script. Load-bearing rather than cosmetic, because upstream ships Microsoft's VS Code icon there and that cannot travel with this app. Needs Pillow | `branding/server/{code-192.png,code-512.png,favicon.ico}` |
 | `device-launch.sh` | Launches the app on a connected device and clears what blocks a first run, matching the POST_NOTIFICATIONS prompt and the toolchain picker by their on-screen text through `uiautomator` rather than by fixed coordinates. Worth knowing why it exists: both dialogs take focus, so the app is backgrounded and its process is gone, which through `ps` and `logcat` reads exactly like a crash. Run by hand, not by CI | the app running on the device |
 | `build-aab.sh` | Builds a signed release bundle outside CI, reading the keystore from the gitignored `android/signing.properties` or the `VSCODROID_*` environment variables. Run by hand; `release.yml` builds the published bundle itself and does not call this. Useful for checking what a release build actually produces, assets and signing included. It is not the only build that reaches R8: `release.yml` runs `bundleRelease` on the tag, and the `Shrinker` workflow (`r8.yml`) runs `:app:optimizeReleaseResources :app:lintVitalRelease`, which pulls `minifyReleaseWithR8` in without needing the keystore or the asset tree | `app/build/outputs/bundle/release/app-release.aab` |
-| `verify-server-tree.py` | Checks a server tree: required paths, no vsda, no bundled GNU/Linux node, every native binary aarch64, branding applied. Run by both scripts above on the tree they produce, and again by the `verifyServerTree` Gradle task on the copy in `assets/` that is actually packaged — which on a warm-cache build is the only run that happens | exit status |
+| `verify-server-tree.py` | Checks a server tree: required paths, no vsda, no bundled GNU/Linux node, every native binary aarch64, branding applied. Run by both scripts above on the tree they produce, and again by the `verifyServerTree` Gradle task on the copy in `assets/` that is actually packaged, which on a warm-cache build is the only run that happens | exit status |
 | `download-termux-tools.sh` | Downloads bash, git, tmux, make, openssh and every shared library the bundled binaries link against, including Node's | `jniLibs/arm64-v8a/`, `assets/usr/` |
 | `download-node.sh` | Installs Termux's `nodejs-lts` as `libnode.so`. Run after `download-termux-tools.sh`, which places the libraries it links against | `jniLibs/arm64-v8a/libnode.so` |
 | `patch-default-shell.py` | Repoints a bundled file's compiled-in default shell from Termux's own prefix, a directory inside another application that this one cannot read, to `/system/bin/sh`. Called by `download-node.sh` on `libnode.so`, by `download-termux-tools.sh` on git, git-remote-curl, tmux, make and ssh, by `download-python.sh` on the stdlib's `subprocess.py`, and by `download-ruby.sh` on `libruby.so`, the pty extension and `mkmf.rb`, each on the file it has just installed and before the ELF gate. Four spellings are handled. The two that sit inside an ELF keep the file's length, a C string constant padded with NULs and Node's JavaScript source padded with spaces; the two standalone text files have no fixed length and are rewritten plainly, which matters for `mkmf.rb` because its line is copied verbatim into every generated `Makefile` and a make variable keeps its trailing whitespace. Each call fails unless the path is there exactly once, so an upstream change stops the build rather than shipping a file whose shell nobody has established. A file that already names that shell is reported as such and left alone, so an already-placed one can be handed to it to find out where it stands. `--check <dir>` rewrites nothing and fails if any regular file under the directory, at any depth, still names Termux's prefix. That is how the `verifyBundledShellPaths` Gradle task answers for the whole of `jniLibs/` at packaging time, including binaries restored from a cache that no download step re-ran, and how `download-ruby.sh` and the `verifyRubyPackShellPaths` Gradle task answer for the whole Ruby asset pack rather than only the three files that script names | the file, rewritten in place; or exit status under `--check` |
-| `verify-android-elf.py` | Checks a binary can load on Android: aarch64, no unbundled dependency, 16 KB-aligned segments. Called by every script that installs a binary — the Termux, Node, Python, musl and toolchain downloads, the native-addon and shim builds, and `fetch-vscode-oss.sh` for ripgrep — each on the one file it just placed. `--dir` checks a whole directory instead, which is how the `verifyBundledBinaries` Gradle task re-examines all of `jniLibs/` at packaging time, including binaries restored from a cache that no download step re-ran | exit status |
+| `verify-android-elf.py` | Checks a binary can load on Android: aarch64, no unbundled dependency, 16 KB-aligned segments. Called by every script that installs a binary (the Termux, Node, Python, musl and toolchain downloads, the native-addon and shim builds, and `fetch-vscode-oss.sh` for ripgrep), each on the one file it just placed. `--dir` checks a whole directory instead, which is how the `verifyBundledBinaries` Gradle task re-examines all of `jniLibs/` at packaging time, including binaries restored from a cache that no download step re-ran | exit status |
 | `verify-termux-index.sh` | Checks the Termux package index against the repository's signed `InRelease` before any digest is read out of it, so the filenames and checksums the download scripts trust rest on a signature rather than on one host. Called by every script above and below that reads the index; needs `gpg`. A cached index that has fallen behind is refetched once rather than refused, since callers keep one for an hour and upstream publishes daily. The signed file also has to name the repository the caller is reading packages from, since one key signs all of Termux's. A run that accepts a downloaded `InRelease` keeps it beside the index it covers, and `TERMUX_OFFLINE=1` verifies against that stored copy instead of downloading one. The stored copy is re-checked in full, signature, pinned fingerprint, repository and age alike, and the refetch above is switched off, since it would replace the index while its signature stayed the stored one | exit status |
 | `lib/termux-packages.sh` | Sourced, never run. The index fetch, the signature check, package resolution and the per-`.deb` digest check, shared by the four scripts that take packages from Termux: `download-termux-tools.sh`, `download-python.sh`, `download-ruby.sh` and `download-java.sh`. Each of those carried its own copy, so a correction to any of it had to be made four times and was worth nothing until it had been. What a caller still owns is its package list, where the files go, and which of them are checked as ELF objects. ⚠️ `download-node.sh` deliberately keeps its own: it resolves one package and writes its record after the ELF gate rather than at resolve time | functions, no output of its own |
 | `download-npm.sh` | Extracts npm from Node.js linux-arm64 tarball | `assets/usr/lib/node_modules/npm/` |
@@ -285,7 +285,7 @@ checkouts differed.
 | `check-patch-fingerprints.py` | Checks a packaged tree carries every patch in `patches/`, using the expectations in `patches/fingerprints.txt`. Takes the tree as an argument, so the same check can run against a downloaded tarball | exit status |
 | `check-patches-apply.sh` | Fetches the newest stable upstream VS Code tag and applies every patch in `patches/` to it, cumulatively and in glob order, the way `build-vscode-oss.sh` does. Answers what the build cannot: how much of `patches/` survives the NEXT bump, rather than whether it fits the pinned commit. Run weekly by `patch-drift.yml`, and on demand with a tag argument. Applied cumulatively rather than one at a time because two patches touch `remoteExtensionHostAgentServer.ts`, so an independent `--check` would judge the second against source the first was to have changed. ⚠️ Expected to fail between an upstream move and the bump that answers it, so it is not a gate and must not be added to branch protection. Stops at the first failing patch: a later one applying to a tree that never came to exist proves nothing | exit status |
 | `check-welcome-claims.py` | Refuses a welcome screen that names a bundled tool's version, promises a toolchain as "coming soon", or puts an undeclared number in walkthrough prose or an illustration. Those runtimes come from the Termux index at build time, so a number written into the manifest is right until the next rebuild -- it was wrong for two releases, in the illustrations as well as the text | exit status |
-| `check-bridge-api-spec.py` | Checks every `@JavascriptInterface` method in `AndroidBridge.kt` against `docs/05-API_SPEC.md` on name, parameter list and return type, both directions. The spec is what an extension author writes against and nothing had held it to the bridge: one pass found fourteen disagreements across twenty-eight methods, four of them invisible to a comparison of names because only the shape was wrong. ⚠️ Half the gate, and it reports ok on what it cannot see: a method whose annotation is spelled in a way its patterns miss (`@android.webkit.JavascriptInterface`, an aliased import), and any method the bridge **inherits** — its window is one file. `BridgeApiSpecParityTest` is the other half and settles which methods exist, by reflecting over the compiled class, so spelling and inheritance stop being categories. Return types, parameter names, order and nullability go the other way: they do not survive into bytecode, so this script checks them and the test cannot. Neither checks prose | exit status |
+| `check-bridge-api-spec.py` | Checks every `@JavascriptInterface` method in `AndroidBridge.kt` against `docs/05-API_SPEC.md` on name, parameter list and return type, both directions. The spec is what an extension author writes against and nothing had held it to the bridge: one pass found fourteen disagreements across twenty-eight methods, four of them invisible to a comparison of names because only the shape was wrong. ⚠️ Half the gate, and it reports ok on what it cannot see: a method whose annotation is spelled in a way its patterns miss (`@android.webkit.JavascriptInterface`, an aliased import), and any method the bridge **inherits**: its window is one file. `BridgeApiSpecParityTest` is the other half and settles which methods exist, by reflecting over the compiled class, so spelling and inheritance stop being categories. Return types, parameter names, order and nullability go the other way: they do not survive into bytecode, so this script checks them and the test cannot. Neither checks prose | exit status |
 | `check-bundle-size.py` | Checks the release bundle against Play's per-module size caps before anything is published, rather than at upload | exit status |
 | `check-pack-overlap.py` | Refuses an asset entry the base module and a toolchain pack both carry. Bundletool answers such a bundle by refusing the AAB outright, and the two trees are filled by different download scripts, so nothing compares them until the bundle exists. `release.yml` runs it right after the downloads, the one place both trees are populated, and the `checkPackOverlap` Gradle task runs it again so a local `./gradlew bundleRelease` is covered too; that task is armed by the Ruby pack holding a payload, since comparing an empty pack against the base module reports no overlap for the wrong reason. A pack needing a library the base runtime already ships relies on the base copy, which is extracted before any toolchain installs | exit status |
 | `check-local-network-permission.py` | Checks local network access survives the `targetSdk` in use | exit status |
@@ -365,20 +365,20 @@ installed toolchain: the toolchain checks then report skipped, and only
 oversight.** GitHub's arm64 runners expose no `/dev/kvm`, so an emulator there
 runs under full software emulation; and nine of the eleven bundled executables
 request `/system/bin/linker64`, so running them under `qemu-user` needs Android's
-Bionic from a system image — 2.1 GB, inside a partitioned disk image. Both routes
+Bionic from a system image: 2.1 GB, inside a partitioned disk image. Both routes
 were attempted and measured; the issue tracker carries the evidence.
 
-So it falls to a person. Two suites, one cadence — `device-test.sh` inspects what
-shipped, `--instrumented` runs the app:
+So it falls to a person. Two suites, one cadence (`device-test.sh` inspects what
+shipped, `--instrumented` runs the app):
 
-- before tagging a release — **both**, and the instrumented one first, because it
+- before tagging a release: **both**, and the instrumented one first, because it
   is the only thing here that starts the app rather than reading what was packed
   into it;
 - after changing anything under `scripts/download-*.sh` or `scripts/build-*.sh`,
-  which decide what gets bundled — `device-test.sh`;
-- after a Node, Python or VS Code version bump — `device-test.sh`;
+  which decide what gets bundled: `device-test.sh`;
+- after a Node, Python or VS Code version bump: `device-test.sh`;
 - after touching `MainActivity`, `SplashActivity`, `NodeService`, `ProcessManager`
-  or `FirstRunSetup` — `--instrumented`, the only thing that runs them on a
+  or `FirstRunSetup`: `--instrumented`, the only thing that runs them on a
   device. The JVM suite reaches parts of all five; what it never does is start
   the app.
 
@@ -406,13 +406,13 @@ install and then has no arm64 library to load, and the gitignored asset tree
 being absent produces an APK that builds, installs, opens, and dies. It names
 every missing precondition rather than stopping at the first. With more than one
 emulator attached it refuses and asks for `--device SERIAL`, which it passes on
-as `ANDROID_SERIAL` — Gradle would otherwise pick one for itself and not say
+as `ANDROID_SERIAL`; Gradle would otherwise pick one for itself and not say
 which, so a green run would not name the API level it was green on.
 
 This suite once demanded Node `v20.x` for two releases after the runtime moved to
 24.18.0, and the drift was found by reading it rather than by running it. The
 versions it checks are now read from the build rather than written down, and
-`--self-check` runs in CI to confirm those readings still resolve — but neither
+`--self-check` runs in CI to confirm those readings still resolve, but neither
 replaces running it on a device.
 
 ### Test the wire, not only the predicate
@@ -454,7 +454,7 @@ and to every "still exists", "was not deleted", "was left alone".
 When the thing being judged is a guard rather than a test, measure the tree it
 will guard, not the tree that caused it to be written. A rule for the welcome
 screen was scored against the content the fix replaced, and every number in that
-reading was correct — right command, right tree, right moment — but it described
+reading was correct (right command, right tree, right moment), but it described
 what the rule was written to remove rather than what would have to pass it
 afterwards. Nothing marks that mistake, because the data comes out of the very
 file the change edits.
@@ -765,7 +765,7 @@ fails the build instead of being skipped.
    ```bash
    git -C /path/to/vscode diff > patches/NNNN-short-description.patch
    ```
-   Number it after the last existing patch — run `ls patches/` rather than assuming, since the count
+   Number it after the last existing patch: run `ls patches/` rather than assuming, since the count
    moves. Order matters: they are applied in filename order.
 
 3. **Leave a fingerprint.** The build's Verify stage greps the packaged bundles for a string from
@@ -905,13 +905,13 @@ A review often turns up more than the change can carry: something adjacent, some
 pre-existing, something real but out of scope. Give every one of those a home before the
 PR merges.
 
-- **Fixed in the same PR** — nothing more to do.
-- **Not fixed** — open an issue, and link it from the review thread. One issue per finding,
+- **Fixed in the same PR**: nothing more to do.
+- **Not fixed**: open an issue, and link it from the review thread. One issue per finding,
   titled so it can be found by name.
-- **Rejected** — say so in the thread, with the reason. "Checked, does not apply because X"
+- **Rejected**: say so in the thread, with the reason. "Checked, does not apply because X"
   is a resolution; silence is not.
 
-The rule is that no finding leaves review referenced only by something ephemeral — a position
+The rule is that no finding leaves review referenced only by something ephemeral: a position
 in a list, "the second one", a number that exists nowhere in this repository. Those references
 stop meaning anything the moment the discussion scrolls away, and the finding is then either
 rediscovered at full cost or quietly assumed to be handled.

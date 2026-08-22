@@ -35,12 +35,12 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 ### 2.2 Product Functions (High-Level)
 
-1. **Code Editing** — Full VS Code Workbench with Monaco Editor
-2. **Extension Support** — Install and run extensions from Open VSX
-3. **Integrated Terminal** — Bash shell with Node.js, Python, and Git
-4. **Mobile UX** — Extra Key Row, clipboard bridge, touch optimization
-5. **Dev Environment** — Bundled toolchains + on-demand downloads
-6. **Source Control** — Git integration via SCM panel and CLI
+1. **Code Editing**: Full VS Code Workbench with Monaco Editor
+2. **Extension Support**: Install and run extensions from Open VSX
+3. **Integrated Terminal**: Bash shell with Node.js, Python, and Git
+4. **Mobile UX**: Extra Key Row, clipboard bridge, touch optimization
+5. **Dev Environment**: Bundled toolchains + on-demand downloads
+6. **Source Control**: Git integration via SCM panel and CLI
 
 ### 2.3 User Characteristics
 
@@ -53,7 +53,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 - ARM64 Android only (API 33+)
 - All binaries must be bundled as .so in APK (Android W^X enforcement)
-- Open VSX only — Microsoft Marketplace ToS prohibits third-party access
+- Open VSX only: Microsoft Marketplace ToS prohibits third-party access
 - Android phantom process limit (32 system-wide) constrains child process count
 - See [Section 5: System Constraints](#5-system-constraints) for detailed list
 

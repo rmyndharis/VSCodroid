@@ -8,7 +8,7 @@ const path = require('path');
 const WALKTHROUGH_ID = 'vscodroid.vscodroid-welcome#vscodroid.welcome';
 
 function activate(context) {
-    // File-based marker — survives force-stop (globalState does not,
+    // File-based marker: survives force-stop (globalState does not,
     // because SIGKILL prevents VS Code from flushing its state DB)
     const markerFile = path.join(
         process.env.HOME || process.env.USERPROFILE || '/tmp',
@@ -44,7 +44,7 @@ function activate(context) {
                 WALKTHROUGH_ID,
                 false
             );
-            // Close sidebar AFTER walkthrough is shown — on mobile the
+            // Close sidebar AFTER walkthrough is shown: on mobile the
             // Explorer panel eats ~40% of the screen. Closing after ensures
             // the walkthrough command doesn't re-trigger the sidebar.
             vscode.commands.executeCommand('workbench.action.closeSidebar');

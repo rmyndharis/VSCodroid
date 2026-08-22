@@ -16,7 +16,7 @@ terminal can start. Found by booting the Code - OSS tree on an API 36 emulator;
 planning had this line recorded as unreachable, which is true only of the process
 that receives the CLI argument.
 
-Falling through to the linux case is right rather than merely convenient — the
+Falling through to the linux case is right rather than merely convenient: the
 value is XDG_CONFIG_HOME or ~/.config, and both are correct here. It is also
 moot in practice, since every process that reaches this code on device is given
 an explicit --user-data-dir; what matters is that the default arm no longer

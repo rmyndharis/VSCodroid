@@ -54,7 +54,7 @@ private val SENSITIVE = listOf(
  * What [resolveWebviewResource] will and will not hand to a WebView.
  *
  * The paths here are deliberately synthetic and do not exist on the host, so
- * canonicalisation normalises them without resolving anything — which keeps
+ * canonicalisation normalises them without resolving anything, which keeps
  * every assertion below a statement about the resolver rather than about the
  * machine the suite happens to run on. The cases that need a real filesystem
  * live in [WebviewResourceSymlinkTest].
@@ -87,8 +87,8 @@ class WebviewResourceResolutionTest {
      * The control the assertions above depend on: a resolver that answered
      * null to everything would satisfy them and prove nothing.
      *
-     * Catches: a root list the resolver can never match — a trailing separator
-     * left on a root, or a boundary test that demands equality.
+     * Catches: a root list the resolver can never match (a trailing separator
+     * left on a root, or a boundary test that demands equality).
      */
     @Test
     fun `an installed extension's own media is served`() {
@@ -263,8 +263,8 @@ class PublishedResourceRootsTest {
      * canonicalised.
      *
      * That second half bites here rather than hypothetically: a JUnit temporary
-     * directory on this host is reached through a link — `/var/folders/…` for
-     * `/private/var/folders/…` — so a root left as written matches no request
+     * directory on this host is reached through a link (`/var/folders/…` for
+     * `/private/var/folders/…`), so a root left as written matches no request
      * at all, and every assertion below fails. What that failure would look
      * like in the app is a workbench with no extension resources in it.
      */
@@ -299,7 +299,7 @@ class PublishedResourceRootsTest {
      * Catches: covering the internal fallback by publishing its parent. When
      * external storage is unavailable the projects directory moves to
      * `<filesDir>/home/projects`, and the shortest root that covers it is
-     * `<filesDir>/home` — the directory holding `.ssh`.
+     * `<filesDir>/home`, the directory holding `.ssh`.
      */
     @Test
     fun `the internal projects fallback does not publish the home directory`() {
@@ -365,7 +365,7 @@ class WorkspaceRootTest {
 
     /**
      * Catches: testing containment in one direction only. `.ssh` contains no
-     * sensitive location — it *is* one — so a rule asking only "does the
+     * sensitive location (it *is* one), so a rule asking only "does the
      * candidate hold something sensitive" publishes it.
      */
     @Test

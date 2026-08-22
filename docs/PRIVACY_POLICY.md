@@ -41,9 +41,9 @@ When you browse, search for, or install extensions, the app connects to **Open V
 
 ### Signing In to a Service From the Editor (User-Initiated)
 
-If an extension asks you to sign in — to GitHub, for example — the app hands that extension's authorisation URL to your device's browser, and the sign-in happens there rather than inside the app. VSCodroid never sees your password: it is typed into the provider's own page in the browser.
+If an extension asks you to sign in (to GitHub, for example), the app hands that extension's authorisation URL to your device's browser, and the sign-in happens there rather than inside the app. VSCodroid never sees your password: it is typed into the provider's own page in the browser.
 
-What comes back is a single opaque value that the editor itself issued and is waiting for. The app passes it to the editor page without reading, parsing or storing it, and without sending it anywhere. It is accepted only while a sign-in is plausibly in flight — the app records when it last opened a browser, and a callback arriving outside a ten-minute window from that moment is discarded rather than delivered, so another app on your device cannot inject one at will.
+What comes back is a single opaque value that the editor itself issued and is waiting for. The app passes it to the editor page without reading, parsing or storing it, and without sending it anywhere. It is accepted only while a sign-in is plausibly in flight: the app records when it last opened a browser, and a callback arriving outside a ten-minute window from that moment is discarded rather than delivered, so another app on your device cannot inject one at will.
 
 Any tokens the editor keeps afterwards are stored locally in the app's private storage on your device.
 
@@ -59,7 +59,7 @@ If you would rather it were not there, disable or uninstall **GitHub Copilot Cha
 
 ### Git Operations (User-Initiated)
 
-When you push, pull, clone or fetch, the bundled Git client connects directly to the remote you configured — GitHub, GitLab, a self-hosted server, whatever you named. VSCodroid does not proxy these connections, add its own destinations, or record where you push.
+When you push, pull, clone or fetch, the bundled Git client connects directly to the remote you configured: GitHub, GitLab, a self-hosted server, whatever you named. VSCodroid does not proxy these connections, add its own destinations, or record where you push.
 
 ### Toolchain Downloads (User-Initiated)
 
@@ -91,7 +91,7 @@ This is written as an allowlist, so everything not named above is excluded rathe
 - your SSH keys (`~/.ssh`) and the local server's connection token
 - your projects and any folder you opened from device storage
 - the bundled runtimes and any language toolchains you installed
-- app preferences, deliberately — restoring those onto a device with empty storage would make the app believe setup had already run
+- app preferences, deliberately: restoring those onto a device with empty storage would make the app believe setup had already run
 
 To turn it off entirely, use Android's own control: **Settings → Google → Backup**, or the per-app backup setting your device provides. It is Android's switch, not ours.
 
@@ -111,7 +111,7 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 The following data is stored locally on your device within the app's private sandbox:
 
 - **Your project files**: Stored in the app's internal storage or in locations you grant access to
-- **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. So a second copy of that folder exists inside the app for as long as it stays open to you, and it is removed when you uninstall or clear app data along with everything else. Nothing about the copy leaves the device — it is excluded from backup — but you should know it is made
+- **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. So a second copy of that folder exists inside the app for as long as it stays open to you, and it is removed when you uninstall or clear app data along with everything else. Nothing about the copy leaves the device (it is excluded from backup), but you should know it is made
 - **Editor settings and preferences**: Stored locally as JSON configuration files
 - **Installed extensions**: Downloaded from Open VSX and stored locally
 - **SSH keys**: If you generate SSH keys using the built-in tool, they are stored in the app's private `~/.ssh/` directory. They never leave your device unless you explicitly copy or use them

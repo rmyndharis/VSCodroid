@@ -333,7 +333,7 @@ void *__shim_resolve(const char *name) {
  * Accessors for the data symbols the stubs re-export. The stubs cannot read
  * `environ` or `stdout` by name: they define those very names (versioned, at
  * default visibility), so the reference would bind to their own zeroed storage
- * and the constructor would copy NULL over NULL — measured with readelf, the
+ * and the constructor would copy NULL over NULL; measured with readelf, the
  * GLOB_DAT entries pointed at the stub's own .bss. This library defines
  * neither name, so from here the same references reach Bionic's real ones.
  */

@@ -11,7 +11,7 @@
 VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + Node.js) that cross-compiles native binaries. Testing must cover all layers and their integration points.
 
 **Principles**:
-- Test the integration boundaries (Kotlin ↔ WebView ↔ Node.js) — that's where bugs hide
+- Test the integration boundaries (Kotlin ↔ WebView ↔ Node.js); that's where bugs hide
 - Automate what can run on CI; manual test what requires real devices
 - Prioritize real device testing over emulator (ARM64 binaries don't run on x86 emulators)
 - Test on the lowest-spec supported device (4GB RAM, Android 13)

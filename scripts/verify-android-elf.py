@@ -3,9 +3,9 @@
 
     verify-android-elf.py <file> [--lib-dir DIR]...
 
-Three things, each of which fails the same quiet way at runtime — the file is
+Three things, each of which fails the same quiet way at runtime (the file is
 present, the build is green, and the process dies or the addon refuses to load
-with a message nobody sees:
+with a message nobody sees):
 
   * aarch64, so it matches the only ABI this app ships;
   * every DT_NEEDED library is one Bionic provides or one we bundle, since a

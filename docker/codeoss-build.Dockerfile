@@ -6,14 +6,14 @@
 #
 # Left at the host's own architecture on purpose. Our target is
 # vscode-reh-web-linux-arm64, so on an arm64 machine this builds natively and the
-# remote/ native modules — which remote/.npmrc forces to build_from_source — need
+# remote/ native modules (which remote/.npmrc forces to build_from_source) need
 # no qemu at all. Microsoft's own pipeline reaches for multiarch/qemu-user-static
 # precisely because it builds arm64 on x64; we can skip that whole layer.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Matches .nvmrc at the VS Code tag being built — the Node this build host runs.
+# Matches .nvmrc at the VS Code tag being built: the Node this build host runs.
 # The Node that ends up on the device is a separate number, remote/.npmrc
 # `target`, satisfied by the Termux package download-node.sh fetches. For 1.133.0
 # both happen to be 24.18.0; do not assume that holds at the next tag.

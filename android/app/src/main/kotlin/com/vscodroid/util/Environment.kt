@@ -26,7 +26,7 @@ object Environment {
         // nativeLibraryDir cannot leave it dangling.
         //
         // SHELL is what a terminal falls back to when no profile supplies a
-        // default, so the basename has to be right on that path too — but it is
+        // default, so the basename has to be right on that path too, but it is
         // not the only path. `terminal.integrated.profiles.linux` is read; see
         // createDefaultSettings() in FirstRunSetup for why `linux` is the suffix
         // the workbench looks up on Android.
@@ -138,7 +138,7 @@ object Environment {
             "NPM_CONFIG_CACHE" to "$cacheDir/npm-cache",
             "PROJECTS_DIR" to getProjectsDir(context),
             // The Claude Code CLI otherwise looks for a ripgrep under its own
-            // vendor/<arch>-<platform>/ — a directory that cannot exist here,
+            // vendor/<arch>-<platform>/, a directory that cannot exist here,
             // since process.platform reports "android" and the builds shipped
             // are for glibc and musl. Unset, it finds nothing and searching
             // fails with no explanation. Falsy sends it to `rg` on PATH, which
@@ -155,7 +155,7 @@ object Environment {
         return try {
             ToolchainManager(context).getAllToolchainEnv().toMutableMap()
         } catch (e: Exception) {
-            // Toolchain state file may not exist yet — not an error
+            // Toolchain state file may not exist yet, not an error
             mutableMapOf()
         }
     }
@@ -222,7 +222,7 @@ object Environment {
      * `remoteAgentEnvironmentImpl.ts:112` hands exactly that to the client as the
      * remote `settingsPath`.
      *
-     * Only REMOTE_MACHINE_SCOPES are taken from it — MACHINE, WINDOW, RESOURCE,
+     * Only REMOTE_MACHINE_SCOPES are taken from it: MACHINE, WINDOW, RESOURCE,
      * LANGUAGE_OVERRIDABLE, MACHINE_OVERRIDABLE (`configuration.ts:387`). An
      * APPLICATION-scoped setting is still ignored here no matter how correct the
      * path is, which is why Workspace Trust needs the server's CLI flag.
@@ -335,7 +335,7 @@ object Environment {
         "${context.applicationInfo.nativeLibraryDir}/libbash.so"
 
     /**
-     * The shell to name in the terminal profile — the maintained symlink, never
+     * The shell to name in the terminal profile: the maintained symlink, never
      * the `nativeLibraryDir` binary it points at.
      *
      * VS Code decides whether it can inject shell integration by switching on the
@@ -392,7 +392,7 @@ object Environment {
     fun getSafMirrorDir(context: Context, safUri: Uri): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(safUri.toString().toByteArray())
-            .take(6) // 6 bytes = 12 hex chars — collision probability ~1 in 281 trillion
+            .take(6) // 6 bytes = 12 hex chars, collision probability ~1 in 281 trillion
             .joinToString("") { "%02x".format(it) }
         return "${getSafMirrorsDir(context)}/$hash"
     }

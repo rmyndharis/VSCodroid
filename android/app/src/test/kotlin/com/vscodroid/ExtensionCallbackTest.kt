@@ -23,7 +23,7 @@ import java.io.File
  *
  * `AndroidManifest.xml` gives `MainActivity` a VIEW filter for
  * `vscodroid://callback` carrying BROWSABLE, so the sender is any installed app
- * or any page the user taps a link on — and what arrives is written into the
+ * or any page the user taps a link on, and what arrives is written into the
  * workbench's `localStorage` and announced with a synthetic `StorageEvent`. The
  * filter exists precisely so an outside app (the browser finishing a sign-in)
  * can reach in, so the check cannot be about who sent it. What is left is that
@@ -464,7 +464,7 @@ class AuthCallbackCallSiteTest {
     @Test
     fun `the relay asks whether a sign-in was in flight`() {
         check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath} — this test " +
+            "MainActivity.kt not found at ${mainActivity.absolutePath}; this test " +
                 "would otherwise pass by looking at nothing"
         }
 
@@ -1252,8 +1252,8 @@ private object TokenTaint {
  * Shape was the only thing the relay could judge, and shape is exactly what an
  * unsolicited sender can produce. The id the value is filed under is handed out
  * by the workbench as a counter from one, so it is not a secret that has to be
- * guessed either. Identity cannot be checked at all — the legitimate sender is
- * whichever browser the user has — so what is left is timing: this app either
+ * guessed either. Identity cannot be checked at all (the legitimate sender is
+ * whichever browser the user has), so what is left is timing: this app either
  * opened a sign-in tab in the last few minutes or it did not.
  *
  * Every case here is arithmetic on three numbers, which is why the function
@@ -1318,7 +1318,7 @@ class AuthCallbackExpectedTest {
  * What a failed folder switch leaves watched.
  *
  * The watcher is stopped before every sync so the engine cannot observe its own
- * writes, which means a failure has to decide whether to put it back — and the
+ * writes, which means a failure has to decide whether to put it back, and the
  * first version of that decision was "never", justified by a mirror being
  * part-written. That justification only holds for the folder the sync was
  * writing into. Switch away from a healthy folder, fail, and "never" leaves the

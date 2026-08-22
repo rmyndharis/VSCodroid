@@ -7,7 +7,7 @@ longest-lived fork the server makes, and on Android 12+ every fork spends one of
 It needs more than the Pty Host did, because it hands the client's socket to the
 child over IPC and a worker_thread has no channel that can carry a handle.
 _canSendSocket is therefore forced off, which selects the named-pipe path VS Code
-already uses on Windows — the host connects back over a pipe and the server
+already uses on Windows: the host connects back over a pipe and the server
 bridges the two sockets itself, with no handle ever crossing the IPC boundary.
 
 That is not quite sufficient, and the gap is not in the plan this follows.

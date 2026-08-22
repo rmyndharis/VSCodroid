@@ -13,8 +13,8 @@ name: Shrinker
 #
 # ⚠️ Do NOT add this job to branch protection. A pull_request trigger with a
 # paths filter creates no check run at all on a PR that matches none of them --
-# not a skipped one -- so a required check would sit at "Expected — waiting for
-# status to be reported" forever and block every unrelated PR.
+# not a skipped one -- so a required check would sit forever at "Expected",
+# waiting for status to be reported, and block every unrelated PR.
 #
 # The two paths lists are deliberately not the same. Both name what CONFIGURES
 # the shrinkers; the push list also names the code they run over, because a tag

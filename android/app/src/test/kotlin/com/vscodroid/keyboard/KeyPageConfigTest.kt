@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Tests for [KeyPages] — extra key row page configuration.
+ * Tests for [KeyPages]: extra key row page configuration.
  */
 class KeyPageConfigTest {
 

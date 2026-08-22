@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Tests for [isTerminalPackStatus] — the predicate that decides whether the
+ * Tests for [isTerminalPackStatus]: the predicate that decides whether the
  * first-run download queue moves on.
  *
  * What these cover, and what they do not. They pin the predicate: which statuses
@@ -73,7 +73,7 @@ class PackStatusTest {
 }
 
 /**
- * Tests for [isCurrentDownload] — the check that decides whether a terminal
+ * Tests for [isCurrentDownload]: the check that decides whether a terminal
  * state is allowed to move the queue.
  *
  * This is the invariant the old code never expressed: it deduplicated by pack
@@ -157,7 +157,7 @@ class DownloadStateWiringTest {
 
     private fun bodyOf(declaration: String): String {
         check(source.isFile) {
-            "SplashActivity.kt not found at ${source.absolutePath} — this test would " +
+            "SplashActivity.kt not found at ${source.absolutePath}: this test would " +
                 "otherwise pass by looking at nothing"
         }
         val text = source.readText()

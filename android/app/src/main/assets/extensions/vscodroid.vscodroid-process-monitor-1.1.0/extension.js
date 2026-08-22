@@ -18,7 +18,7 @@ function activate(context) {
     const tmpDir = process.env.TMPDIR || '/tmp';
     const snapshotPath = path.join(tmpDir, 'vscodroid-processes.json');
 
-    // Status bar item — right side, low priority (far right)
+    // Status bar item: right side, low priority (far right)
     statusBarItem = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Right, -100
     );
@@ -47,7 +47,7 @@ function activate(context) {
             lastSnapshot = snapshot;
             updateStatusBar(snapshot);
         } catch {
-            // File not yet written or parse error — keep last state
+            // File not yet written or parse error: keep last state
         }
     }
 
@@ -250,7 +250,7 @@ function showProcessTree() {
             outputChannel.appendLine(`  • Close ${terminals.length - 1} terminals (${terminals.length} open, 1-2 recommended)`);
         }
         if (langservers.length > 1) {
-            outputChannel.appendLine(`  • ${langservers.length} language servers active — idle ones auto-kill after 5 min under memory pressure`);
+            outputChannel.appendLine(`  • ${langservers.length} language servers active: idle ones auto-kill after 5 min under memory pressure`);
             outputChannel.appendLine(`  • Run "VSCodroid: Kill Idle Servers" to free them now`);
         }
     }

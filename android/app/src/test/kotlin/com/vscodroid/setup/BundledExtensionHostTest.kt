@@ -13,7 +13,7 @@ import java.io.File
  * with `main` runs in the Node extension host on the server, where `BroadcastChannel`
  * resolves to the unrelated class from `node:worker_threads`.
  *
- * Nothing at build or install time notices the mismatch — the extension loads, its
+ * Nothing at build or install time notices the mismatch: the extension loads, its
  * commands appear in the palette, and every call silently times out after five seconds.
  * This test is what notices.
  */
@@ -30,7 +30,7 @@ class BundledExtensionHostTest {
     fun `an extension that uses the bridge relay declares a browser entry point`(): List<DynamicTest> {
         val extensions = ourExtensions()
         check(extensions.isNotEmpty()) {
-            "No bundled extensions found under ${extensionsDir.absolutePath} — the test is " +
+            "No bundled extensions found under ${extensionsDir.absolutePath}; the test is " +
                 "looking in the wrong place, which would let it pass by finding nothing"
         }
 
@@ -57,7 +57,7 @@ class BundledExtensionHostTest {
                 assertTrue(
                     manifest.optString("browser").isNotBlank(),
                     "${dir.name} talks to the bridge relay over BroadcastChannel, so it has to run " +
-                        "in the web extension host — but its manifest declares no browser entry " +
+                        "in the web extension host, but its manifest declares no browser entry " +
                         "point. Loaded on the Node host, every bridge call times out."
                 )
             }

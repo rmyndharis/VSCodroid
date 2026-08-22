@@ -11,10 +11,10 @@ set -euo pipefail
 #
 # ⚠️ A reused work volume is faster and lies. It carries the previous run's
 # node_modules and output tree, so a build can pass on it while the same commit
-# fails from clean — which is how an unpatched CI build went unnoticed. Before
+# fails from clean, which is how an unpatched CI build went unnoticed. Before
 # trusting a local green, `docker volume rm vscodroid-codeoss`.
 #
-# Run it with a named volume rather than a bind mount — npm ci writes on the
+# Run it with a named volume rather than a bind mount; npm ci writes on the
 # order of 100k files, and a Docker Desktop bind mount makes that pathologically
 # slow:
 #
@@ -46,7 +46,7 @@ set -euo pipefail
 # that ends up on the DEVICE are different numbers that merely coincide at 1.133.0.
 #
 # Run it on an arm64 host. Every native module in the tree is built for the build
-# host, and only two of them are overlaid afterwards by build-native-addons.sh —
+# host, and only two of them are overlaid afterwards by build-native-addons.sh:
 # ripgrep in particular is downloaded by its own postinstall for whatever
 # os.platform()/arch() reports. The Verify stage refuses to finish an x86-64
 # tree rather than let one reach a device, where it fails at exec.
@@ -103,7 +103,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SRC="$WORK/vscode"
 # gulpfile.reh.js: BUILD_ROOT = path.dirname(REPO_ROOT), and destinationFolderName
-# carries no `min` suffix — the min and non-min variants share this directory.
+# carries no `min` suffix: the min and non-min variants share this directory.
 OUT="$WORK/vscode-reh-web-linux-$ARCH"
 
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -251,7 +251,7 @@ echo "  .nvmrc  : $(cat .nvmrc)"
 step "Patches"
 # The Android adaptations, as real diffs against readable source. git apply exits
 # non-zero when the context has shifted, and set -e turns that into a failed
-# build — which is the whole reason these are moving here from regexes against
+# build, which is the whole reason these are moving here from regexes against
 # minified output, where a stale pattern printed SKIP and exited 0.
 #
 # Applied to a clean tree every time, so a rerun does not fail on already-applied
@@ -271,7 +271,7 @@ if [ -d "$PATCHES" ] && [ -n "$(ls -A "$PATCHES"/*.patch 2>/dev/null)" ]; then
         echo "  applied $(basename "$patch")"
     done
 elif [ -n "${ALLOW_UNADAPTED:-}" ]; then
-    echo "  no patches at $PATCHES — building unadapted (ALLOW_UNADAPTED set)"
+    echo "  no patches at $PATCHES, building unadapted (ALLOW_UNADAPTED set)"
 else
     echo "  ERROR: no patches at $PATCHES" >&2
     echo "  A tree without them is not this product: no Android platform" >&2
@@ -288,7 +288,7 @@ BRANDING="${BRANDING:-$REPO_ROOT/branding}"
 if [ -d "$BRANDING" ]; then
     # Restore what this stage overwrites before overwriting it. The overlay is
     # applied with update(), so on a reused work volume it merges into the
-    # previous run's output — which means a key REMOVED from the overlay stays in
+    # previous run's output, which means a key REMOVED from the overlay stays in
     # the file forever, and the stage silently stops matching what it declares.
     # That cost three build attempts: extensionsGallery was dropped from the
     # overlay and the build kept downloading builtin extensions from Open VSX.
@@ -356,7 +356,7 @@ PY
     done
     echo "  src/vs/workbench/browser/parts/editor/media/letterpress-{dark,hcDark,hcLight,light}.svg"
 elif [ -n "${ALLOW_UNADAPTED:-}" ]; then
-    echo "  no branding at $BRANDING — building unbranded (ALLOW_UNADAPTED set)"
+    echo "  no branding at $BRANDING, building unbranded (ALLOW_UNADAPTED set)"
 else
     echo "  ERROR: no branding at $BRANDING" >&2
     echo "  The tree would carry Microsoft's name and icons." >&2
@@ -366,7 +366,7 @@ fi
 
 step "Dependencies (npm ci)"
 # Around 3 GB over the wire, and a single reset anywhere in it fails the whole
-# stage — which then costs another full download to retry. npm's own retry only
+# stage, which then costs another full download to retry. npm's own retry only
 # covers individual requests, so the stage is retried as a whole too. Mount a
 # volume at /root/.npm (see the header) and a retry resumes from cache instead of
 # starting over.
@@ -458,7 +458,7 @@ elapsed $(( SECONDS - t0 ))
 step "Prune"
 # The node-linux-arm64 gulp task downloads a GNU/Linux Node and packageTask ships
 # it. Its interpreter (/lib/ld-linux-aarch64.so.1) does not exist on Android and
-# nothing here references it — the runtime uses nativeLibraryDir/libnode.so. The
+# nothing here references it; the runtime uses nativeLibraryDir/libnode.so. The
 # OSS build produces it byte-for-byte the same as the proprietary one, so the
 # pivot does not remove it and this stays a post-build step. Doing it here rather
 # than patching the gulpfile keeps it upright across version bumps.
@@ -470,7 +470,7 @@ fi
 
 # gulp's reh-web package task leaves both of these behind, and product.json still
 # names one of them in licenseFileName. Code - OSS is MIT, and MIT asks that the
-# copyright notice travel with the copies — this tree is redistributed inside
+# copyright notice travel with the copies; this tree is redistributed inside
 # every APK, so the notice has to be in it.
 for f in LICENSE.txt ThirdPartyNotices.txt; do
     if [ -f "$SRC/$f" ]; then
@@ -518,8 +518,8 @@ fail=0
 
 # Tree shape, branding and native architecture are checked by the same script the
 # fetcher runs, so what is proven here is exactly what is proven again on the way
-# into an APK. The build-specific checks — that each patch survived into the
-# packaged bundles, and that the product.json key set has not drifted — stay here,
+# into an APK. The build-specific checks (that each patch survived into the
+# packaged bundles, and that the product.json key set has not drifted) stay here,
 # because only this side has the patches and the expectation file.
 python3 "$SCRIPT_DIR/verify-server-tree.py" "$OUT" || fail=1
 
@@ -563,7 +563,7 @@ check("manifest.json is branded", manifest.get("name") == "VSCodroid",
       f"name = {manifest.get('name')!r}")
 
 # Locks the key set. A VS Code bump that adds, drops or renames a product.json
-# key has to be looked at deliberately — silently inheriting one is how a CDN
+# key has to be looked at deliberately; silently inheriting one is how a CDN
 # URL or a telemetry endpoint slips back in.
 keys = sorted(product)
 try:

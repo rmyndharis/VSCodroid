@@ -186,8 +186,8 @@ class SafSyncEngine(private val context: Context) {
         var keptLocal = 0
         /*
          * What the mirror holds, for the files this sync can vouch for. Filled at the two
-         * points below that know the mirror copy corresponds to the device document — it
-         * was just written, or it was found identical — and nowhere else.
+         * points below that know the mirror copy corresponds to the device document (it
+         * was just written, or it was found identical), and nowhere else.
          *
          * An allowlist, and that is the whole point. The previous version recorded every
          * enumerated path and then subtracted the ways that could be wrong, which meant a
@@ -434,7 +434,7 @@ class SafSyncEngine(private val context: Context) {
      * Removes mirror files for documents that have since been deleted on the device.
      *
      * Reopening a folder used to only create and overwrite, so anything deleted on the
-     * device came straight back from the stale mirror — and because a MODIFY on a file
+     * device came straight back from the stale mirror, and because a MODIFY on a file
      * the tree no longer knows falls through to a create, editing it pushed it back
      * onto the device too.
      *
@@ -455,8 +455,8 @@ class SafSyncEngine(private val context: Context) {
      * - **A candidate must still be the file that was recorded**, matched on modification
      *   time *and* length, not merely on its path. This is the rule the others used to
      *   stand in for, and getting here took four separate defects to notice. Each was a
-     *   different way for a path to be recorded while the mirror held something else — a
-     *   local edit, a file too large to have ever been copied, a copy that failed — and
+     *   different way for a path to be recorded while the mirror held something else (a
+     *   local edit, a file too large to have ever been copied, a copy that failed), and
      *   each was patched on its own. They were one gap: the record named *paths*, while
      *   the argument for deleting needs *identity*. Matching identity is what makes a
      *   fifth way, which nobody has found yet, stop mattering: a path recorded in error
@@ -464,7 +464,7 @@ class SafSyncEngine(private val context: Context) {
      * - A line that cannot be parsed that way is never a candidate, and neither is any
      *   line of a record that does not open with [RECORD_HEADER]. Records written by an
      *   earlier build are one path per line and carry no identity at all, so they are
-     *   unverifiable by construction — and unverifiable has to mean "keep". The header is
+     *   unverifiable by construction, and unverifiable has to mean "keep". The header is
      *   what extends that to a format this build has never seen: field count is not a
      *   version, and the operation on the other side of the guess is a delete.
      * - A candidate that does not resolve inside the mirror is left alone. The record is
@@ -495,7 +495,7 @@ class SafSyncEngine(private val context: Context) {
         if (!enumerationComplete || documents.isEmpty()) {
             Logger.w(
                 tag,
-                "Enumeration proved nothing — leaving the mirror of ${mirrorDir.name} as it is"
+                "Enumeration proved nothing: leaving the mirror of ${mirrorDir.name} as it is"
             )
             return 0
         }
@@ -568,7 +568,7 @@ class SafSyncEngine(private val context: Context) {
      * ⚠️ Reading back is only sound because the caller has established the file is this
      * sync's. It cannot tell on its own: [copyDocumentToLocal] writes beside the
      * destination and renames, deliberately leaving the destination untouched when it
-     * fails — so after a failed copy this reads whatever was already there, which can be
+     * fails, so after a failed copy this reads whatever was already there, which can be
      * an edit of the user's that no sync ever wrote. Recording that identity is what
      * would make the user's only copy match, and match is what licenses the delete.
      *
@@ -737,7 +737,7 @@ class SafSyncEngine(private val context: Context) {
             // stopWatching() interrupts to wake this thread out of the sleep it spends
             // nearly all of its idle time in, so this is the ordinary way the loop ends,
             // not a fault. Letting it escape reaches the thread's uncaught handler, and
-            // Android's default handler ends the process — closing a folder, which
+            // Android's default handler ends the process: closing a folder, which
             // happens on every folder switch and on destroy, would close the app.
             interrupted = true
         }
@@ -780,7 +780,7 @@ class SafSyncEngine(private val context: Context) {
         if (worker != null && worker.isAlive) {
             // Still draining. Emptying the queue from here would throw away exactly the
             // writes the drain exists to save, and would do it in the case where there
-            // are the most of them — a burst of saves, or one slow provider. The thread
+            // are the most of them: a burst of saves, or one slow provider. The thread
             // owns this session's queue until it finishes, and nothing else can reach
             // it: the queue went with the session, so the folder opened next offers its
             // jobs somewhere this drain never polls. Addressing was never the question.
@@ -812,7 +812,7 @@ class SafSyncEngine(private val context: Context) {
         // The walk calls listFiles() once per directory, so it stays outside the lock:
         // holding a monitor across a tree's worth of filesystem calls would block the
         // observer thread's own registrations behind them. Its result is a bound on how
-        // much work follows, not a reservation — the cap is enforced again below, where
+        // much work follows, not a reservation; the cap is enforced again below, where
         // it can be exact.
         val room = synchronized(watchersLock) { MAX_WATCHED_DIRECTORIES - watchers.size }
         val targets = watchableDirectories(dir, room)
@@ -946,14 +946,14 @@ class SafSyncEngine(private val context: Context) {
      * Copies a single SAF document to a local file.
      *
      * @return whether [dest] now holds this document. False means [dest] was left exactly
-     *   as it was — which, because of the partial-and-rename below, can mean it still
+     *   as it was, which, because of the partial-and-rename below, can mean it still
      *   holds an edit of the user's that no sync wrote. Callers that record what the
      *   mirror holds have to know the difference.
      */
     private fun copyDocumentToLocal(docUri: Uri, dest: File, sourceModified: Long): Boolean {
         // Written beside the destination and moved into place only once the stream
         // finished. Writing straight to dest would truncate it first, so a copy cut
-        // short — by an exception, or by the process being killed mid-stream — would
+        // short (by an exception, or by the process being killed mid-stream) would
         // leave a short file carrying a fresh timestamp. That is indistinguishable
         // from an unsaved local edit, and the sync decision has to tell them apart.
         val partial = File(dest.parentFile, "${dest.name}$PARTIAL_SUFFIX")
@@ -1414,7 +1414,7 @@ class SafSyncEngine(private val context: Context) {
      *
      * [DocumentsContract.createDocument] does not merge: handed a name the folder
      * already has, a provider invents "notes (1).txt" and the user's file quietly
-     * forks. Two ordinary things arrive here as a create — the rename
+     * forks. Two ordinary things arrive here as a create: the rename
      * [copyDocumentToLocal] performs to move a finished copy into place, and any local
      * rename over an existing name, which is what `mv` and a git checkout do. Resolving
      * first is also what makes the MODIFY-on-unknown fallback in [processWriteBack]
@@ -1776,8 +1776,8 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Watches one directory and enqueues write-back jobs for what changes inside it.
      *
-     * [path] arrives as inotify's own `name` field — the bare entry name within the
-     * watched directory, not a path relative to the mirror root — so [dir] is what it
+     * [path] arrives as inotify's own `name` field (the bare entry name within the
+     * watched directory, not a path relative to the mirror root), so [dir] is what it
      * has to be resolved against. Covering the tree is [watchTree]'s job: one observer
      * per directory, because a watch descriptor covers a directory and not a tree.
      */
@@ -2147,7 +2147,7 @@ class SafSyncEngine(private val context: Context) {
          * First line of the record, and the only thing that says which format follows.
          *
          * Field count is not a version. A later format that also has three fields with
-         * different meanings would be read as this one and acted on — and acting means
+         * different meanings would be read as this one and acted on, and acting means
          * deleting. A record whose first line is not exactly this is ignored, which is
          * how a record from the build before headers is already treated, and in the same
          * direction: unverifiable means keep.
@@ -2158,7 +2158,7 @@ class SafSyncEngine(private val context: Context) {
          * inotify's flag for "the entry this event is about is a directory".
          *
          * [FileObserver] does not expose it, but it passes the kernel's mask through
-         * untouched — which is also why the existing `event and ALL_EVENTS` is needed
+         * untouched, which is also why the existing `event and ALL_EVENTS` is needed
          * to read the event type at all.
          */
         private const val IN_ISDIR = 0x40000000
@@ -2227,7 +2227,7 @@ class SafSyncEngine(private val context: Context) {
          *
          * Each watch is a kernel inotify descriptor drawn from a per-uid budget
          * (`fs.inotify.max_user_watches`, commonly 8192), and this process is not the
-         * only claimant — the file watcher the VS Code server runs draws on the same
+         * only claimant: the file watcher the VS Code server runs draws on the same
          * pool. [SKIP_DIRECTORIES] already excludes what generates most of the count,
          * so a real project tree lands in the low hundreds; this is the backstop for
          * the folder that does not. Past it, deeper directories go unwatched and their
@@ -2389,20 +2389,20 @@ class SafSyncEngine(private val context: Context) {
             // A newer local copy wins, whatever its size. Checking size before this
             // was the defect: almost every edit changes a file's length, so almost
             // every unsaved edit looked like "not a copy of the source" and was
-            // overwritten — the exact case this guard exists for.
+            // overwritten, the exact case this guard exists for.
             mirrorModified > sourceModified -> false
-            // Same timestamp, different content. Writers that preserve mtime — unzip,
-            // cp -p, rsync -t, git checkout — land here.
+            // Same timestamp, different content. Writers that preserve mtime (unzip,
+            // cp -p, rsync -t, git checkout) land here.
             else -> mirrorSize != sourceSize
         }
 
         /**
-         * Directories to skip during sync — auto-generated and too large.
+         * Directories to skip during sync: auto-generated and too large.
          *
          * "build" and ".vscode" are deliberately absent. build/ holds real
          * source in many projects (Gradle build scripts, C output kept in
          * tree), and .vscode/ holds launch.json, settings.json and
-         * extensions.json — the workspace settings users most want synced.
+         * extensions.json, the workspace settings users most want synced.
          * Adding either back silently stops those files reaching the device.
          */
         internal val SKIP_DIRECTORIES = setOf(
@@ -2422,12 +2422,12 @@ class SafSyncEngine(private val context: Context) {
          * it is a single name. [walkTree] composes it into a relative path and the copy
          * turns that into a real one with [File], creating directories along the way, so
          * a value carrying a separator or a parent reference would land outside the
-         * mirror — somewhere the engine has no business writing and no record of having
+         * mirror, somewhere the engine has no business writing and no record of having
          * written.
          *
          * Worth knowing when judging the cost: a platform provider derives the name from
          * a real filename and cannot return such a value, so this never fires for the
-         * common case. Providers that relay names from elsewhere — cloud, WebDAV, SMB —
+         * common case. Providers that relay names from elsewhere (cloud, WebDAV, SMB)
          * have no such guarantee.
          *
          * [reconcileDeletions] already declines to act on a path that resolves out of the
@@ -2600,7 +2600,7 @@ class SafSyncEngine(private val context: Context) {
          * The rule it replaces tested `relativePath.startsWith(".")`, which had no
          * counterpart on the way in: [SKIP_DIRECTORIES] deliberately does not list
          * `.vscode`, so workspace settings, `.gitignore` and `.editorconfig` were copied
-         * into the mirror and then never allowed back onto the device — edited in the
+         * into the mirror and then never allowed back onto the device: edited in the
          * editor, saved, and silently lost on the device side.
          *
          * The temporary suffixes are the one asymmetry that stays, and it is the

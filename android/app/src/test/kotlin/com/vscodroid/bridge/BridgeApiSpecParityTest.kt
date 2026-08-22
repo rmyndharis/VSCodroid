@@ -54,7 +54,7 @@ import java.lang.reflect.Method
  *
  *  - It compares names and ARITY. It does NOT compare return types: those are checked
  *    only by `check-bridge-api-spec.py`. A method whose documented return type is wrong
- *    passes here — measured on a five-way merge, 751 tests, 0 failures, while the script
+ *    passes here: measured on a five-way merge, 751 tests, 0 failures, while the script
  *    reported the mismatch.
  *  - It does not see parameter NAMES, their order, or nullability. None survive erasure.
  *  - `@JvmOverloads` would produce two annotated methods sharing a name with different
@@ -64,7 +64,7 @@ import java.lang.reflect.Method
  *    like `Map<String, Int>`, or a default value containing a comma, inflates the count
  *    and fails a correct document. Also loud, also absent today.
  *  - `documented()` builds its map with `associate`, which keeps the LAST entry for a
- *    repeated key. A method documented TWICE — two blocks, two arities — collapses to
+ *    repeated key. A method documented TWICE (two blocks, two arities) collapses to
  *    whichever came last, and the first is never compared against anything. This is the
  *    one limit in this list that is silent rather than loud, so it is the one worth
  *    re-reading if the spec ever grows a second entry for a name. No name appears twice
@@ -86,11 +86,11 @@ class BridgeApiSpecParityTest {
      * function. `addJavascriptInterface` exposes the class's *public* methods, which
      * includes the ones it inherits; `declaredMethods` returns what this class declares
      * and nothing it inherits. So a base class carrying one annotated method used to be
-     * callable from the page and invisible here — measured, with a `BridgeBase` holding a
+     * callable from the page and invisible here. Measured, with a `BridgeBase` holding a
      * single method: twenty-nine callable methods, this test green, the script green too
      * because its window is one file.
      *
-     * Filtering `Any` is belt and braces — `java.lang.Object` declares nothing annotated —
+     * Filtering `Any` is belt and braces (`java.lang.Object` declares nothing annotated),
      * but it says what the set is meant to be rather than relying on that staying true.
      *
      * The swap also drops private methods, which is correct rather than incidental:
@@ -141,7 +141,7 @@ class BridgeApiSpecParityTest {
         // meant "the pattern found nothing" rather than "the two agree".
         assertTrue(
             registered.isNotEmpty(),
-            "no @JavascriptInterface methods found on AndroidBridge — reflection returned " +
+            "no @JavascriptInterface methods found on AndroidBridge: reflection returned " +
                 "nothing, so any comparison below would pass vacuously",
         )
         assertTrue(spec.exists(), "spec not found at ${spec.absolutePath}")
@@ -149,7 +149,7 @@ class BridgeApiSpecParityTest {
         val documented = documented()
         assertTrue(
             documented.isNotEmpty(),
-            "parsed no signatures out of ${spec.name} — the pattern stopped matching, so a " +
+            "parsed no signatures out of ${spec.name}: the pattern stopped matching, so a " +
                 "clean result here would mean nothing",
         )
 

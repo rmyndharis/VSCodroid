@@ -104,8 +104,8 @@ class NodeService : Service() {
      * Whether this failure episode has already been raised to a bound client.
      *
      * An episode, not a run, and the difference is what an earlier shape of this
-     * got wrong while it was being built — no release ever carried either shape.
-     * It keyed on [runId], which changes only when a run ENDS —
+     * got wrong while it was being built; no release ever carried either shape.
+     * It keyed on [runId], which changes only when a run ENDS,
      * and a run does not end when a server finally comes up. So after any
      * successful start, every later failure in that run was silent, and a run can
      * last days.
@@ -127,7 +127,7 @@ class NodeService : Service() {
      * Invoked when the user stops the server from the notification.
      *
      * A bound activity is showing an editor whose server is going away, so it is
-     * told rather than left on a dead page — and until it acts on this, the
+     * told rather than left on a dead page, and until it acts on this, the
      * binding it holds is what keeps the service from being destroyed at all.
      * See [shutdown].
      */
@@ -190,7 +190,7 @@ class NodeService : Service() {
     override fun onDestroy() {
         Logger.i(tag, "Service destroying")
         isServiceRunning = false
-        // Scope first, then the process — the same order [shutdown] uses, for the
+        // Scope first, then the process (the same order [shutdown] uses), for the
         // reason it writes down: a coroutine still inside the readiness poll
         // would otherwise get a window in which it can observe a server being
         // killed and report it ready. Nothing observes that today, because this
@@ -200,8 +200,8 @@ class NodeService : Service() {
         processManager.stopServer()
         // Deliberately does NOT call [removeNotification]. Reaching here after
         // [shutdown] there is nothing left to remove, and reaching here any other
-        // way means the system destroyed a service that was in the terminal state
-        // — where the detached card is the only place that state is visible once
+        // way means the system destroyed a service that was in the terminal state,
+        // where the detached card is the only place that state is visible once
         // the activity is gone, which is the whole reason it was detached rather
         // than removed. Its Stop action starts the process again and clears it,
         // which is measured to work; taking the card down here would remove the
@@ -225,8 +225,8 @@ class NodeService : Service() {
      * Whether the server has answered a health check and has not stopped since.
      *
      * The only server-state question this class answers, and the narrowness is
-     * deliberate. Two other wrappers stood here — one returning `Process.isAlive`
-     * and one forwarding the blocking health probe — and both are gone: see
+     * deliberate. Two other wrappers stood here (one returning `Process.isAlive`
+     * and one forwarding the blocking health probe), and both are gone: see
      * [ProcessManager.isReady] for what separates a process that exists from a
      * server that serves, and why asking the first while meaning the second put a
      * connection-refused page in front of users.
@@ -242,8 +242,8 @@ class NodeService : Service() {
      * nothing.
      *
      * A notice rather than a failure, which the name and the strings both have
-     * to keep saying. Two of the three messages that reach here are terminal —
-     * a start that could not spawn, and a restart budget spent — and the third
+     * to keep saying. Two of the three messages that reach here are terminal
+     * (a start that could not spawn, and a restart budget spent), and the third
      * is `status_server_slow_start`, said while the server is still being waited
      * for and may still come up. Reading them all as failures is what makes a
      * slow start indistinguishable from a dead one to everything downstream,
@@ -256,7 +256,7 @@ class NodeService : Service() {
      *
      * Read on the main thread by a newly bound client and written on the main
      * thread by [launchServer], [awaitLateReadiness] and [enterTerminalState],
-     * so it needs no synchronisation of its own — the same confinement
+     * so it needs no synchronisation of its own: the same confinement
      * [restartCount] and [launchJob] rely on.
      *
      * Cleared whenever a start begins and whenever one succeeds, so a reader
@@ -270,7 +270,7 @@ class NodeService : Service() {
      * There is exactly one reason to need this, and it is not a refresh of stale
      * content. `MainActivity.onCreate` asks for `POST_NOTIFICATIONS` and starts
      * this service on the next line, and the ask is a launcher call that returns
-     * immediately — so `startForeground` below runs while the permission dialog
+     * immediately, so `startForeground` below runs while the permission dialog
      * is still on screen and the answer is still "no". On Android 13+ the system
      * accepts the foreground promotion and drops the notification: the service
      * record ends up holding a notification that was never enqueued, which is
@@ -294,12 +294,12 @@ class NodeService : Service() {
      *
      * One case is deliberately left uncovered, so that it is not solved twice.
      * A user who denies the dialog and grants the permission later from Settings
-     * gets no card until the next cold start — the launcher callback that leads
+     * gets no card until the next cold start: the launcher callback that leads
      * here fires once, for the dialog. That case repairs itself: by the next
      * start the permission is already granted when `startForeground` runs, which
      * is the state this whole method exists to compensate for the absence of.
      * Android broadcasts nothing when a permission changes, so covering it would
-     * mean re-checking on every `onStart` — a permanent cost for something that
+     * mean re-checking on every `onStart`, a permanent cost for something that
      * is already temporary.
      */
     fun refreshNotification() {
@@ -326,7 +326,7 @@ class NodeService : Service() {
      * nothing. This service is started *and* bound: `MainActivity` binds with
      * `BIND_AUTO_CREATE` in `startAndBindService()` and unbinds only in its own
      * `onDestroy`. Android does not destroy a started, bound service on
-     * `stopSelf()` alone — it waits for the last client to unbind as well. So
+     * `stopSelf()` alone; it waits for the last client to unbind as well. So
      * with the editor open, or merely backgrounded, pressing Stop stopped
      * nothing, removed no notification, and said nothing about it.
      *
@@ -335,14 +335,14 @@ class NodeService : Service() {
      * readiness for a server that is being killed, and drive the activity to load
      * a workbench that is not there.
      *
-     * [ProcessManager.stopServer] is idempotent — it clears its own process
-     * reference — so the call [onDestroy] makes once the activity unbinds costs a
+     * [ProcessManager.stopServer] is idempotent (it clears its own process
+     * reference), so the call [onDestroy] makes once the activity unbinds costs a
      * log line and nothing else. That second stop is not merely tolerated: it is
      * what reaps a process spawned inside the window below.
      *
      * The client is told last. Everything here runs on the main thread, and
      * `MainActivity` answers this callback with `runOnUiThread`, which on the
-     * main thread runs inline — so the notification is taken down and the service
+     * main thread runs inline, so the notification is taken down and the service
      * is stopped before anything the activity does can re-enter.
      */
     private fun shutdown() {
@@ -401,7 +401,7 @@ class NodeService : Service() {
      * detached card is no longer the service's foreground notification, so
      * `stopForeground` has nothing to act on. Measured on an API 36 emulator: with
      * the terminal card up, tapping Stop ran this whole method and the
-     * NotificationRecord was still posted afterwards — and tapping it a second
+     * NotificationRecord was still posted afterwards, and tapping it a second
      * time did the same again. Without an explicit cancel it is a permanent
      * button on a card nothing can clear.
      *
@@ -411,7 +411,7 @@ class NodeService : Service() {
      * `stopForeground` handles the ordinary case, and this handles the detached
      * one. Each is a no-op where the other applies.
      *
-     * The first `NotificationManager.cancel` in this app — until now the manager
+     * The first `NotificationManager.cancel` in this app; until now the manager
      * was used only to create the channel, in `VSCodroidApp`.
      */
     private fun removeNotification() {
@@ -429,7 +429,7 @@ class NodeService : Service() {
      * need to be.
      *
      * **Precondition: the server process must not be alive when this is called.**
-     * Not a style preference — it is what holds up a sentence shown to users.
+     * Not a style preference: it is what holds up a sentence shown to users.
      * [ProcessManager.startServer] answers `false` for a process that is already
      * running, so re-entering here cancels [awaitLateReadiness] through
      * `launchJob?.cancel()`, clears the notice, takes the `!started` branch and
@@ -443,8 +443,8 @@ class NodeService : Service() {
      * live one:
      *
      *  - [onStartCommand], which guards on [isServiceRunning];
-     *  - [retryOrGiveUp], reached either from [handleServerCrash] — which the
-     *    watchdog raises only after the process has exited — or from the launch
+     *  - [retryOrGiveUp], reached either from [handleServerCrash] (which the
+     *    watchdog raises only after the process has exited) or from the launch
      *    path's own [endsUnreported] branch. Of the two outcomes that reach it,
      *    `NOT_STARTED` spawned no process by construction and `CANNOT_BIND` stops
      *    the one it spawned before handing the run on, which is the half of that
@@ -758,8 +758,8 @@ class NodeService : Service() {
      *
      * The two always move together, which is why they are one function rather
      * than a pair repeated three times. Every place that refreshes the budget is
-     * also a place a fresh failure deserves to be heard — the server came up, the
-     * user stopped it, or the budget ran out — and an earlier draft refreshed the
+     * also a place a fresh failure deserves to be heard (the server came up, the
+     * user stopped it, or the budget ran out), and an earlier draft refreshed the
      * budget at all three and the message key at none of them.
      */
     private fun endFailureEpisode() {
@@ -771,7 +771,7 @@ class NodeService : Service() {
      * Routes [ProcessManager.onServerCrashed] into [handleServerCrash].
      *
      * The hop onto [serviceScope] is the point. That callback fires on the
-     * watchdog thread, and what it reaches for — [restartCount] and [launchJob] —
+     * watchdog thread, and what it reaches for ([restartCount] and [launchJob])
      * is also read and written by [launchServer]'s coroutine. Neither field was
      * synchronised, so the watchdog could raise the count while the coroutine
      * reset it, and `launchJob?.cancel()` followed by an assignment is a compound
@@ -799,7 +799,7 @@ class NodeService : Service() {
         // A report that arrives after the service has stopped describes a process
         // the user asked to be rid of. The watchdog suppresses the expected exit
         // itself, but a crash already on its way to this scope when Stop was
-        // pressed still lands here — and reviving it, or rewriting a notification
+        // pressed still lands here; reviving it, or rewriting a notification
         // that has just been taken down, would both be wrong.
         val action = crashAction(isServiceRunning, restartCount)
         if (action == CrashAction.IGNORE) {
@@ -902,7 +902,7 @@ class NodeService : Service() {
      * back.
      *
      * This branch used to log and raise [onServerError], which is null until an
-     * activity binds and a Toast afterwards — so on a headless crash loop it
+     * activity binds and a Toast afterwards, so on a headless crash loop it
      * reached nobody, and the notification went on reading "VSCodroid is running"
      * over a server that had stopped five attempts ago.
      *
@@ -915,7 +915,7 @@ class NodeService : Service() {
      *
      * Clearing [isServiceRunning] is what makes the app recoverable. The flag
      * otherwise stays true for the life of the process, and this service outlives
-     * the activity — so relaunching would bind to a service that believes it is
+     * the activity, so relaunching would bind to a service that believes it is
      * already running, start nothing, and leave the editor waiting for a
      * readiness callback that can no longer fire.
      *
@@ -1010,12 +1010,12 @@ class NodeService : Service() {
         else getString(R.string.notification_text)
 
     /**
-     * Builds the notification shown while the server is running, and — with
-     * [serverRunning] cleared and its own wording — the one left behind after it
+     * Builds the notification shown while the server is running, and (with
+     * [serverRunning] cleared and its own wording) the one left behind after it
      * has stopped for good.
      *
      * Always tapping through to [MainActivity], and always carrying the Stop
-     * action. [serverRunning] governs only whether the notification is ongoing —
+     * action. [serverRunning] governs only whether the notification is ongoing,
      * one the user cannot dismiss, which is only fair while something is still
      * running behind it.
      *
@@ -1037,7 +1037,7 @@ class NodeService : Service() {
      * Withholding it was therefore not protection, it was the only lever removed.
      * `MainActivity` is `singleTask` and re-issues the service start only from
      * `onCreate`, so while that activity lives nothing else can restart the
-     * service — the launcher tap reaches `onNewIntent`, which handles the OAuth
+     * service: the launcher tap reaches `onNewIntent`, which handles the OAuth
      * relay and nothing else. With no Stop on the card there was no way back at
      * all short of force-stopping the app.
      */
@@ -1064,7 +1064,7 @@ class NodeService : Service() {
             // A stated intent, not a fix for anything measured here. Android 12+
             // is documented to hold a foreground-service notification back for
             // about ten seconds when its channel sits below IMPORTANCE_DEFAULT,
-            // which this one does at IMPORTANCE_LOW — but the delay did not
+            // which this one does at IMPORTANCE_LOW, but the delay did not
             // reproduce: on an API 36 emulator the NotificationRecord was already
             // present three seconds after launch both with this call and without
             // it. Whether the emulator does not apply the deferral, or the
@@ -1072,7 +1072,7 @@ class NodeService : Service() {
             //
             // Kept because it is the documented way to say "show this now" and
             // costs nothing, and because a server the user cannot see is also a
-            // server the user cannot stop — the Stop action lives on this card.
+            // server the user cannot stop: the Stop action lives on this card.
             // Do not write it up as having fixed a delay; nobody has seen one.
             //
             // Not in tension with setSilent above: that governs whether it makes
@@ -1121,8 +1121,8 @@ internal const val LATE_READY_POLL_MS = 2_000L
 /**
  * How often it is asked once even a late answer has stopped being likely.
  *
- * The loop still never ends — a server can answer at any point while its process
- * lives — but by this stage the cost of asking matters more than the seconds
+ * The loop still never ends (a server can answer at any point while its process
+ * lives), but by this stage the cost of asking matters more than the seconds
  * between an answer and noticing it. Two seconds forever is a probe every two
  * seconds for as long as a wedged process is alive, on a battery.
  */
@@ -1147,7 +1147,7 @@ internal const val LATE_READY_NOTICE_MS = 90_000L
  * How long to wait before the next probe, given how long the late poll has run.
  *
  * A step rather than a curve, because the only thing it has to get right is that
- * the interval never reaches zero — the loop has no other brake, so an interval
+ * the interval never reaches zero: the loop has no other brake, so an interval
  * of zero is a spin on the IO dispatcher for as long as a wedged process lives.
  */
 internal fun lateReadinessPollMs(elapsedMs: Long): Long =
@@ -1314,7 +1314,7 @@ internal fun hasRestartBudget(restartCount: Int, maxRestarts: Int = MAX_RESTARTS
  *
  * Doubling, with the shift held inside a band rather than the result. Kotlin
  * masks a shift distance to the low six bits, so an unbounded `1L shl (n - 1)`
- * wraps back to `1 shl 0` at attempt 65 and retries instantly — the opposite of
+ * wraps back to `1 shl 0` at attempt 65 and retries instantly: the opposite of
  * a backoff, at the point where backing off matters most. The lower bound
  * matters for the same reason from the other end: a zero attempt would shift by
  * -1, which masks to 63 and produces a negative delay.

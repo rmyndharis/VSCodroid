@@ -10,10 +10,10 @@ import java.nio.file.Files
  * Tracks disk usage per component and provides cache-clearing operations.
  *
  * Components tracked:
- * - VS Code Server (vscode-reh — the reh-web build, workbench included)
+ * - VS Code Server (vscode-reh, the reh-web build, workbench included)
  * - Extensions (marketplace + bundled)
  * - User data (settings, state, logs)
- * - Tools (usr/ — bash, git, python, npm, etc.)
+ * - Tools (usr/: bash, git, python, npm, etc.)
  * - Cache (npm-cache, tmp, crash-logs)
  */
 object StorageManager {

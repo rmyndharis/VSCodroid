@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Tests for [Environment] — path generation and environment configuration.
+ * Tests for [Environment]: path generation and environment configuration.
  *
  * Complements [EnvironmentSafTest] which covers SAF-specific methods.
  * Tests pure path-building methods using mocked Context.

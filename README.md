@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>VS Code, natively on Android.</strong><br>
-  A full-featured IDE on your phone — not a toy editor, not a cloud IDE.<br>
+  A full-featured IDE on your phone, not a toy editor, not a cloud IDE.<br>
   Download. Open. Code.
 </p>
 
@@ -63,7 +63,7 @@ wait for better internet,
 wait for better circumstances.
 
 VSCodroid is a refusal of that waiting.
-VSCodroid exists for people with talent, discipline, and ideas — but without access to expensive hardware.
+VSCodroid exists for people with talent, discipline, and ideas, but without access to expensive hardware.
 
 We believe access to software creation should depend on effort and curiosity, not on purchasing power.
 So this project brings a real development environment to Android:
@@ -103,11 +103,11 @@ If you are **ready to learn**, you should be able to **start today**.
 
 ## 🧭 Principles
 
-- **Human potential first** — talent exists everywhere, even where hardware access does not.
-- **Real tools, real dignity** — people deserve production-grade workflows, not watered-down substitutes.
-- **Offline-first by design** — learning and working should remain possible when internet is weak or expensive.
-- **Local by default** — your environment runs on your own device, on `localhost`.
-- **Pathway to opportunity** — the goal is not just writing code, but opening doors to real projects and jobs.
+- **Human potential first**: talent exists everywhere, even where hardware access does not.
+- **Real tools, real dignity**: people deserve production-grade workflows, not watered-down substitutes.
+- **Offline-first by design**: learning and working should remain possible when internet is weak or expensive.
+- **Local by default**: your environment runs on your own device, on `localhost`.
+- **Pathway to opportunity**: the goal is not just writing code, but opening doors to real projects and jobs.
 
 ## 🤝 Our Promise
 
@@ -118,15 +118,15 @@ If you are **ready to learn**, you should be able to **start today**.
 
 ## ✨ Features
 
-- **Real VS Code** — Monaco Editor, Workbench UI, Command Palette, and all the features you know.
+- **Real VS Code**: Monaco Editor, Workbench UI, Command Palette, and all the features you know.
 - **Extension Support**: Install themes, linters, language support, and more from [Open VSX](https://open-vsx.org). The editor's own interface is English only.
 - **Integrated Terminal**: Full bash terminal with real PTY support (tmux, bash line editing and the Node and Python REPLs all work).
-- **Batteries Included** — Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
-- **Offline-First** — Code without an internet connection. Everything runs locally on your device.
+- **Batteries Included**: Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
+- **Offline-First**: Code without an internet connection. Everything runs locally on your device.
 - **Mobile-Optimized**: Extra Key Row (Ctrl, Alt, Tab, Esc, F1-F12, symbols, cursor trackpad), touch-friendly UI, clipboard bridge.
-- **SSH Out of the Box** — Bundled OpenSSH client and `ssh-keygen`, preconfigured with sane defaults (ed25519, keepalive, `accept-new`).
-- **Language Picker** — Select your languages; Ruby and Java install on demand — via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
-- **Dev Server Preview** — Preview a running dev server in an editor tab beside your code, or hand it to the device's browser.
+- **SSH Out of the Box**: Bundled OpenSSH client and `ssh-keygen`, preconfigured with sane defaults (ed25519, keepalive, `accept-new`).
+- **Language Picker**: Select your languages; Ruby and Java install on demand, via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
+- **Dev Server Preview**: Preview a running dev server in an editor tab beside your code, or hand it to the device's browser.
 
 ## 📸 Screenshots
 
@@ -168,7 +168,7 @@ flowchart TD
   LOCAL <--> REH
 ```
 
-> For full architecture details, see [Architecture Design Document (historical — the 2026-02-10 design, not the code)](docs/03-ARCHITECTURE.md).
+> For full architecture details, see [Architecture Design Document (historical: the 2026-02-10 design, not the code)](docs/03-ARCHITECTURE.md).
 
 ## 📱 Requirements
 
@@ -292,7 +292,7 @@ Quick links:
 | [Development Guide](docs/09-DEVELOPMENT_GUIDE.md)                            | Pointer to CONTRIBUTING.md, which carries the build and contribution steps |
 | [Release Plan](docs/10-RELEASE_PLAN.md)                                      | Release strategy, CI/CD, Play Store                        |
 | [User Guide](docs/USER_GUIDE.md)                                             | How to use VSCodroid (keyboard, terminal, extensions, SSH) |
-| [Milestones](MILESTONES.md)                                                  | Development milestones M0–M6                               |
+| [Milestones](MILESTONES.md)                                                  | Development milestones M0-M6                               |
 | [Glossary](docs/11-GLOSSARY.md)                                              | Terms and definitions                                      |
 | [Implementation Plan](docs/12-IMPLEMENTATION_PLAN.md)                        | Week-by-week task breakdown with dependencies              |
 | [Third-Party Attribution](NOTICE.md)                                         | Licenses for all bundled software                          |
@@ -315,7 +315,7 @@ The bundled editor server is built from the MIT-licensed [Code - OSS](https://gi
 
 ## 📄 License
 
-VSCodroid's **own** source — the Android app, the build scripts, and the bundled configuration — is licensed under the **MIT License**. See [LICENSE](LICENSE).
+VSCodroid's **own** source (the Android app, the build scripts, and the bundled configuration) is licensed under the **MIT License**. See [LICENSE](LICENSE).
 
 That licence does not extend to the third-party components VSCodroid downloads or bundles; each carries its own terms, listed in [NOTICE.md](NOTICE.md).
 

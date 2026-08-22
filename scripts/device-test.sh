@@ -318,7 +318,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# adb wrapper — respects --device flag
+# adb wrapper: respects --device flag
 ADB="adb"
 if [ -n "$DEVICE" ]; then
     ADB="adb -s $DEVICE"
@@ -346,17 +346,17 @@ pass() {
 fail() {
     FAIL=$((FAIL + 1))
     FAILURES="${FAILURES}\n  - $1: $2"
-    printf "  ${RED}FAIL${RESET}  %s — %s\n" "$1" "$2"
+    printf "  ${RED}FAIL${RESET}  %s: %s\n" "$1" "$2"
 }
 
 skip() {
     SKIP=$((SKIP + 1))
-    printf "  ${YELLOW}SKIP${RESET}  %s — %s\n" "$1" "$2"
+    printf "  ${YELLOW}SKIP${RESET}  %s: %s\n" "$1" "$2"
 }
 
 # A first launch is interrupted by the Android 13+ notification request and by the
 # first-run toolchain picker. Both take focus, so the app is backgrounded and its
-# process disappears — through logcat and ps that is indistinguishable from a
+# process disappears; through logcat and ps that is indistinguishable from a
 # crash, and it is the reason this suite used to time out on a healthy device.
 # Matched by button text out of the view hierarchy rather than by coordinates, so
 # it survives a layout change.
@@ -640,7 +640,7 @@ if $INSTRUMENTED; then
     fi
 
     if [ "$FAIL" -ne 0 ]; then
-        printf "\n  ${RED}%d precondition(s) failed${RESET} — not starting the suite%b\n\n" \
+        printf "\n  ${RED}%d precondition(s) failed${RESET}, not starting the suite%b\n\n" \
             "$FAIL" "$FAILURES"
         exit 1
     fi
@@ -651,7 +651,7 @@ if $INSTRUMENTED; then
     # '%s' not found!" is what an unattached serial produces.
     [ -n "$DEVICE" ] && export ANDROID_SERIAL="$DEVICE"
 
-    printf "\n  ${GREEN}%d passed${RESET} — handing off to Gradle%s\n\n" \
+    printf "\n  ${GREEN}%d passed${RESET}, handing off to Gradle%s\n\n" \
         "$PASS" "${DEVICE:+ (ANDROID_SERIAL=$DEVICE)}"
     cd "$ROOT_DIR/android" || exit 1
 
@@ -789,7 +789,7 @@ printf "\n${BOLD}Phase 2: Launch & First Run${RESET}\n"
 
 # Stop first. `am start` against a running instance just delivers the intent to
 # it and produces no new log lines, so every wait below would sit until timeout
-# reading an empty buffer — which looks exactly like the app failing to start.
+# reading an empty buffer, which looks exactly like the app failing to start.
 $ADB shell am force-stop "$PKG" 2>/dev/null
 sleep 2
 
@@ -1036,7 +1036,7 @@ run_tool() {
         "$tool_path" "$@" 2>&1
 }
 
-# run_tool_code TOOL CODE — for a `-c` argument, which contains spaces.
+# run_tool_code TOOL CODE: for a `-c` argument, which contains spaces.
 #
 # `adb shell` joins its arguments with a space and hands the result to the
 # device's shell, so quoting applied on this side is consumed here and never
@@ -1216,7 +1216,7 @@ vlog "$(echo "$PROC_LIST" | head -5)"
 EXT_JSON=$($ADB shell run-as "$PKG" cat "files/home/.vscodroid/extensions/extensions.json" 2>/dev/null || true)
 if echo "$EXT_JSON" | grep -q '"identifier"'; then
     # grep -c counts matching *lines*, and VS Code rewrites this file as a single
-    # line, so it reported 1 no matter how many extensions were installed — which
+    # line, so it reported 1 no matter how many extensions were installed, which
     # reads as a catastrophic loss when comparing two runs. Count occurrences.
     EXT_COUNT=$(echo "$EXT_JSON" | grep -o '"identifier"' | wc -l | tr -d ' ')
     pass "extensions_manifest ($EXT_COUNT extensions)"
@@ -1227,7 +1227,7 @@ fi
 # Test 22: settings_json
 # FirstRunSetup writes settings to data/Machine/ (Environment.getMachineSettingsPath)
 # because the workbench never reads a server-side User/ file, and
-# migrateSettingsToMachinePath() deletes any legacy User/ copy on every launch —
+# migrateSettingsToMachinePath() deletes any legacy User/ copy on every launch,
 # so probing User/ fails on exactly the healthy devices.
 SETTINGS_CHECK=$($ADB shell "run-as $PKG sh -c 'test -f files/home/.vscodroid/data/Machine/settings.json && echo EXISTS'" 2>/dev/null)
 if echo "$SETTINGS_CHECK" | grep -q "EXISTS"; then

@@ -51,7 +51,7 @@ class RestartBudgetTest {
 /**
  * How often a server that has not answered yet is asked again.
  *
- * The loop this feeds never ends while the process is alive — that is the whole
+ * The loop this feeds never ends while the process is alive; that is the whole
  * point of it, and a server can answer at any moment before it dies. Which means
  * the interval is the only brake there is.
  */
@@ -224,7 +224,7 @@ class LaunchOutcomeTest {
  *
  * The defect this pins is what a failed start used to leave behind. Both failure
  * branches recorded a notice and returned, and neither cleared the flag
- * `onStartCommand` guards on — so the service went on believing it was running,
+ * `onStartCommand` guards on, so the service went on believing it was running,
  * every later launch was a no-op, and the notification still said "VSCodroid is
  * running" over a Stop button for a server that did not exist. The failure was
  * permanent for the life of the process; the only way out was that Stop button,
@@ -310,7 +310,7 @@ class EndsUnreportedTest {
  *
  * [EndsUnreportedTest] pins the decision; this pins that it is consulted
  * and acted on. Neither subsumes the other: the predicate can be perfect and
- * called from nowhere, which is the exact shape of the defect being closed —
+ * called from nowhere, which is the exact shape of the defect being closed:
  * `enterTerminalState` did the right thing and the two start failures simply did
  * not call it.
  *
@@ -469,7 +469,7 @@ class CannotBindCleanupTest {
  * The defect: `waitForReady` asks the port and never the process, so a launch
  * attempt polls out its full budget even though the process it is waiting for
  * has already died. That attempt then concludes DIED_BEFORE_ANSWERING and clears
- * the service flag — and `handleServerCrash`, resuming from its backoff, reads
+ * the service flag, and `handleServerCrash`, resuming from its backoff, reads
  * the cleared flag as the user having stopped the server and returns without
  * restarting. The restart is swallowed with nothing said.
  *
@@ -483,7 +483,7 @@ class CannotBindCleanupTest {
  * launch begins. This pins that ordering.
  *
  * Source-reading, and the weaker of the two layers as always: it sees the order
- * of two statements and not whether they run. Nothing stronger is available —
+ * of two statements and not whether they run. Nothing stronger is available:
  * the method is private on a `Service`, and this suite can build neither a
  * `Service` nor a main dispatcher.
  */
@@ -533,7 +533,7 @@ class RestartOwnershipTest {
  *
  * The first was the KEY. `restartCount == 0` looked like "the first failure of
  * this run" and is "the first attempt of a fresh process"; then `runId` looked
- * like "this failure episode" and is "this run" — and a run does not end when a
+ * like "this failure episode" and is "this run", and a run does not end when a
  * server finally comes up, so after any success every later failure in that run
  * was silent, for as long as the run lasted. A count is not a run, and a run is
  * not an episode. Each fix moved the substitution up one level rather than
@@ -544,7 +544,7 @@ class RestartOwnershipTest {
  * `onServerError`, which reaches whoever is bound right now and which
  * `MainActivity` answers with a long toast, and it records `startupNotice`,
  * which a client binding LATER reads on demand. Only the first is noisy. The
- * throttle covered both — and since `launchServer` nulls the field at the top of
+ * throttle covered both, and since `launchServer` nulls the field at the top of
  * every attempt, from the second attempt onward the gate returned before
  * restoring it, so `lastStartupNotice()` answered null for the rest of the
  * episode. The harm the throttle was added to prevent was moved, not removed.
@@ -653,7 +653,7 @@ class NoticeGateKeyTest {
  * clears it; `onStartCommand` sets it back for a fresh run. A backoff reaches
  * half a minute at the later attempts, so a Stop followed by a relaunch inside
  * one let the stale chain wake, read `true`, and restart on top of the server the
- * new run had already started — refused as a live process, so it arrived as a
+ * new run had already started, refused as a live process, so it arrived as a
  * start failure with nothing actually wrong and spent the budget down to the
  * terminal state.
  *

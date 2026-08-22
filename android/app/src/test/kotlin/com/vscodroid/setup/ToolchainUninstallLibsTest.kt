@@ -22,13 +22,13 @@ import java.io.File
 import java.io.IOException
 
 /**
- * Tests for the library deletion in `ToolchainManager.uninstallSync` — the call site,
+ * Tests for the library deletion in `ToolchainManager.uninstallSync`: the call site,
  * not the decision.
  *
  * [toolchainLibsSafeToRemove] is covered by [ToolchainLibsTest] in both directions:
  * a null listing removes nothing, an empty listing removes everything named. Both stayed
  * green while the call site could be changed from passing `null` to passing `emptySet()`
- * when the base listing cannot be read — which turns "keep everything, we cannot tell"
+ * when the base listing cannot be read, which turns "keep everything, we cannot tell"
  * into "delete everything, the base ships nothing".
  *
  * That is the `libffi.so` bug the comment above the call site describes: Ruby's manifest
@@ -47,7 +47,7 @@ class ToolchainUninstallLibsTest {
     private lateinit var assets: AssetManager
     private lateinit var libDir: File
 
-    /** Ships in the base APK too — Python's _ctypes links it. */
+    /** Ships in the base APK too: Python's _ctypes links it. */
     private val shared = "libffi.so"
 
     /** Ships only with this toolchain. */
@@ -62,7 +62,7 @@ class ToolchainUninstallLibsTest {
         every { Logger.e(any(), any(), any()) } just Runs
 
         // The constructor reaches Play Core through field initialisation, so it runs
-        // before any method can be called. mockkConstructor does not help — the
+        // before any method can be called. mockkConstructor does not help: the
         // constructor body still executes.
         mockkStatic(AssetPackManagerFactory::class)
         every { AssetPackManagerFactory.getInstance(any()) } returns mockk(relaxed = true)

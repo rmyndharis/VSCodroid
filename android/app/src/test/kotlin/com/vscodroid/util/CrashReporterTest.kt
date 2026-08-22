@@ -22,7 +22,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Tests for [CrashReporter] — crash log management and lifecycle.
+ * Tests for [CrashReporter]: crash log management and lifecycle.
  *
  * Uses JUnit 5 TempDir for isolated file system operations.
  * Tests init() by directly setting the internal crashDir via reflection,
@@ -47,7 +47,7 @@ class CrashReporterTest {
      * Without this, [Logger] stayed mocked for the rest of the JVM. Every class
      * that calls `mockkObject(Logger)` afterwards re-mocks an object this one
      * never released, and whichever of them runs first decides what the others
-     * see — so a failure lands in a class that did nothing wrong, and reordering
+     * see, so a failure lands in a class that did nothing wrong, and reordering
      * the suite moves it somewhere else.
      */
     @AfterEach
@@ -388,7 +388,7 @@ class CrashReporterTest {
 /**
  * The line the crash log opens with, and the API level it is allowed to need.
  *
- * `minSdk` is 33 and `Thread.threadId()` first appears in the android-36 stub —
+ * `minSdk` is 33 and `Thread.threadId()` first appears in the android-36 stub:
  * `javap` on `java/lang/Thread.class` from `platforms/android-33`, `-34` and
  * `-35` shows `getId()` and nothing else. Nothing backports it here:
  * `coreLibraryDesugaring` is not enabled, and `abortOnError = false` means lint
@@ -426,7 +426,7 @@ class ThreadIdentityTest {
         // distinguishes them is which method name is compiled, so that is what
         // this reads.
         check(source.isFile) {
-            "CrashReporter.kt not found at ${source.absolutePath} — this test " +
+            "CrashReporter.kt not found at ${source.absolutePath}; this test " +
                 "would otherwise pass by looking at nothing"
         }
 

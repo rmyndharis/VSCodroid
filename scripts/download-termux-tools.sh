@@ -96,7 +96,7 @@ get_sonames() {
     esac
 }
 
-# Packages that have shared libraries to extract (not bash/git — those go to jniLibs)
+# Packages that have shared libraries to extract (not bash/git; those go to jniLibs)
 LIB_PACKAGES=(
     readline ncurses libiconv libandroid-support
     libcurl openssl pcre2 libexpat
@@ -336,7 +336,7 @@ for pkg in "${LIB_PACKAGES[@]}"; do
     fi
     pkg_lib_dir="extracted/$pkg/data/data/com.termux/files/usr/lib"
     for soname in $sonames; do
-        # Find the actual file — try exact match, then unversioned name
+        # Find the actual file: try exact match, then unversioned name
         src=""
         if [ -f "$pkg_lib_dir/$soname" ] || [ -L "$pkg_lib_dir/$soname" ]; then
             src="$pkg_lib_dir/$soname"
@@ -409,7 +409,7 @@ for file in "$GIT_CORE_SRC"/*; do
     name="$(basename "$file")"
 
     if [ -L "$file" ]; then
-        # Symlink — check if it points to git
+        # Symlink: check if it points to git
         target="$(readlink "$file")"
         if [ "$target" = "git" ] || [ "$target" = "../../bin/git" ]; then
             echo "$name" >> "$SYMLINK_MANIFEST"
@@ -421,14 +421,14 @@ for file in "$GIT_CORE_SRC"/*; do
     if [ -f "$file" ] && [ ! -L "$file" ]; then
         file_size=$(wc -c < "$file" | tr -d ' ')
         if [ "$file_size" = "$GIT_BIN_SIZE" ]; then
-            # Same size as git binary — almost certainly a hardlink copy
+            # Same size as git binary: almost certainly a hardlink copy
             echo "$name" >> "$SYMLINK_MANIFEST"
             SYMLINK_COUNT=$((SYMLINK_COUNT + 1))
             continue
         fi
     fi
 
-    # Script or standalone binary — copy
+    # Script or standalone binary: copy
     if [ -f "$file" ] || [ -L "$file" ]; then
         # Resolve symlinks for copy
         real_file="$file"
@@ -437,19 +437,19 @@ for file in "$GIT_CORE_SRC"/*; do
         if [ -f "$real_file" ] && head -c 2 "$real_file" 2>/dev/null | grep -q '#!'; then
             # Detect script type by content
             if head -20 "$real_file" | grep -q '^use \|^require '; then
-                # Perl script — Perl is not bundled, remove entirely
+                # Perl script: Perl is not bundled, remove entirely
                 echo "  Skipping Perl script: $name"
                 COPIED=$((COPIED - 1))  # offset the +1 below
             elif head -1 "$real_file" | grep -q 'python'; then
-                # Python script with Termux shebang — niche tool, remove
+                # Python script with Termux shebang: niche tool, remove
                 echo "  Skipping Python script: $name"
                 COPIED=$((COPIED - 1))
             elif [ "$name" = "git-instaweb" ]; then
-                # Needs httpd + perl, neither bundled — remove
+                # Needs httpd + perl, neither bundled: remove
                 echo "  Skipping $name (needs httpd + perl)"
                 COPIED=$((COPIED - 1))
             else
-                # Shell script — fix shebangs and embedded Termux paths
+                # Shell script: fix shebangs and embedded Termux paths
                 sed \
                     -e 's|#!/data/data/com.termux/files/usr/bin/sh|#!/system/bin/sh|g' \
                     -e 's|#!/data/data/com.termux/files/usr/bin/bash|#!/system/bin/sh|g' \
@@ -458,7 +458,7 @@ for file in "$GIT_CORE_SRC"/*; do
                     "$real_file" > "$GIT_CORE_DST/$name"
             fi
         else
-            # Binary — copy as-is
+            # Binary: copy as-is
             cp -L "$file" "$GIT_CORE_DST/$name" 2>/dev/null || cp "$real_file" "$GIT_CORE_DST/$name"
         fi
         COPIED=$((COPIED + 1))

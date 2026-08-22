@@ -26,7 +26,7 @@ import java.io.File
  * `shouldWriteBack` check from `onEvent`.
  *
  * Nothing here needs SAF. `watchTree` only ever looks at directories, and `onEvent`
- * queues a job whether or not the document behind it resolves — so a tree URI pointing
+ * queues a job whether or not the document behind it resolves, so a tree URI pointing
  * at an authority that does not exist is enough, and the resolution simply misses.
  *
  * The write-back thread is deliberately not started: the queue is the observable, and a
@@ -92,7 +92,7 @@ class SafWatchWiringTest {
     /**
      * Read under the engine's own monitor, not the map's. The observer thread mutates
      * this map while these tests poll it, and an unsynchronized read races a
-     * `ConcurrentModificationException` — a flaky failure that would look like the defect
+     * `ConcurrentModificationException`, a flaky failure that would look like the defect
      * being tested.
      */
     private fun watchedDirectoryNames(): List<String> {

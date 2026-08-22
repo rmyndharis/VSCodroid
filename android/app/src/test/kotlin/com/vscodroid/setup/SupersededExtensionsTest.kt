@@ -109,7 +109,7 @@ class SupersededExtensionsTest {
     }
 
     // retiredOwnExtensionDirs: the same one-directional risk applies, sharpened
-    // by the publisher filter — nothing outside vscodroid.* may ever be named.
+    // by the publisher filter: nothing outside vscodroid.* may ever be named.
 
     @Test
     fun `retires an own extension that is no longer bundled`() {

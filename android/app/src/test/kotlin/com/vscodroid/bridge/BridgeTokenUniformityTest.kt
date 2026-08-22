@@ -38,7 +38,7 @@ class BridgeTokenUniformityTest {
 
     /**
      * A bridge whose every collaborator is a mock, so "did this method act?" can be asked
-     * as "did anything outside the bridge get touched?". Built fresh per method — `wasNot
+     * as "did anything outside the bridge get touched?". Built fresh per method: `wasNot
      * Called` is a statement about a mock's whole life, so a shared one would carry the
      * previous method's calls into the next one's verdict.
      */
@@ -186,13 +186,13 @@ class BridgeTokenUniformityTest {
     /**
      * Checking the signature instead would not do it. A first parameter of type String says
      * nothing about whether it is a token, and two methods here take an unrelated String
-     * first — a shape check passes them while they consult nothing.
+     * first; a shape check passes them while they consult nothing.
      */
     @Test
     fun `every bridge method consults the session token`() {
         val methods = bridgeMethods()
         check(methods.isNotEmpty()) {
-            "No @JavascriptInterface methods found — this test would otherwise pass by " +
+            "No @JavascriptInterface methods found; this test would otherwise pass by " +
                 "enumerating nothing"
         }
 
@@ -218,19 +218,19 @@ class BridgeTokenUniformityTest {
     /**
      * Asking is not obeying, and the test above cannot tell them apart: it verifies the call
      * happened, which stays true if the method calls the validator and drops the answer on
-     * the floor. That mutation — `security.validateToken(t)` with the `if` and `return`
-     * removed — was measured against the whole suite and no test went red.
+     * the floor. That mutation (`security.validateToken(t)` with the `if` and `return`
+     * removed) was measured against the whole suite and no test went red.
      *
      * So this one asks for the effect instead: with a token the validator rejects, nothing
      * outside the bridge may be touched. It is the same shape as the bug class this project
-     * keeps hitting — the predicate is pinned, the wiring is not — except here the wiring is
+     * keeps hitting (the predicate is pinned, the wiring is not), except here the wiring is
      * the guard itself.
      */
     @Test
     fun `a rejected token stops every bridge method before it acts`() {
         val methods = bridgeMethods()
         check(methods.isNotEmpty()) {
-            "No @JavascriptInterface methods found — this test would otherwise pass by " +
+            "No @JavascriptInterface methods found; this test would otherwise pass by " +
                 "enumerating nothing"
         }
 
@@ -245,7 +245,7 @@ class BridgeTokenUniformityTest {
 
             // Returning early cannot throw, so anything thrown is the method having run on
             // past the check. This is the signal that catches methods whose work goes
-            // through a static object rather than an injected collaborator — swallowing it
+            // through a static object rather than an injected collaborator; swallowing it
             // is what let eleven of them through an earlier version of this test.
             try {
                 m.invoke(f.bridge, *args)

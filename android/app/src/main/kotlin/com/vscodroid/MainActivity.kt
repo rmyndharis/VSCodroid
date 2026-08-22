@@ -149,7 +149,7 @@ class MainActivity : AppCompatActivity() {
      *
      * A pair because [SafStorageManager.startFileWatcher] needs both and one is
      * useless without the other. Kept so that a failed folder switch can put the
-     * previous folder's watcher back — see [restoreWatcherAfterFailure].
+     * previous folder's watcher back; see [restoreWatcherAfterFailure].
      *
      * Volatile because the removal guard reads it, and that read arrives on the
      * WebView's "JavaBridge" thread while every write here is on the UI thread.
@@ -183,7 +183,7 @@ class MainActivity : AppCompatActivity() {
      * logged on every launch, and it is expected. It is also the allowlist that
      * `shouldInterceptRequest` compares every resource request against, and
      * [initBridge] installs the client immediately before [navigateToFolder]
-     * starts the page loading — so resolved on another thread, the first requests
+     * starts the page loading, so resolved on another thread, the first requests
      * would arrive while the list was still empty, and an empty allowlist refuses
      * every extension resource without a sound. A markdown preview that renders
      * blank is a far worse trade than a few milliseconds spent after a server
@@ -191,7 +191,7 @@ class MainActivity : AppCompatActivity() {
      *
      * Lazy so the cost is paid once per Activity rather than once per WebView:
      * [recreateWebView] clears `bridgeInitialized`, so a plain call would re-stat
-     * all four on every renderer crash — the moment the app can least afford it.
+     * all four on every renderer crash, the moment the app can least afford it.
      */
     private val resourceRoots: List<String> by lazy { publishedResourceRoots(this) }
 
@@ -204,7 +204,7 @@ class MainActivity : AppCompatActivity() {
      * Volatile because the two ends are on different threads and neither can
      * move: it is written from `onPageFinished` and from [navigateToFolder],
      * both on the UI thread, and read by the resource interceptor, which is not
-     * on the UI thread — `shouldInterceptRequest` performs synchronous HTTP, so
+     * on the UI thread: `shouldInterceptRequest` performs synchronous HTTP, so
      * it cannot be.
      *
      * A folder rather than the URL it came from, and that is the point of the
@@ -214,8 +214,8 @@ class MainActivity : AppCompatActivity() {
      * `isDirectory` guard once per folder switch and keeps it.
      *
      * Only ever overwritten with a folder, never with the absence of one.
-     * [folderFromUrl] answers null for every URL that is not a workbench URL —
-     * the `data:` placeholder in [setupWebView], an error page — so assigning its
+     * [folderFromUrl] answers null for every URL that is not a workbench URL
+     * (the `data:` placeholder in [setupWebView], an error page), so assigning its
      * result directly would drop a perfectly good folder on any of them. What
      * that looks like from the outside is workspace resources 404ing now and
      * then, which is about as expensive as a symptom gets.
@@ -231,7 +231,7 @@ class MainActivity : AppCompatActivity() {
     ) { granted ->
         Logger.i(tag, "Notification permission granted=$granted")
         // The service has already promoted itself by the time this answer
-        // arrives, and it did so while the answer was still "no" — which on
+        // arrives, and it did so while the answer was still "no", which on
         // Android 13+ means its notification was dropped rather than shown. See
         // NodeService.refreshNotification for the measurement.
         if (granted) refreshServiceNotification()
@@ -525,7 +525,7 @@ class MainActivity : AppCompatActivity() {
      *
      * Both entry points feed this, and only one of them used to exist. The
      * callback opens in the browser while the workbench runs in this WebView, and
-     * Android is free to kill an app whose screen the browser has taken — a phone
+     * Android is free to kill an app whose screen the browser has taken; a phone
      * under memory pressure signing into an extension is a routine way to get
      * there. The returning `vscodroid://callback` then builds a *new*
      * `MainActivity`, whose `onCreate` never looked at `intent.data`;
@@ -534,14 +534,14 @@ class MainActivity : AppCompatActivity() {
      *
      * Reading it is where the recovery stops, though, and the reason is in the
      * workbench rather than here. `out/vs/code/browser/workbench/workbench.js`
-     * keeps the ids it is waiting for in a plain in-memory Set —
-     * `pendingCallbacks = new Set`, added to when a request is created, and never
-     * written to storage — and `checkCallbacks()` iterates *that*, reading
+     * keeps the ids it is waiting for in a plain in-memory Set
+     * (`pendingCallbacks = new Set`, added to when a request is created, and never
+     * written to storage), and `checkCallbacks()` iterates *that*, reading
      * `localStorage` only for ids already in it. So a relayed value is consumable
      * by exactly the page instance that began the sign-in. Once that page is
      * gone, which is the whole premise of arriving through `onCreate`, injecting
      * would write a key nothing ever reads and fire an event nothing is
-     * listening for — and leave the value behind permanently, since the cleanup
+     * listening for, and leave the value behind permanently, since the cleanup
      * is also keyed on the pending set.
      *
      * So this says so instead. A user who came back from the browser expecting
@@ -651,7 +651,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 unbindService(serviceConnection)
             } catch (_: IllegalArgumentException) {
-                // Already unbound — safe to ignore
+                // Already unbound: safe to ignore
             }
             serviceBindingInitiated = false
         }
@@ -771,8 +771,8 @@ class MainActivity : AppCompatActivity() {
                 // that redundancy as the whole problem is the trap, because the
                 // stop that was missing is this one.
                 //
-                // Reopening a folder that is already open — which
-                // openRecentSafFolder routes through here — ran the initial sync
+                // Reopening a folder that is already open (which
+                // openRecentSafFolder routes through here) ran the initial sync
                 // under that folder's live watcher. `copyDocumentToLocal` lands
                 // each file by writing a `.partial` beside it and calling
                 // `renameTo`, the observer reads `MOVED_TO` as CREATE, and every
@@ -866,8 +866,8 @@ class MainActivity : AppCompatActivity() {
      * before the sync is what keeps the engine from observing its own writes,
      * but leaving it stopped is only justified for the folder the sync was
      * writing into: that mirror is part-written, and a watcher over a
-     * part-written mirror would push that half onto the user's own documents —
-     * damage to their only copy.
+     * part-written mirror would push that half onto the user's own documents
+     * (damage to their only copy).
      *
      * A different folder's mirror was not touched at all. Leaving *its* watcher
      * dead buys nothing and costs the user the write-back for the folder still
@@ -1088,7 +1088,7 @@ class MainActivity : AppCompatActivity() {
         if (ts == 0L || serverPort == 0) return
         backgroundedAt = 0
 
-        // Don't interfere if server is restarting — onServerReady handles reload.
+        // Don't interfere if server is restarting; onServerReady handles reload.
         //
         // The same distinction as in setupServiceCallbacks, and the same reason:
         // a restart respawns the process long before the editor server inside it
@@ -1107,7 +1107,7 @@ class MainActivity : AppCompatActivity() {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
                 // reload(), not a rebuilt URL. The WebView URL is the only
                 // truthful record of what is open, and rebuilding reads only
-                // `folder` back out of it — so a multi-root workspace
+                // `folder` back out of it, so a multi-root workspace
                 // (`?workspace=<file>`) or a closed folder (`?ew=true`), both of
                 // which the workbench navigates to on its own, would come back as
                 // the default projects directory instead.
@@ -1171,12 +1171,12 @@ class MainActivity : AppCompatActivity() {
      * which reads as a check on VS Code's reconnection dialog and is really a
      * check on the display language: install a language pack and the substrings
      * are translated, the match never fires, and the probe reports a healthy
-     * connection for a broken one — silently, and only for the users who are not
+     * connection for a broken one, silently, and only for the users who are not
      * reading English.
      *
      * It was not narrowed in favour of something better, because there is nothing
      * better to reach for. The shipped workbench carries no class that marks a
-     * dialog as the reconnection one — `.monaco-dialog-box` and
+     * dialog as the reconnection one: `.monaco-dialog-box` and
      * `.monaco-dialog-modal-block` are the only dialog classes in
      * `workbench.web.main.internal.css`, and both belong to every modal it can
      * raise. Matching any dialog instead would reload the page over an unanswered
@@ -1222,17 +1222,17 @@ class MainActivity : AppCompatActivity() {
      * The client that survives a renderer crash before the real one is installed.
      *
      * `onRenderProcessGone` has a platform contract with teeth: returning false
-     * — which the default `WebViewClient` does, and which is also what a WebView
-     * with *no* client does — tells the framework the app cannot carry on, and it
+     * (which the default `WebViewClient` does, and which is also what a WebView
+     * with *no* client does) tells the framework the app cannot carry on, and it
      * ends the application process. [VSCodroidWebViewClient] returns true and
      * rebuilds the view, but it is installed by [initBridge], which runs from
      * [loadVSCode] only once the server reports ready. That leaves the whole cold
-     * start — up to the thirty seconds `waitForReady` will wait — with the
+     * start (up to the thirty seconds `waitForReady` will wait) with the
      * placeholder on screen and nothing to catch a renderer that dies under
      * exactly the memory pressure a Node.js server starting up creates.
      *
      * Deliberately not the real client. That one needs the port, and it fires
-     * `onPageLoaded` on every page — including this placeholder, whose load would
+     * `onPageLoaded` on every page, including this placeholder, whose load would
      * reach [injectBridgeToken] before `securityManager` has been constructed.
      * A renderer crash is the only thing worth handling before the workbench
      * exists; the placeholder is a `data:` URL and issues no requests to
@@ -1272,14 +1272,14 @@ class MainActivity : AppCompatActivity() {
      * and not for the reason its shape suggests.
      *
      * The padding does NOT position anything: the WebView render engine
-     * ignores the view's own padding — with it applied, the page still
+     * ignores the view's own padding: with it applied, the page still
      * reports `window.innerHeight` equal to the full view height, and the
      * container padding from [ExtraKeyRow.setupWithRootView] is what places
      * the editor below the bars. What the padding DOES feed is Chromium's
      * safe-area computation, roughly `safeArea = cutout − viewPadding`.
      * Remove it and the page suddenly reads `env(safe-area-inset-top)` =
-     * the full cutout height — even though the container already moved the
-     * view out of the cutout — and the workbench squeezes its title bar to
+     * the full cutout height (even though the container already moved the
+     * view out of the cutout) and the workbench squeezes its title bar to
      * zero height: measured on API 36, `.titlebar-container` collapsed from
      * 35px to 0 and the command center, navigation arrows and layout
      * controls vanished. Both states were measured over CDP before this
@@ -1317,7 +1317,7 @@ class MainActivity : AppCompatActivity() {
                 webView?.evaluateJavascript(
                     // The token is injected into the page once the workbench has loaded.
                     // Before that it is absent, the call returns false, and the fallback
-                    // below sends the app to the background — which is what pressing back
+                    // below sends the app to the background, which is what pressing back
                     // on a not-yet-loaded editor should do anyway.
                     "(function() { var t = (window.__vscodroid || {}).authToken;" +
                         " return t ? (window.AndroidBridge?.onBackPressed?.(t) || false) : false; })()"
@@ -1344,8 +1344,8 @@ class MainActivity : AppCompatActivity() {
      *
      * Deferred when the binding is not up yet rather than dropped. The permission
      * answer and `onServiceConnected` are both main-thread callbacks with no
-     * ordering between them — the user can answer the dialog faster than the
-     * service binds — and losing the request to that race would leave exactly the
+     * ordering between them (the user can answer the dialog faster than the
+     * service binds), and losing the request to that race would leave exactly the
      * missing notification this exists to fix, on the runs where the user was
      * quick.
      *
@@ -1390,8 +1390,8 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { showServerGaveUp() }
         }
         // Stopping the server from the notification leaves this activity showing
-        // an editor whose backend is gone, and — because the binding it holds is
-        // what keeps a started service alive — leaves the service unable to
+        // an editor whose backend is gone, and, because the binding it holds is
+        // what keeps a started service alive, leaves the service unable to
         // finish stopping until the activity goes. Closing is both the honest
         // response and the thing that completes the stop.
         nodeService?.onServerStopped = {
@@ -1406,7 +1406,7 @@ class MainActivity : AppCompatActivity() {
         if (notificationRefreshPending) refreshServiceNotification()
 
         // A server that became ready before this activity bound will never fire
-        // onServerReady at it — launchServer()'s coroutine has already finished —
+        // onServerReady at it (launchServer()'s coroutine has already finished),
         // so the state has to be asked for rather than waited on.
         //
         // isServerReady(), not isServerRunning(). The latter is Process.isAlive,
@@ -1417,14 +1417,14 @@ class MainActivity : AppCompatActivity() {
         // connection, so what the user gets is a connection-refused page that
         // nothing clears.
         //
-        // The real probe is HTTP and cannot run here — NetworkOnMainThreadException
-        // — which is what made the wrong question attractive. isServerReady()
+        // The real probe is HTTP and cannot run here (NetworkOnMainThreadException),
+        // which is what made the wrong question attractive. isServerReady()
         // reports what that probe already found, at no cost. See
         // ProcessManager.isReady.
         val service = nodeService ?: return
 
         // Checked first, because anything the service has to say about the start
-        // was said to a callback that did not exist yet — this activity was not
+        // was said to a callback that did not exist yet: this activity was not
         // bound when it happened, and nothing repeats it.
         //
         // Shown rather than judged. The notice may be terminal (a start that
@@ -1536,8 +1536,8 @@ class MainActivity : AppCompatActivity() {
      *
      * VS Code opens a folder by navigating this same WebView without going
      * through Kotlin, so the URL is the only record of the open workspace that
-     * stays truthful. A folder that has since disappeared — a cleared SAF
-     * mirror, unmounted storage — is dropped so the caller falls back to the
+     * stays truthful. A folder that has since disappeared (a cleared SAF
+     * mirror, unmounted storage) is dropped so the caller falls back to the
      * default rather than pinning the WebView to a dead path.
      *
      * The hierarchical check is load-bearing, not defensive. Before the workbench
@@ -1555,7 +1555,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Initializes the WebView bridge, security manager, and clients.
-     * Only called once per server lifecycle — not on every folder switch.
+     * Only called once per server lifecycle, not on every folder switch.
      */
     private fun initBridge(port: Int) {
         val wv = webView ?: return
@@ -1613,7 +1613,7 @@ class MainActivity : AppCompatActivity() {
         // One set of rules, read once, handed to both entry points. The service
         // worker is the second route a resource request takes into the
         // interceptor, so lists installed on only one side leave the other
-        // answering by different rules — and neither side would say a word about
+        // answering by different rules, and neither side would say a word about
         // the difference.
         val roots = resourceRoots
         val sensitive = sensitivePaths
@@ -1772,12 +1772,12 @@ class MainActivity : AppCompatActivity() {
         // Seeded here and not only from the page-loaded callback. This method is
         // the one that knows the folder before the page exists, and between
         // loadUrl below and onPageFinished the workbench is already fetching
-        // resources — against a supplier that would still be answering null, so
+        // resources, against a supplier that would still be answering null, so
         // everything inside the workspace would 404 for the length of the load.
         openWorkspaceFolder = folderPath
         // The token rides in the query once. The server consumes it on `/`, turns
         // it into the vscode-tkn cookie and redirects with the folder intact;
-        // everything after that authenticates itself — the cookie for pages, the
+        // everything after that authenticates itself: the cookie for pages, the
         // query for resource requests, an auth message for the WebSocket.
         val token = nodeService?.getConnectionToken()
         val url = workbenchUrl(port, folderPath, token)
@@ -1899,7 +1899,7 @@ class MainActivity : AppCompatActivity() {
      * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
      *
      * The test is `pointer: coarse`, not a viewport width, because what these rules
-     * compensate for is the fingertip — and a fingertip does not change size with the
+     * compensate for is the fingertip, and a fingertip does not change size with the
      * screen. A phone held in landscape is wider than any width threshold that still
      * excludes tablets, so a width test left exactly the orientation people turn to
      * for code width with desktop-sized targets. Conversely a tablet driven by a
@@ -2455,7 +2455,7 @@ class MainActivity : AppCompatActivity() {
      * Relays an extension auth callback from Chrome into the WebView's localStorage.
      *
      * VS Code's callback.html writes auth tokens to localStorage, but on Android
-     * the callback opens in Chrome while the workbench runs in WebView — separate
+     * the callback opens in Chrome while the workbench runs in WebView: separate
      * localStorage domains. This method receives the token data via deep link
      * (vscodroid://callback?data=ENCODED_JSON) and injects it into the WebView's
      * localStorage so the workbench can pick it up.
@@ -2471,7 +2471,7 @@ class MainActivity : AppCompatActivity() {
                     var key = 'vscode-web.url-callbacks[' + d.id + ']';
                     var value = JSON.stringify(d.uri);
                     localStorage.setItem(key, value);
-                    // Dispatch synthetic StorageEvent — VS Code's workbench monitors
+                    // Dispatch synthetic StorageEvent: VS Code's workbench monitors
                     // localStorage via addEventListener("storage"), but that event only
                     // fires when ANOTHER browsing context writes. Since evaluateJavascript
                     // runs in the same context, we must dispatch it manually.
@@ -2656,11 +2656,11 @@ internal const val PRESSURE_CRITICAL = "critical"
  *
  * Android's constants are not ordered by severity. `TRIM_MEMORY_UI_HIDDEN`
  * is 20 and sits above `TRIM_MEMORY_RUNNING_CRITICAL` at 15, but it does not
- * describe memory at all — it means "your UI is no longer visible" and
+ * describe memory at all: it means "your UI is no longer visible" and
  * arrives on every single backgrounding, on a device with gigabytes free.
  * A `>=` comparison therefore read an ordinary app switch as worse than a
  * genuine critical warning, and every language server idle for five minutes
- * — which, after five minutes in another app, is all of them — was killed.
+ * (which, after five minutes in another app, is all of them) was killed.
  *
  * So this maps rather than compares, and the next constant Android adds
  * cannot clear a threshold by accident. Raising the number would have looked
@@ -2670,7 +2670,7 @@ internal const val PRESSURE_CRITICAL = "critical"
 internal fun memoryPressureOf(level: Int): String = when (level) {
     // Every level that already shed idle work keeps doing so. Critical while
     // running, and the cached levels, which all mean the system is reclaiming
-    // and this process is a candidate — shrinking our own footprint there is
+    // and this process is a candidate; shrinking our own footprint there is
     // what keeps the app alive rather than merely responsive.
     TRIM_MEMORY_RUNNING_CRITICAL,
     TRIM_MEMORY_BACKGROUND,
@@ -2696,14 +2696,14 @@ internal fun memoryPressureOf(level: Int): String = when (level) {
  * without an Activity, while the recording sat in a private method that reached
  * `this.cacheDir` for the one thing it needed. Neither half could be reached, so
  * the wire between the pinned predicate and the file the monitor reads was
- * covered by nothing — and replacing [memoryPressureOf] here with a `>=`
+ * covered by nothing, and replacing [memoryPressureOf] here with a `>=`
  * comparison, the exact defect this whole path exists to prevent, left the
  * entire suite green.
  *
  * Takes the directory rather than reaching for one, so the caller supplies what
  * it already has and a test supplies a temporary one.
  *
- * @return the severity, so the caller can log it and notify the workbench —
+ * @return the severity, so the caller can log it and notify the workbench,
  *   both of which need the Activity and neither of which decides anything.
  */
 internal fun applyMemoryPressure(tmpDir: File, level: Int): String {
@@ -2740,8 +2740,8 @@ internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
  * Both halves are load-bearing, and the manifest is why. The VIEW filter that
  * delivers this is exported and BROWSABLE, so any installed app and any web page
  * the user taps can fire it, and what rides in the `data` parameter is written
- * into the workbench's `localStorage`. Relaxed to either half on its own —
- * `vscodroid://` with any host, or any scheme pointed at `callback` — the relay
+ * into the workbench's `localStorage`. Relaxed to either half on its own
+ * (`vscodroid://` with any host, or any scheme pointed at `callback`), the relay
  * starts accepting shapes the flow it exists for never sends.
  *
  * Taking the two parts rather than the Uri is what makes this reachable: `Uri`
@@ -3009,8 +3009,8 @@ internal fun workbenchUrl(port: Int, folderPath: String, token: String?): String
  *
  * The watcher is stopped before every sync, so something has to decide what a
  * failure leaves behind, and the two cases pull opposite ways. When the sync was
- * writing into the folder that was being watched — reopening the folder already
- * open — that mirror is now part-written, and a watcher over it would push the
+ * writing into the folder that was being watched (reopening the folder already
+ * open), that mirror is now part-written, and a watcher over it would push the
  * half onto the user's own documents. When it was writing into a different one,
  * the watched folder was never touched, it is still the folder on screen, and
  * leaving it unwatched means the user keeps editing it with write-back silently
@@ -3032,7 +3032,7 @@ internal fun shouldRestorePreviousWatcher(previousUri: String?, failedUri: Strin
  * "reconnect" and "lost", which reads as a check on VS Code's reconnection
  * dialog and is really a check on the display language. Under a language pack
  * the substrings are translated, the match never fires, and a broken connection
- * is reported healthy — with no error, and only for the users not reading
+ * is reported healthy, with no error, and only for the users not reading
  * English.
  *
  * What is left asks IndexedDB, which answers the same in every locale.

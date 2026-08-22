@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
 
 /**
- * Tests for [ToolchainRegistry] — catalog lookups and size formatting.
+ * Tests for [ToolchainRegistry]: catalog lookups and size formatting.
  */
 class ToolchainRegistryTest {
 

@@ -44,7 +44,7 @@ object PortFinder {
      *
      * The port is part of the WebView's origin, and the browser keys IndexedDB by
      * origin. Secret storage and every extension's `globalState` live there, so a
-     * freshly allocated port on each launch silently emptied all of it — sessions
+     * freshly allocated port on each launch silently emptied all of it: sessions
      * signed out, extension state reset, with nothing in any log to connect it to
      * the port. The chosen port is therefore remembered and reused whenever it is
      * still free.
@@ -117,7 +117,7 @@ object PortFinder {
      * Loopback, not the wildcard address, and the difference is not academic.
      * `ProcessManager` launches the server with `--host=127.0.0.1`, so the only
      * useful question is whether *that* address is free. `ServerSocket(port)`
-     * binds `0.0.0.0` and asks a different one — and the two answers disagree:
+     * binds `0.0.0.0` and asks a different one, and the two answers disagree:
      * Java sets `SO_REUSEADDR` on a `ServerSocket` by default, and on
      * BSD-derived systems that lets a wildcard bind succeed while a specific
      * address is held. Measured here: with a holder on `127.0.0.1:53194`, a
@@ -126,7 +126,7 @@ object PortFinder {
      *
      * Linux is believed to refuse the wildcard bind in that situation, which
      * would make the old form accidentally right on device. That belief is not
-     * what this rests on, and deliberately so — nobody has measured it on
+     * what this rests on, and deliberately so: nobody has measured it on
      * Android, and a check that happens to agree with the server on one platform
      * is a check that disagrees with it on another.
      *

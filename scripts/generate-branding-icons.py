@@ -12,7 +12,7 @@ Run when the launcher icon changes; the outputs are committed:
 
 Requires Pillow. The adaptive icon is a 108dp canvas whose visible area is the
 central 72dp, so a faithful square icon is the canvas rendered at size * 108/72
-and centre-cropped — rendering the foreground full-bleed instead would leave the
+and centre-cropped; rendering the foreground full-bleed instead would leave the
 artwork noticeably too small.
 """
 

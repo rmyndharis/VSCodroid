@@ -5,7 +5,7 @@
 
   No device this app runs on reads this file. `android:fullBackupContent` is
   consulted up to Android 11 (API 30) and `android:dataExtractionRules` from
-  Android 12 (API 31) onwards, while `minSdk` is 33 — so every supported device
+  Android 12 (API 31) onwards, while `minSdk` is 33, so every supported device
   takes the other file and ignores this one. It is kept in step rather than left
   to drift, because a stale copy of a security-relevant rule is worse company
   than none: the next reader has no way to tell which of the two is live.
@@ -16,7 +16,7 @@
   What they are is a safety net for a change nobody would connect to backups:
   lowering `minSdk` to 30 or below, which is an ordinary thing to do to reach
   more devices. On those API levels `android:dataExtractionRules` is ignored, and
-  an app with no `android:fullBackupContent` gets *unrestricted* full backup —
+  an app with no `android:fullBackupContent` gets *unrestricted* full backup:
   the passphrase-less SSH key and the server's connection token included, off the
   device and into the cloud. Nothing would fail, nothing would be logged, and the
   cause would be a manifest edit from months earlier.

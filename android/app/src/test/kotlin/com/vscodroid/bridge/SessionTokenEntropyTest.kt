@@ -18,9 +18,9 @@ import org.junit.jupiter.api.Test
  * within an instance, different between two instances.
  *
  * None of those is unpredictability. Replacing `SecureRandom().nextBytes()` with a
- * `System.nanoTime()` write leaves every one of them green — the value is still 64 hex
+ * `System.nanoTime()` write leaves every one of them green (the value is still 64 hex
  * characters, still stable per instance, and still different between two instances
- * built microseconds apart — while making the token guessable from the launch time.
+ * built microseconds apart) while making the token guessable from the launch time.
  *
  * These tests assert the property that matters instead.
  */

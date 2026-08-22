@@ -1,12 +1,12 @@
 /**
- * VSCodroid platform compatibility fix — SELECTIVE override.
+ * VSCodroid platform compatibility fix: SELECTIVE override.
  *
  * Termux-patched Node.js reports process.platform === "android" instead of "linux".
  * Many npm packages (Prisma, node-gyp, etc.) don't recognize "android" and fail
  * during platform detection or native binary download.
  *
  * However, some tools (Rollup 4.57+, esbuild) have native android-arm64 builds.
- * A global override to "linux" breaks them — they try linux-arm64-musl instead.
+ * A global override to "linux" breaks them; they try linux-arm64-musl instead.
  *
  * Strategy: Only override when explicitly opted in (npm/npx bash functions set
  * VSCODROID_PLATFORM_FIX=1) or when node-gyp is detected in argv.

@@ -197,7 +197,7 @@ class SafStorageManager(private val context: Context) {
      *
      * The reclamation half of what [getPersistedFolders] used to do in one pass. It
      * works off the mirrors directory rather than the recent list so that it carries no
-     * ordering requirement against the read — a list already pruned no longer names the
+     * ordering requirement against the read: a list already pruned no longer names the
      * folders whose mirrors are stale, and an orphan left by a cleared list or a crashed
      * sync is not in the list at all.
      *
@@ -205,14 +205,14 @@ class SafStorageManager(private val context: Context) {
      * hash, the record with a suffix.
      *
      * Call it where no folder is open. Nothing here can tell which mirror the editor is
-     * holding, so the call site is what keeps it away from one — see
+     * holding, so the call site is what keeps it away from one; see
      * [com.vscodroid.SplashActivity], which always precedes `MainActivity`.
      *
      * Returns immediately. The scan itself is a handful of stats, but what it can find
      * is a mirror of a whole project, and deleting one of those is a recursive delete of
      * thousands of files. Its caller is the launch-time repair block in
      * [com.vscodroid.SplashActivity], which runs on the main thread before anything is
-     * drawn — the same reason `repairInstalledToolchains` hands its walk off there.
+     * drawn, the same reason `repairInstalledToolchains` hands its walk off there.
      *
      * Note what that does *not* buy: the thread outlives the activity that started it,
      * so "no folder is open when it starts" is not "no folder can be opened before it
@@ -242,8 +242,8 @@ class SafStorageManager(private val context: Context) {
      * can put a file there and some will. Only names of the shape [getMirrorDir]
      * produces, and the sync record beside them, are candidates.
      *
-     * **A candidate is set aside before it is deleted.** The obvious version — delete in
-     * place — rests on nothing else touching that directory meanwhile, and that does not
+     * **A candidate is set aside before it is deleted.** The obvious version (delete in
+     * place) rests on nothing else touching that directory meanwhile, and that does not
      * hold: this runs on a detached thread, so it outlives the splash screen that starts
      * it, and its duration is proportional to the mirror it is deleting. The user can
      * reach `MainActivity`, re-grant the same folder and re-sync it into the directory

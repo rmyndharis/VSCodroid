@@ -160,8 +160,8 @@ if (!fs.existsSync(rehEntryPoint)) {
         // The security.workspace.trust.enabled setting cannot do it, and for two
         // reasons rather than one. The setting is registered with
         // ConfigurationScope.APPLICATION, and the remote side contributes only
-        // REMOTE_MACHINE_SCOPES — MACHINE, WINDOW, RESOURCE, LANGUAGE_OVERRIDABLE,
-        // MACHINE_OVERRIDABLE (configuration.ts:387) — so an application-scoped
+        // REMOTE_MACHINE_SCOPES: MACHINE, WINDOW, RESOURCE, LANGUAGE_OVERRIDABLE,
+        // MACHINE_OVERRIDABLE (configuration.ts:387), so an application-scoped
         // setting is ignored here whatever file it is in. Separately, until
         // 2026-08-12 the file this app wrote was not read at all: the workbench
         // takes remote settings from <server-data-dir>/data/Machine/settings.json

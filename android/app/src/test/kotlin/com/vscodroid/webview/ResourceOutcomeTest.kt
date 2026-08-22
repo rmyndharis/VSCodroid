@@ -13,7 +13,7 @@ import java.io.File
  * the resolver is called at all. What it cannot prove is the outcome. Serving and
  * refusing both end in a `WebResourceResponse`, which cannot be constructed under
  * the stub `android.jar`, so that test mocks the constructor and then has only the
- * app's own log line to go on — and code that logged the refusal and served the
+ * app's own log line to go on, and code that logged the refusal and served the
  * file anyway satisfied every assertion in it.
  *
  * These assert the decision itself, so "log and serve anyway" is a different value

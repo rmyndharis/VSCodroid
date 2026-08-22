@@ -24,13 +24,13 @@ import java.io.File
  * could be deleted from [SafSyncEngine.initialSync] with all seven of those methods
  * green, which is how the fix for #84 shipped without anything holding it in place.
  *
- * These run `initialSync` itself. No production seam was added for them — the engine
+ * These run `initialSync` itself. No production seam was added for them: the engine
  * already takes a `Context`, and its far end is `ContentResolver.openInputStream`:
  * called means it copied, not called means it kept what was there. The mirror is a real
  * directory, so `exists`, `lastModified` and `length` are answered by the filesystem.
  *
  * Fixture values are chosen so the broken path cannot produce them. A local edit here is
- * both *newer* and a *different length* than the source — the combination the first
+ * both *newer* and a *different length* than the source, the combination the first
  * version of the guard got wrong, because it compared sizes before timestamps.
  */
 class InitialSyncWiringTest {
@@ -40,7 +40,7 @@ class InitialSyncWiringTest {
 
     /**
      * The sync now records what it copied, in a file beside the mirror rather than inside
-     * it — so it lands outside the directory `@TempDir` cleans up, and each test method
+     * it, so it lands outside the directory `@TempDir` cleans up, and each test method
      * gets a fresh directory and therefore a fresh name. Removed here so the runs do not
      * accumulate one small file apiece in the system temp root.
      *
@@ -128,7 +128,7 @@ class InitialSyncWiringTest {
 
     @Test
     fun `an unsaved local edit survives reopening the folder`() {
-        // Newer AND a different length — the pairing the size-first rule overwrote.
+        // Newer AND a different length: the pairing the size-first rule overwrote.
         val local = mirrorHolding("notes.txt", "edited in the editor!", 1_700_000_060_000)
         deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
 

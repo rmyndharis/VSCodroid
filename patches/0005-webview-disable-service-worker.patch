@@ -2,14 +2,14 @@ Disable the webview service worker, and relax its CSP to match.
 
 A webview runs in a cross-origin iframe. Android's WebView will let a
 ServiceWorkerClient intercept the worker script, but activation never completes
-there — controllerchange does not fire, workerReady never resolves, and the
+there: controllerchange does not fire, workerReady never resolves, and the
 webview stays blank indefinitely. Resources are served through
 shouldInterceptRequest on the Kotlin side instead, so the worker has nothing to
 do here even when it does start.
 
 The CSP change is a consequence, not a preference. script-src pins the inline
 script by sha256, and patching that script changes its digest. Planning recorded
-it as unverified whether the build recomputes the hash; it does not — nothing
+it as unverified whether the build recomputes the hash; it does not: nothing
 under build/ touches it, and the value is byte-identical between the source file
 and the packaged output. Left alone, the patched script would be blocked and
 every webview would be blank for a different reason than before.
@@ -22,7 +22,7 @@ The explanatory comment sits outside the <meta> element. An earlier revision put
 it between the tag name and its attributes, which breaks the element: the browser
 stops parsing it as a tag and renders content="default-src 'none'; ..." as
 visible text at the top of every webview, with no CSP applied at all. It was
-caught on screen — the webviews rendered, but only because the policy had
+caught on screen: the webviews rendered, but only because the policy had
 silently gone missing.
 
 diff --git a/src/vs/workbench/contrib/webview/browser/pre/index.html b/src/vs/workbench/contrib/webview/browser/pre/index.html

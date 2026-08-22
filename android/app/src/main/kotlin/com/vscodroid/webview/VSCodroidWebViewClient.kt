@@ -71,7 +71,7 @@ internal fun publishedResourceRoots(context: Context): List<String> = listOf(
  * Separated from building the response because a `WebResourceResponse` cannot be
  * constructed under the stub `android.jar`, so a test has to mock its constructor
  * and can then observe nothing about it. That left refusal provable only by the
- * warning the code logs — and a log line is not a refusal. Code that logged the
+ * warning the code logs, and a log line is not a refusal. Code that logged the
  * warning and served the file anyway satisfied every assertion.
  */
 internal sealed interface ResourceOutcome {
@@ -142,7 +142,7 @@ internal fun sensitiveLocations(context: Context): List<String> = listOf(
  * The open folder as a resource root, or null if publishing it would publish
  * something that must stay unreadable.
  *
- * The workspace has to be a root — VS Code's own `localResourceRoots` includes
+ * The workspace has to be a root: VS Code's own `localResourceRoots` includes
  * it, and without it a markdown preview cannot show an image sitting next to
  * the file being previewed. It cannot be a *static* root, because the user
  * chooses it: opening the home directory would publish the SSH key, which is
@@ -150,7 +150,7 @@ internal fun sensitiveLocations(context: Context): List<String> = listOf(
  *
  * Overlap is tested in **both** directions. Containment alone would let the
  * user open `~/.ssh` itself as the workspace and get the directory published
- * because it contains nothing sensitive — it *is* the sensitive thing.
+ * because it contains nothing sensitive; it *is* the sensitive thing.
  *
  * [sensitive] is expected already canonical; [sensitiveLocations] is what
  * produces it, and doing that work here would put it on every request.
@@ -165,8 +165,8 @@ internal fun workspaceRootOrNull(candidatePath: String?, sensitive: List<String>
  * when it is safe to publish.
  *
  * Both entry points go through here so that the two cannot drift apart. A
- * rejection is reported because the failure it causes — resources missing from
- * the user's own workspace — otherwise looks like a bug rather than a refusal.
+ * rejection is reported because the failure it causes (resources missing from
+ * the user's own workspace) otherwise looks like a bug rather than a refusal.
  * Nothing is logged in the ordinary case: an accepted folder and an absent one
  * are both silent, so this only speaks when the workspace holds a location that
  * must stay unreadable.
@@ -222,8 +222,8 @@ private val TOKEN_PARAMETER = Regex("""tkn=[^&\s"']*""", RegexOption.IGNORE_CASE
  * navigation URL to log, and says in a comment that it is the only place the
  * token could escape. It was not: the same value is appended by [withToken] to
  * every proxied request, and arrives here on the navigation URL that the page
- * callbacks are handed. Four statements printed it, and two of them —
- * `Page loaded` at `Logger.i` and the un-rewritable-URL warning at `Logger.w` —
+ * callbacks are handed. Four statements printed it, and two of them
+ * (`Page loaded` at `Logger.i` and the un-rewritable-URL warning at `Logger.w`)
  * are not gated on a debuggable build, so they shipped in release.
  *
  * Keyed on the parameter rather than on the token's value, because most of the
@@ -231,7 +231,7 @@ private val TOKEN_PARAMETER = Regex("""tkn=[^&\s"']*""", RegexOption.IGNORE_CASE
  * ceilings follow from that and are worth naming, since a comment claiming
  * containment is worth nothing unless it also says where the containment stops:
  * a statement printing the bare token, in no `tkn=` at all, passes straight
- * through, and so does one that has been encoded again — `tkn%3D<value>` nested
+ * through, and so does one that has been encoded again: `tkn%3D<value>` nested
  * inside another parameter is not the pattern below. Neither shape is produced
  * by any call site today, and `ConnectionTokenLoggingTest` drives the real call
  * sites rather than this function, so a statement that started producing one
@@ -680,7 +680,7 @@ class VSCodroidWebViewClient(
 
     /**
      * Carries the URL, because this is the only notice Kotlin gets when VS Code
-     * switches folders on its own — it navigates this WebView without going
+     * switches folders on its own: it navigates this WebView without going
      * through us, so the URL is the only truthful record of the open workspace.
      *
      * That this notice is *sufficient* is a property of the shipped bundles, not
@@ -802,7 +802,7 @@ class VSCodroidWebViewClient(
 
     companion object {
         private const val TAG = "WebViewClient"
-        /** VS Code assets are versioned by commit hash — safe to cache forever. */
+        /** VS Code assets are versioned by commit hash: safe to cache forever. */
         private const val CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 
         /**
@@ -862,9 +862,9 @@ class VSCodroidWebViewClient(
          * Shared CDN interception logic used by both WebViewClient and ServiceWorkerClient.
          *
          * Handles three types of *.vscode-cdn.net requests:
-         * 1. main.vscode-cdn.net — Microsoft resources → empty JSON
-         * 2. *.vscode-resource.vscode-cdn.net — extension webview resources → local file/proxy
-         * 3. HASH.vscode-cdn.net — VS Code static assets → rewrite to localhost
+         * 1. main.vscode-cdn.net: Microsoft resources → empty JSON
+         * 2. *.vscode-resource.vscode-cdn.net: extension webview resources → local file/proxy
+         * 3. HASH.vscode-cdn.net: VS Code static assets → rewrite to localhost
          */
         internal fun interceptCdnRequest(
             request: WebResourceRequest,
@@ -967,7 +967,7 @@ class VSCodroidWebViewClient(
                     Logger.w(TAG, "Resource refused, foreign origin: $origin")
                     return notFound("Access denied")
                 }
-                // Local file resource — serve directly from filesystem.
+                // Local file resource: serve directly from filesystem.
                 // Both "file" and "vscode-remote" schemes use local paths in VSCodroid
                 // since the server runs on the same device.
                 // Through resourceOutcome so the decision is a value rather than a
@@ -996,7 +996,7 @@ class VSCodroidWebViewClient(
                         put("Access-Control-Allow-Origin", "*")
                         put("Content-Length", file.length().toString())
                         // Static resources are versioned by commit hash in the URL,
-                        // so they never change — cache aggressively for warm starts.
+                        // so they never change; cache aggressively for warm starts.
                         if (isStaticAsset(path)) {
                             put("Cache-Control", CACHE_IMMUTABLE)
                         }
@@ -1153,7 +1153,7 @@ class VSCodroidWebViewClient(
          * These requests need it carried explicitly. The workbench authenticates
          * itself with the `vscode-tkn` cookie, but everything here is re-fetched
          * through HttpURLConnection, which has its own cookie store and shares
-         * nothing with the WebView — so without the query parameter the server
+         * nothing with the WebView, so without the query parameter the server
          * answers 403 and the asset silently fails to load.
          *
          * Deliberately not folded into proxyToLocalhost(), despite the name of

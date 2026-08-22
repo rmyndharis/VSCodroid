@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$ROOT_DIR/toolchain-zips"
 
-# Available toolchains (parallel arrays for bash 3.2 — no associative arrays)
+# Available toolchains (parallel arrays for bash 3.2, no associative arrays)
 ALL_TOOLCHAINS=(ruby java)
 
 get_assets_dir() {

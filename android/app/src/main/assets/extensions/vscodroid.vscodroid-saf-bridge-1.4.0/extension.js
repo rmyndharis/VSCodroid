@@ -71,7 +71,7 @@ function sendBridgeCommand(cmd, extra = {}) {
         setTimeout(() => {
             if (_pending[id]) {
                 delete _pending[id];
-                reject(new Error('Bridge timeout — is the app running on Android?'));
+                reject(new Error('Bridge timeout: is the app running on Android?'));
             }
         }, 5000);
     });
@@ -415,7 +415,7 @@ function activate(context) {
                 vscode.window.showInformationMessage(
                     freed > 0
                         ? `Freed ${formatBytes(freed)} of cached data.`
-                        : 'Nothing to clear — no cached data was using space.'
+                        : 'Nothing to clear: no cached data was using space.'
                 );
             } catch (/** @type {*} */ err) {
                 vscode.window.showErrorMessage(`Could not clear caches: ${err.message}`);

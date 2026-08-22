@@ -130,7 +130,7 @@ object KeyMapping {
      *
      * The soft keyboard reaches VS Code through a `beforeinput` listener rather than
      * through [getKeyDefOrLetter], so that path has no way to read these definitions
-     * from Kotlin. It is handed this instead — see
+     * from Kotlin. It is handed this instead: see
      * [KeyInjector.setupModifierInterceptor]. Both input paths then answer from one
      * table, which is what keeps a symbol typed on the soft keyboard equivalent to the
      * same symbol tapped on the key row.

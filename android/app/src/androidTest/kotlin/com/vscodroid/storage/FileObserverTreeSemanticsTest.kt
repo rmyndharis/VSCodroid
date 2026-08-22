@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
  *
  * ## What this needs
  *
- * A temporary directory, and nothing else — no server, no first-run extraction, no SAF
+ * A temporary directory, and nothing else: no server, no first-run extraction, no SAF
  * grant, no picker. That is deliberate. `ServerHealthTest` passes its three cases on a
  * clean install by skipping all of them, because the state it needs is produced by a
  * class that sorts after it; this file has no such state to be missing, so there is
@@ -72,7 +72,7 @@ class FileObserverTreeSemanticsTest {
      *
      * The observer is held in [observers] for the whole test. That is not tidiness:
      * FileObserver's shared ObserverThread keeps only a WeakReference to it, so an
-     * observer nothing else references stops delivering the moment it is collected —
+     * observer nothing else references stops delivering the moment it is collected,
      * which is why the engine keeps its own map of them rather than starting and
      * forgetting them.
      */

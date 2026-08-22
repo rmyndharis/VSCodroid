@@ -27,7 +27,7 @@ VSCodroid is Visual Studio Code ported to Android. It provides a full-featured I
 
 ### The Gap
 
-Developers increasingly work across multiple devices, yet Android — the world's most popular mobile OS — has no viable VS Code option. Current alternatives fall into two categories:
+Developers increasingly work across multiple devices, yet Android (the world's most popular mobile OS) has no viable VS Code option. Current alternatives fall into two categories:
 
 1. **Cloud IDEs** (GitHub Codespaces, Gitpod): Require internet, incur costs, add latency
 2. **Mobile code editors** (Acode, Spck, CodeFA): Limited features, no extension support, no terminal, no Node.js
@@ -47,7 +47,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 
 ## 3. Vision
 
-> **Install once. Open. Code.** Full VS Code on Android — no cloud, no setup, no compromises.
+> **Install once. Open. Code.** Full VS Code on Android: no cloud, no setup, no compromises.
 
 ## 4. Goals & Non-Goals
 
@@ -82,7 +82,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 
 - **Needs**: Full editor, terminal, git, extensions (ESLint, Prettier)
 - **Pain point**: Current mobile editors can't run linters or use familiar VS Code keybindings
-- **Success**: Can open a project, edit files, run tests, commit and push — all from phone
+- **Success**: Can open a project, edit files, run tests, commit and push, all from phone
 
 ### Secondary: The Student Developer
 
@@ -102,7 +102,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 
 ## 6. Feature Scope
 
-### P0 — Must Have (M0-M1)
+### P0: Must Have (M0-M1)
 
 | Feature | Description |
 |---------|-------------|
@@ -115,7 +115,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 | Node.js Runtime | Bundled Node.js ARM64 binary |
 | Git Integration | VS Code SCM panel, git commands in terminal |
 
-### P1 — Should Have (M2-M3)
+### P1: Should Have (M2-M3)
 
 | Feature | Description | Milestone |
 |---------|-------------|-----------|
@@ -130,7 +130,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 | Bundled Python | Python 3 + pip, ready to use | M3 |
 | Terminal Sessions | Each terminal spawns bash directly on its own PTY through node-pty; tmux ships as a standalone tool | M1 |
 
-### P2 — Nice to Have (M3-M4)
+### P2: Nice to Have (M3-M4)
 
 | Feature | Description | Milestone |
 |---------|-------------|-----------|
@@ -141,7 +141,7 @@ Developers increasingly work across multiple devices, yet Android — the world'
 | First-Run Experience | Welcome screen, quick actions | M3 |
 | GitHub OAuth | Push/pull to GitHub from SCM panel | M4 |
 
-### P3 — Future (M4-M5)
+### P3: Future (M4-M5)
 
 | Feature | Description |
 |---------|-------------|
@@ -245,10 +245,10 @@ See [MILESTONES.md](../MILESTONES.md) for detailed breakdown.
 
 | Phase | Duration | Deliverable |
 |-------|----------|-------------|
-| M0 — POC | 1-2 weeks | Node.js + WebView working on Android |
-| M1 — Core | 3-4 weeks | VS Code running with extensions |
-| M2 — Mobile UX | 2-3 weeks | Touch-optimized, Extra Key Row |
-| M3 — Dev Env | 3-4 weeks | Python, package manager, toolchains |
-| M4 — Polish | 3-4 weeks | Performance, stability, testing |
-| M5 — Release | 6-8 weeks | Play Store launch |
+| M0: POC | 1-2 weeks | Node.js + WebView working on Android |
+| M1: Core | 3-4 weeks | VS Code running with extensions |
+| M2: Mobile UX | 2-3 weeks | Touch-optimized, Extra Key Row |
+| M3: Dev Env | 3-4 weeks | Python, package manager, toolchains |
+| M4: Polish | 3-4 weeks | Performance, stability, testing |
+| M5: Release | 6-8 weeks | Play Store launch |
 | **Total** | **~5-6 months** | |

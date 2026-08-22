@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
 /**
- * Tests for [SecurityManager] — token generation/validation and the URL allowlist.
+ * Tests for [SecurityManager]: token generation/validation and the URL allowlist.
  */
 class SecurityManagerTest {
 
@@ -123,7 +123,7 @@ class SecurityManagerTest {
     }
 
     // The URL allow-list that stood here is gone, deliberately, and so are its
-    // cases. `SecurityManager` no longer decides anything about destinations —
+    // cases. `SecurityManager` no longer decides anything about destinations;
     // see the note where the method was, and `ExternalUrlHandoffTest` for what
     // the app does with a URL now.
 }

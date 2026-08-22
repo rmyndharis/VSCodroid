@@ -827,7 +827,7 @@ up to Android 11 (API 30) and `android:dataExtractionRules` from Android 12 (API
 onwards. `minSdk` is 33, so **every supported device reads
 `data_extraction_rules.xml` and ignores `backup_rules.xml`**. The older file is kept
 deliberately rather than deleted: it is the floor that stops a future `minSdk`
-reduction from silently turning on unrestricted full backup. Keep the two in step —
+reduction from silently turning on unrestricted full backup. Keep the two in step:
 the header comment in each file carries the full reasoning.
 
 **Live rules** (`res/xml/data_extraction_rules.xml`):
@@ -849,7 +849,7 @@ the header comment in each file carries the full reasoning.
 **Rationale**: this is an **allowlist with no exclusions**, and the absence of
 `<exclude>` is the design rather than an omission. Under `<include>` semantics
 anything not named is already out, so exclusions would only restate paths that were
-never in scope — which is what lint reported, once per line.
+never in scope, which is what lint reported, once per line.
 
 Fail-closed is the point. The app's private storage holds a passphrase-less SSH key
 (`Environment.getSshDir`) and the server's connection token
@@ -858,7 +858,7 @@ directory away from the settings that *are* backed up. A denylist protects exact
 the secrets someone remembered to list; naming only what may leave keeps the next
 credential file out by default.
 
-What is included is `data/Machine` — where the workbench reads its settings from on
+What is included is `data/Machine`, where the workbench reads its settings from on
 this side, which is not the `User/` path it looks like it should be; see
 `Environment.getMachineSettingsPath`. Restoring it is worth doing because
 `FirstRunSetup.createDefaultSettings()` writes only when the file is absent, so a

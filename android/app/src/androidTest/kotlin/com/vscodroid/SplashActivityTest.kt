@@ -17,7 +17,7 @@ import java.io.File
 /**
  * Instrumented tests for [SplashActivity].
  *
- * SplashActivity is transitional — it finishes itself after setup completes
+ * SplashActivity is transitional; it finishes itself after setup completes
  * and starts MainActivity. ActivityScenario.state is unreliable when the
  * tracked activity starts a new activity (lifecycle events get ignored due
  * to intent mismatch). Tests verify side effects (SharedPreferences) and

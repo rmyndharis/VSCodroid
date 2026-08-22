@@ -126,7 +126,7 @@ class SafSyncEngineTest {
 
         @Test
         fun `extension matching is case-sensitive`() {
-            // .TXT != .txt — this is the current behavior (could be a limitation)
+            // .TXT != .txt: this is the current behavior (could be a limitation)
             assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("README.TXT"))
             assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("APP.JS"))
         }
@@ -200,7 +200,7 @@ class SafSyncEngineTest {
         fun `keeps a newer local file even when its length differs`() {
             // This pairing is the common one: almost every edit changes a file's
             // length. Checking size before the timestamps meant almost every unsaved
-            // edit was read as "not a copy of the source" and overwritten — the exact
+            // edit was read as "not a copy of the source" and overwritten, the exact
             // case the guard exists for.
             //
             // A copy cut short used to produce the same pairing, which is why size
@@ -217,7 +217,7 @@ class SafSyncEngineTest {
 
         @Test
         fun `copies when the timestamps match but the contents differ in length`() {
-            // Writers that preserve mtime — unzip, cp -p, rsync -t, git checkout —
+            // Writers that preserve mtime (unzip, cp -p, rsync -t, git checkout)
             // change content without moving the clock. Size is the tiebreaker there.
             assertTrue(
                 SafSyncEngine.shouldOverwriteMirror(

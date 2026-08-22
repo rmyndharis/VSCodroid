@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test
  *
  * `ShouldSkipTest` covers fourteen directory names across two parameterised
  * cases and never checked that the walk consults the answer. Dropping the
- * `if (shouldSkip(name, isDir)) continue` line leaves all of them green — and
+ * `if (shouldSkip(name, isDir)) continue` line leaves all of them green, and
  * mirrors `node_modules` and `.git` into the local copy.
  *
  * The cost is not a slow sync. Every mirrored file is also watched and

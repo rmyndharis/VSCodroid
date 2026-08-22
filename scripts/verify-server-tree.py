@@ -275,15 +275,15 @@ def main(tree):
         check(size > 0, "ThirdPartyNotices.txt is not empty", "0 bytes")
 
     # The Mobile CSS block is appended to the packaged workbench.css at server
-    # build time, and on 2026-08-15 its content changed — the Accounts/Manage
-    # hide was removed — while the idempotency marker stayed the same. The
+    # build time, and on 2026-08-15 its content changed (the Accounts/Manage
+    # hide was removed) while the idempotency marker stayed the same. The
     # server tarball is rebuilt in place without the version moving, so a
     # workflow dispatched from a ref that predates the change would publish a
     # tree that passes every other check here and silently hides the section
     # again. Two assertions, one per failure direction: the marker missing
     # means the append never ran; the hide selector present means the block is
-    # the old one. This runs on both sides — the build before publishing, the
-    # fetch before packaging — so either end refuses the stale tree.
+    # the old one. This runs on both sides (the build before publishing, the
+    # fetch before packaging), so either end refuses the stale tree.
     wb_css = tree / "out/vs/code/browser/workbench/workbench.css"
     # exists() is inside the try for the same reason as the REQUIRED loop above: it
     # stats, and an unsearchable parent makes the stat itself raise. This was the

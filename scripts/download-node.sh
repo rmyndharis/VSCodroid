@@ -16,7 +16,7 @@ set -euo pipefail
 #
 # Termux's package is a maintained Bionic build with the same 16 KB page
 # alignment Android 16 requires. Taking it removes a cross-compile we do not have
-# the means to debug, and its version — 24.18.0 — is exactly what VS Code 1.133
+# the means to debug, and its version (24.18.0) is exactly what VS Code 1.133
 # asks for in remote/.npmrc, which is what makes the version bump possible at all.
 #
 # The libraries it links against are placed by download-termux-tools.sh, not
@@ -174,7 +174,7 @@ python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNILIBS_DIR/libnode.so" \
     --lib-dir "$JNILIBS_DIR"
 
 # The ABI number is what native addons are compiled against, and a mismatch is
-# not a warning — the addon simply refuses to load, taking terminals with it.
+# not a warning: the addon simply refuses to load, taking terminals with it.
 # Printed here so a version bump makes the number that has to reach
 # build-native-addons.sh visible rather than implied.
 echo ""

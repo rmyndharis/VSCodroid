@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
 /**
- * Tests for [refreshManagedPaths] — the settings.json values this app manages.
+ * Tests for [refreshManagedPaths]: the settings.json values this app manages.
  *
  * Two jobs are covered. `git.path` embeds nativeLibraryDir and goes stale on every
  * APK reinstall, so it is re-pointed. The terminal profile is migrated off
@@ -332,9 +332,9 @@ class SettingsPathsTest {
     }
 
     /**
-     * The Claude Code extension refuses to start without this setting —
+     * The Claude Code extension refuses to start without this setting:
      * resolveClaudeBinary() throws "Unsupported platform" rather than falling back
-     * to PATH — so it has to be added to settings.json that predate it, not only
+     * to PATH. So it has to be added to settings.json that predate it, not only
      * refreshed. Insertion touches a user's document, so what these cover is mostly
      * what must NOT change.
      */

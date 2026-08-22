@@ -57,13 +57,13 @@ class SplashActivity : AppCompatActivity() {
 
         val setup = FirstRunSetup(this)
 
-        // Always validate tool symlinks — Android changes nativeLibraryDir
+        // Always validate tool symlinks: Android changes nativeLibraryDir
         // path on every reinstall, which breaks absolute symlinks in usr/bin/.
         //
         // These touch the filesystem on the main thread at launch. Letting one
         // throw would crash the app before it ever draws, leaving a launch loop
         // with no explanation. What survives a failure here is degraded rather
-        // than dead — tools missing from PATH, a stale terminal profile — and
+        // than dead (tools missing from PATH, a stale terminal profile), and
         // logcat is the only trace, so keep the message specific.
         //
         // Guarded one at a time rather than as a block, because they share
@@ -131,7 +131,7 @@ class SplashActivity : AppCompatActivity() {
             // changes. Reinstalling a rebuilt APK is exactly that gap, and it is
             // the one case where "not first run" still has work to do. The check
             // is two directory listings; the work it gates is 23 MB, so it runs
-            // off the main thread and holds this activity open while it does —
+            // off the main thread and holds this activity open while it does:
             // lifecycleScope is cancelled the moment we finish for MainActivity.
             if (setup.pythonRuntimeNeedsWork()) {
                 Logger.i(tag, "Bundled Python changed since the last extraction; reconciling")
@@ -258,7 +258,7 @@ class SplashActivity : AppCompatActivity() {
             }
             // Constrained below the (hidden) progress bar, centered. Added
             // without LayoutParams, a ConstraintLayout child lays out at
-            // (0,0) — the top-left corner, under the transparent status bar.
+            // (0,0), the top-left corner, under the transparent status bar.
             if (parent is ConstraintLayout) {
                 val lp = ConstraintLayout.LayoutParams(
                     ConstraintLayout.LayoutParams.WRAP_CONTENT,

@@ -84,7 +84,7 @@ class FirstRunSetup(
         // Two Splash instances can exist at once (noHistory + standard
         // launchMode), each calling this from its own lifecycleScope. The body
         // is blocking I/O that never checks for cancellation, so cancelling the
-        // loser does nothing — serialize instead, and let whoever waited find
+        // loser does nothing: serialize instead, and let whoever waited find
         // the work already done. The winner's markSetupComplete() flips
         // isFirstRun() before the lock is released.
         if (!isFirstRun()) return@withLock SetupResult.SUCCESS
@@ -323,7 +323,7 @@ class FirstRunSetup(
             createBashrc()
             createBashProfile()
             createTmuxConf()
-            createNpmWrappers()  // After createBashrc — appends npm functions to .bashrc
+            createNpmWrappers()  // After createBashrc: appends npm functions to .bashrc
             createStorageSymlinks()
             createWelcomeProject()
 
@@ -905,7 +905,7 @@ class FirstRunSetup(
      *
      * Android changes the nativeLibraryDir path on every reinstall (random hash),
      * so existing symlinks may point to a stale path. This method validates and
-     * recreates them as needed — safe to call on every launch, not just first run.
+     * recreates them as needed, safe to call on every launch, not just first run.
      */
     fun setupToolSymlinks() {
         val nativeLibDir = context.applicationInfo.nativeLibraryDir
@@ -942,7 +942,7 @@ class FirstRunSetup(
                     val currentTarget = Os.readlink(link.absolutePath)
                     if (currentTarget == target) continue
                 } catch (_: Exception) { }
-                // Stale or broken symlink — remove it
+                // Stale or broken symlink, remove it
                 link.delete()
                 updated++
                 linkUpdated = true
@@ -1097,7 +1097,7 @@ class FirstRunSetup(
      *
      * Sets up ~/.ssh/ directory, default ssh_config (auto-accept first connection,
      * ed25519 key, keepalive), and correct file permissions. Only runs on first setup
-     * — does not overwrite existing user SSH config.
+     * and does not overwrite existing user SSH config.
      */
     private fun setupSshDefaults() {
         val homeDir = context.filesDir.absolutePath + "/home"
@@ -1141,7 +1141,7 @@ class FirstRunSetup(
      * denied" no matter how it is chmod'ed. Instead, npm/npx are defined as bash
      * functions that invoke node with the cli entry point.
      *
-     * Safe to call on every launch — only appends if functions are missing.
+     * Safe to call on every launch: only appends if functions are missing.
      */
     fun createNpmWrappers() {
         val nativeLibDir = context.applicationInfo.nativeLibraryDir
@@ -1205,7 +1205,7 @@ class FirstRunSetup(
             }
         }
 
-        // Update .npmrc on every launch — nativeLibDir changes on APK reinstall
+        // Update .npmrc on every launch: nativeLibDir changes on APK reinstall
         val npmrc = File(context.filesDir, "home/.npmrc")
         val bashPath = "$nativeLibDir/libbash.so"
         // script-shell: use bundled bash for npm lifecycle scripts, because
@@ -1355,7 +1355,7 @@ class FirstRunSetup(
 
     /**
      * Ensures .bashrc sources toolchain-env.sh for on-demand toolchain env vars.
-     * Safe to call on every launch — only appends if the sourcing line is missing.
+     * Safe to call on every launch: only appends if the sourcing line is missing.
      */
     fun ensureToolchainEnvSourcing() {
         val bashrc = File(context.filesDir, "home/.bashrc")
@@ -1480,9 +1480,9 @@ class FirstRunSetup(
      * older shape is there.
      *
      * The block is fenced by versioned markers so that any future change to it is
-     * migratable. The first version had no markers at all — it printed straight
+     * migratable. The first version had no markers at all: it printed straight
      * out of PROMPT_COMMAND with PS1 left empty, dating from when the terminal was
-     * a pipe rather than the PTY node-pty now gives us — so that shape is also
+     * a pipe rather than the PTY node-pty now gives us, so that shape is also
      * recognised, by its function name and its `PS1=''`.
      *
      * Safe to call on every launch: it returns immediately once the current marker
@@ -1600,7 +1600,7 @@ class FirstRunSetup(
 
     private fun npmBashFunctions(): String = """
 
-# npm/npx — shell functions (SELinux blocks exec of scripts under filesDir)
+# npm/npx: shell functions (SELinux blocks exec of scripts under filesDir)
 # VSCODROID_PLATFORM_FIX=1: override process.platform to "linux" for npm only
 # (child processes like Rollup/esbuild see real "android" platform)
 # --prefer-offline: use local cache first, saves time on slow mobile connections
@@ -1612,14 +1612,14 @@ npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx
      * `claude` in the terminal, which the extension's own login screen suggests.
      *
      * A function for the same reason npm is one: SELinux denies exec of anything
-     * under filesDir, and the CLI lives there — it ships inside the extension the
+     * under filesDir, and the CLI lives there: it ships inside the extension the
      * user installed. It runs that very file rather than a second copy, so the
      * terminal and the extension are always on the same version, and the glob
      * picks up whatever version is installed without this needing to change.
      */
     private fun claudeBashFunction(): String = """
 
-# claude — the CLI the Claude Code extension brings with it. Started through
+# claude: the CLI the Claude Code extension brings with it. Started through
 # musl's loader: the CLI is a musl binary under filesDir, which SELinux will not
 # execve but will let a loader map. libldmusl.so is found on PATH, which already
 # includes nativeLibraryDir.
@@ -1678,8 +1678,8 @@ claude() {
      * Moves settings.json from the path this app used to write to the one the
      * workbench reads.
      *
-     * Everything written to the old path was inert — the theme, the terminal
-     * profile, the Python interpreter, all of it — so the move is what makes those
+     * Everything written to the old path was inert (the theme, the terminal
+     * profile, the Python interpreter, all of it), so the move is what makes those
      * defaults take effect for the first time. It is a move rather than a fresh
      * write because the old file is reachable from the terminal and may have been
      * edited by hand.
@@ -1831,7 +1831,7 @@ claude() {
             // `getPlatformKey()` maps 1 to "windows", 2 to "osx" and everything
             // else to "linux", and the server computes that integer as
             // `isMacintosh || isIOS ? 2 : isWindows ? 1 : 3`. Linux is the branch
-            // nothing tests for, so Android — neither darwin nor win32 — has always
+            // nothing tests for, so Android (neither darwin nor win32) has always
             // landed on it. isLinux is not consulted anywhere on this path, so
             // patches/0001 neither made this work nor is needed for it.
             //
@@ -1841,7 +1841,7 @@ claude() {
             // injects shell integration for empty or login args.
             //
             // This block was once documented as inert, on the grounds that the
-            // remote "reports its platform as android". No such mechanism exists —
+            // remote "reports its platform as android". No such mechanism exists:
             // it reports an integer, never a platform string. The device
             // measurement offered as proof predates the settings-path fix, when
             // everything written here went to a file the workbench never read, so
@@ -2098,8 +2098,8 @@ claude() {
         }
 
         // The server manages this file for marketplace installs, so it is never
-        // regenerated wholesale. But it is the default profile's manifest — the
-        // scanner shows only what is listed in it — and bundled extensions
+        // regenerated wholesale. But it is the default profile's manifest (the
+        // scanner shows only what is listed in it), and bundled extensions
         // change with app upgrades while the file survives them. Reconcile:
         // entries whose directory is gone are unloadable and dropped, freshly
         // extracted bundled versions gain an entry, everything else stays
@@ -2230,7 +2230,7 @@ claude() {
      * swapped bundled extension versions underneath it. Conservative on
      * purpose: an entry survives unless its directory is verifiably gone, and a
      * bundled directory is only added to replace an entry that was just
-     * dropped — never for an identifier with no entry at all, which is an
+     * dropped, never for an identifier with no entry at all, which is an
      * extension the user uninstalled, nor over a surviving entry, so a user's
      * own newer install keeps winning over the bundled copy.
      */
@@ -2341,8 +2341,8 @@ claude() {
         if (fromVersionCode < PIVOT_VERSION_CODE) {
             // The server tree changed origin, not just version: what was there is a
             // pre-built VS Code Server, and what replaces it is Code - OSS built
-            // from source. Their file sets differ — vsda and the bundled node are
-            // gone, several paths moved — and extractAssetDir only ever writes over
+            // from source. Their file sets differ (vsda and the bundled node are
+            // gone, several paths moved), and extractAssetDir only ever writes over
             // what it recognises. Merging the two leaves orphans from the old tree
             // that nothing overwrites and nothing loads, with no visible symptom
             // beyond behaviour nobody can account for.
@@ -2362,7 +2362,7 @@ claude() {
 
             // Every pre-pivot release also extracted a standalone web client here
             // (the reh-web tree now carries it), and nothing writes or reads this
-            // path anymore — without this, tens of MB ride along on every phone
+            // path anymore. Without this, tens of MB ride along on every phone
             // forever, counted into the storage figure the app reports.
             val webTree = File(context.filesDir, "server/vscode-web")
             if (webTree.exists()) {
@@ -2384,7 +2384,7 @@ claude() {
         //
         // Note that files owned by the user are not migrated from this method at
         // all. settings.json and .bashrc are both written only when absent, so a
-        // change to their defaults reaches nobody who already has them — the
+        // change to their defaults reaches nobody who already has them; the
         // anchored rewrites in updateSettingsNativeLibPaths() and
         // ensurePromptFix() handle that, and they run on every launch rather than
         // only on a version change.
@@ -2824,19 +2824,19 @@ private val PROMPT_BLOCK = """
     # readline which bytes take no width; without them Ctrl+L and any wrapped line
     # redraw over the prompt. An earlier build printed the prompt straight out of
     # PROMPT_COMMAND with an empty PS1, dating from when the terminal was a pipe
-    # rather than a PTY — readline could not measure that at all, and VS Code's
+    # rather than a PTY: readline could not measure that at all, and VS Code's
     # shell integration ended up wrapping an empty string.
     __vscodroid_prompt() {
         local dir="${'$'}PWD"
         # The tilde must be escaped. bash expands tildes in a substitution's
         # replacement text, so a bare one turns back into the home path and the
         # whole substitution collapses into a no-op. bash 3.2 does not do this,
-        # so a macOS shell cannot reproduce it — only a device can.
+        # so a macOS shell cannot reproduce it; only a device can.
         dir="${'$'}{dir/#${'$'}HOME/\~}"
         [[ "${'$'}dir" == /* ]] && dir="${'$'}{dir/#${'$'}PROJECTS_DIR/projects}"
         # Abbreviate SAF mirror paths: /data/.../saf-mirrors/<hash>/... → [saf]/...
         # At the mirror root there is nothing after the hash, so stripping has to be
-        # conditional — stripping unconditionally leaves the hash itself standing,
+        # conditional: stripping unconditionally leaves the hash itself standing,
         # which is the one thing this abbreviation exists to hide.
         if [[ "${'$'}dir" == *saf-mirrors/* ]]; then
             dir="${'$'}{dir#*saf-mirrors/}"
@@ -2853,7 +2853,7 @@ private val PROMPT_BLOCK = """
 """.trimIndent()
 
 /**
- * Anchors for a prompt block written before the versioned markers existed — the
+ * Anchors for a prompt block written before the versioned markers existed: the
  * shape shipped in v1.0.0, which printed from PROMPT_COMMAND with an empty PS1.
  */
 private const val PROMPT_ANCHOR_START = "__vscodroid_prompt() {"
@@ -2996,7 +2996,7 @@ private val FIRST_PROPERTY = Regex("""(?<=\{)\s*\n([ \t]*)(?=")""")
  * Directories under our own publisher that this build no longer bundles.
  *
  * `vscodroid.*` never appears on the marketplace, so such a directory can only
- * be a leftover from a previous build of this app — the github-auth stub is the
+ * be a leftover from a previous build of this app; the github-auth stub is the
  * case that prompted this. With the manifest reconciled it would otherwise
  * survive forever: reconciliation keeps any entry whose directory exists. A
  * directory whose base id is still bundled is not retired; its versions belong
@@ -3562,9 +3562,9 @@ internal fun refreshManagedPaths(
         updated = SHELL_INTEGRATION_OFF.replace(updated) { "${it.groupValues[1]}true" }
     }
 
-    // Without this setting the Claude Code extension refuses to start at all —
+    // Without this setting the Claude Code extension refuses to start at all:
     // resolveClaudeBinary() throws "Unsupported platform" rather than looking on
-    // PATH — so an install that predates the setting needs it added, not just
+    // PATH. So an install that predates the setting needs it added, not just
     // refreshed. The value names musl's loader in nativeLibraryDir, so like the
     // two paths above it moves on every reinstall and has to be rewritten here.
     updated = when {

@@ -22,7 +22,7 @@ import java.net.ServerSocket
 import java.net.Socket
 
 /**
- * Tests for [PortFinder] — port discovery, availability checking, and the
+ * Tests for [PortFinder]: port discovery, availability checking, and the
  * remembered port that keeps the workbench origin stable across cold starts.
  */
 class PortFinderTest {
@@ -107,7 +107,7 @@ class PortFinderTest {
          *     holder=wildcard  tester=wildcard  -> BindException
          *
          * A conflict is seen only when both sockets name the same address, so
-         * neither form is the stronger one — the check simply has to bind what the
+         * neither form is the stronger one: the check simply has to bind what the
          * server binds. With a wildcard fixture these tests passed while modelling
          * something that cannot happen, and would have gone on passing against a
          * check unable to detect the holder that can.

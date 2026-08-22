@@ -11,7 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 
 /**
- * Tests for [KeyMapping] — keyboard key definitions and fallback logic.
+ * Tests for [KeyMapping]: keyboard key definitions and fallback logic.
  */
 class KeyMappingTest {
 
@@ -326,7 +326,7 @@ class KeyMappingTest {
 
         /**
          * Scans the way a parser would, honouring escapes. An unescaped `"` inside a
-         * key ends that string early, which shifts every string boundary after it —
+         * key ends that string early, which shifts every string boundary after it,
          * so the count is what catches it, not the appearance of any one entry.
          */
         @Test

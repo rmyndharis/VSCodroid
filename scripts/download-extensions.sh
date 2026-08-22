@@ -40,11 +40,11 @@ apply_tree_rewrites() {
 # Every one is pinned to the newest STABLE version whose engines.vscode is
 # satisfied by the VSCODE_VERSION file. Stable matters as much as compatible:
 # GitLens publishes pre-release builds far more often than releases, so "newest
-# compatible" lands on one — and its pre-releases carry an expiry date. Picking
+# compatible" lands on one, and its pre-releases carry an expiry date. Picking
 # one ships an extension that works in testing and then puts an "this
 # pre-release has expired" error in front of every user some weeks later. Leaving one unpinned would resolve to
 # whatever is newest on the day of the build, and an extension needing a newer VS
-# Code than the server does not error — it simply never activates, so the feature
+# Code than the server does not error; it simply never activates, so the feature
 # is missing with nothing in the log to explain it. The check after extraction
 # below turns that into a failed build instead.
 #

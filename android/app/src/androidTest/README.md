@@ -19,12 +19,12 @@ before tagging a release.
 ## Why CI cannot run them
 
 The app is `arm64-v8a` only (`abiFilters += "arm64-v8a"`), so the emulator has
-to be arm64 as well — an x86_64 image cannot load the bundled `.so` files.
+to be arm64 as well: an x86_64 image cannot load the bundled `.so` files.
 Measured on both runner families:
 
 | Runner | Architecture | `/dev/kvm` |
 |---|---|---|
-| `ubuntu-latest` | x86_64 | present — but only accelerates x86_64 images |
+| `ubuntu-latest` | x86_64 | present, but only accelerates x86_64 images |
 | `ubuntu-24.04-arm` | aarch64 | absent, and no `vmx`/`svm` flag either |
 
 So an arm64 image would run under pure software emulation, for a 340 MB APK
@@ -77,7 +77,7 @@ when the APKs can be built on Linux and only installed on the other runner.
 ## What CI does instead
 
 `build.yml` compiles them (`assembleDebugAndroidTest`). That is not a
-substitute for running them and is not offered as one — it catches only the
+substitute for running them and is not offered as one; it catches only the
 second way they were rotting. Until it was added, nothing compiled them either,
 so they could drift out of the app's API and stay broken indefinitely.
 
@@ -91,16 +91,16 @@ ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
 ```
 
 Results land in `app/build/outputs/androidTest-results/connected/`. **Read that
-XML rather than the exit code** — a run that fails before reaching the tests
+XML rather than the exit code**: a run that fails before reaching the tests
 writes no results at all, and its exit code is indistinguishable from a genuine
 failure.
 
 Read the times out of that XML rather than trusting a figure written here. The
-one recorded run in this checkout — a Pixel 9 Pro XL AVD on API 36 — reports
+one recorded run in this checkout (a Pixel 9 Pro XL AVD on API 36) reports
 116.1 s of suite time for 22 tests, of which `firstRun_launchesWithoutCrash`
 alone was 60.686 s. That test is gone: it slept a flat 60 seconds and asserted
 nothing, so the only failure it could report was a throw out of `onCreate`,
-which `firstRun_extractionSetsVersion` reports as well in 11.7 s — and that one
+which `firstRun_extractionSetsVersion` reports as well in 11.7 s, and that one
 also catches a setup ending in `showSetupError()`.
 
 That accounted for 21 tests and roughly 52 s of test time. This paragraph claimed
@@ -113,7 +113,7 @@ than from any run, with `grep -cE '^\s*@Test'` over this directory:
 work and adds eleven, `SafWatchWiringTest` arrived with the per-directory watch work
 and adds five, `ExtractionOnDeviceTest` arrived with the first-run setup work and
 adds four, and the classes have moved since besides. No recorded run covers
-this set, so there is no honest wall-clock figure to quote for it — the 52 s above
+this set, so there is no honest wall-clock figure to quote for it; the 52 s above
 measured a different suite and is kept only as the reason not to say "three
 minutes". Read the times out of your own run's XML.
 
@@ -125,7 +125,7 @@ minutes". Read the times out of your own run's XML.
 | `MainActivityTest` | WebView and ExtraKeyRow initial state; the About dialog's trademark disclaimer, which is a stated legal requirement rather than cosmetic. |
 | `SplashActivityTest` | First-run extraction, and that a later launch skips it. The slow ones. |
 | `FileObserverTreeSemanticsTest` | The platform behaviour the SAF write-back rests on: that a watch covers a directory and not a tree, that the path an event reports is the bare entry name, and that inotify's directory flag survives the trip through FileObserver. Needs no app state at all, so it has no precondition that a skip could hide. |
-| `SafWatchWiringTest` | That those semantics are wired up: a save two directories down and a `.vscode/` settings file are both queued for write-back, a scratch file beside an ordinary one is not, deleting a watched directory releases its watch, and a skipped directory is never watched at all. The layer above `FileObserverTreeSemanticsTest` — that one proves the platform behaves as assumed, this one proves the assumption was used. |
+| `SafWatchWiringTest` | That those semantics are wired up: a save two directories down and a `.vscode/` settings file are both queued for write-back, a scratch file beside an ordinary one is not, deleting a watched directory releases its watch, and a skipped directory is never watched at all. The layer above `FileObserverTreeSemanticsTest`: that one proves the platform behaves as assumed, this one proves the assumption was used. |
 | `ToolchainInsetsTest` | With edge-to-edge enforced, the Toolchains screen stays out of both system bars: toolbar below the status bar, grid above the navigation bar. The screen shipped drawing its title under the clock, so this is the regression the padding exists to prevent. |
 | `ExtractionOnDeviceTest` | The parts of bundled-extension extraction a JVM cannot answer: that `AssetManager.list()` returns an empty array for a leaf, which is the basis on which `extractAssetDir` decides file-or-directory and which every unit test stubs; that `deleteRecursively()` succeeds on app-private storage, which the retry after a failed unpack depends on; and the abort-and-retry itself, driven by a real out-of-space condition. Redirects `getFilesDir()` through a `ContextWrapper` so the real AssetManager stays in play, so it needs no server tree and no first-run setup. |
 | `KeyRowAccessibilityInstrumentedTest` | The extra key row and the trackpad as an accessibility service would find them: every key carries a content description, a latched modifier and the open alternates layer say so in their node state, a key with no alternates advertises no long click, each key clears 48dp on a mainstream phone, and the trackpad offers one action per arrow. It reads the `AccessibilityNodeInfo` and performs the actions it advertises by id rather than tapping. A `View` initialiser touches resources on its first line, so none of this is reachable from the JVM suite; the unit tests next door assert the wiring by reading the source instead. The view has to be inside a real window, because a detached one reports almost nothing. |
@@ -133,13 +133,13 @@ minutes". Read the times out of your own run's XML.
 ## A green run is not necessarily a run
 
 `ServerHealthTest` used to **silently not run on a clean install.** Classes
-execute alphabetically, so it goes before `SplashActivityTest` — and
+execute alphabetically, so it goes before `SplashActivityTest`, and
 `SplashActivityTest` is what triggers the extraction that puts `server-main.js`
 in `filesDir`. Its `assumeTrue` then skipped all three cases.
 
 `connectedAndroidTest` installs over an existing app, which keeps `filesDir`, and
 uninstalls afterwards. So the first run on a device someone else set up inherits
-their assets and passes; the next run starts bare. Measured both ways — 1.6s /
+their assets and passes; the next run starts bare. Measured both ways: 1.6s /
 0.9s / 5.3s in one run, and 0.008s / 0.003s / 0.002s in the next.
 
 The instruction here used to be *read the skip count, not just the failure

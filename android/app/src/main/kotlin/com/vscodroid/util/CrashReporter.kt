@@ -187,7 +187,7 @@ object CrashReporter {
  * API level has.
  *
  * `Thread.threadId()` is API 36 and `minSdk` is 33, and nothing backports it
- * here — `coreLibraryDesugaring` is off, and `abortOnError = false` means lint
+ * here: `coreLibraryDesugaring` is off, and `abortOnError = false` means lint
  * cannot stop a build over it either. On 33, 34 and 35 the call therefore raises
  * `NoSuchMethodError`, and it sat above `file.writeText` inside a
  * `catch (_: Throwable)`: the write never happened, `hasPendingCrash()` stayed

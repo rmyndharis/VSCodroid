@@ -63,7 +63,7 @@ class ProcessManager(private val context: Context) {
      * when the adopted server stops answering, and the main thread reads it.
      *
      * There is no [Process] behind an adopted server, so everything that reasons
-     * from `serverProcess` has to consult this too — the start guard, and
+     * from `serverProcess` has to consult this too: the start guard, and
      * [stopServer], which cannot kill what it did not spawn and says so instead
      * of reporting success.
      */
@@ -147,7 +147,7 @@ class ProcessManager(private val context: Context) {
      * command line it reads the file [Environment.getConnectionTokenPath] names,
      * generates one if it is absent, and writes it back with mode 0600. Reading
      * that file is therefore the only way to learn it, and it is only there once
-     * the server has started — which is why this is read on demand rather than
+     * the server has started, which is why this is read on demand rather than
      * cached at construction.
      *
      * Returns null before the server has written it. Callers that need it are all
@@ -203,7 +203,7 @@ class ProcessManager(private val context: Context) {
      *
      * This is the only callback of the pair that ever existed. A sibling named
      * `onServerRestarting` sat beside it with no assignment and no call site, and
-     * `onServerReady` sat here too — a name [waitForReady]'s return value already
+     * `onServerReady` sat here too, a name [waitForReady]'s return value already
      * carried, and one shared with a live callback on `NodeService` that
      * `MainActivity` does assign. Two identically named callbacks in adjacent
      * layers, one of them dead, is a trap for whoever wires up the next one; both
@@ -253,7 +253,7 @@ class ProcessManager(private val context: Context) {
         // (VSCodroidWebViewClient.kt:59,89). This used to cite the bridge's allowed-origin
         // check as the second binding; that check was removed in #144 because nothing
         // called it.
-        // Across cold starts it is the workbench's IndexedDB that is bound to it —
+        // Across cold starts it is the workbench's IndexedDB that is bound to it:
         // see PortFinder.getOrAllocatePort.
         //
         // Whether it is free is asked once and held, because two decisions turn
@@ -498,14 +498,14 @@ class ProcessManager(private val context: Context) {
             !(reapedThisStart && PortFinder.isPortAvailable(_port))
         Logger.i(tag, "Starting server on port $_port")
 
-        // Ensure TMPDIR is a usable directory — Android may clear cache between
+        // Ensure TMPDIR is a usable directory: Android may clear cache between
         // launches.
         //
         // `isDirectory` rather than `exists`, and the return value of `mkdirs` is
         // read rather than discarded. Both halves are the same mistake: the test
         // asked whether *something* was at that path while the code meant whether
-        // a *directory* was, and they part company exactly when a file sits there
-        // — at which point `mkdirs` cannot succeed and said so to nobody. This
+        // a *directory* was, and they part company exactly when a file sits there,
+        // at which point `mkdirs` cannot succeed and said so to nobody. This
         // path is TMPDIR and TMUX_TMPDIR for the server (Environment), so the
         // failure would surface later as temporary-file errors with no visible
         // connection to it.
@@ -1150,7 +1150,7 @@ class ProcessManager(private val context: Context) {
                 // This is the branch Android takes: its java.lang.Process has no
                 // pid(). On a desktop JVM the method is found but belongs to the
                 // package-private ProcessImpl, so invoking it fails and this
-                // returns null — do not assert on it from a JVM unit test.
+                // returns null; do not assert on it from a JVM unit test.
                 val pidField = process.javaClass.getDeclaredField("pid")
                 pidField.isAccessible = true
                 pidField.getInt(process).toLong()
@@ -1169,14 +1169,14 @@ class ProcessManager(private val context: Context) {
      * Not the same question as [isRunning], and the gap between them is wide
      * enough to have shipped a bug. `isRunning` asks whether a process exists;
      * this asks whether the thing inside it is serving. Between the two lies
-     * every start — the process is spawned in milliseconds and the editor server
-     * it forks takes seconds to bind its port — and every restart after a crash.
+     * every start (the process is spawned in milliseconds and the editor server
+     * it forks takes seconds to bind its port) and every restart after a crash.
      * A caller that navigates a WebView on `isRunning` therefore points it at a
      * port with nothing listening, and gets a connection-refused page.
      *
      * The answer costs nothing to read, which is the other half of why this
      * exists. [isServerHealthy] is the real probe and it blocks on HTTP, so it
-     * cannot be called from the main thread — that constraint is what pushed the
+     * cannot be called from the main thread; that constraint is what pushed the
      * navigation decision onto `isRunning` in the first place. Recording the
      * probe's own result where it already runs gives the main thread the true
      * answer without the I/O.
@@ -1190,9 +1190,9 @@ class ProcessManager(private val context: Context) {
      * That leaves a window worth naming rather than implying away. Between the
      * process dying and the watchdog's `waitFor()` returning, this still answers
      * true while the port is already dead. It is the gap between two statements
-     * rather than anything the app waits on — before this flag existed the same
+     * rather than anything the app waits on (before this flag existed the same
      * caller was wrong for the whole of a restart, so the window shrank by
-     * several orders of magnitude — but it did not close, and a caller that must
+     * several orders of magnitude), but it did not close, and a caller that must
      * not be wrong even briefly wants [probeReadiness] instead.
      */
     fun isReady(): Boolean = _isReady
@@ -1200,7 +1200,7 @@ class ProcessManager(private val context: Context) {
     /**
      * Asks the server once, and records the answer if it is yes.
      *
-     * Blocking — it is [isServerHealthy] underneath, so it belongs off the main
+     * Blocking: it is [isServerHealthy] underneath, so it belongs off the main
      * thread like every other caller of that. Blocking also means cancellation
      * does not reach it: a coroutine cancelled while this is in flight cannot act
      * on the result, because it resumes by throwing, but the request itself runs
@@ -1212,7 +1212,7 @@ class ProcessManager(private val context: Context) {
      * is a *bounded* poll, and something has to keep asking after that bound is
      * spent: a server the poll gave up on is not a server that failed, and it can
      * still bind its port a second later. When the only writer lived inside the
-     * bounded loop, that second later was unreachable — the flag stayed false for
+     * bounded loop, that second later was unreachable: the flag stayed false for
      * as long as the process lived, and every caller reading it refused a server
      * that was serving perfectly well.
      */
@@ -1259,7 +1259,7 @@ class ProcessManager(private val context: Context) {
      * [isServerHealthy] already does.
      *
      * Two consecutive failures rather than one, because a single refused
-     * connection is not evidence of death — the same reasoning [probeReadiness]
+     * connection is not evidence of death, the same reasoning [probeReadiness]
      * gives for not clearing readiness on one bad answer. The cost of being wrong
      * in this direction is a restart the user did not need; in the other it is an
      * editor that stopped working with nothing said.
@@ -1387,7 +1387,7 @@ internal const val READY_POLL_TIMEOUT_MS = 30_000L
 /**
  * How often an adopted server is asked whether it is still there.
  *
- * Slower than a readiness poll because nothing is waiting on the answer — this
+ * Slower than a readiness poll because nothing is waiting on the answer: this
  * is a heartbeat over the life of a session, not a startup check, and it runs
  * for as long as the adopted server does.
  */

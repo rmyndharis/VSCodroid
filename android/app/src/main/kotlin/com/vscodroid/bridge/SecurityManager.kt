@@ -52,7 +52,7 @@ class SecurityManager {
     // allow-list is the thing somebody re-wires later. VSCodroid is a development
     // environment and everything has to be reachable: a LAN dev server on plain
     // http, a private registry, a staging host, a scheme belonging to another
-    // tool on the device. The list refused the work the app exists for — the same
+    // tool on the device. The list refused the work the app exists for: the same
     // `http://192.168.1.50:5173` opened when followed as a link and was silently
     // dropped when the workbench chose to send it through `window.open`.
     //

@@ -10,7 +10,7 @@ set -euo pipefail
 # A first launch is interrupted by things that look nothing like each other in a
 # log but block everything the same way: Android 13+ asks for POST_NOTIFICATIONS,
 # and first-run setup shows a toolchain picker. Both take focus, so the app is
-# backgrounded and its process is gone — through `ps` and `logcat` that reads
+# backgrounded and its process is gone; through `ps` and `logcat` that reads
 # exactly like a crash, which is how it gets misdiagnosed.
 #
 # So the dialogs are dismissed by looking at what is on screen rather than by

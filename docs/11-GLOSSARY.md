@@ -14,7 +14,7 @@
 Google's publishing format for Android apps. Unlike APK, AAB lets Google Play generate optimized APKs for each device configuration (screen density, CPU architecture, language). Reduces download size.
 
 **ABI (Application Binary Interface)**
-Specifies how binary code interacts at the machine level. VSCodroid targets `arm64-v8a` ABI — the 64-bit ARM architecture used by modern Android devices.
+Specifies how binary code interacts at the machine level. VSCodroid targets `arm64-v8a` ABI, the 64-bit ARM architecture used by modern Android devices.
 
 **ADR (Architecture Decision Record)**
 A document that captures an important architectural decision along with its context and consequences. See [Architecture § ADRs](./03-ARCHITECTURE.md#4-key-architecture-decisions-adrs).
@@ -72,7 +72,7 @@ A separate process that provides language intelligence (autocomplete, diagnostic
 A JSON-RPC protocol between an editor and a Language Server. Standardized by Microsoft. Enables language features without per-editor reimplementation.
 
 **localhost**
-The network loopback address (127.0.0.1). In VSCodroid, the Node.js server binds to localhost only — meaning only processes on the same device can connect. This is a key security property.
+The network loopback address (127.0.0.1). In VSCodroid, the Node.js server binds to localhost only, meaning only processes on the same device can connect. This is a key security property.
 
 ### M
 

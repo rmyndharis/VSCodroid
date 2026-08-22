@@ -104,18 +104,18 @@ class SafReconcileDeletionsTest {
 
     /**
      * Describes the device folder as holding exactly [files], each a name to contents,
-     * all carrying [modified] — old by default, so nothing is kept merely for being newer.
+     * all carrying [modified]: old by default, so nothing is kept merely for being newer.
      *
      * ⚠️ One cursor serves every query of a sync, and its row counter is shared. That is
      * sound only while no row here is a directory: the walk then issues exactly one query
      * and never re-enters the counter. Add a directory row and the recursive query gets
-     * the same, already-exhausted cursor — `moveToNext()` simply returns false, with no
-     * error — so the walk reports a *complete* enumeration of an empty subtree and a test
+     * the same, already-exhausted cursor (`moveToNext()` simply returns false, with no
+     * error), so the walk reports a *complete* enumeration of an empty subtree and a test
      * passes having enumerated nothing. [directoryRow] exists for that case: it hands out
      * a separate cursor and lets the caller decide which query receives it.
      *
      * ⚠️ Also: a document opened from an earlier sync raises out of the reverse lookup
-     * below, and [copyDocumentToLocal] swallows it — so a redundant copy fails silently
+     * below, and [copyDocumentToLocal] swallows it, so a redundant copy fails silently
      * and the mirror keeps its old bytes. No assertion in this file can tell "kept the
      * local copy" from "re-copied identical content"; `InitialSyncWiringTest` is where
      * that distinction is observable.

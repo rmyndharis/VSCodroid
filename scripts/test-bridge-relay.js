@@ -237,7 +237,7 @@ function checkCommandCoverage(relay) {
     assert.deepStrictEqual(
         unhandled, [],
         `these commands are sent by a bundled extension and have no branch in the relay, so ` +
-        `they post no reply and fail five seconds later as "Bridge timeout — is the app ` +
+        `they post no reply and fail five seconds later as "Bridge timeout: is the app ` +
         `running on Android?", which names neither the command nor the real cause: ` +
         `${unhandled.join(', ')}`,
     );

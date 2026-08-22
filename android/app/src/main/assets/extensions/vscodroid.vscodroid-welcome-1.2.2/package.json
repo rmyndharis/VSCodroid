@@ -45,7 +45,7 @@
           {
             "id": "tools",
             "title": "Your development tools",
-            "description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js** + npm — ready\n\n$(check) **Python** + pip — ready\n\n$(check) **Git** — ready\n\n$(check) **make** — ready\n\n**Java 17** and **Ruby** install on demand. Touch and hold the VSCodroid icon on your home screen and pick **Manage toolchains**.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
+            "description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js** + npm: ready\n\n$(check) **Python** + pip: ready\n\n$(check) **Git**: ready\n\n$(check) **make**: ready\n\n**Java 17** and **Ruby** install on demand. Touch and hold the VSCodroid icon on your home screen and pick **Manage toolchains**.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
             "media": {
               "svg": "media/tools.svg"
             },
@@ -56,7 +56,7 @@
           {
             "id": "terminal",
             "title": "A powerful terminal",
-            "description": "Open a full bash terminal with every bundled tool on PATH — ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` prints ``hi``\n\n``python3 -c 'print(\"hi\")'`` prints ``hi``\n\n``git init demo`` prints ``Initialized empty Git repository``\n\n[Open Terminal](command:workbench.action.terminal.new)",
+            "description": "Open a full bash terminal with every bundled tool on PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` prints ``hi``\n\n``python3 -c 'print(\"hi\")'`` prints ``hi``\n\n``git init demo`` prints ``Initialized empty Git repository``\n\n[Open Terminal](command:workbench.action.terminal.new)",
             "media": {
               "svg": "media/terminal.svg"
             },

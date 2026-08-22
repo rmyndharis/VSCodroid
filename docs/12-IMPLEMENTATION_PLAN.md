@@ -43,7 +43,7 @@ This document translates the VSCodroid documentation suite (PRD, SRS, Architectu
 
 | Principle                         | Implication                                                                       |
 | --------------------------------- | --------------------------------------------------------------------------------- |
-| **Fail fast on highest risk**     | M0 exists solely to validate Node.js on Android — if this fails, everything stops |
+| **Fail fast on highest risk**     | M0 exists solely to validate Node.js on Android; if this fails, everything stops |
 | **Dependency-driven ordering**    | Tasks are sequenced so no task starts before its inputs are ready                 |
 | **Parallelizable where possible** | Independent work streams identified within each milestone                         |
 | **Risk checkpoints embedded**     | Go/no-go gates at week boundaries, not just milestone boundaries                  |
@@ -226,11 +226,11 @@ Files to create:
 
 ---
 
-## 3. M0 — Proof of Concept
+## 3. M0: Proof of Concept
 
 **Goal**: Validate that Node.js runs on Android and WebView can connect to it via localhost.
 **Duration**: 2-3 weeks (11 working days critical path, 13 person-days total effort)
-**Risk level**: HIGH — this is the "can we even do this?" milestone
+**Risk level**: HIGH (this is the "can we even do this?" milestone)
 
 ### 3.1 Task Breakdown
 
@@ -261,14 +261,14 @@ android/
 ├── gradle/
 │   └── libs.versions.toml              (version catalog)
 ├── app/
-│   ├── build.gradle.kts                (app module — minSdk 33, targetSdk 36)
+│   ├── build.gradle.kts                (app module: minSdk 33, targetSdk 36)
 │   ├── proguard-rules.pro
 │   └── src/
 │       └── main/
 │           ├── AndroidManifest.xml     (permissions, services, activities)
 │           ├── kotlin/com/vscodroid/
 │           │   ├── VSCodroidApp.kt     (Application class)
-│           │   └── MainActivity.kt     (WebView host — placeholder)
+│           │   └── MainActivity.kt     (WebView host, placeholder)
 │           ├── res/
 │           │   ├── layout/
 │           │   │   └── activity_main.xml   (WebView container)
@@ -277,7 +277,7 @@ android/
 │           │   └── drawable/
 │           │       └── ic_launcher.xml     (placeholder icon)
 │           └── jniLibs/
-│               └── arm64-v8a/              (empty — M0-T2 populates)
+│               └── arm64-v8a/              (empty, M0-T2 populates)
 ```
 
 **Implementation steps**:
@@ -337,13 +337,13 @@ toolchains/
 
 **Implementation steps**:
 
-1. **Day 1 — Setup and research**:
+1. **Day 1 (setup and research)**:
    - Study Termux's `packages/nodejs/build.sh` for patch inventory
    - Download Node.js LTS source (v20.x)
    - Identify required Termux patches (typically 5-15 patches)
    - Create `build-node.sh` script skeleton
 
-2. **Day 2 — Cross-compilation attempt**:
+2. **Day 2 (cross-compilation attempt)**:
    - Set NDK toolchain variables:
      ```bash
      export CC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
@@ -360,13 +360,13 @@ toolchains/
      ```
    - Start build: `make -j$(nproc)`
 
-3. **Day 3 — Debug build failures**:
+3. **Day 3 (debug build failures)**:
    - Fix compilation errors (expect 3-5 issues)
    - Common issues: missing headers, linker flags, V8 assembly
    - Apply 16KB page alignment: `LDFLAGS="-Wl,-z,max-page-size=16384"`
    - Successful build → strip: `aarch64-linux-android-strip --strip-unneeded out/Release/node`
 
-4. **Day 4 — Validate and package**:
+4. **Day 4 (validate and package)**:
    - Copy to jniLibs: `cp out/Release/node android/app/src/main/jniLibs/arm64-v8a/libnode.so`
    - Verify: `file libnode.so` → `ELF 64-bit LSB pie executable, ARM aarch64`
    - Push to device via adb, test execution: `adb shell /data/local/tmp/libnode.so --version`
@@ -435,11 +435,11 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. **PortFinder.kt** — find available localhost port:
+1. **PortFinder.kt** (find available localhost port):
    - Bind to port 0, read assigned port, close socket
    - Return port number
 
-2. **Environment.kt** — construct environment variables:
+2. **Environment.kt** (construct environment variables):
 
    ```kotlin
    fun buildEnvironment(context: Context, port: Int): Map<String, String> {
@@ -457,13 +457,13 @@ android/app/src/main/kotlin/com/vscodroid/
    }
    ```
 
-3. **ProcessManager.kt** — launch and monitor Node.js:
+3. **ProcessManager.kt** (launch and monitor Node.js):
    - `startServer()`: ProcessBuilder with `libnode.so` path + `--max-old-space-size=512` + server script
    - `waitForReady()`: Poll `http://localhost:PORT/healthz` every 200ms, timeout 30s
    - `stopServer()`: SIGTERM → wait 5s → SIGKILL
    - `isServerHealthy()`: Single HTTP GET to `/healthz`
 
-4. **test-server.js** — minimal HTTP server:
+4. **test-server.js** (minimal HTTP server):
 
    ```javascript
    const http = require("http");
@@ -508,7 +508,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. **VSCodroidWebView.kt** — configure WebView settings:
+1. **VSCodroidWebView.kt** (configure WebView settings):
 
    ```kotlin
    fun configure(webView: WebView) {
@@ -525,11 +525,11 @@ android/app/src/main/kotlin/com/vscodroid/
    }
    ```
 
-2. **VSCodroidWebViewClient.kt** — handle page load errors:
+2. **VSCodroidWebViewClient.kt** (handle page load errors):
    - `onReceivedError()`: show retry UI
    - `onReceivedHttpError()`: log
 
-3. **MainActivity.kt** — orchestrate:
+3. **MainActivity.kt** (orchestrate):
    - Start ProcessManager
    - Wait for server ready
    - `webView.loadUrl("http://localhost:$port/")`
@@ -563,13 +563,13 @@ android/app/src/main/res/
 
 **Implementation steps**:
 
-1. **NodeService.kt** — Foreground Service with `specialUse` type:
+1. **NodeService.kt** (Foreground Service with `specialUse` type):
    - `onCreate()`: create notification channel, start foreground
    - Move ProcessManager logic into service
    - Node.js watchdog thread: `process.waitFor()` → auto-restart if exit != 0
    - `onDestroy()`: graceful shutdown of Node.js
 
-2. **AndroidManifest.xml** — declare service:
+2. **AndroidManifest.xml** (declare service):
 
    ```xml
    <service
@@ -582,7 +582,7 @@ android/app/src/main/res/
    </service>
    ```
 
-3. **MainActivity.kt** — bind to NodeService, receive server-ready callback
+3. **MainActivity.kt**: bind to NodeService, receive server-ready callback
 
 **Acceptance criteria**:
 
@@ -635,7 +635,7 @@ android/app/src/main/assets/
 
 ---
 
-## 4. M1 — VS Code Core
+## 4. M1: VS Code Core
 
 **Goal**: VS Code Workbench running in WebView with extensions, terminal, and Git.
 **Duration**: 3 weeks (15 working days critical path, 30 person-days across 3 parallel streams)
@@ -685,7 +685,7 @@ patches/
 │   ├── browser-command.diff
 │   ├── github-auth.diff
 │   └── local-storage.diff
-└── vscodroid/                      (empty for M1 — populated M2+)
+└── vscodroid/                      (empty for M1, populated M2+)
 
 scripts/
 ├── apply-patches.sh
@@ -696,13 +696,13 @@ scripts/
 
 **Implementation steps**:
 
-1. **Day 1 — Fork and understand code-server**:
+1. **Day 1 (fork and understand code-server)**:
    - Fork `coder/code-server` to `rmyndharis/code-server`
    - Clone as git submodule: `git submodule add <url> server`
    - Study code-server build system: `ci/dev/`, `ci/build/`, patch mechanism
    - Read each existing code-server patch to understand what it does
 
-2. **Day 2 — Apply and customize patches**:
+2. **Day 2 (apply and customize patches)**:
    - Run `./ci/dev/patch-vscode.sh` to apply code-server patches
    - Create `patches/code-server/product.diff` with VSCodroid branding:
      ```json
@@ -721,18 +721,18 @@ scripts/
      ```
    - Create `scripts/apply-patches.sh` (as specified in Tech Spec §6.2)
 
-3. **Day 3 — Build vscode-web**:
+3. **Day 3 (build vscode-web)**:
    - Install VS Code dependencies: `cd server/lib/vscode && yarn`
    - Build web client: `yarn gulp vscode-web-min`
    - Verify output in `out-vscode-web/`
 
-4. **Day 4 — Build vscode-reh (server)**:
+4. **Day 4 (build the vscode-reh server)**:
    - Build server: `yarn gulp vscode-reh-min`
    - Verify output in `out-vscode-reh/`
    - Verify `@vscode/ripgrep` binary is included in `node_modules`
    - Bundle ripgrep as `libripgrep.so` in `jniLibs/arm64-v8a/` (symlink created by `FirstRunSetup.setupToolSymlinks()`)
 
-5. **Day 5 — Package and scripts**:
+5. **Day 5 (package and scripts)**:
    - Create `scripts/build-vscode.sh` (automates steps 2-4)
    - Create `scripts/package-assets.sh`:
      - Copy `out-vscode-web/` → `android/app/src/main/assets/vscode-web/`
@@ -760,7 +760,7 @@ scripts/
 android/app/src/main/assets/
 ├── vscode-web/                  (from M1-T1 build output)
 ├── vscode-reh/                  (from M1-T1 build output)
-└── server.js                    (bootstrap script — replaces test-server.js)
+└── server.js                    (bootstrap script, replaces test-server.js)
 
 android/app/src/main/kotlin/com/vscodroid/
 ├── service/
@@ -773,7 +773,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. **FirstRunSetup.kt** — extract VS Code assets:
+1. **FirstRunSetup.kt** (extract VS Code assets):
    - Check if `files/server/vscode-reh/` exists
    - If not, extract from APK assets to app-private storage
    - Create required directories: `home/`, `home/.vscodroid/`, `home/.vscodroid/extensions/`
@@ -789,14 +789,14 @@ android/app/src/main/kotlin/com/vscodroid/
      }
      ```
 
-2. **server.js** — bootstrap script (see Tech Spec §3.1):
+2. **server.js**, the bootstrap script (see Tech Spec §3.1):
    - Parse command-line arguments
    - Set up VS Code product.json overrides
    - Launch vscode-reh server entry point
    - Expose `/healthz` endpoint
    - Serve vscode-web static files
 
-3. **ProcessManager.kt** — update server launch:
+3. **ProcessManager.kt** (update server launch):
 
    ```kotlin
    val command = listOf(
@@ -812,7 +812,7 @@ android/app/src/main/kotlin/com/vscodroid/
    )
    ```
 
-4. **MainActivity.kt** — load VS Code:
+4. **MainActivity.kt** (load VS Code):
    - Wait for server ready
    - `webView.loadUrl("http://localhost:$port/")`
 
@@ -952,21 +952,21 @@ patches/vscodroid/
 
 **Implementation steps**:
 
-1. **Day 1** — Verify node-pty works with bash:
+1. **Day 1** (verify node-pty works with bash):
    - Load `libnode_pty.so` in VS Code server
    - Configure terminal to use `libbash.so` as shell
    - Test: open terminal in VS Code → bash prompt appears
 
-2. **Day 2** — tmux integration:
+2. **Day 2** (tmux integration):
    - Configure tmux as terminal multiplexer layer
    - VS Code terminal tabs → tmux sessions
    - Single tmux process manages all terminal sessions
 
-3. **Day 3** — Create `terminal-tmux.diff` patch:
+3. **Day 3** (create `terminal-tmux.diff` patch):
    - Modify VS Code's terminal service to route through tmux
    - Handle session create/destroy/resize
 
-4. **Day 4** — Test and verify phantom process count:
+4. **Day 4** (test and verify phantom process count):
    - Open 3 terminal tabs
    - `adb shell ps -A | grep vscodroid` → verify only 1 tmux process
    - Test: terminal I/O, colors, interactive programs (vim, top)
@@ -996,7 +996,7 @@ android/app/src/main/kotlin/com/vscodroid/
 **Implementation steps**:
 
 1. Configure `GIT_EXEC_PATH` environment variable to point to extracted git-core helpers
-2. `FirstRunSetup.setupGitCore()` — create symlinks for git-core helper binaries:
+2. `FirstRunSetup.setupGitCore()` (create symlinks for git-core helper binaries):
    - Extract `assets/usr/lib/git-core/` to app-private storage on first run
    - Create symlinks: `git` → `libgit.so`, plus helper binaries (`git-remote-https`, `git-upload-pack`, etc.)
 3. Verify Git works in VS Code terminal
@@ -1065,13 +1065,13 @@ android/app/src/androidTest/    (instrumented tests)
 
 **Implementation steps**:
 
-1. **Day 1** — Create test fixtures and instrumented test scaffolding
-2. **Day 2** — Integration testing:
+1. **Day 1**: Create test fixtures and instrumented test scaffolding
+2. **Day 2** (integration testing):
    - File explorer shows files, create/edit/save works
    - Open test-small project → verify file tree
    - Edit file → Ctrl+S → verify saved content
    - Open 10K-line file → verify no crash
-3. **Day 3** — Full integration validation:
+3. **Day 3** (full integration validation):
    - Run all E2E tests from Testing Strategy §3.3 (E2E-01 through E2E-06)
    - Fix any integration issues found
    - Document known issues
@@ -1104,7 +1104,7 @@ android/app/src/androidTest/    (instrumented tests)
 
 ---
 
-## 5. M2 — Mobile UX
+## 5. M2: Mobile UX
 
 **Goal**: Make VS Code usable on a touchscreen device.
 **Duration**: 3 weeks (13 working days critical path, 18 person-days total effort)
@@ -1153,34 +1153,34 @@ android/app/src/main/res/
 
 **Implementation steps**:
 
-1. **Day 1** — Multi-page key row with ViewPager2:
+1. **Day 1** (multi-page key row with ViewPager2):
    - `KeyPageConfig.kt` defines page layouts:
      - Page 1: `[Tab] [Esc] [Ctrl] [Alt] [Shift] [GestureTrackpad] [{}] [()]`
      - Page 2: `[;] [:] ["] [/] [|] [`] [&] [_]`
      - Page 3: `[[] []] [<] [>] [=] [!] [#] [@]`
-   - `KeyPageAdapter.kt` — `RecyclerView.Adapter` for `ViewPager2` pages
+   - `KeyPageAdapter.kt`: `RecyclerView.Adapter` for `ViewPager2` pages
    - Dot indicators below the key row to show current page
 
-2. **Day 2** — Key injection + modifiers:
+2. **Day 2** (key injection + modifiers):
    - `KeyInjector.kt`: construct JavaScript `KeyboardEvent` and dispatch via `evaluateJavascript`
    - Handle modifier state (Ctrl held + S = Ctrl+S)
    - Map key names to `keyCode`, `code`, `key` values
-   - `setupModifierInterceptor()` — intercept physical keyboard modifier keys (Ctrl, Alt) and sync state with Extra Key Row toggle buttons
+   - `setupModifierInterceptor()`: intercept physical keyboard modifier keys (Ctrl, Alt) and sync state with Extra Key Row toggle buttons
 
-3. **Day 3** — Long-press popup + alternate keys:
-   - `ExtraKeyButton.showLongPressPopup()` — long-press on a key shows alternate keys
+3. **Day 3** (long-press popup + alternate keys):
+   - `ExtraKeyButton.showLongPressPopup()`: long-press on a key shows alternate keys
      - Example: long-press `{` shows `[`, `<`, `(`
      - Example: long-press `Ctrl` shows `Meta`, `Fn`
    - Each button ≥ 48dp × 48dp (accessibility requirement)
    - Ctrl and Alt are sticky toggle buttons (highlight when active)
 
-4. **Day 4** — GestureTrackpad:
-   - `GestureTrackpad.kt` — swipeable area (rightmost zone or dedicated area)
+4. **Day 4** (GestureTrackpad):
+   - `GestureTrackpad.kt`: swipeable area (rightmost zone or dedicated area)
    - 3-speed drag-to-navigate: slow drag = character-by-character, medium = word, fast = line
    - Injected as arrow key events via `KeyInjector`
    - Horizontal swipe = left/right cursor, vertical swipe = up/down cursor
 
-5. **Day 5** — Visibility + integration:
+5. **Day 5** (visibility + integration):
    - Use `WindowInsetsCompat.Type.ime()` to detect keyboard visibility
    - Show Extra Key Row + GestureTrackpad when keyboard appears, hide when it disappears
    - Position above soft keyboard using `WindowInsets` padding
@@ -1219,7 +1219,7 @@ patches/vscodroid/
 
 **Implementation steps**:
 
-1. `windowSoftInputMode = adjustResize` — WebView shrinks when keyboard appears
+1. `windowSoftInputMode = adjustResize`: WebView shrinks when keyboard appears
 2. Handle viewport resize: ensure cursor scrolls into view
 3. Fix `position:fixed` elements (command palette, suggest widget) via patch
 4. Test with different screen sizes and keyboard heights
@@ -1253,7 +1253,7 @@ patches/vscodroid/
 
 **Implementation steps**:
 
-1. **AndroidBridge.kt** — implement security model (API Spec §2.2):
+1. **AndroidBridge.kt**, implement security model (API Spec §2.2):
    - Origin check: only `http://127.0.0.1:PORT/` or `http://localhost:PORT/`
    - Per-session capability token
    - Sensitive method gating via `authToken` parameter
@@ -1263,12 +1263,12 @@ patches/vscodroid/
    - Test: copy in Chrome → paste in VSCodroid and vice versa
 
 3. **IntentBridge.kt**:
-   - `openExternalUrl(url, authToken)` — planned as a scheme allowlist (https, mailto only); shipped
+   - `openExternalUrl(url, authToken)`: planned as a scheme allowlist (https, mailto only); shipped
      without one. The token is checked, the URL is not
-   - `onBackPressed()` — close panels/dialogs first, then minimize
+   - `onBackPressed()`: close panels/dialogs first, then minimize
    - `minimizeApp()`
 
-4. **touch-ui.diff** — larger touch targets for mobile:
+4. **touch-ui.diff** (larger touch targets for mobile):
    - Disable WebView zoom conflicts
    - Handle long-press: prefer Monaco selection over WebView default
    - Context menu: use Monaco's
@@ -1402,7 +1402,7 @@ patches/vscodroid/
 
 ---
 
-## 6. M3 — All-in-One Dev Environment
+## 6. M3: All-in-One Dev Environment
 
 **Goal**: Bundle Python, npm, and essential tools for out-of-the-box development.
 **Duration**: 2 weeks (9 working days critical path, 14 person-days total effort)
@@ -1440,18 +1440,18 @@ android/app/src/main/
 
 **Implementation steps**:
 
-1. **Day 1** — Download pre-compiled Python from Termux APT:
+1. **Day 1** (download pre-compiled Python from Termux APT):
    - Download `python` and `python-pip` packages from Termux APT repo
    - Extract `.deb` packages, place binary as `libpython.so` in jniLibs
    - Place stdlib in `assets/usr/lib/python3.12/`
    - Place pip site-packages alongside stdlib
 
-2. **Day 2** — Setup and integration:
+2. **Day 2** (setup and integration):
    - Create symlinks: `python3` and `python` → `libpython.so` via `setupToolSymlinks()`
    - Configure `PYTHONPATH` and `PYTHONHOME` environment variables
    - Test: `python3 --version`, `python3 -c "import json; print('ok')"`
 
-3. **Day 3** — pip validation:
+3. **Day 3** (pip validation):
    - Verify pip works: `pip install requests`
    - Strip `.pyc` files for size reduction
    - Test: import installed packages
@@ -1503,13 +1503,13 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. **Day 1** — Create npm bash functions:
+1. **Day 1** (create npm bash functions):
    - Define `npm` and `npx` as bash functions in `.bashrc` (not script wrappers)
    - Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
    - Bash functions required because SELinux denies `execute_no_trans` on `app_data_file` for targetSdk >= 29, so a shebang script under `filesDir` cannot be exec'd
    - Create `.npmrc` with `script-shell` pointing to `libbash.so`
 
-2. **Day 2** — Validation:
+2. **Day 2** (validation):
    - Test: `npm --version`, `npm init -y`, `npm install express`
    - Test: `npx create-vite-app test-app`
    - Verify npm cache directory is properly configured
@@ -1547,16 +1547,16 @@ android/app/src/main/assets/
 
 **Implementation steps**:
 
-1. **Day 1** — Download and bundle marketplace extensions:
+1. **Day 1** (download and bundle marketplace extensions):
    - Download 6 VSIX files from Open VSX: Material Icon Theme, Prettier, ESLint, Python, GitLens, Tailwind CSS
    - Extract to `assets/extensions/` directory
 
-2. **Day 2** — Develop 3 custom VSCodroid extensions:
+2. **Day 2** (develop 3 custom VSCodroid extensions):
    - `vscodroid-welcome`: Welcome tab with quick actions ("Open Folder", "Clone Repo", "New File", tool versions)
    - `vscodroid-saf-bridge`: VS Code UI for SAF folder management (used in M4)
    - `vscodroid-process-monitor`: Phantom process monitoring UI (used in M4)
 
-3. **Day 3** — Integration:
+3. **Day 3** (integration):
    - `FirstRunSetup.extractBundledExtensions()` extracts all 9 extensions
    - `extensions.json` manifest auto-generated on first run
    - Verify extensions load without internet (airplane mode)
@@ -1589,18 +1589,18 @@ android/app/src/main/res/
 
 **Implementation steps**:
 
-1. **Day 1** — `SplashActivity`:
+1. **Day 1** (`SplashActivity`):
    - Check if first run (shared preferences flag)
    - Show progress: percentage-based progress bar with step labels
    - Steps flow: create dirs → extract vscode-reh → extract vscode-web → extract tools → setup git → setup symlinks → extract extensions → configure settings
 
-2. **Day 2** — `FirstRunSetup.runSetup()`:
+2. **Day 2** (`FirstRunSetup.runSetup()`):
    - Percentage-based progress reporting via callback
    - Create welcome project (`createWelcomeProject`)
    - Configure VS Code settings (terminal profile, git path, etc.)
    - Create npm bash function wrappers (`createNpmWrappers`)
 
-3. **Day 3-4** — Welcome extension + polish:
+3. **Day 3-4** (Welcome extension + polish):
    - Welcome extension provides quick-start tab with tool versions
    - Subsequent launches skip extraction (< 5 sec to editor)
    - Edge cases: interrupted extraction, reinstall, app update
@@ -1629,7 +1629,7 @@ android/app/src/main/res/
 
 ---
 
-## 7. M4 — Polish & Performance
+## 7. M4: Polish & Performance
 
 **Goal**: Production-quality stability and performance.
 **Duration**: 4-5 weeks (21 working days critical path, 24 person-days total effort)
@@ -1665,7 +1665,7 @@ android/app/src/main/kotlin/com/vscodroid/
     └── Logger.kt                   (debug logging with tag filtering)
 ```
 
-> **Why first?** Error handling and logging are foundational — all subsequent M4 tasks benefit from having proper crash capture and logging in place for debugging.
+> **Why first?** Error handling and logging are foundational: all subsequent M4 tasks benefit from having proper crash capture and logging in place for debugging.
 
 **Implementation steps**:
 
@@ -1858,19 +1858,19 @@ patches/vscodroid/
 
 **Implementation steps**:
 
-1. **Day 1-2** — `SafStorageManager.kt`:
+1. **Day 1-2** (`SafStorageManager.kt`):
    - SAF (Storage Access Framework) bridge for files outside app directory
    - `ACTION_OPEN_DOCUMENT_TREE` for folder selection
    - Persist URI permissions across restarts
    - Map SAF URIs to virtual file paths for VS Code
 
-2. **Day 3-4** — `SafSyncEngine.kt`:
+2. **Day 3-4** (`SafSyncEngine.kt`):
    - Bidirectional sync between SAF documents and app-private mirror
    - `FileObserver` watches local mirror for changes → write back to SAF
    - Content provider queries for SAF → local mirror sync
    - Handle conflicts gracefully
 
-3. **Day 5** — Integration:
+3. **Day 5** (integration):
    - `vscodroid-saf-bridge` extension (from M3) provides UI
    - "Open External Folder" option in Welcome tab
    - Permission request UX with clear explanation
@@ -1900,7 +1900,7 @@ patches/vscodroid/
 
 ---
 
-## 8. M5 — Toolchain Ecosystem
+## 8. M5: Toolchain Ecosystem
 
 **Goal**: On-demand toolchain delivery so users can install additional languages beyond the bundled core.
 **Deliverable**: Play Asset Delivery integration with Go, Ruby, and Java toolchains, plus a Language Picker UI.
@@ -1918,7 +1918,7 @@ flowchart TD
 ```
 
 > [!NOTE]
-> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Similarly, **Rust** and **C/C++ (Clang)** toolchains are deferred to Post-Release — M5 focuses on Go, Ruby, and Java only. Toolchain compatibility verification and APK size audit have been moved to M6 (Release) where they logically belong as verification/release activities.
+> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Similarly, **Rust** and **C/C++ (Clang)** toolchains are deferred to Post-Release; M5 focuses on Go, Ruby, and Java only. Toolchain compatibility verification and APK size audit have been moved to M6 (Release) where they logically belong as verification/release activities.
 
 ---
 
@@ -1941,24 +1941,24 @@ flowchart TD
 
 **Implementation steps**:
 
-1. **Day 1-2** — Research and prototype:
+1. **Day 1-2** (research and prototype):
    - Study Extension Host startup code path in VS Code source
    - Map `child_process.fork()` calls → `worker_threads.Worker` equivalents
    - Prototype: replace fork with Worker for Extension Host in isolation
 
-2. **Day 3-4** — Implement Extension Host + ptyHost patches:
+2. **Day 3-4** (implement Extension Host + ptyHost patches):
    - Fork to Worker mapping (see `patches/0003-ptyhost-as-worker-thread.patch` and `patches/0004-exthost-as-worker-thread.patch`)
    - Handle message passing: `child.send()` → `worker.postMessage()`
    - Handle stdio: explicit log forwarding via worker message channel
    - Implement crash supervisor: restart with exponential backoff
    - Apply same pattern to ptyHost: patch to run as `worker_threads.Worker()` with graceful disconnect
 
-3. **Day 5** — Crash isolation:
+3. **Day 5** (crash isolation):
    - Worker crash → supervisor restart (max 3 crashes in 60s)
    - Budget exceeded → degraded mode + user prompt to disable extensions
    - Main server process only restarts if worker recovery fails
 
-4. **Day 6** — Validation:
+4. **Day 6** (validation):
    - Extension activation/deactivation parity test vs M4 baseline
    - Extensions load correctly under worker_thread mode
    - Fault injection: throw error in worker → verify restart
@@ -2038,7 +2038,7 @@ android/settings.gradle.kts         (register asset pack modules)
 
 **Implementation steps**:
 
-1. **Day 1-2** — Prepare toolchain asset packs:
+1. **Day 1-2** (prepare toolchain asset packs):
    - Go from Termux `golang` package (179 MB asset pack, `CGO_ENABLED=0`)
    - Ruby from Termux `ruby` + libgmp + libyaml (34 MB asset pack)
    - Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn (146 MB asset pack)
@@ -2046,12 +2046,12 @@ android/settings.gradle.kts         (register asset pack modules)
    - Package each as Android App Bundle asset pack module
    - Configure `build.gradle.kts` with `assetPack` type
 
-2. **Day 3** — Asset pack extraction:
+2. **Day 3** (asset pack extraction):
    - Extract toolchain to `$PREFIX/lib/<toolchain>/`
    - Configure PATH and environment variables
    - Create symlinks in `$PREFIX/bin/`
 
-3. **Day 4-5** — Integration:
+3. **Day 4-5** (integration):
    - Wire up `AndroidBridge.kt` JS bridge for install/uninstall/query from extensions
    - Configure `.bashrc` to source `toolchain-env.sh` for terminal PATH/env updates
    - `Environment.kt`: dynamic toolchain env vars merged into server process
@@ -2090,14 +2090,14 @@ android/app/src/main/res/layout/
 
 **Implementation steps**:
 
-1. **Day 1-2** — First-run Toolchain Picker (integrated in `SplashActivity`):
+1. **Day 1-2**, first-run Toolchain Picker (integrated in `SplashActivity`):
    - `showToolchainPicker()` displays grid of available toolchains after first-run setup
    - `ToolchainPickerAdapter(ToolchainCardMode.PICKER)`: tap toggles checkmark, shows size per toolchain
    - "What do you code in?" title with Continue + Skip buttons
    - `shouldShowPicker()` / `markPickerShown()` via SharedPreferences
 
-2. **Day 3** — Download Progress Phase:
-   - `startDownloads()` — sequential per-pack download with progress rows
+2. **Day 3** (Download Progress Phase):
+   - `startDownloads()`: sequential per-pack download with progress rows
    - Per-pack progress bar, status text, cancel button
    - Handles `AssetPackStatus.DOWNLOADING`, `COMPLETED`, `FAILED`, `REQUIRES_USER_CONFIRMATION`
    - Failed packs skip to next; all done → launch `MainActivity`
@@ -2110,7 +2110,7 @@ android/app/src/main/res/layout/
    - Opened from the launcher shortcut `SplashActivity.publishToolchainShortcut()` pushes. `AndroidBridge.openToolchainSettings()` can also start it, but no bundled extension sends that relay command
    - Refreshes installed state on `onStart()`
 
-4. **Day 5** — Polish:
+4. **Day 5** (polish):
    - Toolchain cards with MaterialCardView, checkmarks, progress bars, status badges
    - Handle edge cases: partial download, interrupted install, remove confirmation
    - String resources for all UI text
@@ -2139,7 +2139,7 @@ android/app/src/main/res/layout/
 
 ---
 
-## 9. M6 — Release
+## 9. M6: Release
 
 **Goal**: Launch on Google Play Store.
 **Deliverable**: Published app with proper branding, legal compliance, and documentation.
@@ -2152,12 +2152,12 @@ _Ordered by dependency: fix bugs → verify features → harden → brand → sh
 
 ```mermaid
 flowchart TD
-  subgraph P1["Phase 1 — Bug Fixes & Feature Completion"]
+  subgraph P1["Phase 1: Bug Fixes & Feature Completion"]
     M6T1["M6-T1: Stability & auth fixes<br/>3 days"] --> M6T2["M6-T2: SSH key management<br/>3 days"]
     M6T2 --> M6T3["M6-T3: App upgrade handling<br/>4 days"]
   end
 
-  subgraph P2["Phase 2 — Testing & Hardening"]
+  subgraph P2["Phase 2: Testing & Hardening"]
     M6T4["M6-T4: Device testing + toolchain verify<br/>7 days"]
     M6T5["M6-T5: Security review<br/>3 days"]
     M6T6["M6-T6: Release build & signing<br/>3 days"]
@@ -2167,7 +2167,7 @@ flowchart TD
     M6T6 --> M6T7
   end
 
-  subgraph P3["Phase 3 — Branding & Store Presence"]
+  subgraph P3["Phase 3: Branding & Store Presence"]
     M6T8["M6-T8: Branding<br/>5 days"]
     M6T9["M6-T9: Legal compliance<br/>2 days"]
     M6T10["M6-T10: Documentation<br/>3 days"]
@@ -2176,7 +2176,7 @@ flowchart TD
     M6T9 --> M6T10
   end
 
-  subgraph P4["Phase 4 — Ship"]
+  subgraph P4["Phase 4: Ship"]
     M6T12["M6-T12: Play Store listing<br/>3 days"]
     M6T13["M6-T13: Launch<br/>37 days"]
     M6T12 --> M6T13
@@ -2191,7 +2191,7 @@ flowchart TD
 
 ---
 
-### Phase 1 — Bug Fixes & Feature Completion
+### Phase 1: Bug Fixes & Feature Completion
 
 #### M6-T1: Stability & Auth Fixes
 
@@ -2266,7 +2266,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 ---
 
-### Phase 2 — Testing & Hardening
+### Phase 2: Testing & Hardening
 
 #### M6-T4: Device Testing + Toolchain Verification
 
@@ -2284,15 +2284,15 @@ android/app/src/main/kotlin/com/vscodroid/
 8. Run backup & restore tests (Testing Strategy §3.8)
 9. SSH key and GitHub OAuth flow testing
 10. **Worker_thread verification** _(validates M5 task 1)_:
-    - [ ] Extension Host runs as worker_thread — only 1 phantom (server-main), no ExtHost in `ps`
-    - [ ] ptyHost runs as worker_thread — not visible in process list, baseline 1 phantom process
-    - [ ] Extensions activate correctly under worker_thread mode — 10 extensions loaded
+    - [ ] Extension Host runs as worker_thread: only 1 phantom (server-main), no ExtHost in `ps`
+    - [ ] ptyHost runs as worker_thread: not visible in process list, baseline 1 phantom process
+    - [ ] Extensions activate correctly under worker_thread mode: 10 extensions loaded
 11. **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
     - [ ] `go version` → Go 1.25.6 android/arm64; hello world compile+run ✓
     - [ ] `ruby --version` → Ruby 3.4.1; `irb` eval ✓; `gem --version` 3.6.2 ✓
     - [ ] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
-    - [ ] Verify toolchains persist across app restarts — all 3 survive force-stop+restart
-    - [ ] Verify uninstall cleans up correctly — symlinks removed, installRoots deleted, libs cleaned, core tools intact
+    - [ ] Verify toolchains persist across app restarts: all 3 survive force-stop+restart
+    - [ ] Verify uninstall cleans up correctly: symlinks removed, installRoots deleted, libs cleaned, core tools intact
     - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
 12. **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
@@ -2317,37 +2317,37 @@ android/app/src/main/kotlin/com/vscodroid/
 2. Verify no secrets in APK (no API keys, tokens, or private keys bundled)
 3. Review all workbench.js patches for unintended side effects
 4. Confirm Android app sandbox isolation (no world-readable files)
-5. Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns) — not what shipped;
+5. Validate `SecurityManager` URL allowlist (only localhost + known CDN patterns). Not what shipped;
    the allowlist was removed rather than relaxed, and no destination filter replaced it
-6. Fix: restrict cleartext HTTP to localhost only (`network_security_config.xml`) — reversed
+6. Fix: restrict cleartext HTTP to localhost only (`network_security_config.xml`). Reversed
    deliberately. The shipped config is `<base-config cleartextTrafficPermitted="true" />`: the format
    matches `<domain>` entries by hostname and understands neither CIDR nor ranges, so "any private
    address" cannot be written, and the addresses change with the network the device joins
-7. Fix: use `Uri.parse()` for exact localhost host matching (prevents domain spoofing) — shipped, and
+7. Fix: use `Uri.parse()` for exact localhost host matching (prevents domain spoofing). Shipped, and
    still in force. It decides which URLs the WebView keeps rather than gating an allow-list
 8. Fix: owner-only execute permissions on extracted binaries
 
 **Acceptance criteria**:
 
 - [ ] Security review completed (no exposed secrets, sandbox intact)
-- [x] WebView CSP headers — not ours to configure. The workbench ships its own policy and nothing in
+- [x] WebView CSP headers: not ours to configure. The workbench ships its own policy and nothing in
       this app's Kotlin or assets sets one. What this project does do is **widen** it: patch 0005
       adds `'unsafe-inline'` to `script-src` because `script-src` pins the document's inline script
       by sha256, patching that script changes its digest, and the build does not recompute the hash.
       `default-src` stays `'none'` and `frame-src` stays `'self'`. Recorded here because it is a
       deliberate relaxation and this list is where someone would look for it
-- [x] No URL allowlist in `SecurityManager` — there are no entries to validate. A development
+- [x] No URL allowlist in `SecurityManager`: there are no entries to validate. A development
       environment has to reach a LAN dev server, a private registry and a staging host, so the
       destination is deliberately unjudged; the session token is what is checked
-- [x] Cleartext HTTP is permitted app-wide, not restricted to localhost — a dev server is served over
+- [x] Cleartext HTTP is permitted app-wide, not restricted to localhost: a dev server is served over
       plain HTTP at the device's own address, and this file cannot express an address range
 - [x] Localhost matching uses `Uri.parse()` for exact host comparison
-- [x] Extracted binaries have owner-only execute permissions — all three sites that grant execute
+- [x] Extracted binaries have owner-only execute permissions: all three sites that grant execute
       (`FirstRunSetup` git-core, `ToolchainManager` install and its repair pass) call
       `setExecutable(true, true)`; there is no plain `setExecutable(true)` anywhere in the tree, and
       the only `Os.chmod` calls are `0700` on `.ssh` and `0600` on the ssh config. ⚠️ **The bit is
       not what constrains execution here.** SELinux refuses `execve` on anything under `filesDir`
-      whatever its mode — `markExecutablesIn`'s own documentation says so, and the tree records the
+      whatever its mode. `markExecutablesIn`'s own documentation says so, and the tree records the
       measurements: a device reporting `cannot exec 'git-remote-https': Permission denied`, and a
       valid ELF at `0755` failing `EACCES`, identically through a symlink, because the check is on
       the resolved inode's label rather than the path. That is why binaries ship in
@@ -2384,11 +2384,11 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Implementation steps**:
 
-1. Build release AAB (signed) — 253 MB total (includes on-demand packs)
-2. Measure base APK size (without toolchains) — **133 MB** download, 138 MB APK (< 150 MB target)
-3. Verify per-device delivery sizes via bundletool — 133 MB for ARM64 SDK 33+
-4. Document per-toolchain on-demand sizes — Go 163 MB, Ruby 29 MB, Java 146 MB
-5. Test HTTP fallback download flow end-to-end — all 3 toolchains verified on OnePlus CPH2791:
+1. Build release AAB (signed): 253 MB total (includes on-demand packs)
+2. Measure base APK size (without toolchains): **133 MB** download, 138 MB APK (< 150 MB target)
+3. Verify per-device delivery sizes via bundletool: 133 MB for ARM64 SDK 33+
+4. Document per-toolchain on-demand sizes: Go 163 MB, Ruby 29 MB, Java 146 MB
+5. Test HTTP fallback download flow end-to-end: all 3 toolchains verified on OnePlus CPH2791:
    - Ruby: 9 MB ZIP, 3.9s total (download 2.9s + extract 0.5s + install 0.3s)
    - Go: 53 MB ZIP, ~10s total (download 6.3s + extract 2.3s + install 1.1s)
    - Java: 55 MB ZIP, ~11s total (download 9.2s + extract 1.6s + install 0.3s)
@@ -2404,7 +2404,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 ---
 
-### Phase 3 — Branding & Store Presence
+### Phase 3: Branding & Store Presence
 
 #### M6-T8: Branding
 
@@ -2506,9 +2506,9 @@ android/app/src/main/res/
 5. `libnode.so` fetching: `LIBNODE_URL` secret → current tag release → latest release → stub fallback
 6. Caching strategy for Node.js binary, VS Code build, Gradle, tarballs + generated assets
 7. Secrets management: keystore env vars (`VSCODROID_KEYSTORE_*`), `LIBNODE_URL`
-8. CI fix: node-pty subshell path resolved with `ROOT_DIR` — Build + Unit Tests green
-9. CI fix: release workflow — remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated `api-level` param — Release workflow green
-10. Build toolchain ZIPs and upload as GitHub Release assets — fallback download URL served from GitHub Releases
+8. CI fix: node-pty subshell path resolved with `ROOT_DIR` (Build + Unit Tests green)
+9. CI fix: release workflow. Remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated `api-level` param (Release workflow green)
+10. Build toolchain ZIPs and upload as GitHub Release assets: fallback download URL served from GitHub Releases
 11. [ ] Automated on-device testing. Not started, and a hosted device lab is not the shape it
     would take: nothing under `.github/workflows/` starts the app, and the harness that does,
     `scripts/device-test.sh`, needs an attached device or a booted arm64 emulator, which GitHub's
@@ -2519,7 +2519,7 @@ android/app/src/main/res/
 
 ---
 
-### Phase 4 — Ship
+### Phase 4: Ship
 
 #### M6-T12: Play Store Listing
 

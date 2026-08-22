@@ -16,7 +16,7 @@ shutdown is asked for in-band with __vsc_disconnect and the module runs its
 normal teardown.
 
 workerAsChildProcess.ts is a new adaptor presenting the small part of the
-ChildProcess surface the IPC actually touches — send, connected, kill, pid, the
+ChildProcess surface the IPC actually touches: send, connected, kill, pid, the
 message/error/exit events, and stdout/stderr for the Extension Host that follows.
 Nothing else is faked, so a new dependency on ChildProcess fails here rather than
 behaving oddly on a device. Two details are load-bearing: a Worker rejects

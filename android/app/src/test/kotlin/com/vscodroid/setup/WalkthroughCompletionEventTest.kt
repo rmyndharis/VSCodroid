@@ -98,7 +98,7 @@ class WalkthroughCompletionEventTest {
     fun `no step of ours completes on a view id`() {
         val manifests = ourManifests()
         check(manifests.isNotEmpty()) {
-            "No bundled manifests under ${extensionsDir.absolutePath} — the test is looking " +
+            "No bundled manifests under ${extensionsDir.absolutePath}: the test is looking " +
                 "in the wrong place, which would let it pass by finding nothing"
         }
 
@@ -123,7 +123,7 @@ class WalkthroughCompletionEventTest {
             "a walkthrough step cannot complete on a view id here. Verifying one needs the " +
                 "built workbench bundle, which is gitignored and absent from every worktree, " +
                 "so a wrong id fails silently and the step stays unfinished forever. Complete " +
-                "on onCommand: naming the command the step's own button runs — that is " +
+                "on onCommand: naming the command the step's own button runs: that is " +
                 "checkable against the step itself, and it is what the workbench infers when " +
                 "a step declares no completionEvents at all. Read ${found.size} events.",
         )
@@ -148,7 +148,7 @@ class WalkthroughCompletionEventTest {
     @Test
     fun `a step completing on a command offers that command`() {
         val steps = ourSteps()
-        check(steps.isNotEmpty()) { "no walkthrough steps found — nothing was checked" }
+        check(steps.isNotEmpty()) { "no walkthrough steps found, nothing was checked" }
 
         val commandEvents = steps.flatMap { step ->
             step.events.filter { it.startsWith(COMMAND_EVENT) }.map { step to it }
@@ -169,7 +169,7 @@ class WalkthroughCompletionEventTest {
         assertEquals(
             emptyList<String>(), orphans,
             "these steps complete on a command their own description does not offer, so the " +
-                "button and the completion event can no longer be wrong together — which is " +
+                "button and the completion event can no longer be wrong together, which is " +
                 "the only reason onCommand: is trusted here. Point the event at the command " +
                 "the step's button runs, or give the step a button that runs it.",
         )

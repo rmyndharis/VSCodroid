@@ -9,7 +9,7 @@ import java.io.File
  * Which question `MainActivity` asks before it navigates the WebView.
  *
  * `isServerRunning()` is `Process.isAlive`: true from the instant the process is
- * spawned, and true for the whole of a restart after a crash — neither of which
+ * spawned, and true for the whole of a restart after a crash, neither of which
  * means anything is listening on the port. Navigating on it produces a
  * connection-refused page, and `onReceivedError` only logs, so nothing takes it
  * away again. `isServerReady()` reports what the health probe found.
@@ -21,8 +21,8 @@ import java.io.File
  *
  * A source-reading test sees the token `isServerReady` and not the branch, so it
  * cannot tell a call whose answer is obeyed from one whose answer is discarded.
- * That mutation was applied to both call sites — keep the calls, drop the
- * verdicts — and all 632 tests stayed green. What could not be extracted is the
+ * That mutation was applied to both call sites (keep the calls, drop the
+ * verdicts) and all 632 tests stayed green. What could not be extracted is the
  * *identity* of the method, since a function handed a boolean cannot tell which
  * question produced it; what could be, and now is, are the branches themselves:
  * `bindDecision` and `shouldActOnResume`, covered by
@@ -49,7 +49,7 @@ class ServerReadinessCallSiteTest {
     @Test
     fun `the activity asks whether the server is serving, not whether a process exists`() {
         check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath} — this test " +
+            "MainActivity.kt not found at ${mainActivity.absolutePath}: this test " +
                 "would otherwise pass by looking at nothing"
         }
 

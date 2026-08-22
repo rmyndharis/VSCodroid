@@ -507,7 +507,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🎉 First Production Release on Google Play Store!
 
-VSCodroid is now publicly available on Google Play. This release represents the cumulative work across milestones M0–M6, bringing a full VS Code IDE experience to Android.
+VSCodroid is now publicly available on Google Play. This release represents the cumulative work across milestones M0 to M6, bringing a full VS Code IDE experience to Android.
 
 ### Added
 - CI/CD pipeline: test job in CI, tag-triggered release workflow, GitHub Pages deployment
@@ -523,7 +523,7 @@ VSCodroid is now publicly available on Google Play. This release represents the 
 - Remove deprecated edge-to-edge theme attributes and fitsSystemWindows from layouts
 
 ### Changed
-- Google Play production access granted — app now publicly available
+- Google Play production access granted: app now publicly available
 
 ## [0.2.9] - 2026-02-27
 
@@ -617,7 +617,7 @@ This release represents the cumulative work across milestones M0 through M5, bri
 
 ### M2: Terminal & Mobile UX
 - Native node-pty (cross-compiled for ARM64 Android) replacing pipeTerminal.js shim
-- Real PTY terminals via `/dev/pts/*` — vim, tmux, readline, colors, job control all work
+- Real PTY terminals via `/dev/pts/*`: vim, tmux, readline, colors, job control all work
 - Extra Key Row with Ctrl, Alt, Tab, Esc, arrows, brackets, parens, semicolons
 - Touch target enlargement CSS for phone-sized screens
 - Safe area padding for round-corner devices and display cutouts

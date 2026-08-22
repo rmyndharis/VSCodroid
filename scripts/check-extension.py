@@ -5,7 +5,7 @@
 
 Both things it looks at fail the same quiet way. An extension whose
 engines.vscode is newer than the server is registered and then simply never
-activates — no error, no log line, just a missing feature. And a glibc native
+activates: no error, no log line, just a missing feature. And a glibc native
 payload loads fine on a desktop and throws on first use under Bionic, long after
 the build that shipped it went green.
 """

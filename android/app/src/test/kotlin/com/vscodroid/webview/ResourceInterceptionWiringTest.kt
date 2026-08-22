@@ -37,8 +37,8 @@ import java.io.File
  *   the line that carries the path, because it is what a reader has when a
  *   preview comes up blank.
  *
- * `WebResourceResponse` cannot be constructed under the stub `android.jar` —
- * every branch here would die in its constructor — so the constructor is
+ * `WebResourceResponse` cannot be constructed under the stub `android.jar`
+ * (every branch here would die in its constructor), so the constructor is
  * mocked purely to let the function run to its end. Nothing is asserted about
  * it.
  */
@@ -237,7 +237,7 @@ class ResourceInterceptionWiringTest {
     /**
      * The other half, and the more valuable one: a workspace being refused must
      * not take the published roots down with it. If it did, opening the wrong
-     * folder would empty the workbench of every extension resource — a far
+     * folder would empty the workbench of every extension resource, a far
      * larger failure than the one being prevented.
      *
      * Asserted against the path this test is about rather than against an empty
@@ -262,7 +262,7 @@ class ResourceInterceptionWiringTest {
      *
      * Every other case here reads the log, because serving and refusing both end
      * in a `WebResourceResponse` and that class cannot be constructed under the
-     * stub `android.jar` — its constructor is mocked, so nothing about it can be
+     * stub `android.jar`: its constructor is mocked, so nothing about it can be
      * asserted. A log line is not evidence of a refusal: code that logged and then
      * served satisfied all four.
      *
@@ -293,7 +293,7 @@ class ResourceInterceptionWiringTest {
     }
 
     private companion object {
-        /** Never connected to — every path here is answered from the filesystem. */
+        /** Never connected to: every path here is answered from the filesystem. */
         const val PORT = 41234
     }
 }

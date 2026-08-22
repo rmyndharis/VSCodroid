@@ -13,7 +13,7 @@ import java.io.File
  *
  * What this pins is the narrower, mechanical half of that: a reference of the form
  * `VSCodroid: Something` must match a `title` contributed by a bundled extension. It is the
- * half that rots on its own — someone renames a palette entry, and a message pointing at the
+ * half that rots on its own: someone renames a palette entry, and a message pointing at the
  * old name keeps compiling and keeps being wrong.
  *
  * What it deliberately does NOT catch, because no test can decide it: prose that points
@@ -30,7 +30,7 @@ class CommandReferenceTest {
     private fun contributedTitles(): Set<String> {
         val dirs = extensionsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
         check(dirs.isNotEmpty()) {
-            "No bundled extensions under ${extensionsDir.absolutePath} — this test would " +
+            "No bundled extensions under ${extensionsDir.absolutePath}; this test would " +
                 "otherwise pass by finding nothing to check against"
         }
         return dirs.flatMap { dir ->
@@ -61,7 +61,7 @@ class CommandReferenceTest {
     fun `every command named in user-facing text is contributed by a bundled extension`() {
         val titles = contributedTitles()
         val sources = userFacingSources()
-        check(sources.isNotEmpty()) { "No sources found — the test is looking in the wrong place" }
+        check(sources.isNotEmpty()) { "No sources found; the test is looking in the wrong place" }
 
         val dangling = sortedMapOf<String, MutableSet<String>>()
         val foundIn = sortedMapOf<String, MutableSet<String>>()
@@ -120,7 +120,7 @@ class CommandReferenceTest {
 
         /**
          * A reference in source text: the name must be QUOTED, which is how it appears
-         * when it is being given to a user to type — `\"VSCodroid: Clear Caches\"` in a
+         * when it is being given to a user to type: `\"VSCodroid: Clear Caches\"` in a
          * Kotlin literal, `"VSCodroid: Copy SSH Public Key"` inside a JavaScript one.
          *
          * The quotes are what make this specific rather than a search for the word. An

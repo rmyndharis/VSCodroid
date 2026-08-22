@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Cross-compiles the native addons the VS Code server needs into Bionic ARM64
-# .node files. Every build — ours or Microsoft's — ships these compiled against
+# .node files. Every build (ours or Microsoft's) ships these compiled against
 # glibc, and Android's loader cannot open them, so each one has to be replaced.
 # Three are recompiled here; @vscode/spdlog is replaced by a JavaScript
 # implementation instead, for the reason given at its stage at the bottom.
@@ -24,7 +24,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/android/app/src/main/assets/vscode-reh}"
 
 # Must match remote/.npmrc `target` at the VS Code tag AND the bundled
 # libnode.so. A mismatch changes NODE_MODULE_VERSION and every addon here is
-# rejected at load with no useful message — terminals stop working and the log
+# rejected at load with no useful message: terminals stop working and the log
 # says only that a module could not be loaded. The check at the end compares the
 # headers used here against the runtime actually being shipped, so the two
 # cannot drift apart silently.
@@ -182,7 +182,7 @@ if [ "${runtime_version%%.*}" != "${NODE_VERSION%%.*}" ]; then
 fi
 echo "  runtime: v$runtime_version (major matches v$NODE_VERSION headers)"
 
-# check_pair <name> <native-version> <package.json> — the .node built here must
+# check_pair <name> <native-version> <package.json>: the .node built here must
 # ship beside the SAME JS the version was chosen for. Between prerelease
 # versions the private binding surface moves, so a silent mismatch is a
 # runtime failure on device, not a build failure here.
@@ -243,7 +243,7 @@ compile() {
     "$STRIP" "$out"
 }
 
-# verify <out.node> — a glibc dependency or a 4 KB segment must fail the build,
+# verify <out.node>: a glibc dependency or a 4 KB segment must fail the build,
 # not surface later as a dlopen error on a user's device.
 verify() {
     local out=$1 name=$2
@@ -257,7 +257,7 @@ verify() {
 
 failed=0
 
-# node-pty — the terminal. ptyHostMain imports it statically, so a failure here
+# node-pty: the terminal. ptyHostMain imports it statically, so a failure here
 # is not a degraded terminal, it is no terminal at all.
 echo ""
 echo "node-pty..."
@@ -271,7 +271,7 @@ compile "$PTY_SRC" "$OUTPUT_ROOT/node_modules/node-pty/build/Release/pty.node" \
 verify "$OUTPUT_ROOT/node_modules/node-pty/build/Release/pty.node" node-pty || failed=1
 check_pair node-pty "$PTY_VERSION" "$OUTPUT_ROOT/node_modules/node-pty/package.json" || failed=1
 
-# @parcel/watcher — recursive file watching. watcherMain imports it statically
+# @parcel/watcher: recursive file watching. watcherMain imports it statically
 # too, so without it recursive watching is dead rather than degraded, and an
 # extension is simply never told a file changed.
 echo ""
@@ -299,9 +299,9 @@ compile "$WATCHER_SRC" "$OUTPUT_ROOT/node_modules/@parcel/watcher/build/Release/
 verify "$OUTPUT_ROOT/node_modules/@parcel/watcher/build/Release/watcher.node" @parcel/watcher || failed=1
 check_pair @parcel/watcher "$WATCHER_VERSION" "$OUTPUT_ROOT/node_modules/@parcel/watcher/package.json" || failed=1
 
-# @vscode/sqlite3 — the workbench's storage engine, and what the Copilot CLI
+# @vscode/sqlite3: the workbench's storage engine, and what the Copilot CLI
 # session store opens through the embedder. The glibc build fails dlopen on
-# libstdc++.so.6, which surfaces as Copilot's "(modelSelectionFailed)" — an
+# libstdc++.so.6, which surfaces as Copilot's "(modelSelectionFailed)", an
 # error three layers from its cause. Bundles SQLite itself: the amalgamation
 # compiles as C, the addon as C++, so this block is two-phase where the others
 # are one call.
@@ -326,7 +326,7 @@ mkdir -p "$(dirname "$SQLITE_OUT")"
 "$CC" -c -fPIC -O2 "${SQLITE_DEFINES[@]}" \
     -o "$WORK_DIR/sqlite3.o" "$SQLITE_AMALGAMATION/sqlite3.c"
 # node_addon_api_except in binding.gyp means C++ exceptions are ON here, unlike
-# the addons above — so -fexceptions and no NAPI_DISABLE_CPP_EXCEPTIONS.
+# the addons above, so -fexceptions and no NAPI_DISABLE_CPP_EXCEPTIONS.
 "$CXX" \
     -shared -fPIC -std=c++17 -O2 -fexceptions \
     -static-libstdc++ \

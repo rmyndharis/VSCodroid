@@ -42,10 +42,10 @@
 | KB-2 | Samsung keyboard | Open file, type code with Samsung KB | Characters appear correctly | | |
 | KB-3 | SwiftKey | Open file, type with SwiftKey | Characters appear correctly | | |
 | KB-4 | Hardware keyboard | Connect BT/USB keyboard, type | All keys work including modifiers. Only hardware answers this row: the automated suite's `hardware_key_chord_reaches_workbench` injects a virtual device, which exercises dispatch but not pairing, layout mapping or how a real HID keyboard reports its modifiers | | |
-| KB-5 | Extra Key Row — Tab | Press Tab in editor | Indentation inserted | | |
-| KB-6 | Extra Key Row — Esc | Press Esc with menu open | Menu/dialog closes | | |
-| KB-7 | Extra Key Row — Ctrl+S | Press Ctrl on EKR then S on keyboard | File saves (no error) | | |
-| KB-8 | Extra Key Row — Ctrl+P | Press Ctrl on EKR then P | Quick Open dialog appears | | |
+| KB-5 | Extra Key Row: Tab | Press Tab in editor | Indentation inserted | | |
+| KB-6 | Extra Key Row: Esc | Press Esc with menu open | Menu/dialog closes | | |
+| KB-7 | Extra Key Row: Ctrl+S | Press Ctrl on EKR then S on keyboard | File saves (no error) | | |
+| KB-8 | Extra Key Row: Ctrl+P | Press Ctrl on EKR then P | Quick Open dialog appears | | |
 | KB-9 | Extra Key Row trackpad | Drag on the trackpad: slowly first, then keep going without lifting, then diagonally | Cursor steps character by character at first and speeds up the longer the drag gets; a diagonal drag moves on both axes. There are no arrow buttons to press: the trackpad replaced them, so a drag is the only route for a finger. KB-13 covers the other route, the pad's four accessibility actions | | |
 | KB-10 | Extra Key Row, brackets on the textarea edit path | On a device whose WebView is older than 121, open a file and press {, }, (, ) on the key row. Confirm the path first in remote debugging: `document.querySelectorAll("textarea.inputarea").length` is 1 | Each character is inserted, and Monaco auto-closes the pair | | |
 | KB-11 | Extra Key Row, brackets on the EditContext edit path | On a device whose WebView is 121 or newer, same presses. Confirm the path first: `document.querySelectorAll("textarea.inputarea").length` is 0 and `document.querySelectorAll("div.native-edit-context").length` is 2 | Each character is inserted. This is the path where anything written to a textarea is inert, so a pass here and a fail on KB-10 means the fix went to the wrong layer | | |
@@ -136,7 +136,7 @@ development server active" here, the degradation is silent again.
 ## 10. Toolchains (On-Demand)
 
 There is no Settings entry for this screen. Touch and hold the app icon on the
-home screen and pick **Manage toolchains** — `strings.xml` calls that the only
+home screen and pick **Manage toolchains**; `strings.xml` calls that the only
 entry point there is, and every row below starts from it.
 
 Run each command in the app's own terminal. `adb shell run-as` will not answer
@@ -181,13 +181,13 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 ## 12. SAF & External Files
 
 > The picker blocker ([#79](https://github.com/rmyndharis/VSCodroid/issues/79)) is
-> fixed — the bridge extension declared `main`, so it loaded in the Node extension
+> fixed: the bridge extension declared `main`, so it loaded in the Node extension
 > host where its `BroadcastChannel` reached nothing; it declares `browser` now and
 > loads where its transport is. **These rows are executable and are the pre-release
 > pass for the area that has changed most.**
 >
 > Run the whole section against **one** device folder that has at least one
-> subdirectory and a `.vscode/` directory in it — several rows below depend on
+> subdirectory and a `.vscode/` directory in it; several rows below depend on
 > subdirectory contents, and a flat folder passes them without exercising anything.
 >
 > A failure here is usually silent by construction: the editor reports success and

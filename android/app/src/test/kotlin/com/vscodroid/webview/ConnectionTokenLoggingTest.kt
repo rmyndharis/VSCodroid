@@ -37,7 +37,7 @@ import kotlin.concurrent.thread
  *
  * The token is the whole of the server's authentication: it is required on every
  * route but `/version`, `/delay-shutdown` and `/callback`, so anything holding it
- * can drive the editor — read any file the server can read, and open a terminal.
+ * can drive the editor: read any file the server can read, and open a terminal.
  * `MainActivity.navigateToFolder` keeps its own URL out of the log, and the
  * comment there once claimed that line was the only place the token could
  * otherwise escape. This file exists because that claim was false: the same token
@@ -53,7 +53,7 @@ import kotlin.concurrent.thread
  * Written against the log rather than against a redaction helper on purpose. A
  * helper can be perfect and called from nowhere; what a reader of logcat gets is
  * decided at the call sites, so the call sites are what these drive. Every
- * `Logger` level is captured, not just the debug ones — `Logger.d` is gated on a
+ * `Logger` level is captured, not just the debug ones: `Logger.d` is gated on a
  * debuggable build but `i`, `w` and `e` are not, so a leak at those levels ships
  * in release.
  */
@@ -350,7 +350,7 @@ class ConnectionTokenLoggingTest {
      * Not one of ours: `message` is arbitrary text the workbench chose to print
      * and `sourceId` is the URL of the script that printed it. Both are
      * interpolated into one line and handed to `Logger`, and the ERROR and
-     * WARNING branches are not gated on a debuggable build — so whatever they
+     * WARNING branches are not gated on a debuggable build, so whatever they
      * carry ships in release.
      *
      * Whether the connection token ever actually reaches here is NOT established,

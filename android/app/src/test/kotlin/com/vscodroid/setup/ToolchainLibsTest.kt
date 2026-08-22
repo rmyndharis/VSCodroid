@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test
  *
  * The risk is one-directional: naming one entry too few leaves a file the next
  * install overwrites, while naming one too many deletes a library the base app
- * loads — Ruby's `libffi.so` was the live case, and removing it broke
+ * loads: Ruby's `libffi.so` was the live case, and removing it broke
  * `import ctypes` until the next app update. Most of these therefore assert on
  * what is *not* returned.
  */

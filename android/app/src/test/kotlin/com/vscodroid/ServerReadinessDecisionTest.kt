@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Test
  * The two decisions `MainActivity` makes about a server that may not be serving.
  *
  * [ServerReadinessCallSiteTest] beside this one reads the source and checks which
- * *method* is called. That catches one regression — putting `isServerRunning`
- * back — and cannot catch the other: calling the right method and then ignoring
+ * *method* is called. That catches one regression (putting `isServerRunning`
+ * back) and cannot catch the other: calling the right method and then ignoring
  * what it said. Both call sites were mutated that way and the whole suite stayed
  * green, because a source-reading test sees the token and not the branch.
  *

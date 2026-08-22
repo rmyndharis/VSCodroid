@@ -1,4 +1,4 @@
-# VSCodroid — Development Milestones
+# VSCodroid: Development Milestones
 
 ## Overview
 
@@ -25,9 +25,9 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M0 — Proof of Concept
+## M0: Proof of Concept
 
-**Goal**: Validate the core architecture — can we run a Node.js process on Android and load VS Code Server in a WebView that connects to it via localhost?
+**Goal**: Validate the core architecture: can we run a Node.js process on Android and load VS Code Server in a WebView that connects to it via localhost?
 
 **Deliverable**: Android app that launches VS Code REH (Remote Extension Host) server via bundled Node.js and renders the VS Code Workbench in a WebView.
 
@@ -78,7 +78,7 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M1 — VS Code Core
+## M1: VS Code Core
 
 **Goal**: VS Code Workbench running in WebView with extension support via Open VSX.
 
@@ -166,7 +166,7 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M2 — Mobile UX
+## M2: Mobile UX
 
 **Goal**: Make VS Code actually usable on a touchscreen device.
 
@@ -238,7 +238,7 @@ M6 (Release)   → Play Store release
    > work. `AndroidManifest.xml` carries this reasoning where the filters used to sit.
 
 9. **Crash recovery** (`VSCodroidWebViewClient.kt`, `MainActivity.kt`)
-   - [x] `onRenderProcessGone`: calls `recreateWebView()` — removes crashed WebView, creates new, re-setups, reloads VS Code
+   - [x] `onRenderProcessGone`: calls `recreateWebView()` (removes crashed WebView, creates new, re-setups, reloads VS Code)
    - [x] Node.js death: auto-restart via `NodeService` + foreground service (`ProcessManager`)
    - [x] `onTrimMemory`: writes memory pressure file + notifies JS via `window.__vscodroid?.onLowMemory?.(level)`
 
@@ -256,7 +256,7 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M3 — All-in-One Dev Environment
+## M3: All-in-One Dev Environment
 
 **Goal**: Bundle Python, npm, and essential tools for out-of-the-box development.
 
@@ -317,7 +317,7 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M4 — Polish & Performance
+## M4: Polish & Performance
 
 **Goal**: Production-quality stability and performance.
 
@@ -331,8 +331,8 @@ M6 (Release)   → Play Store release
 ### Tasks:
 
 1. **Error handling & logging** (`Logger.kt`, `CrashReporter.kt`)
-   - [x] `Logger` — structured logging with tag-based filtering
-   - [x] `CrashReporter` — crash reporting initialized in `Application.onCreate`
+   - [x] `Logger`: structured logging with tag-based filtering
+   - [x] `CrashReporter`: crash reporting initialized in `Application.onCreate`
    - [x] Low-storage Toast warnings in `MainActivity`
    - [x] Process crash exit code diagnostics in `ProcessManager`
 
@@ -342,22 +342,22 @@ M6 (Release)   → Play Store release
    - [x] WebView data directory isolated via `WebView.setDataDirectorySuffix("vscodroid")`
 
 3. **Startup time optimization** (`VSCodroidApp.kt`, `SplashActivity.kt`)
-   - [x] WebView pre-warm in `Application.onCreate` — creates and destroys throwaway WebView to trigger Chromium library preload (~200-400ms savings)
+   - [x] WebView pre-warm in `Application.onCreate`: creates and destroys throwaway WebView to trigger Chromium library preload (~200-400ms savings)
    - [x] `CrashReporter.init(this)` initialized in Application
    - [x] Node.js server starts during `SplashActivity` extraction
    - [x] Notification channel created early in Application
 
 4. **Phantom process monitoring** (`process-monitor.js`, `vscodroid-process-monitor` extension)
-   - [x] `process-monitor.js` extracted to `server/` on first run — monitors child process count
-   - [x] `vscodroid.vscodroid-process-monitor` extension bundled — provides in-VS Code UI
-   - [x] Exit code 137 (SIGKILL) handling in `ProcessManager` — detects OOM/phantom kill
+   - [x] `process-monitor.js` extracted to `server/` on first run: monitors child process count
+   - [x] `vscodroid.vscodroid-process-monitor` extension bundled: provides in-VS Code UI
+   - [x] Exit code 137 (SIGKILL) handling in `ProcessManager`: detects OOM/phantom kill
    - [x] Extension Host and ptyHost run as `worker_threads.Worker()` (saves 2 phantom process slots)
 
 5. **Storage management** (`StorageManager.kt`, `AndroidBridge.kt`)
-   - [x] `StorageManager.getStorageBreakdown()` — per-component usage tracking
-   - [x] `StorageManager.clearCaches()` — clear temporary files
-   - [x] `StorageManager.getAvailableStorage()` — check available space
-   - [x] `StorageManager.isStorageLow()` — low storage warning with Toast
+   - [x] `StorageManager.getStorageBreakdown()`: per-component usage tracking
+   - [x] `StorageManager.clearCaches()`: clear temporary files
+   - [x] `StorageManager.getAvailableStorage()`: check available space
+   - [x] `StorageManager.isStorageLow()`: low storage warning with Toast
    - [x] Exposed to JS via `AndroidBridge` (`getStorageInfo`, `clearCaches`, `getAvailableStorage`)
 
 6. **Browser sign-in callback relay** (`AndroidBridge.kt`, `MainActivity.kt`)
@@ -388,7 +388,7 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M5 — Toolchain Ecosystem
+## M5: Toolchain Ecosystem
 
 **Goal**: On-demand toolchain delivery so users can install additional languages beyond the bundled core.
 
@@ -438,7 +438,7 @@ M6 (Release)   → Play Store release
 
 ---
 
-## M6 — Release
+## M6: Release
 
 **Goal**: Launch on Google Play Store.
 
@@ -454,7 +454,7 @@ M6 (Release)   → Play Store release
 
 _Ordered by dependency: fix bugs → verify features → harden → brand → ship._
 
-#### Phase 1 — Bug Fixes & Feature Completion
+#### Phase 1: Bug Fixes & Feature Completion
 
 1. **Stability & auth fixes** _(discovered during device testing)_
    - [x] Extension OAuth callback relay: Chrome Custom Tabs → Android Intent → WebView (`vscodroid://callback`)
@@ -477,7 +477,7 @@ _Ordered by dependency: fix bugs → verify features → harden → brand → sh
    - [x] Migrate SSH config, .bashrc additions, settings.json across upgrades
    - [x] Handle stale symlinks after APK reinstall (nativeLibraryDir path changes)
 
-#### Phase 2 — Hardening & Release Build
+#### Phase 2: Hardening & Release Build
 
 _Order: audit code → configure release build → test on devices → validate bundle size._
 
@@ -487,16 +487,16 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Review all workbench.js patches for unintended side effects
    - [x] Confirm Android app sandbox isolation (no world-readable files)
    - [x] Validate that every `@JavascriptInterface` method checks the session token (`BridgeTokenUniformityTest` fails the build if one is added without it)
-   - [x] Decided against a URL allowlist, and removed the one that existed: this is a development tool, so any protocol and any address must open, including a wrong one. It had refused `http://192.168.1.x:PORT` — a LAN dev server, the most ordinary thing the product is for. `UrlAllowlistWiringTest` now pins the absence so a filter cannot return unnoticed
-   - [x] Decided against restricting cleartext, for the same reason: a dev server answers over plain HTTP at whatever address the device's network gives it, and `network-security-config` matches hostnames only — it can spell neither CIDR nor an address unknown at build time
-   - [x] Exact host matching keeps the WebView inside its own origin: `VSCodroidWebViewClient.isLocalhost` compares `uri.host` against `127.0.0.1`/`localhost` and requires the allocated port, so `localhost.evil.com` is handed to the browser instead of being served as if it were the local server — which would put a remote page inside the origin holding the session token. Still in force, and deliberately NOT a URL filter: it decides which navigations the WebView keeps, not which addresses may be opened
-   - [x] Execute bits on extracted files, with the limit stated rather than ticked. Nothing written by Kotlin grants execute except two bounded owner-only setters (`FirstRunSetup` for `usr/lib/git-core`, `ToolchainManager` for the paths a toolchain manifest lists); every other write lands with no execute at all, and the toolchain ZIP unpacker discards the archive's modes rather than applying them. The server does not: `vscode-reh`'s VSIX unpacker derives a mode from the entry's external attributes and carries the owner, group AND other triads, so a marketplace extension shipped 0755 lands 0755 under `home/.vscodroid/extensions/`. "Owner-only" is therefore not a property of the whole tree. It costs nothing today — SELinux refuses `execve` under `filesDir` whatever the mode, which is why binaries ship in `nativeLibraryDir` — but nothing asserts on the bits either: `ExecutableRepairTest` checks `canExecute()`, which cannot tell 0700 from 0755, so 0700 and 0755 take the same branch everywhere. The blindness is in the predicate, not in the coverage: the suite exercises `markExecutablesIn`, the repair pass for toolchains left behind by an OLDER version, and that path is live. No guard is proposed for the bits themselves — nothing in production branches on a mode, so a test pinning owner-only would have to be maintained forever to prevent a non-event
+   - [x] Decided against a URL allowlist, and removed the one that existed: this is a development tool, so any protocol and any address must open, including a wrong one. It had refused `http://192.168.1.x:PORT`, a LAN dev server, the most ordinary thing the product is for. `UrlAllowlistWiringTest` now pins the absence so a filter cannot return unnoticed
+   - [x] Decided against restricting cleartext, for the same reason: a dev server answers over plain HTTP at whatever address the device's network gives it, and `network-security-config` matches hostnames only; it can spell neither CIDR nor an address unknown at build time
+   - [x] Exact host matching keeps the WebView inside its own origin: `VSCodroidWebViewClient.isLocalhost` compares `uri.host` against `127.0.0.1`/`localhost` and requires the allocated port, so `localhost.evil.com` is handed to the browser instead of being served as if it were the local server, which would put a remote page inside the origin holding the session token. Still in force, and deliberately NOT a URL filter: it decides which navigations the WebView keeps, not which addresses may be opened
+   - [x] Execute bits on extracted files, with the limit stated rather than ticked. Nothing written by Kotlin grants execute except two bounded owner-only setters (`FirstRunSetup` for `usr/lib/git-core`, `ToolchainManager` for the paths a toolchain manifest lists); every other write lands with no execute at all, and the toolchain ZIP unpacker discards the archive's modes rather than applying them. The server does not: `vscode-reh`'s VSIX unpacker derives a mode from the entry's external attributes and carries the owner, group AND other triads, so a marketplace extension shipped 0755 lands 0755 under `home/.vscodroid/extensions/`. "Owner-only" is therefore not a property of the whole tree. It costs nothing today (SELinux refuses `execve` under `filesDir` whatever the mode, which is why binaries ship in `nativeLibraryDir`), but nothing asserts on the bits either: `ExecutableRepairTest` checks `canExecute()`, which cannot tell 0700 from 0755, so 0700 and 0755 take the same branch everywhere. The blindness is in the predicate, not in the coverage: the suite exercises `markExecutablesIn`, the repair pass for toolchains left behind by an OLDER version, and that path is live. No guard is proposed for the bits themselves: nothing in production branches on a mode, so a test pinning owner-only would have to be maintained forever to prevent a non-event
 
 5. **Release build & signing**
    - [x] Generate release signing keystore (store securely, NOT in repo)
    - [x] Configure `signingConfigs.release` in build.gradle.kts (env vars: VSCODROID*KEYSTORE*\*)
    - [x] Enable R8/ProGuard minification for Kotlin code (already enabled, 165→138 MB)
-   - [x] Test release build on device — R8 minification verified, no reflection/bridge issues, all components functional
+   - [x] Test release build on device: R8 minification verified, no reflection/bridge issues, all components functional
    - [x] Verify `useLegacyPackaging = true` preserved in release build
 
 6. **Device testing** _(on release build)_
@@ -506,60 +506,60 @@ _Order: audit code → configure release build → test on devices → validate 
    - [x] Extension tests: 10 bundled extensions activate, Welcome walkthrough renders, theme picker works
    - [x] Lifecycle tests: background/foreground (server survives), rotation (adapts), force-stop + cold restart (recovers)
    - [x] **worker_thread verification** _(validates M5 task 1)_:
-     - [x] Extension Host runs as worker_thread — only 1 phantom (server-main), no ExtHost in `ps`
-     - [x] ptyHost runs as worker_thread — not visible in process list, baseline 1 phantom process
-     - [x] Extensions activate correctly under worker_thread mode — 10 extensions loaded
+     - [x] Extension Host runs as worker_thread: only 1 phantom (server-main), no ExtHost in `ps`
+     - [x] ptyHost runs as worker_thread: not visible in process list, baseline 1 phantom process
+     - [x] Extensions activate correctly under worker_thread mode: 10 extensions loaded
    - [x] **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
      - [x] `go version` → Go 1.25.6 android/arm64; hello world compile+run ✓
      - [x] `ruby --version` → Ruby 3.4.1; `irb` eval ✓; `gem --version` 3.6.2 ✓
      - [x] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
-     - [x] Verify toolchains persist across app restarts — all 3 survive force-stop+restart
-     - [x] Verify uninstall cleans up correctly — Go/Java/Ruby all uninstalled via bridge, symlinks removed, installRoots deleted, libs cleaned, core tools (bash/git/node/python) intact, toolchains.json empty, toolchain-env.sh deleted
+     - [x] Verify toolchains persist across app restarts: all 3 survive force-stop+restart
+     - [x] Verify uninstall cleans up correctly: Go/Java/Ruby all uninstalled via bridge, symlinks removed, installRoots deleted, libs cleaned, core tools (bash/git/node/python) intact, toolchains.json empty, toolchain-env.sh deleted
      - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
    - [x] **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 7. **Android App Bundle & size audit**
-   - [x] Build release AAB (signed) — 253 MB total (includes on-demand packs)
-   - [x] Measure base APK size (without toolchains) — **133 MB** download, 138 MB APK (< 150 MB target)
-   - [x] Verify per-device delivery sizes via bundletool — 133 MB for ARM64 SDK 33+
-   - [x] Document per-toolchain on-demand sizes — Go 163 MB, Ruby 29 MB, Java 146 MB
-   - [x] Test HTTP fallback download flow end-to-end — all 3 toolchains verified on OnePlus CPH2791:
+   - [x] Build release AAB (signed): 253 MB total (includes on-demand packs)
+   - [x] Measure base APK size (without toolchains): **133 MB** download, 138 MB APK (< 150 MB target)
+   - [x] Verify per-device delivery sizes via bundletool: 133 MB for ARM64 SDK 33+
+   - [x] Document per-toolchain on-demand sizes: Go 163 MB, Ruby 29 MB, Java 146 MB
+   - [x] Test HTTP fallback download flow end-to-end: all 3 toolchains verified on OnePlus CPH2791:
      - Ruby: 9 MB ZIP, 3.9s total (download 2.9s + extract 0.5s + install 0.3s)
      - Go: 53 MB ZIP, ~10s total (download 6.3s + extract 2.3s + install 1.1s)
      - Java: 55 MB ZIP, ~11s total (download 9.2s + extract 1.6s + install 0.3s)
      - Updated manifests with RUBYLIB, scriptWrappers, libSymlinks all functioning
    - [ ] Test Play Asset Delivery flow on internal testing track
 
-#### Phase 3 — Branding & Store Presence
+#### Phase 3: Branding & Store Presence
 
 8. **Branding**
-   - [x] Design VSCodroid icon/logo (original, not VS Code's) — Android bot + VS Code X mark
+   - [x] Design VSCodroid icon/logo (original, not VS Code's): Android bot + VS Code X mark
    - [x] Adaptive icon for Android 13+ (foreground + background layers)
    - [x] App screenshots for Play Store (5 screenshots: welcome, terminal, code editor, extensions, explorer)
-   - [x] Feature graphic (1024x500) — blue gradient with logo and feature highlights
+   - [x] Feature graphic (1024x500): blue gradient with logo and feature highlights
 
 9. **Legal compliance**
-   - [x] Privacy policy (required for Play Store) — `docs/PRIVACY_POLICY.md`
-   - [x] MIT license notice for VS Code source — `docs/LEGAL_NOTICES.md`
-   - [x] Trademark disclaimers — included in LEGAL_NOTICES.md
-   - [x] Disclaimer in app About screen — `showAboutDialog()` with MIT/trademark/Open VSX notices
+   - [x] Privacy policy (required for Play Store): `docs/PRIVACY_POLICY.md`
+   - [x] MIT license notice for VS Code source: `docs/LEGAL_NOTICES.md`
+   - [x] Trademark disclaimers: included in LEGAL_NOTICES.md
+   - [x] Disclaimer in app About screen: `showAboutDialog()` with MIT/trademark/Open VSX notices
 
 10. **Documentation**
     - [x] README.md with project overview, features, screenshots, installation guide
     - [x] CONTRIBUTING.md for contributors
-    - [x] User guide: first-run, keyboard shortcuts, extensions — `docs/USER_GUIDE.md`
-    - [x] Known limitations and FAQ — in README.md
+    - [x] User guide: first-run, keyboard shortcuts, extensions: `docs/USER_GUIDE.md`
+    - [x] Known limitations and FAQ: in README.md
 
 11. **CI/CD pipeline**
     - [x] GitHub Actions: build debug APK on PR (`build.yml`), lint on PR (`lint.yml`)
     - [x] Release workflow: tag → build → sign → GitHub Release (`release.yml`)
     - [ ] Automated on-device testing in CI. Not started, and the hosted-lab plan it was written as is not the shape it would take: nothing under `.github/workflows/` starts the app, and the harness that does, `scripts/device-test.sh`, needs an attached device or a booted arm64 emulator, which GitHub's arm64 runners cannot provide (no `/dev/kvm`). On-device runs are on a person today, before a tag and after a change to what gets bundled
-    - [x] Build toolchain zips and upload as GitHub Release assets — `scripts/package-toolchains.sh` + `release.yml`
-    - [x] Fallback download URL served from GitHub Releases — README links to releases page
-    - [x] CI fix: node-pty subshell path resolved with ROOT_DIR — Build + Unit Tests green
-    - [x] CI fix: release workflow — remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated api-level param — Release workflow green
+    - [x] Build toolchain zips and upload as GitHub Release assets: `scripts/package-toolchains.sh` + `release.yml`
+    - [x] Fallback download URL served from GitHub Releases: README links to releases page
+    - [x] CI fix: node-pty subshell path resolved with ROOT_DIR. Build + Unit Tests green
+    - [x] CI fix: release workflow; remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated api-level param. Release workflow green
 
-#### Phase 4 — Ship
+#### Phase 4: Ship
 
 12. **Play Store listing** _(requires Google Play Developer account)_
     - [x] Title: "VSCodroid"
@@ -568,13 +568,13 @@ _Order: audit code → configure release build → test on devices → validate 
     - [x] Category: Developer Tools
     - [x] Content rating questionnaire
     - [x] Foreground service permission declaration (video demo + written justification)
-    - [x] Prepare for binary execution policy review (explain .so trick, local-only execution) — passed; production access granted
+    - [x] Prepare for binary execution policy review (explain .so trick, local-only execution): passed; production access granted
 
 13. **Launch**
-    - [x] Internal testing track — AAB uploaded (versionCode 2)
-    - [x] Closed testing track — AAB v0.2.2-m6 (versionCode 4) uploaded, 12 testers added, 14-day countdown started
-    - [x] Open beta — skipped; production access granted directly
-    - [x] Production release — v1.0.0 (versionCode 10) published to production track
+    - [x] Internal testing track: AAB uploaded (versionCode 2)
+    - [x] Closed testing track: AAB v0.2.2-m6 (versionCode 4) uploaded, 12 testers added, 14-day countdown started
+    - [x] Open beta: skipped; production access granted directly
+    - [x] Production release: v1.0.0 (versionCode 10) published to production track
     - [ ] Monitor crash reports (CrashReporter) and user feedback
     - [ ] Post-launch: respond to Play Store reviews
 
@@ -583,16 +583,16 @@ _Order: audit code → configure release build → test on devices → validate 
 - [x] Extension secrets persist across app restarts (OAuth tokens, API keys)
 - [x] App recovers cleanly from close/reopen (no white screen)
 - [x] SSH push/pull to GitHub works end-to-end (SSH stack verified, git uses bundled ssh via `GIT_SSH_COMMAND`)
-- [x] App upgrade preserves user data (settings, extensions, SSH keys, projects) — verified v1→v2 upgrade on emulator
+- [x] App upgrade preserves user data (settings, extensions, SSH keys, projects): verified v1→v2 upgrade on emulator
 - [x] Security review completed (network config, URL validation, file permissions)
 - [x] Tested on 3 device models across Android 13-16 (OnePlus flagship 16GB, POCO budget 4GB, Redmi mid-range 6GB)
-- [x] Go/Ruby/Java verified working on physical device after asset pack install — OnePlus CPH2791 (Android 16)
+- [x] Go/Ruby/Java verified working on physical device after asset pack install: OnePlus CPH2791 (Android 16)
 - [x] Release AAB signed and < 150 MB (base: 133 MB download, 138 MB APK)
 - [x] Play Store listing complete (title, description, screenshots, content rating, foreground service declaration)
-- [x] Closed testing track live — v0.2.2-m6 (versionCode 4), 12 testers, 14-day period started
+- [x] Closed testing track live: v0.2.2-m6 (versionCode 4), 12 testers, 14-day period started
 - [x] CI pipeline green (Build + Unit Tests + Release workflows all passing)
-- [x] App published on Play Store — v1.0.0 production release
-- [x] Passes Play Store review (no policy violations) — production access granted 2026-04-21
+- [x] App published on Play Store: v1.0.0 production release
+- [x] Passes Play Store review (no policy violations): production access granted 2026-04-21
 - [ ] No critical bugs in first 48 hours
 - [ ] At least 500 active users (adjusted from beta target; production launched directly)
 
@@ -604,13 +604,13 @@ _Order: audit code → configure release build → test on devices → validate 
 
 | Milestone                       | Duration  | Cumulative  |
 | ------------------------------- | --------- | ----------- |
-| M0 — Proof of Concept           | 1-2 weeks | 1-2 weeks   |
-| M1 — VS Code Core               | 3-4 weeks | 5-6 weeks   |
-| M2 — Mobile UX                  | 2-3 weeks | 7-9 weeks   |
-| M3 — All-in-One Dev Environment | 3-4 weeks | 10-13 weeks |
-| M4 — Polish & Performance       | 3-4 weeks | 13-17 weeks |
-| M5 — Toolchain Ecosystem        | 3-4 weeks | 16-21 weeks |
-| M6 — Release                    | 6-8 weeks | 22-29 weeks |
+| M0: Proof of Concept            | 1-2 weeks | 1-2 weeks   |
+| M1: VS Code Core                | 3-4 weeks | 5-6 weeks   |
+| M2: Mobile UX                   | 2-3 weeks | 7-9 weeks   |
+| M3: All-in-One Dev Environment  | 3-4 weeks | 10-13 weeks |
+| M4: Polish & Performance        | 3-4 weeks | 13-17 weeks |
+| M5: Toolchain Ecosystem         | 3-4 weeks | 16-21 weeks |
+| M6: Release                     | 6-8 weeks | 22-29 weeks |
 
 **Total: ~5-7 months from start to Play Store release.**
 
@@ -629,7 +629,7 @@ flowchart LR
   M5 --> M6
 ```
 
-The hardest part is **M0 + M1** — getting Node.js and VS Code actually running on Android. Once that works, everything else is incremental.
+The hardest part is **M0 + M1**: getting Node.js and VS Code actually running on Android. Once that works, everything else is incremental.
 
 ---
 
@@ -640,15 +640,15 @@ Features planned for after Play Store launch, prioritized by user demand.
 ### Package Manager (`vscodroid pkg`)
 
 - Lightweight CLI for installing additional tools from Termux repository (2000+ packages)
-- `vscodroid pkg install <package>` — download, extract, configure PATH
+- `vscodroid pkg install <package>`: download, extract, configure PATH
 - `vscodroid pkg list` / `vscodroid pkg remove <package>` / `vscodroid pkg search <query>`
 - Curated installer UI inside VSCodroid (not just terminal-based)
 - Targets: PHP, Perl, Lua, and other tools beyond bundled/on-demand toolchains
 
 ### Additional On-demand Toolchains
 
-- **Rust** (rustc + cargo, ~100 MB) — high demand, self-contained
-- **C/C++** (clang/LLVM from Termux, ~84 MB) — large, needs careful stripping
+- **Rust** (rustc + cargo, ~100 MB): high demand, self-contained
+- **C/C++** (clang/LLVM from Termux, ~84 MB): large, needs careful stripping
 - Delivered via same Play Asset Delivery pipeline as Ruby and Java 17
 
 ### Future Enhancements

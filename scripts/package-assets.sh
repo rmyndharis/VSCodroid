@@ -9,7 +9,7 @@ JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 echo "=== Packaging Assets ==="
 
 # VS Code server. The reh-web download carries the web client inside it, so this
-# one tree is both halves — there is no separate vscode-web to copy.
+# one tree is both halves; there is no separate vscode-web to copy.
 REH_SRC="$ROOT_DIR/server/vscode-reh"
 if [ -d "$REH_SRC" ]; then
     echo "Copying vscode-reh..."

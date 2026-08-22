@@ -10,7 +10,7 @@ import java.io.File
  * Tests for [isElfHeader], which decides what the toolchain repair pass marks
  * executable.
  *
- * The risk runs one way. Missing an ELF object leaves a binary unrunnable —
+ * The risk runs one way. Missing an ELF object leaves a binary unrunnable:
  * recoverable, and the same state the user was already in. Claiming something is
  * an ELF that is not hands the execute bit to a data file, which is a permission
  * granted for no reason and can never be taken back by this pass, since it only
@@ -34,7 +34,7 @@ class ElfHeaderTest {
     @Test
     fun `rejects a shell script`(@TempDir dir: File) {
         // The common case in these trees, and the one that must not be marked:
-        // a script under filesDir cannot be executed at all — SELinux refuses —
+        // a script under filesDir cannot be executed at all (SELinux refuses),
         // which is why the manifests wrap scripts in shell functions instead.
         val script = File(dir, "gem").apply { writeText("#!/usr/bin/env ruby\nputs 1\n") }
         assertFalse(isElfHeader(script.readBytes().copyOf(4)))

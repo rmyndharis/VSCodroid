@@ -344,7 +344,7 @@ class OpenExternalUrlRefusalTest {
             "AuthTabWindow.arm() must precede launchUrl(): the launch hands off to another " +
                 "process, and a browser that returns instantly would otherwise arrive before " +
                 "the window it is judged against exists. A failed launch is handled by the " +
-                "rollback in the catch, not by arming later — arming later also makes that " +
+                "rollback in the catch, not by arming later; arming later also makes that " +
                 "rollback unreachable.",
         )
     }
