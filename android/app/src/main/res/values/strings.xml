@@ -160,6 +160,10 @@
     <string name="toolchain_failed_digest">The download did not match what the release published. Try again.</string>
     <string name="toolchain_failed_corrupt">The download was incomplete. Try again.</string>
     <string name="toolchain_failed_play">Play delivers this toolchain only to apps it installed. Install from the Play Store and try again.</string>
+    <!-- Shown when a second install of the same toolchain is declined because one is
+         already running. Not a failure: the toolchain is on its way in, by the install
+         that got there first, and the only thing the user needs is to stop tapping. -->
+    <string name="toolchain_already_installing">That toolchain is already being installed.</string>
     <string name="toolchain_failed_internal">Install failed. The app log has the details.</string>
     <string name="progress_cancel">Cancel</string>
     <string name="progress_retry">Retry</string>

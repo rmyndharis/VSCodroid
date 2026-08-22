@@ -83,6 +83,18 @@ class ToolchainActivity : AppCompatActivity() {
                 if (why != null) {
                     Toast.makeText(this, getString(why.message), Toast.LENGTH_LONG).show()
                 }
+                // A decline reports UNKNOWN, and without this the screen answers a
+                // tap with nothing at all. The card cannot say it either: the pack
+                // is not installed yet and no progress belongs to this manager, so
+                // it draws the same Install it drew before, and the user taps again
+                // and gets the same silence. The install is genuinely happening,
+                // just not by this caller, so the sentence says so rather than
+                // reporting a failure.
+                if (status == AssetPackStatus.UNKNOWN && why == null) {
+                    Toast.makeText(
+                        this, getString(R.string.toolchain_already_installing), Toast.LENGTH_SHORT
+                    ).show()
+                }
                 if (status == AssetPackStatus.REQUIRES_USER_CONFIRMATION) {
                     try {
                         toolchainManager.showConfirmationDialog(this)
