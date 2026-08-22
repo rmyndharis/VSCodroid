@@ -85,6 +85,109 @@ class SplashLifetimeTest {
         }
     }
 
+    /**
+     * The other half of the flag, and the half nothing asked for.
+     *
+     * `showSetupError` leaves the extraction layout in place: it rewrites the
+     * status line, hides the progress bar and adds a Retry button into the same
+     * root. Nothing is in flight after that and the screen changes only when a
+     * person taps, so the argument the layout makes for holding the display awake
+     * has expired, and the layout's own comment makes exactly that argument
+     * against the picker one screen later. Held anyway, a phone put down or
+     * pocketed on the failure screen lights until the battery is flat.
+     *
+     * NEGATIVE CONTROL: delete `root.keepScreenOn = false` from `showSetupError`
+     * and the first assertion goes red; delete `root.keepScreenOn = true` from
+     * the Retry listener and the second does. Both measured.
+     */
+    @Test
+    fun `the failure screen stops holding the display awake`() {
+        val onLayout = layoutRoot().getAttribute("android:keepScreenOn") == "true"
+        val onWindow = code().any { it.contains("FLAG_KEEP_SCREEN_ON") }
+        assertTrue(onLayout || onWindow) {
+            "nothing holds the display awake at all, so this test has no subject; " +
+                "see the test above"
+        }
+
+        val error = body("showSetupError")
+        assertTrue(error.isNotEmpty()) { "showSetupError is empty; this test is measuring nothing" }
+
+        assertTrue(error.any { Regex("""keepScreenOn\s*=\s*false""").containsMatchIn(it) }) {
+            "showSetupError leaves the display held awake on a screen that waits " +
+                "for a person and changes for nothing else. The reachable way in is " +
+                "a phone with under ~875 MB free, which fails the storage pre-flight " +
+                "on first launch."
+        }
+        assertTrue(error.any { Regex("""keepScreenOn\s*=\s*true""").containsMatchIn(it) }) {
+            "nothing gives the flag back, so tapping Retry restarts an 800 MB " +
+                "extraction that the display timeout may now stop part-way through, " +
+                "with no partial progress to resume from"
+        }
+    }
+
+    /**
+     * The splash root is padded for the system bars, like every other full-screen
+     * root in this app.
+     *
+     * `SplashActivity.onCreate` calls `drawBehindSystemBars()`, so this window
+     * draws under the status and navigation bars. `pickerRoot`, `progressRoot`
+     * and `toolchainRoot` are each padded at their own `setContentView`; this one
+     * was not, because its root carried no id to look it up by. The child that
+     * pays for it is the Retry button `showSetupError` adds, which is anchored to
+     * the bottom of the root.
+     *
+     * NEGATIVE CONTROL: drop the `padForSystemBars()` line from
+     * `showSplashLayout` and the second assertion goes red; inline the
+     * `setContentView` back into either caller and the first does. Both measured.
+     */
+    @Test
+    fun `the splash layout is shown from the one place that pads it`() {
+        val shows = code().filter { it.contains("setContentView(R.layout.activity_splash)") }
+        assertEquals(1, shows.size) {
+            "activity_splash is shown from ${shows.size} places:\n${shows.joinToString("\n")}\n" +
+                "One of them will be the one that forgets the insets. It belongs in " +
+                "showSplashLayout() alone."
+        }
+
+        val show = body("showSplashLayout")
+        assertTrue(show.any { it.contains("padForSystemBars") }) {
+            "the splash root is not padded, so this edge-to-edge window draws its " +
+                "one control under the navigation bar:\n${show.joinToString("\n")}"
+        }
+        assertTrue(show.any { it.contains("R.id.splashRoot") }) {
+            "showSplashLayout pads something other than the splash root"
+        }
+    }
+
+    /**
+     * The Retry button is held against the bottom of the root, not only under the
+     * message.
+     *
+     * It is the single control on that screen, there is no scroll container, and
+     * the message above it is the failed step plus up to `DETAIL_LIMIT`
+     * characters of the cause in a packed chain that grows downward as it wraps.
+     * Anchored to the message alone, a long cause in landscape or at a raised
+     * font scale puts the button past the bottom of the window with no way to
+     * reach it, and reinstalling is the only way out.
+     *
+     * NEGATIVE CONTROL: remove `bottomToBottom` from the button's LayoutParams
+     * and this goes red, naming the button. Measured.
+     */
+    @Test
+    fun `the retry button cannot be pushed off the bottom of the screen`() {
+        val error = body("showSetupError")
+        assertTrue(error.any { it.contains("bottomToBottom") }) {
+            "the Retry button is constrained downward from the message only, so a " +
+                "long failure detail can push the only control on the screen out of " +
+                "the window:\n${error.joinToString("\n")}"
+        }
+        assertTrue(error.any { it.contains("verticalBias") }) {
+            "a bottom constraint without the bias against it centres the button in " +
+                "the gap instead of pinning it, which is the same overflow one half " +
+                "as far down"
+        }
+    }
+
     @Test
     fun `every launch that is past setup asks whether the picker was answered`() {
         // The picker is offered once and answering it is what records the answer,

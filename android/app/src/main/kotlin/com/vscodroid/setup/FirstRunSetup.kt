@@ -1433,12 +1433,53 @@ class FirstRunSetup(
      * Both writers live in `runSetupLocked`, which an already-complete install
      * never re-enters, and the every-launch repairs all open with
      * `if (bashrc.exists())`. Deleting the file would have turned a truncated
-     * one into no file at all, with nothing to write it again. So each clear is
-     * followed immediately by the writer that owns the file, whose own
-     * `!exists()` guard the clear has just satisfied.
+     * one into no file at all, with nothing to write it again.
      *
-     * Runs on every launch, and before the appenders, so they extend the file
-     * this has just restored rather than the one it removed.
+     * Which is why nothing here deletes. The second draft cleared the file and
+     * then called the writer, whose `!exists()` guard the clear had just
+     * satisfied, and that leaves the same hole one failure further along: the
+     * rewrite can fail, on exactly the full disk this repair exists for, and
+     * the file is then gone with every guard that could have tried again
+     * keyed on its presence. [writeBashrc] and [writeDefaultSettings] are the
+     * guardless halves of those two writers, so this replaces through
+     * [writeAtomically]'s rename instead: on failure the bad file is still
+     * there, this runs again on the next launch, and freeing space is enough
+     * to heal the install.
+     *
+     * Runs on every launch, and before the appenders, so a file this has just
+     * restored is what they extend.
+     *
+     * WHICH IS ALSO WHAT BOUNDS THE RETRY, and the bound arrived with the
+     * delete going away. A rewrite that fails leaves the file for the next
+     * launch to find, and leaves it for the rest of THIS launch too: the
+     * appenders behind this one are gated on `exists()`, which a file this
+     * could not rewrite still answers. What they append then decides whether
+     * this recognises the file again.
+     *
+     *  - the header shape retries until it heals. An append lands after the
+     *    header and brings no `PROJECTS_DIR`, so the test below classifies the
+     *    file the same way however many launches it takes.
+     *  - the empty shape retries only until an append lands on it.
+     *    `createNpmWrappers` and `ensureToolchainEnvSourcing` extend a
+     *    zero-byte `.bashrc` quite happily, and what they leave is neither
+     *    blank nor header-first, so this stops seeing it: the install keeps the
+     *    npm/claude functions and the toolchain sourcing, and loses the prompt,
+     *    the exports, the aliases and the startup `cd` until Clear Data.
+     *
+     * That second case needs a rewrite that fails and an append moments later
+     * that succeeds, and no state of the device produces the pair: both go
+     * through the same `.bashrc.tmp~`, and neither payload reaches 4 KiB (the
+     * rewrite roughly 2.3 KB, most of it PROMPT_BLOCK; the append 1.8 KB),
+     * so each wants one inode and one block and a full disk, a quota, an
+     * occupied temporary path or a failing rename stops both alike. It takes
+     * something else freeing a block in between, which is why this is written
+     * down rather than closed.
+     *
+     * Closing it would mean testing the empty shape for what an append cannot
+     * remove: a `.bashrc` with no `PROJECTS_DIR` export, whatever its first
+     * bytes. That is refused, because the description fits a `.bashrc` the user
+     * wrote themselves just as well, and nothing here is replaced on evidence
+     * that can be their own choice. A lost prompt is worth less than their file.
      */
     fun repairTruncatedSetupFiles() {
         val bashrc = File(context.filesDir, "home/.bashrc")
@@ -1448,23 +1489,57 @@ class FirstRunSetup(
             val headerWithoutBody = text != null &&
                 text.startsWith(BASHRC_HEADER) &&
                 !text.contains("export PROJECTS_DIR")
-            if ((emptied || headerWithoutBody) && bashrc.delete()) {
-                // Its writer throws on failure, which is right inside setup and
-                // wrong here: this runs beside other per-launch repairs and must
-                // not take them down. A failure leaves no .bashrc, which is what
-                // the previous line already produced, and the next launch tries
-                // again.
-                runCatching { createBashrc() }
-                    .onSuccess { Logger.i(tag, "Rewrote a half-written .bashrc") }
-                    .onFailure { Logger.e(tag, "Could not rewrite the half-written .bashrc", it as? Exception) }
+            if (emptied || headerWithoutBody) {
+                // Written OVER, never deleted first. Deleting is what satisfied
+                // createBashrc's `!exists()` guard, and it is also what let this
+                // repair finish the job the full disk started: the rewrite can
+                // fail, and the file was then absent -- outside the `isFile`
+                // test this branch re-enters through, outside every per-launch
+                // appender's own `exists()` guard, and outside createBashrc,
+                // which runSetupLocked reaches only when versionName or
+                // versionCode moves. So one launch that could not write turned a
+                // repairable install into one nothing repairs until the next app
+                // update. [writeBashrc] renames over the path instead: a failed
+                // write leaves the bad file exactly where it was, and this
+                // branch finds it again on the next launch. For the one shape
+                // where an appender behind this one can take that retry away
+                // before the next launch gets here, see the KDoc.
+                //
+                // The rewrite is not expected to throw (a failed write is
+                // reported as false), but a throw must not skip the settings
+                // repair below either.
+                val rewritten = runCatching { writeBashrc() }
+                    .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
+                    .getOrDefault(false)
+                if (rewritten) {
+                    Logger.i(tag, "Rewrote a half-written .bashrc")
+                } else {
+                    Logger.e(
+                        tag,
+                        "Could not rewrite the half-written .bashrc. It is unchanged rather " +
+                            "than gone, so there is still something for the next launch to repair.",
+                    )
+                }
             }
         }
 
         val settings = File(Environment.getMachineSettingsPath(context))
-        if (settings.isFile && settings.length() == 0L && settings.delete()) {
-            runCatching { createDefaultSettings() }
-                .onSuccess { Logger.i(tag, "Rewrote an empty settings.json") }
-                .onFailure { Logger.e(tag, "Could not rewrite the empty settings.json", it as? Exception) }
+        if (settings.isFile && settings.length() == 0L) {
+            // Replaced rather than deleted and rewritten, for the reason above.
+            // Deleting a zero-byte file frees nothing, so the disk that emptied
+            // it is still full when the rewrite runs.
+            val rewritten = runCatching { writeDefaultSettings() }
+                .onFailure { Logger.e(tag, "The settings.json rewrite threw", it as? Exception) }
+                .getOrDefault(false)
+            if (rewritten) {
+                Logger.i(tag, "Rewrote an empty settings.json")
+            } else {
+                Logger.e(
+                    tag,
+                    "Could not rewrite the empty settings.json. It is still there rather than " +
+                        "gone, so the next launch tries again.",
+                )
+            }
         }
     }
 
@@ -1869,25 +1944,8 @@ claude() {
     }
 
     private fun createBashrc() {
-        val projectsDir = Environment.getProjectsDir(context)
-        val safMirrorsDir = Environment.getSafMirrorsDir(context)
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (!bashrc.exists()) {
-            // Atomic for the reason the rewrite in ensurePromptFix() is: this
-            // writer's guard is the file's own existence, so a first-run write
-            // that stopped partway left a .bashrc that answered `exists()` and
-            // was never written again -- the prompt half-defined and the
-            // PROJECTS_DIR export missing, on a device that had never had a
-            // working shell to compare against.
-            val initial = BASHRC_HEADER + "\n" + PROMPT_BLOCK + "\n\n" + """
-                export PROJECTS_DIR='$projectsDir'
-                export SAF_MIRRORS_DIR='$safMirrorsDir'
-                alias ls='ls --color=auto'
-                alias ll='ls -la'
-
-                # On-demand toolchain env vars (Go, Ruby, Java, etc.)
-                [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
-            """.trimIndent() + "\n\n" + STARTUP_DIR_BLOCK + "\n"
             // Thrown, not logged. This runs only from runSetupLocked, whose
             // markSetupComplete() is the last statement of the same try block --
             // so swallowing the failure certifies an install that has no
@@ -1902,162 +1960,108 @@ claude() {
             // that satisfied the guard above. Atomicity alone leaves the file
             // absent but tells no one, so no retry is offered. Together the
             // retry starts from a clean slate and produces a working shell.
-            if (!writeAtomically(bashrc) { it.write(initial.toByteArray()) }) {
+            if (!writeBashrc()) {
                 throw IOException("could not write $bashrc")
             }
         }
     }
 
+    /**
+     * Writes the `.bashrc` this app owns, over whatever is at the path.
+     *
+     * Split from [createBashrc]'s `!exists()` guard so that
+     * [repairTruncatedSetupFiles] can replace a file it has judged unusable
+     * without first deleting it to satisfy that guard. Deleting is what made
+     * the repair able to destroy the install it exists to rescue: the writer
+     * can fail, and the file was then absent, which is outside the repair's own
+     * re-entry test and outside every per-launch appender, so nothing tried
+     * again until the next app update. Going through the rename leaves the bad
+     * file in place on failure, so the repair fires again on the next launch
+     * and heals as soon as the disk has room.
+     *
+     * @return true if `.bashrc` now holds what this writes. On false it is
+     *   untouched, which is [writeAtomically]'s contract and the whole of what
+     *   makes a retry worth offering.
+     */
+    private fun writeBashrc(): Boolean {
+        val projectsDir = Environment.getProjectsDir(context)
+        val safMirrorsDir = Environment.getSafMirrorsDir(context)
+        val bashrc = File(context.filesDir, "home/.bashrc")
+        // Atomic for the reason the rewrite in ensurePromptFix() is: the
+        // caller's guard is the file's own existence, so a first-run write
+        // that stopped partway left a .bashrc that answered `exists()` and
+        // was never written again -- the prompt half-defined and the
+        // PROJECTS_DIR export missing, on a device that had never had a
+        // working shell to compare against.
+        val initial = BASHRC_HEADER + "\n" + PROMPT_BLOCK + "\n\n" + """
+            export PROJECTS_DIR='$projectsDir'
+            export SAF_MIRRORS_DIR='$safMirrorsDir'
+            alias ls='ls --color=auto'
+            alias ll='ls -la'
+
+            # On-demand toolchain env vars (Go, Ruby, Java, etc.)
+            [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
+        """.trimIndent() + "\n\n" + STARTUP_DIR_BLOCK + "\n"
+        return writeAtomically(bashrc) { it.write(initial.toByteArray()) }
+    }
+
     private fun createBashProfile() {
         val bashProfile = File(context.filesDir, "home/.bash_profile")
         if (!bashProfile.exists()) {
-            bashProfile.writeText("""
+            val content = """
                 # Source .bashrc for login shells (e.g. tmux sessions)
                 if [ -f "${'$'}HOME/.bashrc" ]; then
                     . "${'$'}HOME/.bashrc"
                 fi
-            """.trimIndent() + "\n")
+            """.trimIndent() + "\n"
+            // Atomic and loud, the same pair createBashrc is, and for the same
+            // pair of reasons. `writeText` creates and truncates before writing
+            // a byte, so a write that failed left a file the guard above
+            // accepts for ever, and this writer is reached only from
+            // runSetupLocked, which isFirstRun() gates on versionName or
+            // versionCode: no per-launch repair reads this path at all. What
+            // that costs is confined to INTERACTIVE LOGIN shells, which is what
+            // a tmux window is. Those read .bash_profile and never .bashrc or
+            // BASH_ENV, so they come up with no prompt, no aliases and no
+            // npm/npx/claude while the editor's own terminals (non-login) and
+            // `bash -c` (BASH_ENV) are unaffected. Throwing reaches
+            // runSetupLocked's catch, and the Retry it offers then starts from
+            // an absent file rather than a truncated one.
+            if (!writeAtomically(bashProfile) { it.write(content.toByteArray()) }) {
+                throw IOException("could not write $bashProfile")
+            }
         }
     }
 
     private fun createTmuxConf() {
         val tmuxConf = File(context.filesDir, "home/.tmux.conf")
         if (!tmuxConf.exists()) {
-            tmuxConf.writeText("""
+            val content = """
                 # VSCodroid tmux configuration
                 set -g mouse on
                 set -g default-terminal "xterm-256color"
                 set -g history-limit 10000
                 set -g escape-time 10
                 set -g status off
-            """.trimIndent() + "\n")
+            """.trimIndent() + "\n"
+            // Atomic like its neighbours, so a failed write leaves nothing
+            // rather than a truncated file that answers the guard above for
+            // ever. Logged rather than thrown, which is where it parts from
+            // .bash_profile beside it: what is lost is the mouse, the colours
+            // and the scrollback, and tmux starts perfectly well without them,
+            // so failing the whole unpack over five options would cost the user
+            // more than the options are worth.
+            if (!writeAtomically(tmuxConf) { it.write(content.toByteArray()) }) {
+                Logger.w(tag, "Could not write $tmuxConf; tmux will run with its own defaults")
+            }
         }
     }
 
     private fun createDefaultSettings() {
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
         // Environment.getMachineSettingsPath explains why it is this path and not
         // the `User/` one that looks like the obvious home for user settings.
         val settingsFile = File(Environment.getMachineSettingsPath(context))
-        settingsFile.parentFile?.mkdirs()
         if (!settingsFile.exists()) {
-            // The terminal profile is read, and the `linux` suffix is not a guess.
-            // The workbench builds the key from the OS *integer* the remote sends:
-            // `getPlatformKey()` maps 1 to "windows", 2 to "osx" and everything
-            // else to "linux", and the server computes that integer as
-            // `isMacintosh || isIOS ? 2 : isWindows ? 1 : 3`. Linux is the branch
-            // nothing tests for, so Android (neither darwin nor win32) has always
-            // landed on it. isLinux is not consulted anywhere on this path, so
-            // patches/0001 neither made this work nor is needed for it.
-            //
-            // Both fields below carry weight: the path names the symlink so the
-            // basename is `bash`, which is the key the ptyHost looks up to decide
-            // the injection arguments, and the args stay empty because it only
-            // injects shell integration for empty or login args.
-            //
-            // This block was once documented as inert, on the grounds that the
-            // remote "reports its platform as android". No such mechanism exists:
-            // it reports an integer, never a platform string. The device
-            // measurement offered as proof predates the settings-path fix, when
-            // everything written here went to a file the workbench never read, so
-            // no default profile was selected and terminals took the $SHELL
-            // fallback for an unrelated reason.
-            // Atomic like the migration and the refresh, and for the same
-            // reason: the guard is the file's own existence, so a first-run
-            // write that stopped partway would leave a truncated settings.json
-            // that `exists()` accepts forever. The workbench reads a short file
-            // as the settings rather than as an error, so the user would come
-            // up with an arbitrary subset of the defaults and no way to tell.
-            //
-            // The two Python discovery keys are pinned here as well as in
-            // [refreshManagedPaths], and the duplication is load-bearing:
-            // SplashActivity runs that refresh BEFORE runSetup(), so on a clean
-            // install it returns at its own `!exists()` guard and a first
-            // session would otherwise run unpinned. See PYTHON_LOCATOR for why
-            // neither value is a preference.
-            //
-            // The secondary side bar starts hidden, and on a phone that is not a
-            // preference either: it takes roughly 45 percent of the width for a
-            // chat view whose provider this build prunes, and what is beside it
-            // then wraps mid-word.
-            //
-            // Writing the key here does not by itself close the bar, however
-            // plainly its name reads. It decides a workspace with no recorded
-            // layout, and by the time this file reaches the web client that
-            // record exists: the workbench starts from a copy of these settings
-            // in browser storage that the first load in a profile has not
-            // written yet, falls back to
-            // upstream's "visibleInWorkspace", opens the bar and stores
-            // `workbench.auxiliaryBar.hidden: false` against the workspace. Every
-            // later load reads the record and never consults the default again.
-            // The bundled welcome extension is what corrects the record, once per
-            // workspace; this is the value it reads to decide whether to.
-            //
-            // Still only a default, and the view's own title menu reverses it, so
-            // a user who opens the bar keeps it open.
-            val defaults = """
-                {
-                    "workbench.secondarySideBar.defaultVisibility": "hidden",
-                    "workbench.startupEditor": "none",
-                    "workbench.colorTheme": "Default Dark Modern",
-                    "editor.fontSize": 14,
-                    "editor.wordWrap": "on",
-                    "editor.minimap.enabled": false,
-                    "diffEditor.wordWrap": "on",
-                    "terminal.integrated.fontSize": 13,
-                    "terminal.integrated.defaultProfile.linux": "bash",
-                    "terminal.integrated.profiles.linux": {
-                        "bash": {
-                            "path": "${Environment.getTerminalShellPath(context)}",
-                            "args": [],
-                            "icon": "terminal-bash"
-                        }
-                    },
-                    "git.path": "$nativeLibDir/libgit.so",
-                    "terminal.integrated.shellIntegration.enabled": true,
-                    "extensions.verifySignature": false,
-                    "telemetry.telemetryLevel": "off",
-                    "telemetry.enableTelemetry": false,
-                    "update.mode": "none",
-                    "update.showReleaseNotes": false,
-                    "security.workspace.trust.enabled": false,
-                    "python.languageServer": "Jedi",
-                    "python.defaultInterpreterPath": "${context.filesDir.absolutePath}/usr/bin/python3",
-                    "python.locator": "js",
-                    "python.useEnvironmentsExtension": false,
-                    "claudeCode.claudeProcessWrapper": "${Environment.getMuslLoaderPath(context)}",
-                    "launch": {
-                        "version": "0.2.0",
-                        "configurations": [
-                            {
-                                "name": "Attach to Node.js",
-                                "type": "node",
-                                "request": "attach",
-                                "port": 9229,
-                                "restart": true,
-                                "skipFiles": ["<node_internals>/**"]
-                            },
-                            {
-                                "name": "NestJS: Debug",
-                                "type": "node",
-                                "request": "launch",
-                                "runtimeArgs": ["--inspect", "-r", "ts-node/register", "-r", "tsconfig-paths/register"],
-                                "args": ["${'$'}{workspaceFolder}/src/main.ts"],
-                                "skipFiles": ["<node_internals>/**"],
-                                "console": "integratedTerminal"
-                            },
-                            {
-                                "name": "Node.js: Run Current File",
-                                "type": "node",
-                                "request": "launch",
-                                "program": "${'$'}{file}",
-                                "skipFiles": ["<node_internals>/**"],
-                                "console": "integratedTerminal"
-                            }
-                        ]
-                    }
-                }
-            """.trimIndent()
             // Thrown for the reason createBashrc() throws: this runs only from
             // runSetupLocked, markSetupComplete() is downstream in the same try
             // block, and the every-launch repair that would otherwise catch up
@@ -2065,10 +2069,149 @@ claude() {
             // failure here means no terminal profile, no git.path, no
             // claudeProcessWrapper and no verifySignature until the app
             // updates -- reported to the user as a successful first run.
-            if (!writeAtomically(settingsFile) { it.write(defaults.toByteArray()) }) {
+            if (!writeDefaultSettings()) {
                 throw IOException("could not write $settingsFile")
             }
         }
+    }
+
+    /**
+     * Writes the managed settings this app owns, over whatever is at the path.
+     *
+     * Split from [createDefaultSettings]'s `!exists()` guard for the reason
+     * [writeBashrc] is: [repairTruncatedSetupFiles] has to be able to replace an
+     * empty settings.json without deleting it first to satisfy that guard, and
+     * the delete is what turned a file this app could still heal on any later
+     * launch into one nothing writes again. The rename leaves the empty file in
+     * place if the write fails, so the repair keeps its next attempt.
+     *
+     * @return true if settings.json now holds these defaults; on false it is
+     *   untouched, per [writeAtomically].
+     */
+    private fun writeDefaultSettings(): Boolean {
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        // Environment.getMachineSettingsPath explains why it is this path and not
+        // the `User/` one that looks like the obvious home for user settings.
+        val settingsFile = File(Environment.getMachineSettingsPath(context))
+        settingsFile.parentFile?.mkdirs()
+        // The terminal profile is read, and the `linux` suffix is not a guess.
+        // The workbench builds the key from the OS *integer* the remote sends:
+        // `getPlatformKey()` maps 1 to "windows", 2 to "osx" and everything
+        // else to "linux", and the server computes that integer as
+        // `isMacintosh || isIOS ? 2 : isWindows ? 1 : 3`. Linux is the branch
+        // nothing tests for, so Android (neither darwin nor win32) has always
+        // landed on it. isLinux is not consulted anywhere on this path, so
+        // patches/0001 neither made this work nor is needed for it.
+        //
+        // Both fields below carry weight: the path names the symlink so the
+        // basename is `bash`, which is the key the ptyHost looks up to decide
+        // the injection arguments, and the args stay empty because it only
+        // injects shell integration for empty or login args.
+        //
+        // This block was once documented as inert, on the grounds that the
+        // remote "reports its platform as android". No such mechanism exists:
+        // it reports an integer, never a platform string. The device
+        // measurement offered as proof predates the settings-path fix, when
+        // everything written here went to a file the workbench never read, so
+        // no default profile was selected and terminals took the $SHELL
+        // fallback for an unrelated reason.
+        // Atomic like the migration and the refresh, and for the same
+        // reason: the guard is the file's own existence, so a first-run
+        // write that stopped partway would leave a truncated settings.json
+        // that `exists()` accepts forever. The workbench reads a short file
+        // as the settings rather than as an error, so the user would come
+        // up with an arbitrary subset of the defaults and no way to tell.
+        //
+        // The two Python discovery keys are pinned here as well as in
+        // [refreshManagedPaths], and the duplication is load-bearing:
+        // SplashActivity runs that refresh BEFORE runSetup(), so on a clean
+        // install it returns at its own `!exists()` guard and a first
+        // session would otherwise run unpinned. See PYTHON_LOCATOR for why
+        // neither value is a preference.
+        //
+        // The secondary side bar starts hidden, and on a phone that is not a
+        // preference either: it takes roughly 45 percent of the width for a
+        // chat view whose provider this build prunes, and what is beside it
+        // then wraps mid-word.
+        //
+        // Writing the key here does not by itself close the bar, however
+        // plainly its name reads. It decides a workspace with no recorded
+        // layout, and by the time this file reaches the web client that
+        // record exists: the workbench starts from a copy of these settings
+        // in browser storage that the first load in a profile has not
+        // written yet, falls back to
+        // upstream's "visibleInWorkspace", opens the bar and stores
+        // `workbench.auxiliaryBar.hidden: false` against the workspace. Every
+        // later load reads the record and never consults the default again.
+        // The bundled welcome extension is what corrects the record, once per
+        // workspace; this is the value it reads to decide whether to.
+        //
+        // Still only a default, and the view's own title menu reverses it, so
+        // a user who opens the bar keeps it open.
+        val defaults = """
+            {
+                "workbench.secondarySideBar.defaultVisibility": "hidden",
+                "workbench.startupEditor": "none",
+                "workbench.colorTheme": "Default Dark Modern",
+                "editor.fontSize": 14,
+                "editor.wordWrap": "on",
+                "editor.minimap.enabled": false,
+                "diffEditor.wordWrap": "on",
+                "terminal.integrated.fontSize": 13,
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "terminal.integrated.profiles.linux": {
+                    "bash": {
+                        "path": "${Environment.getTerminalShellPath(context)}",
+                        "args": [],
+                        "icon": "terminal-bash"
+                    }
+                },
+                "git.path": "$nativeLibDir/libgit.so",
+                "terminal.integrated.shellIntegration.enabled": true,
+                "extensions.verifySignature": false,
+                "telemetry.telemetryLevel": "off",
+                "telemetry.enableTelemetry": false,
+                "update.mode": "none",
+                "update.showReleaseNotes": false,
+                "security.workspace.trust.enabled": false,
+                "python.languageServer": "Jedi",
+                "python.defaultInterpreterPath": "${context.filesDir.absolutePath}/usr/bin/python3",
+                "python.locator": "js",
+                "python.useEnvironmentsExtension": false,
+                "claudeCode.claudeProcessWrapper": "${Environment.getMuslLoaderPath(context)}",
+                "launch": {
+                    "version": "0.2.0",
+                    "configurations": [
+                        {
+                            "name": "Attach to Node.js",
+                            "type": "node",
+                            "request": "attach",
+                            "port": 9229,
+                            "restart": true,
+                            "skipFiles": ["<node_internals>/**"]
+                        },
+                        {
+                            "name": "NestJS: Debug",
+                            "type": "node",
+                            "request": "launch",
+                            "runtimeArgs": ["--inspect", "-r", "ts-node/register", "-r", "tsconfig-paths/register"],
+                            "args": ["${'$'}{workspaceFolder}/src/main.ts"],
+                            "skipFiles": ["<node_internals>/**"],
+                            "console": "integratedTerminal"
+                        },
+                        {
+                            "name": "Node.js: Run Current File",
+                            "type": "node",
+                            "request": "launch",
+                            "program": "${'$'}{file}",
+                            "skipFiles": ["<node_internals>/**"],
+                            "console": "integratedTerminal"
+                        }
+                    ]
+                }
+            }
+        """.trimIndent()
+        return writeAtomically(settingsFile) { it.write(defaults.toByteArray()) }
     }
 
     private fun extractBundledExtensions() {
@@ -2109,7 +2252,15 @@ claude() {
             ?.filter { it.isDirectory }
             ?.map { it.name }
             ?: emptyList()
-        val toExtract = bundledDirsToExtract(installed, bundled.toList())
+        // And which of those are not installs at all, but what a killed unpack
+        // left behind. Only names this build bundles are asked the question:
+        // the same listing feeds the newer-version decision inside
+        // [bundledDirsToExtract], and a directory belonging to a user's own
+        // gallery install is not ours to call unfinished.
+        val abandoned = installed
+            .filter { it in bundled && unpackWasAbandoned(File(extensionsDir, it)) }
+            .toSet()
+        val toExtract = bundledDirsToExtract(installed, bundled.toList(), abandoned)
         for (name in toExtract) {
             // Merges rather than emptying the directory first. That leaves a
             // file this build no longer ships behind, which is inert because
@@ -2138,12 +2289,20 @@ claude() {
             // package.json that did land: installed to look at, dead on every
             // activation, permanently.
             //
-            // Only what this attempt created. A directory that was already
-            // there belongs to the previous release and its files were each
-            // replaced atomically, so what survives is whole even if mixed, and
-            // ours are re-unpacked unconditionally so a mixed one heals next
-            // run. A fetched one is in this list only because it was absent,
-            // which is why this branch is the whole of its retry.
+            // Only what nothing else would name again, which is not the same
+            // question as "what this attempt created". A directory that was
+            // already there belongs to the previous release and its files were
+            // each replaced atomically, so what survives is whole even if mixed,
+            // and ours are re-unpacked unconditionally so a mixed one heals next
+            // run. A fetched one used to be in this list only because it was
+            // absent, which is what made "did this attempt create it" the whole
+            // test -- and [abandoned] above is exactly what stopped that being
+            // true: a present directory a kill left half full is now selected
+            // too, and for that one the delete is suppressed while the mark that
+            // replaces it is written best-effort a few lines below. So the test
+            // is [failedUnpackMustBeRemoved], which asks whether the next run
+            // would select this name again and leaves the delete as the fallback
+            // for when nothing would.
             //
             // That makes the retry rest on the delete succeeding, in the
             // condition that caused the failure. Two things could defeat it:
@@ -2164,13 +2323,15 @@ claude() {
             //   yields it and removes it.
             //
             // So the error line below reports a state nobody expects rather
-            // than guarding one we do. If it fires the next attempt skips the
-            // extension exactly as it did before this branch existed -- the fix
-            // not applying, not a new defect. There is deliberately no second
-            // mechanism: producing the state for a test needs an unreadable
-            // directory, and a permission test passes vacuously wherever the
-            // suite runs as root, so a fallback here would be unmeasured state
-            // guarding an unmeasured failure.
+            // than guarding one we do. Usually the extension is still retried
+            // even then: the directory it could not remove carries the in-flight
+            // mark written below, which puts the name back on this list, and
+            // before that mark existed the next attempt skipped it for good. The
+            // exception is the one case where the mark could not be written
+            // either, which is the only reason the delete was attempted for a
+            // directory that was already there. Two failures at once leave
+            // nothing to retry from, so the line says which of the two happened
+            // rather than promising a retry it cannot know about.
             val dest = File(extensionsDir, name)
             // isDirectory, not exists, and for the same reason createDirectories
             // asks it: the question is whether a previous release left something
@@ -2180,16 +2341,62 @@ claude() {
             // fetched extension, since the retry drops it from the list. Reading
             // it as "nothing usable here" clears it and lets the retry work.
             val existedBefore = dest.isDirectory
+            // The other half of the retry, and the half that survives a kill.
+            // Everything above answers an unpack that FAILED; nothing answers
+            // one that was never allowed to finish. Setup runs in
+            // SplashActivity's scope with no foreground service holding the
+            // process, so a Recents swipe or a low-memory kill during this copy
+            // ends it outright, and the directory extractAssetDir created is
+            // then the whole of what a later run has to go on: presence, which
+            // is the only staleness test a fetched extension gets, reads a few
+            // hundred of 3787 files as installed and never touches it again.
+            //
+            // A file this app writes inside the directory before the copy and
+            // removes after it is what tells the two apart. It costs one create
+            // and one unlink per extension that actually needs unpacking, it is
+            // read by [unpackWasAbandoned] and by nothing else, and the answer
+            // it gives on a device that predates it is "finished", which is the
+            // reading every install already had.
+            //
+            // Resuming over the partial tree rather than clearing it first is
+            // deliberate, and it is the same choice the top of this loop makes:
+            // extractAssetFile writes every file through a rename, so no file
+            // on disk is half of anything, and merging the missing ones in
+            // yields a whole tree. Clearing would spend the copy again and open
+            // a window where the extension is not there at all.
+            dest.mkdirs()
+            val marker = File(dest, UNPACK_MARKER_NAME)
+            if (!marker.isFile && !runCatching { marker.createNewFile() }.getOrDefault(false)) {
+                // Not fatal: the copy below is worth attempting either way, and
+                // the failure path below compensates by deleting a directory it
+                // could not mark. Nothing compensates for a process kill, which
+                // is what the mark is for, so this is said out loud: an unpack
+                // nobody marked is exactly as recoverable as it was before any
+                // of this existed.
+                Logger.w(
+                    tag,
+                    "Could not mark $name as being unpacked; a process kill during its copy " +
+                        "would leave it looking installed",
+                )
+            }
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
-                if (!existedBefore && !dest.deleteRecursively()) {
+                if (failedUnpackMustBeRemoved(name, existedBefore, marker.isFile) &&
+                    !dest.deleteRecursively()
+                ) {
                     Logger.e(
                         tag,
-                        "Could not remove the partially unpacked $name. The next attempt will " +
-                            "read it as installed and skip it, so this extension needs the " +
-                            "directory removed by hand or an app update to recover.",
+                        "Could not remove the partially unpacked $name. The next attempt " +
+                            "unpacks it again only while the unpacking mark is on it, and " +
+                            "that mark is ${if (marker.isFile) "there" else "not"}.",
                     )
                 }
                 throw IOException("could not unpack bundled extension $name")
+            }
+            // Only now is the directory an install. A clear that fails costs
+            // one wasted re-copy on the next run, never a broken extension,
+            // which is why it is a warning and not a throw.
+            if (marker.exists() && !marker.delete()) {
+                Logger.w(tag, "Could not clear the unpacking mark on $name; it will be unpacked again")
             }
         }
 
@@ -3295,6 +3502,69 @@ internal fun retiredIdsToSweep(
 internal const val OWN_EXTENSION_PREFIX = "vscodroid."
 
 /**
+ * The file that says an extension directory is being unpacked right now.
+ *
+ * Written inside the directory before the copy starts and removed after it
+ * lands, so that the directory means "unpacked" rather than "created". A dot
+ * name because the directory is also an extension root: the scanner reads
+ * `package.json` and nothing else, and a dot file is out of the way of anyone
+ * listing it by hand.
+ */
+internal const val UNPACK_MARKER_NAME = ".vscodroid-unpacking"
+
+/**
+ * Whether the copy that created this extension directory never finished.
+ *
+ * Two things are asked, and the second is not redundant. The mark is the
+ * reliable answer, but only for a directory created since it existed; an
+ * install unpacked by an earlier release carries no mark whatever state it is
+ * in. A fetched extension with no `package.json` is not loadable by anything --
+ * `manifestEntryFor` declines it, the workbench's scanner cannot see it -- so
+ * reading that as unfinished costs a copy the extension needed anyway, and
+ * recovers the devices this app already broke rather than only the ones it has
+ * yet to.
+ *
+ * Both directions matter. Answering yes for a healthy directory would re-copy
+ * 57 MB on every upgrade and take with it whatever an extension has written
+ * inside its own tree since install, which is the cost [bundledDirsToExtract]
+ * exists to avoid; answering no for a wrecked one is the defect this closes.
+ */
+internal fun unpackWasAbandoned(dir: File): Boolean =
+    File(dir, UNPACK_MARKER_NAME).isFile || !File(dir, "package.json").isFile
+
+/**
+ * Whether an unpack that failed has to remove the directory it was writing
+ * into, for the next run to try again.
+ *
+ * The question is "would anything name this again", not "did this attempt
+ * create it", and the two stopped being the same answer when [abandoned] began
+ * selecting a fetched directory that is present. Three cases:
+ *
+ *  - a directory this attempt created goes. A fetched extension whose directory
+ *    is merely present is dropped by [bundledDirsToExtract], and the half of it
+ *    that landed is enough for `manifestEntryFor` to list it as an install.
+ *  - one that was already there and carries the mark stays. [unpackWasAbandoned]
+ *    reads that mark, so the name comes back on the list, and what is on disk is
+ *    the previous release's install with part of this one merged over it: whole
+ *    even if mixed, since every file is written through a rename.
+ *  - one that was already there and carries NO mark stays only if it is ours.
+ *    Ours are re-unpacked unconditionally, so the previous release's copy is
+ *    worth more kept than deleted. A fetched one is not: it reached this loop
+ *    because it read as abandoned, and if the mark could not be written while
+ *    the manifest did land, nothing on the device would select it again --
+ *    wreckage that lists itself as installed and is dead on every activation.
+ *    Removing it puts it back in the ABSENT case the retry has always handled.
+ *
+ * Pure, and takes the three facts rather than a `File`, so every combination is
+ * decidable without a tree.
+ */
+internal fun failedUnpackMustBeRemoved(
+    name: String,
+    existedBefore: Boolean,
+    marked: Boolean,
+): Boolean = !existedBefore || !(marked || name.startsWith(OWN_EXTENSION_PREFIX))
+
+/**
  * Which bundled extension directories have to be unpacked over what is already
  * on disk.
  *
@@ -3308,7 +3578,14 @@ internal const val OWN_EXTENSION_PREFIX = "vscodroid."
  * directory carrying this version string been unpacked before" and nothing
  * about its contents. For an extension `download-extensions.sh` fetches at a
  * pinned version that is an exact staleness test -- the same version is the
- * same bytes. For one this repository edits in place it is no test at all,
+ * same bytes -- **once the unpack that created it has finished**. It is created
+ * before the first file is copied into it, so on its own it also answers yes
+ * for a directory a process kill left half full, which is a state no sweep here
+ * can reach and no later run would retry: that is what [abandoned] carries, and
+ * a name in it is treated as though the directory were not there. A newer
+ * install of the same id still wins over it, deliberately, since the copy the
+ * user chose is the one that runs and unpacking beside it writes 29 MiB that
+ * nothing loads. For one this repository edits in place presence is no test at all,
  * which is the defect that removed the check: the process-monitor extension's
  * code was rewritten while its `package.json` stayed at 1.0.0, so the fix
  * reached clean installs and no one who upgraded.
@@ -3339,17 +3616,24 @@ internal const val OWN_EXTENSION_PREFIX = "vscodroid."
  * Python extension alone, re-created on every upgrade. Not unpacking it is the
  * whole remedy: the copy the user chose is the one that runs either way.
  *
- * Pure, and takes the two listings rather than a directory, so the decision is
+ * Pure, and takes listings rather than a directory, so the decision is
  * testable without a Context or a tree. `(present, bundled)` in that order, the
  * same as [supersededExtensionDirs] and [retiredOwnExtensionDirs]: all three
  * take two `List<String>` and a swap between them compiles in silence, so the
- * only protection is that there is nothing to remember.
+ * only protection is that there is nothing to remember. [abandoned] is a `Set`
+ * rather than a third list of the same type, so it cannot join that swap, and
+ * it is defaulted because a caller with nothing to say about wreckage gets the
+ * behaviour that was here before it existed.
  */
-internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>): List<String> {
+internal fun bundledDirsToExtract(
+    present: List<String>,
+    bundled: List<String>,
+    abandoned: Set<String> = emptySet(),
+): List<String> {
     val installed = present.mapNotNull(::splitExtensionDir)
     return bundled.filter { dir ->
         if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter true
-        if (dir in present) return@filter false
+        if (dir in present && dir !in abandoned) return@filter false
         val (id, version) = splitExtensionDir(dir) ?: return@filter true
         installed.none { (otherId, otherVersion) ->
             otherId == id && isOlderVersion(version, otherVersion)

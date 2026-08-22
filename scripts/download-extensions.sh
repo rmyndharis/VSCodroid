@@ -25,6 +25,18 @@ WORK_DIR="$ROOT_DIR/toolchains/extensions"
 # this change.
 #
 # Every step here must be safe to run twice, because on a cached tree it is.
+#
+# A non-zero return from this is fatal to the whole run, and the tree it failed
+# on is left where it is. Both halves are deliberate. Each caller used to answer
+# a failure with `rm -rf "$DEST_DIR"; continue`, which reported success for a run
+# that had just dropped an extension: the summary at the bottom listed the four
+# trees that remained, check-bundled-extensions.py called the fifth a note, and
+# the APK shipped with no Python support at all. Deleting is also precisely what
+# disarms the gate that would have caught it, because `verifyPythonPlatform` in
+# android/app/build.gradle.kts is armed by the tree's presence
+# (`onlyIf { tree != null }`): an unrewritten tree fails the build, an absent one
+# skips the task. Leaving it also leaves the bundle a maintainer has to read to
+# update the pattern, which is what a pin bump most often needs.
 apply_tree_rewrites() {
     local dir_name="$1" dest="$2"
     case "$dir_name" in
@@ -296,9 +308,10 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
             # registered, never activates, and logs nothing.
             python3 "$SCRIPT_DIR/check-extension.py" "$DEST_DIR" "$ROOT_DIR/VSCODE_VERSION"
             apply_tree_rewrites "$DIR_NAME" "$DEST_DIR" || {
-                echo "  ERROR: could not rewrite the cached $DIR_NAME tree" >&2
-                rm -rf "$DEST_DIR" "$STAMP"
-                continue
+                echo "  FAIL   could not rewrite the cached $DIR_NAME tree" >&2
+                echo "         The tree is left on disk unrewritten, which is what the" >&2
+                echo "         packaging gate refuses and what says where the shape moved." >&2
+                exit 1
             }
             continue
         fi
@@ -345,9 +358,13 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     if [ -d "$TEMP_EXTRACT/extension" ]; then
         cp -a "$TEMP_EXTRACT/extension/." "$DEST_DIR/"
     else
-        echo "  ERROR: No extension/ directory in VSIX"
+        # Nothing was copied, so unlike the rewrite failures around it this
+        # one has no tree to read or to refuse: the destination is the empty
+        # directory made two lines up. It goes, and the run stops rather than
+        # carrying on to report the extensions it did place.
+        echo "  FAIL   No extension/ directory in $VSIX_FILE" >&2
         rm -rf "$DEST_DIR"
-        continue
+        exit 1
     fi
     rm -rf "$TEMP_EXTRACT"
 
@@ -381,9 +398,10 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     # input is not rebuilt: the VSIX is pinned by sha256 above, so the shape is
     # fixed until the pin moves, and both checks fail loudly when it does.
     apply_tree_rewrites "$DIR_NAME" "$DEST_DIR" || {
-        echo "  ERROR: could not rewrite the $DIR_NAME tree" >&2
-        rm -rf "$DEST_DIR"
-        continue
+        echo "  FAIL   could not rewrite the $DIR_NAME tree" >&2
+        echo "         The tree is left on disk unrewritten, which is what the" >&2
+        echo "         packaging gate refuses and what says where the shape moved." >&2
+        exit 1
     }
 
     # Last, so a tree that failed any step above carries no record saying it
@@ -398,8 +416,13 @@ done
 # of this can run: the extracted directories are gitignored, so on a pull request
 # there is nothing to read. lint.yml runs the same script for the half that reads
 # committed sources.
+#
+# --require-trees because "every" above is a claim this call site can make and
+# the workflow ones cannot: the loop has just placed all five or exited. It is
+# the sweep for any future path that ends a run with an extension unplaced,
+# rather than a restatement of the exits above, which stop long before here.
 echo ""
-python3 "$SCRIPT_DIR/check-bundled-extensions.py"
+python3 "$SCRIPT_DIR/check-bundled-extensions.py" --require-trees
 
 # Summary
 echo ""

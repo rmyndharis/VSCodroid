@@ -1539,6 +1539,289 @@ class ServerReadinessTest {
 }
 
 /**
+ * Readiness when the port was already taken at the spawn.
+ *
+ * The pair this covers is `spawnedOntoHeldPort` and the credential. A start that
+ * recorded the flag knows the process it spawned cannot be what is on the port:
+ * the editor server it forked prints EADDRINUSE and, measured, does not exit. Any
+ * answer from that port therefore comes from somebody else, and readiness is not
+ * an idle question about it: it is what points the WebView at the port, and
+ * `MainActivity` builds that URL with the connection token in it. A bare 200 was
+ * the whole test, which is the test `recordedServerIsServing` already refused to
+ * accept for adoption, on the reasoning that binding a loopback port on Android
+ * needs no permission at all.
+ *
+ * The two directions are both here on purpose. A guard that simply refused every
+ * start that saw a held port would satisfy the first case and break the two that
+ * matter to a working user: a reap whose signal freed the socket a moment after
+ * the port was asked, and an orphan of this same build that no note identifies.
+ * Both of those are serving, and both keep working.
+ */
+class HeldPortReadinessTest {
+
+    @TempDir
+    lateinit var tempDir: File
+
+    private lateinit var manager: ProcessManager
+    private lateinit var contextMock: Context
+    private var stub: StubServer? = null
+
+    /** What the packaged tree records, and so what `/version` answers here. */
+    private val commit = "a5b500951314efd502d07465bd138dfbd714a960"
+
+    /** A build that is not this one, in the shape `/version` answers with. */
+    private val stranger = "1111111111111111111111111111111111111111"
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any()) } just Runs
+
+        File(tempDir, "server/vscode-reh").mkdirs()
+        File(tempDir, "server/$REH_PRODUCT_FILE").writeText("""{"commit":"$commit"}""")
+
+        mockkObject(Environment)
+        every { Environment.getNodePath(any()) } returns "/bin/echo"
+        every { Environment.getServerScript(any()) } returns "server.js"
+        every { Environment.buildProcessEnvironment(any(), any()) } returns emptyMap()
+        every { Environment.getExtensionsDir(any()) } returns "extensions"
+        every { Environment.getUserDataDir(any()) } returns "data"
+        every { Environment.getLogsDir(any()) } returns "logs"
+
+        contextMock = mockk<Context>(relaxed = true)
+        every { contextMock.cacheDir } returns tempDir
+        every { contextMock.filesDir } returns tempDir
+
+        manager = ProcessManager(contextMock)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        stub?.stop()
+        manager.stopServer()
+        unmockkAll()
+    }
+
+    /** Points the manager at a loopback server answering [status] as [reports]. */
+    private fun serving(status: Int, reports: String): StubServer =
+        StubServer(status, reports).also { stub = it; manager.portField = it.port }
+
+    /**
+     * Spawns onto the port the stub is holding, and waits for the spawned process
+     * to be reaped before returning.
+     *
+     * The wait is not tidiness. `/bin/echo` exits at once and the watchdog clears
+     * readiness when it does, so an assertion made while that thread is still on
+     * its way would be racing it and would fail on a busy machine for a reason
+     * that has nothing to do with the probe.
+     */
+    private fun spawnOntoHeldPort() {
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "the spawn must happen or nothing here is under test")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
+        assertTrue(
+            manager.spawnedOntoHeldPort(),
+            "the fixture must be a spawn onto a held port, or the guard is not reached",
+        )
+    }
+
+    @Test
+    fun `a holder this start could not have bound is not ready for answering 200`() {
+        // Kills: restoring `probeReadiness` to `isServerHealthy().also { ... }`,
+        // which is any 200 from anybody. This is the disclosure: readiness is
+        // what `NodeService.announceReady` fires on and what sends MainActivity
+        // to `?folder=...&tkn=<connection token>`, so a stranger that answers
+        // here is handed the credential for every route of the editor server.
+        // The token file is generated once and reused across restarts, so the
+        // disclosure outlives the session it happened in.
+        serving(200, reports = stranger)
+        spawnOntoHeldPort()
+
+        assertFalse(
+            manager.probeReadiness(),
+            "a 200 from a party this start could not have bound the port for proves " +
+                "only that something is there",
+        )
+        assertFalse(manager.isReady(), "and nothing may record it as ready")
+        assertFalse(
+            runBlocking { manager.waitForReady(timeoutMs = 300, pollIntervalMs = 25) },
+            "the whole poll must reach the same answer, or CANNOT_BIND is never reached",
+        )
+    }
+
+    @Test
+    fun `a server of this build on that port is ready, held port or not`() {
+        // The complement, and the reason the guard asks for an identity rather
+        // than refusing outright. Kills: narrowing the guard to
+        // `if (spawnedOntoHeldPort)`. Two real starts land exactly here -- a reap
+        // whose signal released the socket just after the port was asked, and an
+        // orphan of this build that no note names -- and in both the user has a
+        // working editor on that port. Refusing them ends the launch in
+        // CANNOT_BIND and, when the holder outlives the retries, in the terminal
+        // state, with a healthy server sitting right there.
+        serving(200, reports = commit)
+        spawnOntoHeldPort()
+
+        assertTrue(
+            manager.probeReadiness(),
+            "a holder answering as this build is the server the user is already using",
+        )
+        assertTrue(manager.isReady(), "and that has to be recorded for the main thread")
+    }
+
+    @Test
+    fun `a start that had its port to itself is not asked for an identity`() {
+        // Kills: dropping `spawnedOntoHeldPort &&` from the guard, which would
+        // make every readiness poll an identity test. That direction is the one
+        // adoption can afford and readiness cannot: declining adoption costs a
+        // spawn, while refusing readiness costs the editor, and a tree that
+        // records no commit would then never start at all.
+        //
+        // The port is moved after the start rather than before it, because what
+        // is under test is the flag the start recorded and not what is listening:
+        // a free port at the spawn means there is no second party for the answer
+        // to have come from.
+        manager.portField = PortFinder.findAvailablePort()
+        spawnOnFreePort()
+        val elsewhere = StubServer(200, stranger).also { stub = it }
+        manager.portField = elsewhere.port
+
+        assertTrue(
+            manager.probeReadiness(),
+            "a start that owned its port answers to nobody about which build it is",
+        )
+    }
+
+    @Test
+    fun `a build that cannot say what it is trusts nobody on a port it could not bind`() {
+        // Kills: making the comparison fail open when the tree records no commit,
+        // for instance `bundledServerCommit()?.let { served != it } == true`. With
+        // no commit of our own there is nothing that tells the holder from us,
+        // which is the same fail-closed direction `recordedServerIsServing`
+        // already takes for adoption, and the cost is bounded: the run ends in
+        // CANNOT_BIND, which the service reports and retries.
+        File(tempDir, "server/$REH_PRODUCT_FILE").delete()
+        serving(200, reports = commit)
+        spawnOntoHeldPort()
+
+        assertFalse(
+            manager.probeReadiness(),
+            "a build with no commit cannot recognise itself, so it must not accept " +
+                "somebody else's word for it",
+        )
+    }
+
+    /** Starts on a port nothing holds, and waits for the spawn to be reaped. */
+    private fun spawnOnFreePort() {
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "the spawn must happen or nothing here is under test")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
+        assertFalse(
+            manager.spawnedOntoHeldPort(),
+            "the fixture must be a start onto a free port, or it tests the other branch",
+        )
+    }
+}
+
+/**
+ * The clock the start poll spends its budget on.
+ *
+ * `waitForReady` bounded thirty seconds with `System.currentTimeMillis()`, which
+ * is the wall clock and is corrected out from under a running app: NTP or NITZ
+ * arrives as the network attaches, which is exactly where a first launch after a
+ * boot sits, and on a device whose RTC was materially wrong the step is large.
+ * Forward, the poll ended without another probe and the launch fell through to
+ * the slower late-readiness path; backward, the coroutine stayed in the poll past
+ * the timeout; and either way the "Server ready after Nms" line in a bug report
+ * was a number that never happened.
+ *
+ * A time correction cannot be staged from a JVM test, which is why the clock is a
+ * seam. These pin the two halves that make the seam mean something: the loop is
+ * bounded by what it reads there, and what it reads there by default is not the
+ * wall clock.
+ */
+class ReadyPollClockTest {
+
+    @TempDir
+    lateinit var tempDir: File
+
+    private lateinit var manager: ProcessManager
+    private var stub: StubServer? = null
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any()) } just Runs
+
+        val contextMock = mockk<Context>(relaxed = true)
+        every { contextMock.cacheDir } returns tempDir
+        every { contextMock.filesDir } returns tempDir
+        manager = ProcessManager(contextMock)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        stub?.stop()
+        unmockkAll()
+    }
+
+    @Test
+    fun `the poll spends the budget on its own clock and not on the wall`() {
+        // Kills: restoring `System.currentTimeMillis()` to either end of the loop
+        // bound. The fake clock steps a second per reading while real time barely
+        // moves, so a loop bounded by it leaves after about ten readings, and a
+        // loop bounded by anything else sits here for the whole ten seconds --
+        // which is the backward-correction half of the defect, measured in the
+        // only direction a test can move a clock.
+        val server = StubServer(403).also { stub = it }
+        manager.portField = server.port
+        var fakeNanos = 0L
+        manager.nanoClock = { fakeNanos += 1_000_000_000L; fakeNanos }
+
+        val startedAt = System.nanoTime()
+        val ready = runBlocking { manager.waitForReady(timeoutMs = 10_000, pollIntervalMs = 20) }
+        val realMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+
+        assertFalse(ready, "403 is not readiness; the fixture would prove nothing otherwise")
+        assertNotNull(server.lastRequestLine(), "the poll must actually have asked")
+        assertTrue(
+            realMs < 3_000,
+            "a poll bounded by the clock it was given must not spend the wall's " +
+                "ten seconds; it spent ${realMs}ms",
+        )
+    }
+
+    @Test
+    fun `the clock it is given by default is not the wall clock`() {
+        // The other half. The seam above proves the loop reads the clock; this
+        // proves the clock production hands it is a monotonic one. Kills: a
+        // default of `{ System.currentTimeMillis() }`, whose readings are
+        // milliseconds, so a fiftieth of a second across the sleep reads as about
+        // 50 rather than as tens of millions.
+        val before = manager.nanoClock()
+        Thread.sleep(50)
+        val after = manager.nanoClock()
+
+        assertTrue(
+            after - before >= 20_000_000L,
+            "the default clock must tick in nanoseconds; it moved by ${after - before}",
+        )
+    }
+}
+
+/**
  * Adopting a server this instance did not start.
  *
  * The case: `assets/server.js` forks the editor server and forwards SIGTERM, but

@@ -14,21 +14,31 @@ extracted tree and asks two questions, whether `engines.vscode` outruns the
 server and whether a glibc payload came along; neither of those is "may this be
 redistributed, and on what terms".
 
-Three rules:
+Four rules:
 
   * every entry in `EXTENSIONS` has a row in the notices table and every row has
     an entry, matched on the extension id;
   * the licence each row records is one this project can redistribute;
   * where the extracted tree is on disk, its `package.json` declares that same
-    licence and the tree carries the licence text itself.
+    licence and the tree carries the licence text itself;
+  * the extracted trees on disk are all of them or none of them.
 
 The third rule is the one that reads a build product, so it runs where build
 products exist. `download-extensions.sh` calls this after extracting, and
 `build.yml` calls it again once the asset cache has been restored, because that
 download step is skipped on a cache hit and the restored trees are still on
 disk to be read. A checkout with no trees, which is what `lint.yml` has, gets
-the first two rules and a count naming how many of the five were read, so a run
-that examined nothing cannot be read as one that examined all of them.
+the first two rules and a note saying that none was read, so a run that examined
+nothing cannot be read as one that examined all of them.
+
+None and all are the two states a checkout can honestly be in, and a count was
+all that separated them from every state in between. `download-extensions.sh`
+places all five or exits non-zero, so a partial set is not a checkout that has
+not downloaded yet: it is a tree that was built and then lost, which is what
+ships an APK missing an extension `NOTICE.md` still attributes. So the fourth
+rule fails. Zero trees stays a note, because it is the ordinary state of a
+source-only checkout, and `--require-trees` is how a caller that has just built
+them says that zero is wrong there too.
 
 Matched on the id, not on the display name. The names in the table are the ones
 a reader recognises and are not what the extensions call themselves: the table
@@ -131,7 +141,20 @@ def check_tree(ext_id, version, licence, failures):
     return True
 
 
-def main() -> int:
+USAGE = "usage: check-bundled-extensions.py [--require-trees]"
+
+
+def main(argv) -> int:
+    # Refused rather than ignored: a caller that means --require-trees and
+    # mistypes it would otherwise get the tolerant run it was trying to escape.
+    require_trees = False
+    for arg in argv:
+        if arg == "--require-trees":
+            require_trees = True
+        else:
+            print(f"::error::unknown argument {arg!r}\n{USAGE}")
+            return 2
+
     pinned = pinned_extensions()
     if not pinned:
         print(f"::error::no EXTENSIONS array found in {DOWNLOAD_SCRIPT}; the "
@@ -166,10 +189,36 @@ def main() -> int:
                 f"decision to take deliberately rather than by adding a row"
             )
 
+    # Counted rather than subtracted from the pinned total: an id with no
+    # notices row is not read and is not missing a tree either, it is the
+    # failure two blocks up, and taking it off the total would blame the wrong
+    # rule for it.
     trees_read = 0
+    unread = []
     for ext_id in sorted(set(pinned) & set(rows)):
         if check_tree(ext_id, pinned[ext_id], rows[ext_id], failures):
             trees_read += 1
+        else:
+            unread.append(ext_id)
+
+    # Some but not all, or none where the caller has just built them. Held here
+    # with the other failures rather than reported as a count, because the count
+    # was the whole defect: a run that lost a tree printed the same "note" as a
+    # checkout that never had one, and every workflow stayed green.
+    if unread and (require_trees or trees_read):
+        failures.append(
+            f"{trees_read} of {len(pinned)} extracted trees are on disk; "
+            f"{', '.join(unread)} left no package.json to read. "
+            + (
+                "The caller says every one of them was just placed"
+                if require_trees
+                else "download-extensions.sh places all of them or exits "
+                "non-zero, so a partial set is a tree that was built and then "
+                "lost, not a checkout that has not downloaded yet"
+            )
+            + f"; an APK built from this tree ships missing what "
+            f"{NOTICE.name} still attributes"
+        )
 
     for f in failures:
         print(f"::error::{f}")
@@ -184,12 +233,12 @@ def main() -> int:
         print(f"  ok     all {trees_read} extracted trees declare that licence "
               f"and carry its text")
     else:
-        print(f"  note   {trees_read} of {len(pinned)} extracted trees on "
-              f"disk; the licence the other {len(pinned) - trees_read} declare "
-              f"was not read here. That half runs wherever the trees exist, "
-              f"which is build.yml and release.yml")
+        print(f"  note   no extracted trees on disk; the licence all "
+              f"{len(pinned)} declare was not read here. That half runs "
+              f"wherever the trees exist, which is build.yml and from "
+              f"download-extensions.sh")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

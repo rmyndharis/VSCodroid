@@ -18,6 +18,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.util.Base64
+import java.util.concurrent.Executor
 
 /**
  * That a download either arrives complete or is visibly not there.
@@ -35,6 +36,14 @@ import java.util.Base64
  * what reached the file, whether the file survived, and what was reported. Any
  * one of them alone is satisfiable by an implementation that is wrong about the
  * other two.
+ *
+ * The provider work is driven where it is handed over, which is the one thing
+ * here that is not how the coordinator ships: closing a document and deleting it
+ * go to a thread of its own, because both are unbounded calls into another app
+ * and every teardown decides on the UI thread. That property is not this file's
+ * to check and cannot be checked from a single-threaded case at all;
+ * `DownloadWriteBlockingTest` owns it. What is wanted here is for the outcome to
+ * have finished by the time a case asserts on it.
  */
 class DownloadCoordinatorTest {
 
@@ -55,6 +64,9 @@ class DownloadCoordinatorTest {
 
     /** URLs the page was asked to read, paired with the request id. */
     private val readRequests = mutableListOf<Pair<String, String>>()
+
+    /** URLs the page was told it may stop holding the bytes of, in order. */
+    private val released = mutableListOf<String>()
 
     /** Whether the fake picker reports that it opened. */
     private var pickerOpens = true
@@ -122,6 +134,10 @@ class DownloadCoordinatorTest {
             readRequests += requestId to url
         }
 
+        override fun releaseBytes(url: String) {
+            released += url
+        }
+
         override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
             reported += outcome to fileName
         }
@@ -148,11 +164,20 @@ class DownloadCoordinatorTest {
         discarded.clear()
         reported.clear()
         readRequests.clear()
+        released.clear()
         pickerOpens = true
         destinationOpens = true
         writesFail = false
         closeFails = false
-        coordinator = DownloadCoordinator(host)
+        // Both executors run where they are handed over, so the whole of a
+        // download settles inside the call that started it and every case below
+        // reads state that has stopped moving. Which thread each one really is
+        // belongs to DownloadWriteBlockingTest.
+        coordinator = DownloadCoordinator(
+            host,
+            providerWork = Executor { it.run() },
+            mainThread = Executor { it.run() },
+        )
     }
 
     @AfterEach
@@ -441,6 +466,62 @@ class DownloadCoordinatorTest {
         assertEquals(listOf(DownloadOutcome.FAILED to FALLBACK_DOWNLOAD_NAME), reported,
             "a download that will never be started has to say so")
         assertEquals(1, asked.size, "and nothing ahead of it in the queue was disturbed")
+    }
+
+    /**
+     * The bytes the page is left holding for a download that will never be read.
+     *
+     * The page pins a download's blob from the click that started it and keeps
+     * it for the whole hold budget, because up to `MAX_QUEUED` pickers can stand
+     * between that click and anyone asking for the bytes. Nothing else can free
+     * it: the only reason the capture script gives up a hold on its own is that
+     * the bytes are being read, and these three downloads are exactly the ones
+     * that are never read. So a multi-select whose tail the queue turns away
+     * pins every one of those files in the renderer for minutes after the user
+     * was told they are not coming.
+     *
+     * NEGATIVE CONTROL for the three cases below, one each: delete
+     * `host.releaseBytes(request.url)` from the `MAX_QUEUED` refusal in
+     * `onDownloadStart`, from the cancelled branch of `onDestinationChosen`, or
+     * from `fail`.
+     */
+    @Test
+    fun `a download refused for being one too many lets go of its bytes`() {
+        coordinator.onDownloadStart("blob:live", null)
+        repeat(MAX_QUEUED) { coordinator.onDownloadStart("blob:queued$it", null) }
+
+        coordinator.onDownloadStart("blob:overflow", null)
+
+        assertEquals(listOf("blob:overflow"), released,
+            "only the refused download is done with. The one at the picker and the " +
+                "eight behind it are still going to be asked for their bytes, and a " +
+                "hold released under them is a download that fails when its turn comes")
+    }
+
+    @Test
+    fun `cancelling at the picker lets go of the bytes it was holding`() {
+        coordinator.onDownloadStart("blob:x", null)
+
+        chooseDestination(null)
+
+        assertEquals(listOf("blob:x"), released,
+            "the user said no, so nothing will ever read this blob and the page is " +
+                "holding a file the download it belonged to is over")
+    }
+
+    @Test
+    fun `a download that fails before it is read lets go of its bytes`() {
+        destinationOpens = false
+        coordinator.onDownloadStart("blob:x", null)
+
+        chooseDestination(destination())
+
+        assertEquals(listOf(DownloadOutcome.FAILED to FALLBACK_DOWNLOAD_NAME), reported,
+            "the control: a failure that was not reported would satisfy the line below " +
+                "by never having been a download at all")
+        assertEquals(listOf("blob:x"), released,
+            "the document would not open, so the page was never asked to read anything " +
+                "and its hold has nothing left to wait for")
     }
 
     /**

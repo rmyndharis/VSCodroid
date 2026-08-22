@@ -50,6 +50,23 @@ class ExtraKeyRow @JvmOverloads constructor(
     private var longPressPopup: LongPressPopup? = null
 
     /**
+     * How many modifier triples have been pushed at the page.
+     *
+     * Not a modifier's state and not a copy of one: the row keeps none of that,
+     * and `ExtraKeyToggleStateTest` holds it to that. This counts pushes, which
+     * is the one thing about the page the poll cannot read back off it.
+     *
+     * The answer to [KeyInjector.queryModifierState] is a snapshot the renderer
+     * took when the query script ran, and scripts run in the order they were
+     * submitted, so a push made after the query was submitted cannot be in that
+     * answer: the modifier the user has just latched comes back clear. Read
+     * before the question and again in the answer, this is what separates "the
+     * page has spent this modifier", which is what the poll exists to notice,
+     * from "the page has not been told about it yet", which looks identical.
+     */
+    private var modifierPushCount = 0
+
+    /**
      * Polls JS modifier flags to detect when the soft keyboard consumed a modifier.
      * When the JS interceptor handles Ctrl+key from the soft keyboard, it resets the
      * JS flags. This runnable detects that and syncs the Kotlin visual state.
@@ -61,6 +78,25 @@ class ExtraKeyRow @JvmOverloads constructor(
      * keyboard was open.
      */
     private val modifierSyncRunnable: Runnable = object : Runnable {
+        /**
+         * The one [KeyInjector.queryModifierState] allowed to be waiting for its
+         * answer, held as the injector that was asked. See [OutstandingModifierQuery].
+         *
+         * The re-post below is unconditional, which is what keeps the chain alive
+         * when no answer ever comes. On its own that also gave up the bound the old
+         * callback-anchored re-post got for free: a renderer slow to reply was sent
+         * a fresh query every 200 ms with nothing waiting on the last one, for as
+         * long as a modifier stayed latched. Asking again only once the previous
+         * answer is in restores exactly one outstanding query, without making the
+         * poll depend on an answer arriving.
+         *
+         * On the runnable rather than on the row, because it is the poll's own
+         * bookkeeping and no other member reads it. It is deliberately not a
+         * modifier's state, which this class keeps nowhere and reads from the
+         * adapter instead; `ExtraKeyToggleStateTest` holds the row to that.
+         */
+        private val outstanding = OutstandingModifierQuery()
+
         override fun run() {
             val injector = keyInjector
             if (injector == null) {
@@ -70,6 +106,16 @@ class ExtraKeyRow @JvmOverloads constructor(
                 // about this latch went with it, so a row still painted as
                 // latched is promising a modifier to a page that never heard of
                 // it. Clearing also ends the chain, at a place that decided to.
+                //
+                // Reached only where no replacement injector has arrived: the
+                // Activity being destroyed, and the crash during a cold start,
+                // where recreateWebView rebuilds the injector through loadVSCode
+                // and therefore only once a port is bound. A crash with the
+                // editor up hands this row a new injector on the same main
+                // thread turn, before this tick runs at all. Either way the
+                // answer still owed is owed by an injector that is gone, so it
+                // is given up here rather than left standing over the next one.
+                outstanding.abandon()
                 resetModifiersIfNeeded()
                 return
             }
@@ -84,7 +130,38 @@ class ExtraKeyRow @JvmOverloads constructor(
             // below and in startModifierSync and resetModifiersIfNeeded, which are
             // the three places that know it should stop.
             postDelayed(modifierSyncRunnable, 200)
+            // The tick is what survives an answer that never comes; the answer is
+            // what says whether asking again is worth anything. See [outstanding]
+            // for why the two are separated, and [OutstandingModifierQuery] for why
+            // the question is "does this injector owe an answer" rather than "is an
+            // answer owed": the second is unanswerable once the injector that owed
+            // it is gone, and stays true for the life of the row.
+            if (!outstanding.claim(injector)) return
+            // Taken before the question, because [modifierPushCount] is only
+            // meaningful against the moment the query was submitted.
+            val pushedWhenAsked = modifierPushCount
             injector.queryModifierState { jsCtrl, jsAlt, jsShift ->
+                if (!outstanding.release(injector)) {
+                    // An answer about a page this row no longer has: it was asked
+                    // of an injector that has since been replaced or dropped. Its
+                    // flags describe a page that is gone, and releasing here would
+                    // free the claim the current injector's query is holding.
+                    return@queryModifierState
+                }
+                if (modifierPushCount != pushedWhenAsked) {
+                    // A modifier was latched while this answer was in the air, so
+                    // the answer predates it and reports it as clear. Applying it
+                    // would darken the key the user has just pressed while the
+                    // page goes on holding the modifier, and this is the one
+                    // place a modifier is cleared without pushing the new value
+                    // out, so nothing would correct that: the next ordinary
+                    // character typed on the soft keyboard is cancelled and
+                    // delivered as a chord instead. Ending the chain is skipped
+                    // with the rest; the push that moved the count came from
+                    // handleKeyAction, which calls startModifierSync after it and
+                    // is the site that decides whether the poll goes on at all.
+                    return@queryModifierState
+                }
                 if (ctrlActive && !jsCtrl) {
                     ctrlActive = false
                     Logger.d(tag, "Ctrl consumed by soft keyboard")
@@ -286,7 +363,12 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     /** Push current Kotlin modifier state to the JS interceptor. */
     private fun syncModifierState() {
-        keyInjector?.setModifierState(ctrlActive, altActive, shiftActive)
+        val injector = keyInjector ?: return
+        // Counted only where a push actually happens. With no injector there is
+        // no page to have been told anything, so nothing an outstanding answer
+        // could be describing has moved. See [modifierPushCount].
+        modifierPushCount += 1
+        injector.setModifierState(ctrlActive, altActive, shiftActive)
     }
 
     /** Start polling JS state to detect when soft keyboard consumed a modifier. */
@@ -310,4 +392,77 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     private fun dpToPx(dp: Int): Int =
         (dp * resources.displayMetrics.density + 0.5f).toInt()
+}
+
+/**
+ * The one modifier query allowed to be in the air, and whose answer it is.
+ *
+ * The poll re-posts itself before it asks anything, so the tick survives an
+ * answer that never comes. This is the other half: it keeps exactly one query
+ * outstanding, so a renderer slow to reply is not sent a fresh one five times a
+ * second for as long as a modifier stays latched.
+ *
+ * What it records is the injector that was asked, not merely that something was.
+ * The injector owns the answer's lifetime and therefore this record's: an answer
+ * travels back through `WebView.evaluateJavascript`, so a WebView destroyed
+ * before it replies never delivers one. A plain "a query is out" flag would then
+ * stay set for the rest of the Activity, because the row outlives the page.
+ * `MainActivity.recreateWebView` replaces only the WebView: it drops the
+ * injector, then reaches `initBridge` through `loadVSCode` on the same main
+ * thread turn and hands this same row a new `KeyInjector`, so the poll's
+ * no-injector branch is not even reached on that path. Every later tick would
+ * have returned at the guard without asking, and the row would never again learn
+ * that the page had spent a latched modifier: the next row key goes out as a
+ * chord, and a whole trackpad drag does, since the arrow path deliberately keeps
+ * the modifier.
+ *
+ * Asked against the injector, that cannot happen: a claim by an injector other
+ * than the one owing an answer displaces it, because an answer nobody can
+ * deliver is an answer nobody is waiting for. The record is therefore released
+ * on three occasions and can be stuck on none of them: [claim] by a new
+ * injector, [release] by the answer arriving, [abandon] when the row is left
+ * with no injector at all. Bounded at one reference, and that reference is
+ * replaced or dropped rather than accumulated.
+ *
+ * Main thread only, which is where both writers run: the tick is a
+ * `View.postDelayed` and the answer is an `evaluateJavascript` callback.
+ */
+internal class OutstandingModifierQuery {
+
+    /**
+     * The injector owing an answer, or null when none is.
+     *
+     * Identity only. It is never called through and never dereferenced; it says
+     * whose answer is still owed, which is the one thing a boolean could not.
+     */
+    private var askedOf: KeyInjector? = null
+
+    /**
+     * Takes the single outstanding slot for [injector], reporting whether the
+     * caller may now ask. False only while that same injector already owes an
+     * answer, which is the back-pressure; a different injector always takes it,
+     * displacing a claim whose answer can no longer arrive.
+     */
+    fun claim(injector: KeyInjector): Boolean {
+        if (askedOf === injector) return false
+        askedOf = injector
+        return true
+    }
+
+    /**
+     * Frees the slot for an answer from [injector], reporting whether that
+     * answer is the one being waited for. False for an answer from an injector
+     * that has since been replaced or dropped: it describes a page that is gone,
+     * and it must not free a slot a later query is holding.
+     */
+    fun release(injector: KeyInjector): Boolean {
+        if (askedOf !== injector) return false
+        askedOf = null
+        return true
+    }
+
+    /** Gives up on the answer entirely, for a row left with no injector. */
+    fun abandon() {
+        askedOf = null
+    }
 }

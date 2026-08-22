@@ -161,6 +161,26 @@ internal fun workspaceRootOrNull(candidatePath: String?, sensitive: List<String>
 }
 
 /**
+ * The last workspace [resourceRootsInForce] refused, so the refusal is explained
+ * once rather than on every request that follows it.
+ *
+ * The condition is sticky, which is what made the report a stream rather than an
+ * event: the supplier answers the same folder for as long as it stays open and
+ * the caller invokes it per webview resource request, so one markdown preview or
+ * notebook render turned a single refused folder into hundreds of identical
+ * lines, each repeating the absolute path, at a level that is not gated on a
+ * debuggable build. Cleared whenever a candidate is accepted or absent, so a user
+ * who closes the folder and opens it again is told again rather than met with
+ * silence.
+ *
+ * A benign race, deliberately: two threads seeing the same stale value cost one
+ * duplicate line, which is the failure this exists to bound rather than one it
+ * reintroduces.
+ */
+@Volatile
+private var lastRefusedWorkspace: String? = null
+
+/**
  * The roots in force for one request: the published set, plus the open folder
  * when it is safe to publish.
  *
@@ -169,17 +189,23 @@ internal fun workspaceRootOrNull(candidatePath: String?, sensitive: List<String>
  * the user's own workspace) otherwise looks like a bug rather than a refusal.
  * Nothing is logged in the ordinary case: an accepted folder and an absent one
  * are both silent, so this only speaks when the workspace holds a location that
- * must stay unreadable.
+ * must stay unreadable, and then once per folder rather than once per request.
+ * See [lastRefusedWorkspace].
  */
 internal fun resourceRootsInForce(
     published: List<String>, sensitive: List<String>, candidate: String?
 ): List<String> {
     val workspace = workspaceRootOrNull(candidate, sensitive)
     if (candidate != null && workspace == null) {
-        Logger.w(
-            "WebViewClient",
-            "Workspace not published as a resource root, it holds a sensitive location: $candidate"
-        )
+        if (candidate != lastRefusedWorkspace) {
+            lastRefusedWorkspace = candidate
+            Logger.w(
+                "WebViewClient",
+                "Workspace not published as a resource root, it holds a sensitive location: $candidate"
+            )
+        }
+    } else {
+        lastRefusedWorkspace = null
     }
     return published + listOfNotNull(workspace)
 }
@@ -1058,21 +1084,52 @@ class VSCodroidWebViewClient(
                     is ResourceOutcome.Serve -> outcome.file
                 }
 
+                // Opened before the response is built, and inside a try, because
+                // the check above and the open are two syscalls with a gap between
+                // them and nothing upstream catches. `resourceOutcome` answers
+                // Serve for a file that exists and is a regular file, which is not
+                // the same question as whether it opens: a watch build or a
+                // `git checkout` can unlink it in that gap, and a file with no read
+                // permission fails every time without any race at all. The throw
+                // travelled out of `shouldInterceptRequest` into the WebView's own
+                // callback, where `CrashReporter` recorded the death rather than
+                // preventing it, so a workspace being rewritten under a preview
+                // took the editor down with it. IOException and not Exception:
+                // FileNotFoundException is the whole of what an open reports, and
+                // widening it here would swallow failures that are not this one.
+                val stream = try {
+                    FileInputStream(file)
+                } catch (e: IOException) {
+                    Logger.w(
+                        TAG,
+                        "Resource could not be opened ($scheme): $path (${e.javaClass.simpleName})"
+                    )
+                    return notFound("Unreadable: $path")
+                }
+
                 val mimeType = guessMimeType(path)
                 Logger.d(TAG, "Resource served ($scheme): $path ($mimeType)")
 
+                // No Cache-Control on this arm, deliberately. The commit hash that
+                // makes an asset safe to keep forever belongs to the URL the *other*
+                // arm proxies, `/{quality}-{commit}/static/...`; what this one serves
+                // is a plain filesystem path resolved against roots that include the
+                // open workspace, the projects tree and the SAF mirrors, all of which
+                // the user rewrites in place. `immutable` forbids revalidation, so an
+                // image regenerated from the terminal or pulled with `git pull` went
+                // on rendering from the old bytes in the markdown preview for the life
+                // of the renderer, and nothing in the app could force a refetch: that
+                // extension emits query-less resource URLs, unlike `media-preview`,
+                // which appends its own `version=`. The server tree and the extensions
+                // directory do not change within an install, so all they lose is a
+                // warm-start saving on a local file read.
                 return WebResourceResponse(
                     mimeType, null, 200, "OK",
-                    buildMap {
-                        put("Access-Control-Allow-Origin", "*")
-                        put("Content-Length", file.length().toString())
-                        // Static resources are versioned by commit hash in the URL,
-                        // so they never change; cache aggressively for warm starts.
-                        if (isStaticAsset(path)) {
-                            put("Cache-Control", CACHE_IMMUTABLE)
-                        }
-                    },
-                    FileInputStream(file)
+                    mapOf(
+                        "Access-Control-Allow-Origin" to "*",
+                        "Content-Length" to file.length().toString(),
+                    ),
+                    stream
                 )
             }
 
@@ -1154,8 +1211,12 @@ class VSCodroidWebViewClient(
                     ?.toMutableMap()
                     ?: mutableMapOf()
 
-                // Ensure static assets from the local server get cached.
-                // VS Code Server may not set Cache-Control on all responses.
+                // A fallback for a static asset the local server answers without
+                // a Cache-Control of its own. The route this arm proxies,
+                // `/{quality}-{commit}/static/...`, does send one, so the branch
+                // is expected to stay quiet; it stopped being able to fire at all
+                // once the token joined the URL, which is what [assetPathOf]
+                // exists to undo.
                 if (responseCode in 200..299 && isStaticAsset(url) &&
                     !headers.containsKey("Cache-Control")
                 ) {
@@ -1204,6 +1265,42 @@ class VSCodroidWebViewClient(
          *
          * Input:  /stable/cd4ee3b1.../out/vs/workbench/contrib/webview/browser/pre/index.html
          * Output: http://127.0.0.1:{port}/stable-cd4ee3b1.../static/out/vs/workbench/contrib/webview/browser/pre/index.html
+         *
+         * [path] is `Uri.getPath()`, which is DECODED, and every part of it is the
+         * page's: any rendered document may name a `*.vscode-cdn.net` host, which is
+         * the only test the caller applies. Built by concatenation, `%3F` arrived
+         * here as a real `?` and `%2E%2E%2F` as a real `../`, so both became URL
+         * syntax rather than text, and [withToken] then signed the result with the
+         * server's credential. That is the hazard the two removed arms in
+         * [interceptResourceRequest] were deleted for, and it reached the same
+         * place: `/vscode-remote-resource?path=<absolute>` sits behind the token
+         * gate and then reads any file the server can read, the passphrase-less SSH
+         * key included.
+         *
+         * So the URL is assembled through `java.net.URI`, whose multi-argument
+         * constructor quotes everything in a path component that would otherwise be
+         * a delimiter: `?`, `#`, a bare `%`, CR and LF, and anything non-ASCII.
+         * `java.net.URI` rather than `android.net.Uri` for the reason [tlsHostLabel]
+         * gives: the second is a stub under the unit-test `android.jar`, so a case
+         * written against it would measure the mock and not the encoding. It also
+         * fixes a smaller thing the concatenation got wrong, an ordinary space in a
+         * resource name arriving unencoded in a URL string.
+         *
+         * Dot segments are refused rather than quoted, because they are legal path
+         * syntax and `URI` keeps them: `..` inside [path] walks out of
+         * `/{quality}-{commit}/static/` onto any route of our own server. What
+         * resolves them is the HTTP client, and on Android that is OkHttp behind
+         * `HttpURLConnection`, which canonicalises the path as it writes the request
+         * line: standard behaviour, not measured on a device here, and neither the
+         * desktop JVM the unit suite runs on nor the server's own `url.parse` does
+         * it. Refusing is what keeps the app from issuing a request whose route
+         * depends on which end resolves it. `quality` and `commit` need no such
+         * test: they are joined by a hyphen, so the segment they produce can never
+         * be `.` or `..`.
+         *
+         * Nothing the workbench asks for carries one, so refusing costs nothing, and
+         * the caller answers a null here with a 404 of its own rather than handing
+         * the address back to the WebView to fetch from the real CDN.
          */
         private fun rewriteCdnUrl(path: String, query: String?, port: Int, token: String?): String? {
             val segments = path.removePrefix("/").split("/", limit = 3)
@@ -1213,9 +1310,20 @@ class VSCodroidWebViewClient(
             val commit = segments[1]    // commit hash
             val rest = if (segments.size > 2) segments[2] else ""
 
+            if (rest.split("/").any { it == "." || it == ".." }) return null
+
             val localPath = "/$quality-$commit/static/$rest"
-            val queryPart = if (!query.isNullOrEmpty()) "?$query" else ""
-            return withToken("http://127.0.0.1:$port$localPath$queryPart", token)
+            // Empty and absent are one case here, as they were for the `?` this
+            // replaces: `URI` writes a bare `?` for an empty query, which [withToken]
+            // would then read as a query to extend.
+            val localUrl = try {
+                URI(
+                    "http", null, "127.0.0.1", port, localPath, query?.ifEmpty { null }, null
+                ).toASCIIString()
+            } catch (e: URISyntaxException) {
+                return null
+            }
+            return withToken(localUrl, token)
         }
 
         /**
@@ -1249,14 +1357,29 @@ class VSCodroidWebViewClient(
             return "$url$separator" + "tkn=" + Uri.encode(token)
         }
 
-        private fun isStaticAsset(path: String): Boolean {
+        /**
+         * The part of [pathOrUrl] the two suffix tests below can answer for.
+         *
+         * They are asked both ways: the resource arm has a bare `uri.path`,
+         * while the proxy has the whole rewritten URL. Since the editor server
+         * began requiring a connection token, every one of those URLs ends in
+         * `tkn=<hex>`, so a suffix test on the raw string matched no asset at
+         * all and both fallbacks reading it, the immutable cache header and the
+         * MIME type for a response that carries none of its own, had quietly
+         * stopped being reachable.
+         */
+        private fun assetPathOf(pathOrUrl: String): String = pathOrUrl.substringBefore('?')
+
+        internal fun isStaticAsset(pathOrUrl: String): Boolean {
+            val path = assetPathOf(pathOrUrl)
             return path.endsWith(".js") || path.endsWith(".css") ||
                     path.endsWith(".woff2") || path.endsWith(".woff") ||
                     path.endsWith(".ttf") || path.endsWith(".svg") ||
                     path.endsWith(".png") || path.endsWith(".jpg")
         }
 
-        private fun guessMimeType(path: String): String {
+        internal fun guessMimeType(pathOrUrl: String): String {
+            val path = assetPathOf(pathOrUrl)
             return when {
                 path.endsWith(".html") -> "text/html"
                 path.endsWith(".js") -> "application/javascript"

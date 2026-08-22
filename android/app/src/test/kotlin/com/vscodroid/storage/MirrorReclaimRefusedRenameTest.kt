@@ -69,6 +69,10 @@ class MirrorReclaimRefusedRenameTest {
         resolver = mockk(relaxed = true)
         context = mockk<Context>(relaxed = true)
         every { context.filesDir } returns filesDir
+        // The manager unwraps whatever it is given to the application context, so a
+        // relaxed mock that answers a different object for it hands the manager a
+        // filesDir that is not the one below.
+        every { context.applicationContext } returns context
         every { context.contentResolver } returns resolver
         every { context.getSharedPreferences(any(), any()) } returns fakePrefs()
         mockkStatic(Uri::class)

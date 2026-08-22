@@ -101,6 +101,18 @@ class ProcessManager(private val context: Context) {
     private var spawnedOntoHeldPort = false
 
     /**
+     * Whether [probeReadiness] has already said that the holder of a port this
+     * start could not claim does not answer as this build.
+     *
+     * The poll asks five times a second for thirty seconds and then goes on
+     * asking, so an unthrottled line would be the whole of the log by the end of
+     * it while saying nothing the first one did not. Cleared beside
+     * [spawnedOntoHeldPort], which is the value it describes.
+     */
+    @Volatile
+    private var heldPortRefusalLogged = false
+
+    /**
      * Whether the process the last [startServer] spawned was given a ceiling the
      * user chose that is above the one the device would otherwise have had.
      *
@@ -211,6 +223,27 @@ class ProcessManager(private val context: Context) {
      * test calling through to it could only ever assert that nothing happened.
      */
     internal var killRecordedProcess: (Int) -> Unit = { android.os.Process.killProcess(it) }
+
+    /**
+     * The clock [waitForReady] measures its budget on, in nanoseconds.
+     *
+     * Monotonic, which is the whole requirement: the wall clock is corrected out
+     * from under a running app and the poll's bound must not move with it. See
+     * [waitForReady] for what a correction did to it.
+     *
+     * [System.nanoTime] rather than `SystemClock.elapsedRealtime`, which is what
+     * `NodeService.awaitLateReadiness` uses for the same event. Both are immune to
+     * a time correction, which is all this needs; they differ only over deep
+     * sleep, and this poll runs for thirty seconds with the launch in front of the
+     * user. What decides it is that this loop is reachable from the JVM suite,
+     * where every `android.os` member is a stub that throws, and the bound is the
+     * thing the suite has to be able to pin.
+     *
+     * A `var` for the same reason [procDir] is one, and not for a production
+     * caller: a time correction cannot be staged from a test, so a fake clock is
+     * the only way to show the loop is bounded by this and not by the wall.
+     */
+    internal var nanoClock: () -> Long = { System.nanoTime() }
 
     // Cached on the first successful read and never invalidated, which is correct
     // rather than merely convenient: the server generates the token only when the
@@ -462,12 +495,15 @@ class ProcessManager(private val context: Context) {
         // the life of this instance.
         //
         // What IS wrong is that nothing distinguishes the survivor from a server
-        // this class started. The health probe reads a response code and nothing
-        // else, so the survivor satisfies readiness, `NodeService.announceReady`
+        // this class started. The health probe reads a response code and, on this
+        // path, the build the holder claims to be -- see [probeReadiness] -- so a
+        // survivor of this build satisfies readiness, `NodeService.announceReady`
         // fires, and the WebView is pointed at it. That much works -- the token
         // matches, because `server.js` reuses the token file -- which is why
-        // nothing downstream notices. The cost is everywhere the app assumes the
-        // server it is serving is the one it spawned:
+        // nothing downstream notices. What no longer passes is a holder that is
+        // not this build, which is the party the token must never reach. The cost
+        // is everywhere the app assumes the server it is serving is the one it
+        // spawned:
         //
         //  - `serverProcess` refers to the process spawned here, not the survivor.
         //    So [stopServer] destroys the wrong one. Stop takes the notification
@@ -569,6 +605,7 @@ class ProcessManager(private val context: Context) {
         // reads held, is the one the free-at-first-ask path has always accepted.
         spawnedOntoHeldPort = !portIsFree &&
             !(reapedThisStart && PortFinder.isPortAvailable(_port))
+        heldPortRefusalLogged = false
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR is a usable directory: Android may clear cache between
@@ -684,10 +721,21 @@ class ProcessManager(private val context: Context) {
     /**
      * Suspends until the server responds to a health check or the timeout elapses.
      *
-     * Polls [isServerHealthy] at [pollIntervalMs] intervals and answers with the
+     * Polls [probeReadiness] at [pollIntervalMs] intervals and answers with the
      * outcome. The answer is the whole contract: there is no readiness callback
      * here, because a suspending function that returns the result already told
      * the caller, and the one that used to sit here was assigned by nobody.
+     *
+     * The budget is measured on [nanoClock] and not on the wall clock, which is
+     * the difference between a thirty-second poll and a poll that lasts thirty
+     * seconds of whatever the clock happens to say. The wall clock is corrected
+     * out from under a running app: NTP or NITZ lands as the network attaches,
+     * which is precisely when a first launch after a boot is inside this loop, and
+     * on a device whose RTC was materially wrong the step is large. Correcting
+     * forward ended the poll without another probe, correcting backward kept the
+     * launch coroutine in it long past the timeout, and the line below reported a
+     * figure that was neither. The counterpart loop for the same event,
+     * `NodeService.awaitLateReadiness`, has always used a monotonic source.
      *
      * @param timeoutMs  Maximum time to wait for the server to become ready.
      * @param pollIntervalMs  Interval between health check attempts.
@@ -697,10 +745,10 @@ class ProcessManager(private val context: Context) {
         timeoutMs: Long = READY_POLL_TIMEOUT_MS,
         pollIntervalMs: Long = 200,
     ): Boolean {
-        val startTime = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
+        val startedAt = nanoClock()
+        while (elapsedMsSince(startedAt) < timeoutMs) {
             if (probeReadiness()) {
-                Logger.i(tag, "Server ready after ${System.currentTimeMillis() - startTime}ms")
+                Logger.i(tag, "Server ready after ${elapsedMsSince(startedAt)}ms")
                 return true
             }
             delay(pollIntervalMs)
@@ -708,6 +756,10 @@ class ProcessManager(private val context: Context) {
         Logger.e(tag, "Server failed to become ready within ${timeoutMs}ms")
         return false
     }
+
+    /** Milliseconds since a [nanoClock] reading. */
+    private fun elapsedMsSince(startNanos: Long): Long =
+        TimeUnit.NANOSECONDS.toMillis(nanoClock() - startNanos)
 
     /**
      * Whether the process holding our port is an editor server this app started.
@@ -992,9 +1044,12 @@ class ProcessManager(private val context: Context) {
      * readiness check that counts 403 as healthy reports a successful startup for
      * a server that will serve the user nothing but Forbidden.
      *
-     * Liveness only, deliberately. Which build answered is [probeVersion]'s
-     * business and only adoption asks it, because a readiness poll runs every
-     * 200 ms for thirty seconds and has no use for the answer.
+     * Liveness only, deliberately, which is what [startAdoptionWatch] wants of a
+     * heartbeat over a server whose identity was settled when it was adopted.
+     * Which build answered is [probeVersion]'s business, and it is asked by
+     * adoption and by [probeReadiness] on the one path where the holder cannot be
+     * the process this class spawned. An ordinary readiness poll runs every 200 ms
+     * for thirty seconds and has no use for the answer.
      */
     fun isServerHealthy(): Boolean = probeVersion() != null
 
@@ -1324,12 +1379,13 @@ class ProcessManager(private val context: Context) {
     /**
      * Asks the server once, and records the answer if it is yes.
      *
-     * Blocking: it is [isServerHealthy] underneath, so it belongs off the main
-     * thread like every other caller of that. Blocking also means cancellation
-     * does not reach it: a coroutine cancelled while this is in flight cannot act
-     * on the result, because it resumes by throwing, but the request itself runs
-     * to completion. The ceiling on that is the connect and read timeouts, a
-     * little over two seconds, and it is worth knowing rather than rediscovering.
+     * Blocking: it is [probeVersion] underneath, the same request [isServerHealthy]
+     * makes, so it belongs off the main thread like every other caller of that.
+     * Blocking also means cancellation does not reach it: a coroutine cancelled
+     * while this is in flight cannot act on the result, because it resumes by
+     * throwing, but the request itself runs to completion. The ceiling on that is
+     * the connect and read timeouts, a little over two seconds, and it is worth
+     * knowing rather than rediscovering.
      *
      * The single place `_isReady` is ever set true, which is the point of it
      * existing rather than being written inline in [waitForReady]. [waitForReady]
@@ -1339,8 +1395,53 @@ class ProcessManager(private val context: Context) {
      * bounded loop, that second later was unreachable: the flag stayed false for
      * as long as the process lived, and every caller reading it refused a server
      * that was serving perfectly well.
+     *
+     * Being that single writer is why the identity question below is asked here
+     * and not in [isServerHealthy]: this answer is what points the WebView at the
+     * port, and `MainActivity` builds that URL with the connection token in it.
+     * [isServerHealthy] stays the plain liveness probe its own documentation
+     * describes, which is what [startAdoptionWatch] wants of it.
      */
-    fun probeReadiness(): Boolean = isServerHealthy().also { if (it) _isReady = true }
+    fun probeReadiness(): Boolean {
+        val served = probeVersion() ?: return false
+        // A start that recorded [spawnedOntoHeldPort] already knows the process it
+        // spawned is not what is answering: the editor server it forked printed
+        // EADDRINUSE and, measured, did not exit, so whoever holds the port took
+        // it first. A status code cannot tell that party from ours -- the same gap
+        // [recordedServerIsServing] closes before adoption, and for the same
+        // reason, since binding a loopback port on Android needs no permission.
+        // The cost of being wrong is larger here than there: readiness is what
+        // navigates, and the URL carries the credential that authenticates every
+        // route of the editor server. So on this path the holder names the build
+        // it is before it is believed.
+        //
+        // Only on this path, deliberately. A start whose port was free at the
+        // spawn has no second party to be confused with, and asking every start
+        // for an identity would refuse to serve a tree that records no commit.
+        // That direction is one adoption can afford, because declining it costs a
+        // spawn; readiness cannot, because it costs the editor.
+        //
+        // The port answering as this build is not proof it is the process we
+        // spawned -- the commit is public, [recordedServerIsServing] says so at
+        // length -- and it does not need to be. What it rules out is the case this
+        // guard exists for, and it deliberately keeps the two starts that reach
+        // here with a server of ours on the port: a reap whose signal freed the
+        // socket a moment after it was asked, and an orphan of this same build
+        // that no note identifies. Both serve the user, and both keep working.
+        if (spawnedOntoHeldPort && served != bundledServerCommit()) {
+            if (!heldPortRefusalLogged) {
+                heldPortRefusalLogged = true
+                Logger.w(
+                    tag,
+                    "Port $_port is answering as \"$served\", which is not this build, and " +
+                        "this start could not have bound it; not treating that as ready",
+                )
+            }
+            return false
+        }
+        _isReady = true
+        return true
+    }
 
     // -- Internal --
 

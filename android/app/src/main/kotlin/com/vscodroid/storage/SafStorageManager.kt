@@ -3,6 +3,7 @@ package com.vscodroid.storage
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import androidx.annotation.StringRes
 import com.vscodroid.R
@@ -27,11 +28,37 @@ import kotlin.concurrent.thread
  * VS Code Server (Node.js) requires real filesystem paths, we maintain a
  * local "mirror" directory that is kept in sync with the SAF source.
  */
-class SafStorageManager(private val context: Context) {
+class SafStorageManager(context: Context) {
+
+    /**
+     * The application context, whatever the caller handed over.
+     *
+     * Both production callers construct this with an Activity, and one of them
+     * ([com.vscodroid.SplashActivity]) then starts [reclaimRevokedMirrors], whose
+     * detached thread captures this object and through it whatever Context it
+     * holds. That thread outlives the Activity by construction (the file says so
+     * where the thread is started), and its duration is the recursive delete of a
+     * project-sized mirror, so an Activity kept here stays reachable, with its
+     * Window and its ContextImpl, through exactly the minutes when `MainActivity`,
+     * the WebView renderer and the Node server are all starting.
+     *
+     * Nothing here needs an Activity: what is read is `contentResolver`, `filesDir`
+     * (through [com.vscodroid.util.Environment]) and the preferences file, all
+     * identical on the application context. This is the same reasoning
+     * `AndroidBridge` gives for building its `ToolchainManager` on
+     * `applicationContext`.
+     *
+     * ⚠️ The two initialisers below say `this.context` deliberately. A constructor
+     * parameter shadows the property of the same name inside an initialiser, so a
+     * bare `context` there is the Activity again, and handing that to
+     * [SafSyncEngine] would keep the whole retention with the unwrapping still in
+     * place and reading as though it worked.
+     */
+    private val context: Context = context.applicationContext ?: context
 
     private val tag = "SafStorageManager"
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val syncEngine = SafSyncEngine(context)
+    private val prefs = this.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val syncEngine = SafSyncEngine(this.context)
 
     /**
      * Told when a write-back has given up on a file, once per burst.
@@ -44,10 +71,18 @@ class SafStorageManager(private val context: Context) {
      * refuses everything, and the editor saves on a timer, so the unthrottled version is
      * a wall of the same notice. Globally rather than per file, for the same reason. The
      * user's problem is the folder.
+     *
+     * The reading is the monotonic clock, never wall time, and that is the same reason
+     * `AuthTabWindow` gives one file over. The throttle is a subtraction against a stamp
+     * held for the life of this object, so a wall clock corrected backwards by more than
+     * the interval (NTP after a drifted RTC, or the user setting the date) leaves every
+     * later difference below it, and a folder that is still refusing every save
+     * says nothing at all until the clock catches up. Silence is the failure this notice
+     * exists to prevent.
      */
     fun onWriteBackFailed(announce: (File) -> Unit) {
         syncEngine.onWriteBackFailed = { file ->
-            if (claimAnnouncement(System.currentTimeMillis(), lastFailureAnnouncedAt.get())) {
+            if (claimAnnouncement(SystemClock.elapsedRealtime(), lastFailureAnnouncedAt.get())) {
                 announce(file)
             }
         }
@@ -102,7 +137,7 @@ class SafStorageManager(private val context: Context) {
         syncEngine.onUploadIncomplete = announce
     }
 
-    private val lastFailureAnnouncedAt = AtomicLong(0)
+    private val lastFailureAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
 
     // -- Permission Management --
 
@@ -118,6 +153,10 @@ class SafStorageManager(private val context: Context) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             context.contentResolver.takePersistableUriPermission(uri, flags)
+            // Between the grant and the row, and that order is what [grantsTaken] is
+            // read against: a reader whose snapshot of the grants was taken before this
+            // line must not judge the row the next one writes.
+            grantsTaken.incrementAndGet()
             addToRecentFolders(uri)
             Logger.i(tag, "Persisted permission for ${getMirrorDir(uri).name}")
         } catch (e: SecurityException) {
@@ -173,14 +212,61 @@ class SafStorageManager(private val context: Context) {
      * in the editor out from under it. That reclamation lives in [reclaimRevokedMirrors]
      * alone now.
      */
-    fun getPersistedFolders(): List<SafFolderInfo> =
-        synchronized(recentFoldersLock) { readAndPruneRecentFolders() }
+    fun getPersistedFolders(): List<SafFolderInfo> {
+        // Read before the lock, and as one call rather than one per entry. The prune
+        // below used to ask the system server for each folder in turn, so a listing held
+        // the monitor across up to [MAX_RECENT] binder round trips while the bridge's
+        // disk-work thread, a sync on Dispatchers.IO and the reclaim thread waited on
+        // it. One reading also judges every entry against one answer, which is what the
+        // per-entry version could not promise.
+        //
+        // What this does not buy is a monitor free of binder calls, which is how the
+        // hoist has already been read once. Three of the four read-modify-writes the
+        // lock exists for call this from inside it ([releaseGrantFor],
+        // [addToRecentFolders], [updateLastOpened]; the fourth is the prune below), and
+        // each of those nested calls makes its own [persistedReadUris] round trip with
+        // the monitor already held. What the hoist bounds is the cost of that: one round
+        // trip rather than one per entry.
+        // Who pays it is a background thread in every case, so it is a wait and not a
+        // freeze: MainActivity hops folderForOpenedPath, persistPermission and
+        // syncToLocal onto Dispatchers.IO (DeviceFolderOpenThreadTest pins that), the
+        // bridge answers listings on its disk-work executor and on the JavaBridge
+        // thread, and [reclaimRevokedMirrors] runs on a thread of its own.
+        val stamp = grantsTaken.get()
+        val granted = persistedReadUris()
+        return synchronized(recentFoldersLock) {
+            // What holding the reading inside the lock used to buy, without holding it
+            // there. The prune below is a read-modify-write that DELETES rows, and a
+            // reading taken before the lock can be older than the list read inside it: a
+            // grant taken in between belongs to a row the picker saves before this thread
+            // gets the monitor, and judging that row against the older reading prunes the
+            // folder the user just picked and persists the list without it, with the
+            // grant still held. Nothing here can tell which row that would be, so against
+            // such a reading no row is judged at all: the list is returned as it stands
+            // and left alone, and the next read, whose reading names the new grant,
+            // prunes then. Keeping a row too long is the harmless direction, because the
+            // pass that deletes mirrors is [reclaimRevokedMirrors] and it never consults
+            // this list.
+            readAndPruneRecentFolders(granted.takeIf { grantsTaken.get() == stamp })
+        }
+    }
+
+    /** Every tree this app still holds a persisted read grant for, in one binder call. */
+    private fun persistedReadUris(): Set<Uri> =
+        context.contentResolver.persistedUriPermissions
+            .filter { it.isReadPermission }
+            .map { it.uri }
+            .toSet()
 
     /**
      * The body of [getPersistedFolders]. Caller must hold [recentFoldersLock]: the
      * prune below is itself a read-modify-write of the list.
+     *
+     * [granted] is every tree still granted, as of a reading the caller took. Null means
+     * the caller cannot vouch that its reading is not older than this list, and then
+     * nothing is pruned and nothing is written: see [getPersistedFolders].
      */
-    private fun readAndPruneRecentFolders(): List<SafFolderInfo> {
+    private fun readAndPruneRecentFolders(granted: Set<Uri>?): List<SafFolderInfo> {
         val json = prefs.getString(KEY_RECENT_FOLDERS, "[]") ?: "[]"
         val array = JSONArray(json)
         val result = mutableListOf<SafFolderInfo>()
@@ -191,7 +277,7 @@ class SafStorageManager(private val context: Context) {
             val uri = Uri.parse(obj.getString("uri"))
 
             // Prune folders whose permissions have been revoked externally
-            if (!hasPersistedPermission(uri)) {
+            if (granted != null && uri !in granted) {
                 toRemove.add(i)
                 continue
             }
@@ -886,6 +972,36 @@ class SafStorageManager(private val context: Context) {
         private val recentFoldersLock = Any()
 
         /**
+         * How many persisted grants this process has taken, counted only so that two
+         * readings of them can be told apart.
+         *
+         * The prune inside [getPersistedFolders] judges the saved list against a reading
+         * of the system server's grants, and that reading is deliberately taken outside
+         * [recentFoldersLock], so an ordinary listing does not hold the monitor across a
+         * binder round trip. A call nested inside one of the read-modify-writes still
+         * does, and [getPersistedFolders] says which ones and what it costs.
+         * Taking the reading first leaves one ordering the lock used to forbid: a
+         * reading older than the list
+         * it is judging, which is what a grant taken between the two produces, and which
+         * would prune away the row the picker has just written. This is bumped between
+         * the grant and the row (see [persistPermission]), so a reader that took its
+         * reading before the grant sees a different value once it holds the monitor, and
+         * declines to judge.
+         *
+         * Only a grant TAKEN is counted. A grant released moves the other way: the
+         * reading still names it, so the row survives one more listing and the next one
+         * prunes it, which is the same one-listing delay a revocation in system settings
+         * already has.
+         *
+         * Never reset, so no path can leave it stale: it counts up, comparisons are for
+         * equality between two reads on one thread, and the whole of it dies with the
+         * process. In the companion for the reason [recentFoldersLock] gives, and because
+         * the grants it counts belong to the process rather than to one activity's
+         * manager.
+         */
+        private val grantsTaken = AtomicLong(0)
+
+        /**
          * Whether a mirror with no live permission may be deleted, given the writes
          * this app records as never having reached the device.
          *
@@ -1084,15 +1200,29 @@ class SafStorageManager(private val context: Context) {
         internal const val FAILURE_NOTICE_INTERVAL_MS = 10_000L
 
         /**
+         * The stamp of a session in which nothing has been announced yet.
+         *
+         * Tested for rather than subtracted from, and that became necessary with the
+         * clock. Under wall time zero was further back than any interval on its own;
+         * under the monotonic clock the reading is milliseconds since boot, so a device
+         * that has been up for less than the interval would have found the FIRST failure
+         * of a session too close to zero to be worth saying, which is the one notice
+         * that always has to be given.
+         */
+        internal const val NEVER_ANNOUNCED = 0L
+
+        /**
          * Whether a failure at [now] is far enough from [lastAnnouncedAt] to be said.
          *
          * A function rather than an inline comparison so the rule can be asserted: the
-         * wiring around it reaches a Toast, which no JVM test here can see. The first
-         * failure of a session announces, because a zero last-announced time is further
-         * back than any interval.
+         * wiring around it reaches a Toast, which no JVM test here can see.
+         *
+         * [now] comes from the monotonic clock; see [onWriteBackFailed] for why it is
+         * not the wall clock.
          */
         internal fun shouldAnnounce(now: Long, lastAnnouncedAt: Long): Boolean =
-            now - lastAnnouncedAt >= FAILURE_NOTICE_INTERVAL_MS
+            lastAnnouncedAt == NEVER_ANNOUNCED ||
+                now - lastAnnouncedAt >= FAILURE_NOTICE_INTERVAL_MS
     }
 }
 

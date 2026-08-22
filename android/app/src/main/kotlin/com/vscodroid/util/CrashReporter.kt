@@ -41,19 +41,24 @@ object CrashReporter {
     /**
      * Returns the most recent crash log, or null if no crashes have been recorded.
      *
-     * The text goes through [redactToken] on the way out. This is the boundary
-     * the log crosses: it reaches the dialog `MainActivity.checkPreviousCrash`
-     * puts on screen and the `AndroidBridge.getLastCrash` method the page can
-     * call, and redacting here covers both without either caller having to
-     * remember. `MainActivity` cuts its preview at 500 characters after this
-     * returns, so the substitution shifts where that cut lands.
+     * The text goes through [redactToken] and [redactSecrets] on the way out.
+     * This is the boundary the log crosses: it reaches the dialog
+     * `MainActivity.checkPreviousCrash` puts on screen and the
+     * `AndroidBridge.getLastCrash` method the page can call, and redacting here
+     * covers both without either caller having to remember. Both scrubbers and
+     * not only the token, for the reason [generateBugReport] gives: what a text
+     * has to be scrubbed for follows from the boundary it crosses, and this one
+     * ends up in the same places the report does. `MainActivity` cuts its preview
+     * at 500 characters after this returns, so the substitution shifts where that
+     * cut lands.
      */
     fun getLastCrash(): String? {
         if (!::crashDir.isInitialized) return null
         return crashDir.listFiles()
             ?.sortedByDescending { it.lastModified() }
             ?.firstOrNull()
-            ?.let { redactToken(it.readText()) }
+            ?.let { readOrNull(it) }
+            ?.let { redactSecrets(redactToken(it)) }
     }
 
     /**
@@ -84,14 +89,25 @@ object CrashReporter {
      * function's does, at the literal `tkn=` parameter, so a bare token in no
      * parameter at all still passes through.
      *
-     * The server section carries a second class of secret, and [redactSecrets]
-     * is what answers it. That section is not this app's own output: the editor
+     * [redactSecrets] answers a second class of secret, and it runs over both
+     * sections rather than only over the server one. The server section is where
+     * a leak is demonstrable: it is not this app's own output, because the editor
      * server echoes the extension host's stdout and stderr into its console, so
      * an extension that dumps a failing request writes whatever authenticated it
-     * onto the stream this section quotes. [ServerLog] takes the same two
-     * functions on the way in, so a file written by this build holds neither
-     * shape; both run again here, because this is the boundary the text crosses
-     * and a file written by an older build is still on the device.
+     * onto the stream that section quotes. A crash log holds the stack trace of
+     * an uncaught throwable in this process and nothing is known to put a
+     * credential of that shape into one. It is scrubbed all the same, because
+     * what a text needs taking out of it follows from where it is going, not from
+     * who wrote it, and both sections leave here on the same clipboard. Splitting
+     * that rule per section is how one half of a boundary ends up unguarded. A
+     * crash log is a whole file rather than the single line the server section is
+     * read in, and [redactSecrets] takes it a line at a time for that reason: its
+     * patterns are written against one line and would otherwise swallow the stack
+     * trace under a match.
+     * [ServerLog] takes the same two functions on the way in, so a file written
+     * by this build holds neither shape; both run again here, because this is the
+     * boundary the text crosses and a file written by an older build is still on
+     * the device.
      */
     fun generateBugReport(context: Context): String {
         val sb = StringBuilder()
@@ -126,8 +142,15 @@ object CrashReporter {
             if (logs.isNotEmpty()) {
                 sb.appendLine("--- Crash Logs (${logs.size}) ---")
                 for (log in logs.take(3)) {
+                    val text = readOrNull(log)
                     sb.appendLine()
-                    sb.appendLine(redactToken(log.readText()))
+                    // Named rather than dropped: the count above already promised
+                    // this log, so leaving a silent hole in the report says the
+                    // crash never happened.
+                    sb.appendLine(
+                        text?.let { redactSecrets(redactToken(it)) }
+                            ?: "(${log.name} could not be read)"
+                    )
                     sb.appendLine("---")
                 }
             } else {
@@ -179,9 +202,6 @@ object CrashReporter {
             if (!::crashDir.isInitialized) return
             crashDir.mkdirs()
 
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val file = File(crashDir, "crash_$timestamp.txt")
-
             val sw = StringWriter()
             sw.appendLine("Crash at ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date())}")
             sw.appendLine(threadIdentity(thread))
@@ -189,12 +209,59 @@ object CrashReporter {
             sw.appendLine()
             throwable.printStackTrace(PrintWriter(sw))
 
+            // The name is only as fine-grained as a second, and this handler is
+            // the process-wide default, entered by whichever thread faulted. It
+            // also runs before the chain to the handler that kills the process,
+            // so nothing about the process dying serializes two threads that
+            // fault together: the second one arrives on the same name and
+            // writeText truncates, which used to lose the first crash, the one
+            // that started the cascade.
+            // createNewFile is the atomic half of "take this name if nobody has
+            // it": the loser of a race gets false rather than a shared file.
+            // Giving up after a handful of names costs nothing, since [MAX_LOGS]
+            // is all pruneOldLogs would keep anyway. Chosen after the trace is
+            // rendered, so a render that fails leaves no empty file behind, which
+            // would read as a crash that had nothing to say.
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            var file = File(crashDir, "crash_$timestamp.txt")
+            var taken = 1
+            while (taken < MAX_LOGS && !file.createNewFile()) {
+                file = File(crashDir, "crash_${timestamp}_$taken.txt")
+                taken++
+            }
+
             file.writeText(sw.toString())
             Logger.e(TAG, "Crash log written: ${file.name}")
         } catch (_: Throwable) {
             // Last-resort: can't even write the crash log (including OOM)
         }
     }
+
+    /**
+     * The text of [log], or null if it cannot be read.
+     *
+     * Both readers list the directory and then read what the listing gave them,
+     * and the two steps are not one operation. The directory is under `cacheDir`,
+     * which the OS may evict under storage pressure at any moment, and two of the
+     * app's own entry points empty it from other threads with no lock shared with
+     * these readers: `AndroidBridge.clearCrashLogs`, and `clearCaches`, whose
+     * disk thread deletes this directory outright. An entry that has gone by the
+     * time it is read raises FileNotFoundException.
+     *
+     * That mattered because of who calls. `MainActivity.checkPreviousCrash` reads
+     * a crash log on the main thread during `onCreate` and again from the dialog
+     * button, and nothing on that path catches anything, so the throw reached the
+     * looper and killed the process: a crash raised by the crash reporter, which
+     * also loses the report the user was trying to send. Every other disk touch
+     * in this object was already guarded, [writeCrashLog] and [pruneOldLogs]
+     * both, and these two were the exception.
+     */
+    private fun readOrNull(log: File): String? =
+        try {
+            log.readText()
+        } catch (_: Exception) {
+            null
+        }
 
     private fun pruneOldLogs() {
         try {

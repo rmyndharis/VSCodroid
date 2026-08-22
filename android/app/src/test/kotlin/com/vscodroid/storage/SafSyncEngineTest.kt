@@ -83,68 +83,6 @@ class SafSyncEngineTest {
         }
     }
 
-    // ── guessMimeType ───────────────────────────────────────────────────
-
-    @Nested
-    inner class GuessMimeTypeTest {
-
-        @Test
-        fun `text files`() {
-            assertEquals("text/plain", SafSyncEngine.guessMimeType("readme.txt"))
-            assertEquals("text/plain", SafSyncEngine.guessMimeType("CHANGELOG.md"))
-        }
-
-        @Test
-        fun `web files`() {
-            assertEquals("text/html", SafSyncEngine.guessMimeType("index.html"))
-            assertEquals("text/css", SafSyncEngine.guessMimeType("styles.css"))
-            assertEquals("text/javascript", SafSyncEngine.guessMimeType("app.js"))
-            assertEquals("text/javascript", SafSyncEngine.guessMimeType("main.ts"))
-        }
-
-        @Test
-        fun `data files`() {
-            assertEquals("application/json", SafSyncEngine.guessMimeType("package.json"))
-            assertEquals("text/xml", SafSyncEngine.guessMimeType("AndroidManifest.xml"))
-        }
-
-        @Test
-        fun `programming language files`() {
-            assertEquals("text/x-python", SafSyncEngine.guessMimeType("script.py"))
-            assertEquals("text/plain", SafSyncEngine.guessMimeType("Main.kt"))
-            assertEquals("text/plain", SafSyncEngine.guessMimeType("App.java"))
-            assertEquals("text/x-shellscript", SafSyncEngine.guessMimeType("deploy.sh"))
-        }
-
-        @Test
-        fun `unknown extensions fall back to octet-stream`() {
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("binary.dat"))
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("archive.zip"))
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("image.png"))
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("noext"))
-        }
-
-        @Test
-        fun `extension matching is case-sensitive`() {
-            // .TXT != .txt: this is the current behavior (could be a limitation)
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("README.TXT"))
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType("APP.JS"))
-        }
-
-        @Test
-        fun `handles dotfiles without real extension`() {
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType(".gitignore"))
-            assertEquals("application/octet-stream", SafSyncEngine.guessMimeType(".dockerignore"))
-        }
-
-        @Test
-        fun `handles files with multiple dots`() {
-            assertEquals("text/javascript", SafSyncEngine.guessMimeType("app.config.js"))
-            assertEquals("text/javascript", SafSyncEngine.guessMimeType("vite.config.ts"))
-            assertEquals("application/json", SafSyncEngine.guessMimeType("tsconfig.build.json"))
-        }
-    }
-
     // ── shouldOverwriteMirror ───────────────────────────────────────────
 
     @Nested

@@ -145,9 +145,12 @@ class WriteBackNoticeWiringTest {
     @Test
     fun `the first failure is announced and a prompt second one is not`() {
         val interval = SafStorageManager.FAILURE_NOTICE_INTERVAL_MS
-        // A wall-clock value, because that is what the caller passes. Toy numbers put
-        // the first failure inside the interval of a zero last-announced time and made
-        // this assert the opposite of the shipped behaviour.
+        // A reading well past the interval. Toy numbers put the first failure inside
+        // the interval of a zero last-announced time and made this assert the opposite
+        // of the shipped behaviour; the clause named in `the first failure is said even
+        // seconds after boot` is what settles that case now, and it is asserted there
+        // rather than smuggled in here. The caller supplies this from the monotonic
+        // clock, not the wall clock.
         val now = 1_700_000_000_000L
 
         assertTrue(
@@ -161,6 +164,73 @@ class WriteBackNoticeWiringTest {
         assertTrue(
             SafStorageManager.shouldAnnounce(now = now + interval, lastAnnouncedAt = now),
             "the notice has to come back, or a later failure is silent again",
+        )
+    }
+
+    /**
+     * That the reading the throttle subtracts from cannot move backwards.
+     *
+     * ⚠️ Source text, because the reading is taken inside the lambda this method installs
+     * on a private [SafSyncEngine], which no JVM test here can make fire. The behaviour
+     * either side of it is covered: the rule by the cases above, and the clock by the one
+     * below.
+     *
+     * The stamp lives in an `AtomicLong` for the life of the manager, and the rule is a
+     * subtraction against it, so a wall clock corrected backwards by more than the
+     * interval (NTP after a drifted RTC, or the user setting the date) makes every
+     * later difference negative and silences the notice until the clock catches up. A
+     * folder whose provider is refusing every save then stops saying so, which is the
+     * failure this notice exists to prevent. `AuthTabWindow` states the same reasoning
+     * one file over and takes `SystemClock.elapsedRealtime()`.
+     *
+     * Negative control, measured: put `System.currentTimeMillis()` back and this goes red.
+     */
+    @Test
+    fun `the write-back throttle reads the monotonic clock`() {
+        assertTrue(manager.isFile, "SafStorageManager.kt is not where this test expects it")
+        val body = manager.readText()
+            .substringAfter("fun onWriteBackFailed(", "")
+            .substringBefore("\n    }")
+        assertTrue(
+            body.contains("claimAnnouncement("),
+            "onWriteBackFailed is not where this test expects it, so the assertions below " +
+                "would be asked of nothing",
+        )
+
+        assertTrue(
+            Regex("""(?m)^\s*if \(claimAnnouncement\(SystemClock\.elapsedRealtime\(\)""")
+                .containsMatchIn(body),
+            "the throttle no longer reads the monotonic clock, so a device clock moved " +
+                "backwards silences every write-back failure notice for the rest of the " +
+                "session",
+        )
+        assertFalse(
+            body.contains("System.currentTimeMillis()"),
+            "the throttle reads wall time, which can move backwards under it",
+        )
+    }
+
+    /**
+     * The first notice of a session is given however recently the device booted.
+     *
+     * The clock above is milliseconds since boot, not since 1970, so "nothing announced
+     * yet" stopped being a reading further back than any interval and became one that
+     * can sit inside it. A device a few seconds up, with a provider already refusing,
+     * would have swallowed the one notice that always has to be given.
+     *
+     * Negative control, measured: drop the `lastAnnouncedAt == NEVER_ANNOUNCED` clause
+     * from `shouldAnnounce` and this goes red while every case above stays green, which
+     * is why it is a case of its own.
+     */
+    @Test
+    fun `the first failure is said even seconds after boot`() {
+        assertTrue(
+            SafStorageManager.shouldAnnounce(
+                now = 3_000L,
+                lastAnnouncedAt = SafStorageManager.NEVER_ANNOUNCED,
+            ),
+            "a folder that started failing before the device had been up for one " +
+                "interval said nothing at all",
         )
     }
 

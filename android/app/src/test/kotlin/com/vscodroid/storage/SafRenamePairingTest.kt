@@ -26,8 +26,11 @@ class SafRenamePairingTest {
     private val window = SafSyncEngine.RENAME_PAIR_WINDOW_MS
     private val now = 1_000_000L
 
+    // The mirror path is the record's other half, and it is not what is being decided
+    // here: it names the upload records that follow the directory, while the pairing
+    // reads the mirror-relative path and the clock.
     private fun vanished(path: String, ago: Long) =
-        VanishedDirectory(path, now - ago)
+        VanishedDirectory(path, now - ago, "/mirror/$path")
 
     private fun sourceFor(newPath: String, vararg vanished: VanishedDirectory): String? =
         SafSyncEngine.renameSourceFor(vanished.toList(), newPath, now)

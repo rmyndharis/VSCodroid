@@ -28,6 +28,14 @@ import java.io.File
  * cases in `DownloadListenerWiringTest`. It is deliberately a floor rather than
  * an equality: what matters is the relation between the two, so raising the
  * queue without raising the budget is what has to go red.
+ *
+ * The budget being a floor is what makes the other direction matter. A download
+ * Android has finished with and never read holds its file for the whole of it,
+ * and the page cannot know: the capture script gives a hold up only when the
+ * bytes are being read, which is the one thing that never happens to a download
+ * refused for being one of too many, cancelled at the picker, or failed before
+ * anyone asked. So the release has to be told, and the last two cases here are
+ * the page's half of that. `DownloadCoordinatorTest` owns the Kotlin half.
  */
 class DownloadHoldBudgetTest {
 
@@ -63,6 +71,8 @@ class DownloadHoldBudgetTest {
     }
 
     private val readerFor by lazy { script("function readerFor(url) {") }
+
+    private val release by lazy { script("release: function(url) {") }
 
     @Test
     fun `the script being checked was actually found`() {
@@ -113,6 +123,45 @@ class DownloadHoldBudgetTest {
             "the release sits on the fetch path rather than the blob path. The fetch " +
                 "has not read anything yet, so revoking there refuses the very request " +
                 "the hold exists for."
+        }
+    }
+
+    /**
+     * NEGATIVE CONTROL: delete the `release` entry from the injected
+     * `window.__vscodroidDownload`, and this case fails at the extraction rather
+     * than at the assertion, saying so.
+     */
+    @Test
+    fun `the page gives up a hold Android has finished with`() {
+        assertTrue(release.contains("held.delete(url)") && release.contains("revoke(url)")) {
+            "the page-side release does not let the blob go. A download that is never " +
+                "read has no other way out of the map: its hold sits there for the whole " +
+                "budget above, holding the file's bytes in the renderer long after the " +
+                "user was told the download failed.\n$release"
+        }
+    }
+
+    /**
+     * NEGATIVE CONTROL: drop the `d.release(...)` call from the `releaseBytes`
+     * override in `MainActivity`'s `DownloadHost`. The page-side function above
+     * then has no caller at all, which is exactly the state this pair exists to
+     * rule out.
+     */
+    @Test
+    fun `the release the page offers is the one Android calls`() {
+        val override = withoutComments(source)
+            .lines()
+            .dropWhile { !it.contains("override fun releaseBytes(") }
+            .takeWhile { !it.contains("override fun report(") }
+
+        assertTrue(override.isNotEmpty()) {
+            "MainActivity no longer answers DownloadHost.releaseBytes where this looks. " +
+                "If it moved, point this at wherever the page is told to let go now."
+        }
+        val body = override.joinToString("\n")
+        assertTrue(body.contains("__vscodroidDownload") && body.contains(".release(")) {
+            "releaseBytes does not reach the capture script's release, so every download " +
+                "that dies before it is read keeps its bytes pinned in the page:\n$body"
         }
     }
 }

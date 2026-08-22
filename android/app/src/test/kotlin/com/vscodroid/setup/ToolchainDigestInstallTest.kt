@@ -195,15 +195,32 @@ class ToolchainDigestInstallTest {
     private val manifestPath get() = "$releaseDir/toolchains.sha256"
 
     /** A minimal but real pack: [ToolchainManager.installFromDirectory] needs this manifest. */
-    private val zipBytes: ByteArray = ByteArrayOutputStream().also { out ->
+    private fun packZip(payloadBytes: Int = 0): ByteArray = ByteArrayOutputStream().also { out ->
         ZipOutputStream(out).use { zip ->
             zip.putNextEntry(ZipEntry("toolchain_test.json"))
             zip.write("""{"name":"test","installRoot":"usr/opt/test"}""".toByteArray())
             zip.closeEntry()
+            if (payloadBytes > 0) {
+                // Random bytes from a fixed seed, so the entry deflates to
+                // roughly its own size: a compressible filler would leave the
+                // transfer several times shorter than the test asked for, and
+                // every count below is against what crossed the socket.
+                zip.putNextEntry(ZipEntry("usr/opt/test/payload.bin"))
+                zip.write(ByteArray(payloadBytes).also { java.util.Random(7).nextBytes(it) })
+                zip.closeEntry()
+            }
         }
     }.toByteArray()
 
-    private val zipDigest: String = MessageDigest.getInstance("SHA-256")
+    /**
+     * What the release serves for the ZIP. A `var` because one case needs a
+     * transfer long enough to be read more than once, and everything derived from
+     * it -- the digest, and the sizes the registry fixture quotes -- is computed
+     * from whatever it holds at the time.
+     */
+    private var zipBytes: ByteArray = packZip()
+
+    private val zipDigest: String get() = MessageDigest.getInstance("SHA-256")
         .digest(zipBytes)
         .joinToString("") { "%02x".format(it) }
 
@@ -549,8 +566,10 @@ class ToolchainDigestInstallTest {
         manager.cancel("toolchain_test")
         release.countDown()
 
-        // A cancellation reports no status, so the task's own bookkeeping is
-        // what says it finished: downloadViaHttp drops its token in a finally.
+        // Waited on the task's own bookkeeping rather than on its CANCELED
+        // report: downloadViaHttp drops its token in the same finally that makes
+        // that report, and drops it first, so the token going is the earlier of
+        // the two signals and this waits for the whole task either way.
         val tokens = outstanding()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         while (tokens.containsKey("toolchain_test") && System.nanoTime() < deadline) Thread.sleep(20)
@@ -558,6 +577,67 @@ class ToolchainDigestInstallTest {
 
         assertEquals(0, timesRequested(manifestPath), "a cancelled install still fetched the manifest")
         assertEquals(0, timesRequested(zipPath), "a cancelled install still fetched the payload")
+    }
+
+    /**
+     * A cancelled transfer says so, to the manager that began it.
+     *
+     * Every read of the cancellation flag leaves through a bare `return@execute`,
+     * so the download used to end in silence, and silence reaches the one party
+     * nothing else can speak for: a report goes to the manager that began the
+     * download and to no other. The toolchain screen takes the pack out of its
+     * own outstanding set when Cancel is tapped, but that set belongs to the
+     * screen the tap happened on, while the cancel token is process-wide so that
+     * a rebuilt screen can stop a transfer the destroyed one began. Cancelled
+     * that way, the destroyed screen's set kept the pack and the Play Core
+     * registration `ToolchainActivity.shouldReleaseSubscription` hands back only
+     * when that set empties, for the life of the process and once per repetition.
+     * The first-run queue is the other reader: `handleDownloadState` advances on
+     * a terminal status, so a pack cancelled from the toolchain screen left its
+     * row where it was and every pack queued behind it waiting.
+     *
+     * Blocked inside the disk-space pre-flight rather than raced against the
+     * executor, exactly as the queued-cancel case above.
+     *
+     * NEGATIVE CONTROL: drop the `report(packName, AssetPackStatus.CANCELED, 0)`
+     * from the `finally` in `downloadViaHttp` and this goes red on a status list
+     * that ends at the PENDING the request was published with.
+     */
+    @Test
+    fun `a cancelled download reports that it stopped`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+
+        val reachedPreflight = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            reachedPreflight.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            8L * 1024 * 1024 * 1024
+        }
+
+        val manager = manager()
+        manager.install("toolchain_test")
+        assertTrue(reachedPreflight.await(10, TimeUnit.SECONDS), "the task never reached the pre-flight")
+
+        manager.cancel("toolchain_test")
+        release.countDown()
+
+        // The report is the last thing the task does, after the token it is
+        // waited on elsewhere has already gone, so this waits for the report
+        // itself rather than for the bookkeeping that precedes it.
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (!statuses().contains(AssetPackStatus.CANCELED) && System.nanoTime() < deadline) {
+            Thread.sleep(20)
+        }
+        assertTrue(
+            statuses().contains(AssetPackStatus.CANCELED),
+            "the cancelled download reported nothing, so the screen that began it keeps the " +
+                "pack outstanding and its Play Core listener with it: $events",
+        )
+        assertFalse(
+            statuses().contains(AssetPackStatus.COMPLETED),
+            "the cancelled download installed the toolchain anyway: $events",
+        )
     }
 
     @Test
@@ -811,6 +891,125 @@ class ToolchainDigestInstallTest {
             listOf(ToolchainFailure.NOT_PUBLISHED),
             synchronized(reasons) { reasons.toList() },
             "a file the release never published is not a network fault",
+        )
+    }
+
+    // -- what the transfer reports, and what it does when it is stopped --
+
+    /**
+     * Serves a pack big enough to be read many times over, and publishes the
+     * digest for it. [publishFrom] is called again because the registry fixture
+     * quotes the payload's size, and it was built for the small one.
+     */
+    private fun serveLargePack(payloadBytes: Int) {
+        zipBytes = packZip(payloadBytes)
+        publishFrom(releaseDir)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+    }
+
+    /**
+     * Progress is a figure, not a heartbeat.
+     *
+     * The read loop reports into a 8 KB buffer, and the percentage it carries has
+     * 86 values to take, so a 55 MB toolchain reported 6,763 times to say 86
+     * different things. Every one of those is posted to the main thread by both
+     * consumers: `ToolchainActivity` rebinds the card and the first-run row
+     * re-formats its text, neither of which returns early on an unchanged value.
+     *
+     * The two assertions are independent. The first says the loop no longer
+     * reports per read -- the transfer is at least [minimumReads] reads long, and
+     * it cannot be shortened, because a socket read may return less than the
+     * buffer but never more. The second says nothing repeats.
+     *
+     * NEGATIVE CONTROL: drop the `if (percent != lastReported)` guard in
+     * `downloadFile` and this goes red on both. Measured.
+     */
+    @Test
+    fun `a long transfer reports each percentage once rather than each read`() {
+        serveLargePack(1_400_000)
+
+        installAndWait()
+
+        val downloading = synchronized(events) {
+            events.filter { it.second == AssetPackStatus.DOWNLOADING }.map { it.third }
+        }
+        // 8192 is DOWNLOAD_BUFFER_SIZE. Named here rather than read from the
+        // class because it is the figure the assertion is about.
+        val minimumReads = zipBytes.size / 8192
+        assertTrue(
+            minimumReads > 100,
+            "the fixture served ${zipBytes.size} bytes, which is not a transfer worth counting",
+        )
+        assertTrue(
+            downloading.size >= 50,
+            "only ${downloading.size} progress reports for a ${zipBytes.size}-byte transfer; " +
+                "this case cannot tell a dedupe from a progress channel that went silent",
+        )
+        assertTrue(
+            downloading.size < minimumReads,
+            "${downloading.size} reports for at least $minimumReads reads: the loop is " +
+                "still reporting per read rather than per percentage",
+        )
+        assertEquals(
+            downloading.distinct(), downloading,
+            "the same percentage was reported more than once, and each one costs a main " +
+                "thread post and a card rebind",
+        )
+    }
+
+    /**
+     * Cancel is honoured after the payload has arrived, not only during it.
+     *
+     * The flag was read three times on the success path and all three sat before
+     * the digest check, so a cancel from that point on was collected by nobody:
+     * the archive was hashed, expanded and copied into `usr/` -- about 155 MB for
+     * Java 17 -- and recorded as installed. The card offers Cancel throughout,
+     * because TRANSFERRING is one of the states that draws it.
+     *
+     * Deterministic without a race: the cancel is issued from inside the report
+     * that opens the window. `downloadViaHttp` reports TRANSFERRING once, on the
+     * download's own thread, between the digest check and the extraction, so by
+     * the time it returns the flag is set and every later read of it is under
+     * test.
+     *
+     * NEGATIVE CONTROL: remove the `if (download.cancelled)` check that precedes
+     * `installFromDirectory` and this goes red -- COMPLETED is reported and the
+     * record names the toolchain. Measured. The sibling check one step earlier,
+     * between the digest and the extraction, is the same predicate at the other
+     * expensive boundary and nothing here can land a cancel inside the digest
+     * hash, which emits no report to fire from.
+     */
+    @Test
+    fun `a cancel after the payload arrives installs nothing`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+
+        val manager = ToolchainManager(context)
+        manager.onStateChange = { pack, status, percent, why ->
+            if (why != null) reasons.add(why)
+            events.add(Triple(pack, status, percent))
+            // The user's own tap, through the same call the Cancel button makes.
+            if (status == AssetPackStatus.TRANSFERRING) manager.cancel("toolchain_test")
+        }
+        manager.install("toolchain_test")
+
+        // The task's own bookkeeping is what says it finished, exactly as the
+        // queued-cancel case above waits, and for the reason given there.
+        val tokens = outstanding()
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (tokens.containsKey("toolchain_test") && System.nanoTime() < deadline) Thread.sleep(20)
+        assertFalse(tokens.containsKey("toolchain_test"), "the cancelled task never finished")
+
+        assertTrue(
+            statuses().contains(AssetPackStatus.TRANSFERRING),
+            "the download never reached the window this case is about: ${statuses()}",
+        )
+        assertFalse(
+            statuses().contains(AssetPackStatus.COMPLETED),
+            "a cancelled install reported itself complete: $events",
+        )
+        assertFalse(
+            recorded().contains("\"test\""),
+            "the toolchain the user cancelled was installed anyway: ${recorded()}",
         )
     }
 

@@ -18,6 +18,10 @@ import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.util.Base64
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
@@ -44,6 +48,16 @@ import java.util.concurrent.TimeUnit
  * download is claimed for the length of the call, so the file the teardown could
  * not remove is removed by the thread that was inside the provider, and a save
  * that finished during a teardown is kept rather than deleted.
+ *
+ * The claim covers only the window in which a write or a close is outstanding,
+ * and that is a minority of a transfer's wall time: the page yields between
+ * pieces, and nothing at all is claimed between the picker answering and the
+ * first piece arriving. On that far larger half the teardown does the work
+ * itself, so the close that commits the bytes and the delete that follows it
+ * have to leave the caller's thread outright. That is what the coordinator's
+ * own executor is for, and why the cases here drive a real one on a thread of
+ * its own rather than a direct executor: with the hand-off run inline, "the
+ * caller waited" and "the caller was quick" are the same measurement.
  */
 class DownloadWriteBlockingTest {
 
@@ -75,6 +89,45 @@ class DownloadWriteBlockingTest {
     /** Set to make closing the opened document stop until [release]. */
     @Volatile
     private var blockCloses = false
+
+    /** Set to make deleting a document stop until [release]. */
+    @Volatile
+    private var blockDiscards = false
+
+    /** Set to make opening the chosen document stop until [release]. */
+    @Volatile
+    private var blockOpens = false
+
+    /**
+     * Whether the stream to a document had been closed when it was deleted.
+     *
+     * One entry per delete. The order matters on its own: a document deleted
+     * while a stream to it is still open is a delete racing a provider that has
+     * not finished with the file, which is what the claim over the open exists
+     * to rule out.
+     */
+    private val closedWhenDiscarded = mutableListOf<Boolean>()
+
+    /**
+     * Where the coordinator's answer to an open is applied, held when
+     * [holdMainThread] is set so a case can run a teardown inside the hand-off.
+     */
+    private val mainQueue = LinkedBlockingQueue<Runnable>()
+
+    /** Set to divert the coordinator's main-thread hand-offs into [mainQueue]. */
+    @Volatile
+    private var holdMainThread = false
+
+    /**
+     * The coordinator's own provider thread, real rather than direct.
+     *
+     * Single, as the one it ships with is, so a close still precedes the delete
+     * of the same document. [awaitProviderIdle] is how a case waits for what was
+     * handed to it, and every case that asserts on a discarded document calls it
+     * first: without that the assertion races the hand-off and passes or fails
+     * on the runner's mood.
+     */
+    private lateinit var providerWork: ExecutorService
 
     /** Counted down by whichever call is holding the provider. */
     private val insideCall = CountDownLatch(1)
@@ -125,14 +178,23 @@ class DownloadWriteBlockingTest {
         }
 
         override fun openDestination(destination: Uri): OutputStream {
+            if (blockOpens) {
+                insideCall.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
             stream = BlockingStream()
             documents[destination] = stream
             return stream
         }
 
         override fun discardDestination(destination: Uri) {
+            if (blockDiscards) {
+                insideCall.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
             synchronized(discarded) {
                 discarded += destination
+                closedWhenDiscarded += documents[destination]?.closed ?: false
                 documents.remove(destination)
             }
         }
@@ -140,6 +202,8 @@ class DownloadWriteBlockingTest {
         override fun requestBytes(requestId: String, url: String) {
             readRequests += requestId to url
         }
+
+        override fun releaseBytes(url: String) = Unit
 
         override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
             synchronized(reported) { reported += outcome to fileName }
@@ -158,14 +222,29 @@ class DownloadWriteBlockingTest {
         discarded.clear()
         reported.clear()
         readRequests.clear()
+        closedWhenDiscarded.clear()
+        mainQueue.clear()
         blockWrites = false
         blockCloses = false
-        coordinator = DownloadCoordinator(host)
+        blockDiscards = false
+        blockOpens = false
+        holdMainThread = false
+        providerWork = Executors.newSingleThreadExecutor()
+        // Inline unless a case says otherwise: the coordinator brings the answer
+        // to an open back to the thread the picker answered on, and running that
+        // where it is handed over keeps every case below reading state that has
+        // settled. `an open whose answer is held` is the one that drives it.
+        coordinator = DownloadCoordinator(
+            host,
+            providerWork = providerWork,
+            mainThread = Executor { work -> if (holdMainThread) mainQueue.put(work) else work.run() },
+        )
     }
 
     @AfterEach
     fun tearDown() {
         release.countDown()
+        providerWork.shutdownNow()
         unmockkAll()
     }
 
@@ -179,6 +258,9 @@ class DownloadWriteBlockingTest {
         coordinator.onDownloadNamed("blob:x", name)
         coordinator.onDownloadStart("blob:x", null)
         coordinator.onDestinationChosen(pickerIds.last(), target)
+        // The document is opened on the provider thread now, so the page has not
+        // been asked for anything yet when the picker's answer returns.
+        awaitProviderIdle()
         return readRequests.last().first
     }
 
@@ -191,6 +273,23 @@ class DownloadWriteBlockingTest {
         insideCall.await(5, TimeUnit.SECONDS),
         "nothing ever reached the blocking stream, so no call was contended and " +
             "the timing below would be measuring an idle coordinator",
+    )
+
+    /**
+     * Waits for everything handed to the provider thread up to this point.
+     *
+     * A barrier rather than a sleep: the thread is single, so work queued behind
+     * the hand-off cannot run in front of it. Every case that asserts on a
+     * discarded document goes through here first, or the assertion races the
+     * hand-off and answers differently on a loaded runner.
+     */
+    private fun awaitProviderIdle() = assertTrue(
+        CountDownLatch(1).let { drained ->
+            providerWork.execute { drained.countDown() }
+            drained.await(5, TimeUnit.SECONDS)
+        },
+        "the provider thread never got through what it was handed, so what follows " +
+            "would be reading the state of a teardown that has not happened yet",
     )
 
     /** How long [work] took, in milliseconds. */
@@ -234,6 +333,7 @@ class DownloadWriteBlockingTest {
 
         release.countDown()
         writer.join(5_000)
+        awaitProviderIdle()
 
         assertEquals(
             listOf(target), discarded,
@@ -279,6 +379,7 @@ class DownloadWriteBlockingTest {
 
         release.countDown()
         closer.join(5_000)
+        awaitProviderIdle()
 
         assertEquals(
             emptyList<Uri>(), discarded,
@@ -308,6 +409,7 @@ class DownloadWriteBlockingTest {
 
         release.countDown()
         writer.join(5_000)
+        awaitProviderIdle()
 
         assertEquals(
             listOf(DownloadOutcome.FAILED to "report.pdf"), reported,
@@ -341,6 +443,243 @@ class DownloadWriteBlockingTest {
     }
 
     /**
+     * The teardown with nothing claimed, which is most of a transfer's wall
+     * time.
+     *
+     * The claim only covers a write or a close that is actually outstanding.
+     * Between two pieces the page yields, and between the picker answering and
+     * the first piece there is a whole trip through the bridge, so a teardown
+     * arriving at any of those moments finds `busy` false and does the work
+     * itself: the close that commits the buffered bytes to the provider, and
+     * the delete behind it. On the UI thread that is the same ANR the claim was
+     * written to remove, reached by the other half of the same window.
+     *
+     * NEGATIVE CONTROL: in `closeAndDiscard`, replace the
+     * `offThread("close") { it.close() }` hand-off with a plain `it.close()`.
+     * This case then waits the blocked close out and fails on the elapsed time.
+     */
+    @Test
+    fun `a teardown between two pieces does not wait for the close that commits them`() {
+        val target = destination()
+        val id = startAndChoose(target)
+        // Returns, so nothing is claimed when the teardown arrives. This is the
+        // ordinary state of a transfer, not a corner of one.
+        coordinator.onBytes(id, encode("payload"))
+        blockCloses = true
+
+        val waitedMs = timed { coordinator.onPageGone() }
+        awaitInsideProvider()
+
+        assertTrue(
+            waitedMs < 1_000,
+            "the teardown waited ${waitedMs}ms for the close to commit. Closing a " +
+                "content:// stream is what pushes the buffered bytes into the provider, " +
+                "so it costs whatever the provider costs, and onPageGone runs on the UI " +
+                "thread from onDestroy, from every finished main-frame load and from " +
+                "recreateWebView",
+        )
+    }
+
+    /**
+     * The other half of the case above: not waiting is easy by doing nothing.
+     *
+     * NEGATIVE CONTROL: drop either hand-off from `closeAndDiscard` entirely and
+     * this goes red on the stream or on the document.
+     */
+    @Test
+    fun `the document a teardown handed over is still closed and removed`() {
+        val target = destination()
+        val id = startAndChoose(target)
+        coordinator.onBytes(id, encode("payload"))
+        blockCloses = true
+
+        coordinator.onPageGone()
+        awaitInsideProvider()
+        release.countDown()
+        awaitProviderIdle()
+
+        assertTrue(stream.closed, "the stream was left open on a download that is over")
+        assertEquals(
+            listOf(target), discarded,
+            "the picker's file is still in the user's folder, part-written and wearing " +
+                "the name of the file they asked for, which is indistinguishable from a " +
+                "finished save until they open it",
+        )
+    }
+
+    /**
+     * The delete, which is a second trip into the same provider and just as
+     * unbounded as the close.
+     *
+     * NEGATIVE CONTROL: replace the `offThread("discard")` hand-off in
+     * `closeAndDiscard` with a direct `host.discardDestination(it)`. The close
+     * being handed over does not save it: this case leaves the close free to
+     * return and blocks only the delete.
+     */
+    @Test
+    fun `a teardown does not wait for the document to be deleted either`() {
+        val target = destination()
+        val id = startAndChoose(target)
+        coordinator.onBytes(id, encode("payload"))
+        blockDiscards = true
+
+        val waitedMs = timed { coordinator.onPageGone() }
+        awaitInsideProvider()
+
+        assertTrue(
+            waitedMs < 1_000,
+            "the teardown waited ${waitedMs}ms inside DocumentsContract.deleteDocument, " +
+                "which is a synchronous call into the provider that owns the document",
+        )
+    }
+
+    /**
+     * The picker outliving the download it was opened for, which is the one
+     * path here that needs no second thread at all: the result arrives on the
+     * UI thread, the document it created belongs to nobody, and the delete of
+     * it used to run right there.
+     *
+     * NEGATIVE CONTROL: restore the direct `host.discardDestination(it)` in the
+     * "belongs to no download in flight" branch of `onDestinationChosen`.
+     */
+    @Test
+    fun `a picker answering for a download that is gone deletes off the caller's thread`() {
+        val target = destination()
+        coordinator.onDownloadNamed("blob:x", "report.pdf")
+        coordinator.onDownloadStart("blob:x", null)
+        val requestId = pickerIds.last()
+        // The renderer died under the picker. The result still arrives, having
+        // already created a document nobody now owns.
+        coordinator.onPageGone()
+        blockDiscards = true
+
+        val waitedMs = timed { coordinator.onDestinationChosen(requestId, target) }
+        awaitInsideProvider()
+
+        assertTrue(
+            waitedMs < 1_000,
+            "the activity result callback waited ${waitedMs}ms deleting a document, on " +
+                "the UI thread, with no other thread involved at all",
+        )
+    }
+
+    /**
+     * Opening the chosen document is the first trip into the provider and was
+     * the last one still made on the UI thread, under the monitor.
+     *
+     * `onDestinationChosen` runs in the activity-result callback, so a provider
+     * whose process has to be cold-started, or that answers over a network,
+     * froze the editor from the moment the picker closed; past five seconds the
+     * system offers to close the app, taking the editor session with it.
+     *
+     * NEGATIVE CONTROL: put the open back inline, replacing the
+     * `providerWork.execute { ... }` hand-off in `onDestinationChosen` with the
+     * open and a direct call to `onDestinationOpened`. This goes red on the
+     * elapsed time.
+     */
+    @Test
+    fun `the picker's answer does not wait for the document to open`() {
+        val target = destination()
+        coordinator.onDownloadNamed("blob:x", "report.pdf")
+        coordinator.onDownloadStart("blob:x", null)
+        blockOpens = true
+
+        val waitedMs = timed { coordinator.onDestinationChosen(pickerIds.last(), target) }
+        awaitInsideProvider()
+
+        release.countDown()
+        assertTrue(
+            waitedMs < 1_000,
+            "the activity result callback waited ${waitedMs}ms inside the provider, on " +
+                "the UI thread. openOutputStream cold-starts the provider's process and " +
+                "has no timeout, so that wait is the editor frozen and then an ANR",
+        )
+    }
+
+    /**
+     * And the monitor is not held across it either, which is the half the timing
+     * above cannot see: a caller that does not wait for the provider is worth
+     * nothing if every other caller waits for it instead.
+     *
+     * NEGATIVE CONTROL: the same restoration as the case above. The open then
+     * runs under `@Synchronized`, so this teardown waits for the whole of it.
+     */
+    @Test
+    fun `a teardown does not wait for a document that is still opening`() {
+        val target = destination()
+        coordinator.onDownloadNamed("blob:x", "report.pdf")
+        coordinator.onDownloadStart("blob:x", null)
+        blockOpens = true
+        // On a thread of its own, so that restoring the inline open leaves this
+        // case measuring a monitor a blocked caller is holding rather than a
+        // provider that has already returned.
+        val chooser = Thread { coordinator.onDestinationChosen(pickerIds.last(), target) }
+            .apply { start() }
+        awaitInsideProvider()
+
+        val waitedMs = timed { coordinator.onPageGone() }
+
+        release.countDown()
+        chooser.join(5_000)
+        awaitProviderIdle()
+        assertTrue(
+            waitedMs < 1_000,
+            "the teardown waited ${waitedMs}ms for a document to open. onPageGone is " +
+                "called from onDestroy, from every finished main-frame load and from " +
+                "recreateWebView, all on the UI thread",
+        )
+        assertEquals(
+            listOf(target), discarded,
+            "the download was abandoned while its document was opening, and the empty " +
+                "file the picker created for it stayed in the user's folder wearing the " +
+                "name of the file they asked for",
+        )
+    }
+
+    /**
+     * The claim over the open, which is what orders the delete after the close.
+     *
+     * A teardown that lands while the answer to an open is still in the air
+     * finds the download claimed and leaves the document to the thread that
+     * opened it, so the stream is closed before the delete goes in. Without the
+     * claim the teardown deletes first and the close follows it, which is a
+     * delete racing a provider that has not finished with the file.
+     *
+     * NEGATIVE CONTROL: delete `request.busy = true` from `onDestinationChosen`.
+     * The teardown below then discards immediately, with no stream to close yet,
+     * and this goes red on `closedWhenDiscarded`.
+     */
+    @Test
+    fun `a document opened into a teardown is closed before it is deleted`() {
+        val target = destination()
+        coordinator.onDownloadNamed("blob:x", "report.pdf")
+        coordinator.onDownloadStart("blob:x", null)
+        // Held so the teardown lands in the gap between the provider answering
+        // and the coordinator acting on the answer.
+        holdMainThread = true
+        coordinator.onDestinationChosen(pickerIds.last(), target)
+        awaitProviderIdle()
+        assertTrue(
+            readRequests.isEmpty(),
+            "the page was asked for the bytes from the provider thread. requestBytes " +
+                "reaches the page through evaluateJavascript, which the WebView refuses " +
+                "from any thread but its own",
+        )
+
+        coordinator.onPageGone()
+        holdMainThread = false
+        mainQueue.poll(5, TimeUnit.SECONDS)?.run()
+        awaitProviderIdle()
+
+        assertEquals(listOf(target), discarded, "the abandoned document was left behind")
+        assertEquals(
+            listOf(true), closedWhenDiscarded,
+            "the document was deleted with the stream to it still open, so the delete " +
+                "raced a provider that had not finished with the file",
+        )
+    }
+
+    /**
      * The control that stops every case above from passing over a coordinator
      * that stopped writing altogether.
      */
@@ -352,6 +691,7 @@ class DownloadWriteBlockingTest {
         coordinator.onBytes(id, encode("fun main"))
         coordinator.onBytes(id, encode("() {}"))
         coordinator.onComplete(id, null)
+        awaitProviderIdle()
 
         assertEquals("fun main() {}", stream.written.toString())
         assertTrue(stream.closed, "the document is closed, which is what commits it")

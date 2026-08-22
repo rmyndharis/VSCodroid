@@ -191,34 +191,158 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
         return shown.slice();
     };
 
-    const moved = { idle: 3, soft: 4, error: 6 };
-    assert.strictEqual(poll(snapshot(4, 1, 1, moved)).length, 1, 'no warning at the soft budget');
+    // Spread wider than the shipped budget on purpose: the re-arm is at the
+    // idle baseline and the tier above it is the soft budget, so a fixture
+    // whose two numbers are adjacent has no count between them to probe with.
+    const moved = { idle: 3, soft: 6, error: 9 };
+    assert.strictEqual(poll(snapshot(6, 1, 1, moved)).length, 1, 'no warning at the soft budget');
     assert.deepStrictEqual(
-        poll(snapshot(4, 1, 1, moved)), [],
+        poll(snapshot(6, 1, 1, moved)), [],
         'the same warning was raised twice, so it is not latched and this check cannot tell a ' +
             'cleared latch from one that was never set',
     );
 
-    // Three is this snapshot's idle baseline, not below it, so the latch must
-    // hold. It IS below the 5 that used to be written here, which is the whole
-    // discrimination: nothing else in this file can tell the two apart.
-    assert.deepStrictEqual(poll(snapshot(3, 1, 0, moved)), [], 'a device at its baseline was interrupted');
+    // Four is above this snapshot's idle baseline of three, so the warning latch
+    // must hold. It is at or below the 5 that used to be written here, which is
+    // the whole discrimination: nothing else in this file can tell a reset
+    // measured against the budget from one measured against that literal.
+    assert.deepStrictEqual(poll(snapshot(4, 1, 0, moved)), [], 'a settling device was interrupted');
     assert.deepStrictEqual(
-        poll(snapshot(4, 1, 1, moved)), [],
-        'a count of 3 is not below the idle baseline of 3 this snapshot names, yet the latch was ' +
-            'cleared and the same warning raised again, so the reset is measured against a ' +
+        poll(snapshot(6, 1, 1, moved)), [],
+        'a count of 4 is above the idle baseline of 3 this snapshot names, yet the warning latch ' +
+            'was cleared and the same warning raised again, so the reset is measured against a ' +
             'literal rather than against the budget',
     );
 
     // The other direction, so the assertion above is not satisfied by a latch
-    // that never clears at all: below the baseline it must, and the warning
-    // must come back.
-    assert.deepStrictEqual(poll(snapshot(2, 1, 0, moved)), [], 'a quiet device was interrupted');
+    // that never clears at all: AT the baseline it must clear, and the warning
+    // must come back. At, not below: the baseline is what the app costs with
+    // nothing happening, so asking for fewer asks for a count no session with
+    // the workbench open can reach, and the tier was one-shot for the life of
+    // the extension host.
+    assert.deepStrictEqual(poll(snapshot(3, 1, 0, moved)), [], 'a quiet device was interrupted');
     assert.strictEqual(
-        poll(snapshot(4, 1, 1, moved)).length, 1,
-        'the warning never returns after the count fell below the idle baseline, so the latch is ' +
-            'permanent and the check above would pass on an extension that warns exactly once',
+        poll(snapshot(6, 1, 1, moved)).length, 1,
+        'the warning never returns after the count fell back to the idle baseline, so the latch ' +
+            'is permanent and the check above would pass on an extension that warns exactly once',
     );
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// One reading raises one notification, and the tier it raises is the severe one.
+//
+// The three tiers are an if/else-if chain over two independent latches, and the
+// critical arm used to set only its own. So the poll after a critical one, at a
+// count that had not moved, fell through to the soft arm and raised 'above the
+// target' on top of the error already on screen: two notifications about one
+// reading, the second the less severe, and both permanent afterwards because
+// only a count below the idle baseline clears either. Measured against the
+// shipped file at 3, 20, 20, 20: nothing, the error, the warning, nothing.
+//
+// Driven on ONE copy across polls, like the block above, because a fresh copy
+// starts with both latches false and can only ever show the first of them.
+//
+// NEGATIVE CONTROL: drop `warningShownAtThreshold = true` from the critical arm
+// of updateStatusBar() and the third poll raises the warning again, which is
+// what the first assertion below refuses.
+{
+    const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-tier-'));
+    process.env.TMPDIR = tmp;
+    delete require.cache[require.resolve(EXTENSION)];
+    const extension = require(EXTENSION);
+    const poll = (snap) => {
+        fs.writeFileSync(path.join(tmp, 'vscodroid-processes.json'), JSON.stringify(snap));
+        shown.length = 0;
+        extension.activate({ subscriptions: [] });
+        extension.deactivate();
+        return shown.slice();
+    };
+
+    // A jump straight past the error budget, which is what a project opening
+    // with a terminal and two language servers does between two 10 s polls.
+    assert.deepStrictEqual(poll(snapshot(3, 1, 0)), [], 'a quiet device was interrupted');
+    const raised = poll(snapshot(20, 9, 6));
+    assert.strictEqual(raised.length, 1, `one reading raised ${raised.length} notifications`);
+    assert.strictEqual(raised[0].level, 'error', `expected the error tier at 20, got ${raised[0].level}`);
+
+    assert.deepStrictEqual(
+        poll(snapshot(20, 9, 6)), [],
+        'the poll after a critical one, at a count that had not moved, raised a second ' +
+            'notification: the warning tier fires behind the error tier because the critical ' +
+            'arm leaves the warning latch unset, and the user reads the milder of the two last',
+    );
+
+    // The other direction, so the assertion above is not met by an extension
+    // that has simply gone quiet for good: at the baseline both latches clear,
+    // and the tiers must still work afterwards.
+    assert.deepStrictEqual(poll(snapshot(2, 1, 0)), [], 'a quiet device was interrupted');
+    const again = poll(snapshot(20, 9, 6));
+    assert.strictEqual(
+        again.length, 1,
+        'the critical tier never returns after the count fell to the idle baseline, so the ' +
+            'assertion above would pass on an extension that notifies exactly once',
+    );
+    assert.strictEqual(again[0].level, 'error', `expected the error tier again, got ${again[0].level}`);
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// Each tier re-arms at the tier below it, and the two are not the same count.
+//
+// Both latches used to clear together and only below the idle baseline, which
+// process-monitor.js measures as what the app costs doing nothing: five, the
+// bootstrap, the server, the file watcher, the agent host and the chat backend.
+// No session with the workbench open goes under that, so on a device neither
+// tier ever came back and both were one-shot for the life of the extension
+// host. A recovery that a user can actually produce -- close the extra
+// terminals, let the language servers idle-kill -- lands at 6 or 7, which is
+// where the error tier has to re-arm if it is to fire on the next project that
+// runs the count away.
+//
+// The warning tier deliberately does NOT re-arm there: 7 is still above the
+// target that warning names, so repeating it says nothing the user did not act
+// on. That is the second assertion, and it is the one that fails on the obvious
+// over-correction of clearing both flags below the soft budget.
+//
+// NEGATIVE CONTROL: restore `} else if (total < idle) {` with both flags cleared
+// inside it. The last assertion goes red -- 7 is not below 5, so the error tier
+// never returns.
+{
+    const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-rearm-'));
+    process.env.TMPDIR = tmp;
+    delete require.cache[require.resolve(EXTENSION)];
+    const extension = require(EXTENSION);
+    const poll = (snap) => {
+        fs.writeFileSync(path.join(tmp, 'vscodroid-processes.json'), JSON.stringify(snap));
+        shown.length = 0;
+        extension.activate({ subscriptions: [] });
+        extension.deactivate();
+        return shown.slice();
+    };
+
+    assert.deepStrictEqual(poll(snapshot(3, 1, 0)), [], 'a quiet device was interrupted');
+    assert.strictEqual(poll(snapshot(20, 9, 6)).length, 1, 'the critical tier raised nothing at 20');
+
+    // The recovery: under the soft budget of 8, and nowhere near the idle
+    // baseline of 5.
+    assert.deepStrictEqual(poll(snapshot(7, 2, 1)), [], 'a recovering device was interrupted');
+
+    assert.deepStrictEqual(
+        poll(snapshot(10, 4, 2)), [],
+        'the warning tier came back at a count that never returned to the idle baseline, so a ' +
+            'user who has already been told once and acted on it is told again for a count ' +
+            'they have improved',
+    );
+
+    const back = poll(snapshot(20, 9, 6));
+    assert.strictEqual(
+        back.length, 1,
+        'the critical tier never returned after the count fell below the soft budget, so the ' +
+            'notification carrying the Kill Idle Servers button is raised once per extension ' +
+            'host however often the count runs away afterwards',
+    );
+    assert.strictEqual(back[0].level, 'error', `expected the error tier again, got ${back[0].level}`);
 
     fs.rmSync(tmp, { recursive: true, force: true });
 }

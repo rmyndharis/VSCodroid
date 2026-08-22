@@ -81,6 +81,10 @@ class SafFolderPathLoggingTest {
         every { resolver.query(any(), any(), any(), any(), any()) } returns null
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
+        // The manager unwraps whatever it is given to the application context, so a
+        // relaxed mock that answers a different object for it hands the manager a
+        // filesDir that is not the one below.
+        every { context.applicationContext } returns context
         every { context.contentResolver } returns resolver
         every { context.getSharedPreferences(any(), any()) } returns fakePrefs()
     }
@@ -171,7 +175,7 @@ class SafFolderPathLoggingTest {
      * before phase 2 exists, so `copyDocumentToLocal` is never reached and the gate's
      * coverage became the reviewer's coverage.
      */
-    private fun deviceHoldingOneFile() {
+    private fun deviceHoldingOneFile(lastModified: Long = 1_700_000_000_000L) {
         val docId = "primary:Documents/$folderName/notes.txt"
         val docUri = mockk<Uri>(relaxed = true)
         every { docUri.lastPathSegment } returns docId
@@ -194,7 +198,7 @@ class SafFolderPathLoggingTest {
         every { cursor.getString(1) } returns "notes.txt"
         every { cursor.getString(2) } returns "text/plain"
         every { cursor.getLong(3) } returns 12L
-        every { cursor.getLong(4) } returns 1_700_000_000_000L
+        every { cursor.getLong(4) } returns lastModified
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             row = -1
             cursor
@@ -232,6 +236,35 @@ class SafFolderPathLoggingTest {
         syncOneFolder()
 
         assertFolderNotNamed()
+    }
+
+    /**
+     * The line the copy path's redaction does not cover, on the branch that only exists
+     * for providers reporting no `COLUMN_LAST_MODIFIED` (MTP, some USB-OTG bridges, some
+     * network providers). With no clock to compare, the sync reads both sides and asks
+     * whether they hold the same bytes, and that read comes from the provider too.
+     */
+    @Test
+    fun `a comparison that throws does not repeat the provider's own message`() {
+        val mirrorDir = File(filesDir, "saf-mirrors/abc123def456").apply { mkdirs() }
+        // The same length the document reports, which is what gets the comparison as far
+        // as opening the device copy at all.
+        File(mirrorDir, "notes.txt").writeText("123456789012")
+        deviceHoldingOneFile(lastModified = 0L)
+        every { resolver.openInputStream(any()) } throws java.io.FileNotFoundException(
+            "open failed for $treeUri/document/primary%3ADocuments%2FClientProject%2Fnotes.txt"
+        )
+
+        runBlocking { SafSyncEngine(context).initialSync(folderUri, mirrorDir) { _, _ -> } }
+
+        assertFolderNotNamed()
+        assertTrue(
+            emitted.any {
+                it.contains("Could not compare notes.txt") &&
+                    it.contains("FileNotFoundException")
+            },
+            "the comparison never ran, so this case is asserting nothing: $emitted",
+        )
     }
 
     @Test

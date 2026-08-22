@@ -104,6 +104,56 @@ class PickerInstalledStateTest {
     }
 
     /**
+     * The reading is repeated when the screen comes back, because one reading
+     * describes the moment it was taken.
+     *
+     * The picker is offered on any launch that has not answered it, and by then
+     * the launcher shortcut to `ToolchainActivity` is published, so the user can
+     * leave these cards on screen, install a toolchain from there, and come back.
+     * A card built from the older reading carries no badge and still takes a tick.
+     *
+     * NEGATIVE CONTROL: delete `onStart` from SplashActivity, or the
+     * `pickerAdapter?.setInstalled(` line inside it, and this goes red. The
+     * activity had no lifecycle callback other than onCreate and onDestroy when
+     * this was written, which is how the staleness went unnoticed.
+     */
+    @Test
+    fun `the picker's installed set is read again when the screen comes back`() {
+        val body = code(bodyOf("override fun onStart("))
+
+        assertTrue(
+            Regex("""(?m)^\s*pickerAdapter\?\.setInstalled\(""").containsMatchIn(body),
+            "nothing refreshes the picker's installed set, so the refusal in " +
+                "ToolchainCardState reads a snapshot taken before the user left for the " +
+                "Toolchains screen and installed something",
+        )
+    }
+
+    /**
+     * And asked once more at the point the download is spent.
+     *
+     * The refresh above cannot cover everything: replacing the installed set
+     * unticks nothing, so a pack ticked before it was installed keeps its tick
+     * behind its own badge, and `reconcileDeliveredPacks` writes the record from
+     * the toolchain I/O thread with no lifecycle callback to hang a re-read on.
+     *
+     * NEGATIVE CONTROL: put `val selected = adapter.getSelectedPackNames()` back
+     * in the Continue handler and this goes red. `PickerSpendGuardTest` covers
+     * what the filter itself decides.
+     */
+    @Test
+    fun `Continue filters the choice against the record rather than trusting the cards`() {
+        val body = code(bodyOf("private fun showToolchainPicker("))
+
+        assertTrue(
+            Regex("""(?m)^\s*val selected = notYetInstalled\(""").containsMatchIn(body),
+            "Continue starts a download for everything ticked, including a toolchain " +
+                "installed while these cards were on screen, which spends the transfer " +
+                "and the copy a second time",
+        )
+    }
+
+    /**
      * The control for the extraction, because a body that quietly ran past its
      * function would satisfy the case above by finding the call somewhere else.
      * `startDownloads` is the declaration after `showToolchainPicker`, so its name

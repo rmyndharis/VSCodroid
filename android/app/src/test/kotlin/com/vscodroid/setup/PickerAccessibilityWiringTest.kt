@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * The accessibility wiring on the first-run picker, and the one on the Toolchains
+ * The accessibility wiring on the toolchain cards, and the one on the Toolchains
  * toolbar, kept from being deleted by someone who cannot see what it does.
  *
  * Both are invisible to a sighted reviewer and to every other test here. Selection
@@ -192,6 +192,74 @@ class PickerAccessibilityWiringTest {
             calls[0].contains(","),
             "${calls[0]} passes no payload, so the default change animation runs and " +
                 "drops accessibility focus off the card that was just tapped",
+        )
+    }
+
+    /**
+     * The same question of the channel that fires hardest, which had the same
+     * answer written for it and did not get it.
+     *
+     * `updateState` is where every download report lands: once per 8 KB read on
+     * the HTTP path, so thousands of times for one 55 MB toolchain, on the card
+     * whose Cancel button is the only way to stop that transfer. Without a payload
+     * each one runs the default change animation, swaps the item view and takes
+     * accessibility focus with it, so a user who has just reached Cancel is thrown
+     * off it again for the whole of the download. Nothing in this app customises
+     * the item animator or supplies stable ids, so the default behaviour is what
+     * runs.
+     *
+     * NEGATIVE CONTROL: drop the payload argument from `notifyItemChanged` in
+     * `updateState` and this goes red. Measured.
+     */
+    @Test
+    fun `the progress rebind carries a payload`() {
+        val body = bodyOf(adapter, "fun updateState(")
+
+        // Anchored to the start of a line, with an `if (...)` allowed in front:
+        // the call sits behind the position guard. A substring search would be
+        // satisfied by a commented-out call, which is how a developer disables
+        // something while debugging.
+        val calls = Regex("""(?m)^\s*(?:if\s*\([^)]*\)\s*)?(notifyItemChanged\([^)]*\))""")
+            .findAll(body).map { it.groupValues[1] }.toList()
+
+        assertEquals(
+            1, calls.size,
+            "expected exactly one notifyItemChanged in updateState, found $calls",
+        )
+        assertTrue(
+            calls[0].contains(","),
+            "${calls[0]} passes no payload, so every download report runs the default " +
+                "change animation and drops accessibility focus off Cancel",
+        )
+    }
+
+    /**
+     * The second channel into the same cards, on the same screen.
+     *
+     * `ToolchainActivity` re-asks the process what is downloading once a second
+     * while it is in front, and pushes the answer through here whenever it has
+     * changed, which during a transfer is every time. `notifyDataSetChanged`
+     * rebinds every card with no payload at all, so it costs the same focus for
+     * the same reason. The item list is fixed, so a range covers it.
+     *
+     * NEGATIVE CONTROL: put `notifyDataSetChanged()` back in `setDownloading` and
+     * this goes red on both assertions. Measured.
+     */
+    @Test
+    fun `the download snapshot is pushed without the change animation`() {
+        val body = bodyOf(adapter, "fun setDownloading(")
+
+        assertTrue(
+            !Regex("""(?m)^\s*notifyDataSetChanged\(""").containsMatchIn(body),
+            "setDownloading rebinds every card with notifyDataSetChanged, once a " +
+                "second for the length of a download, and each rebind takes " +
+                "accessibility focus off whatever button the user is on",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*notifyItemRangeChanged\([^)]*PAYLOAD_[A-Z_]+\)""")
+                .containsMatchIn(body),
+            "setDownloading does not push its snapshot as a payloaded range, so " +
+                "whatever it does instead runs the change animation",
         )
     }
 

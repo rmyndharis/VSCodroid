@@ -41,6 +41,16 @@ class SplashActivity : AppCompatActivity() {
     private var currentDownloadIndex = -1
     private var cancelled = false
 
+    /**
+     * The picker's cards while the picker is the screen on show, and null in
+     * every other phase of this activity.
+     *
+     * Held so that coming back to the picker can correct what it says is already
+     * on disk. Nothing else may use it: after Continue the layout is replaced and
+     * these cards are detached, which is why [startDownloads] drops it.
+     */
+    private var pickerAdapter: ToolchainPickerAdapter? = null
+
     // Progress UI refs (only valid after setContentView to progress layout)
     private val progressRows = mutableMapOf<String, ProgressRow>()
 
@@ -128,7 +138,7 @@ class SplashActivity : AppCompatActivity() {
             // lifecycleScope is cancelled the moment we finish for MainActivity.
             if (setup.pythonRuntimeNeedsWork()) {
                 Logger.i(tag, "Bundled Python changed since the last extraction; reconciling")
-                setContentView(R.layout.activity_splash)
+                showSplashLayout()
                 findViewById<TextView>(R.id.statusText).text = getString(R.string.status_updating_python)
                 lifecycleScope.launch {
                     withContext(Dispatchers.IO) { setup.reconcilePythonRuntime() }
@@ -141,7 +151,7 @@ class SplashActivity : AppCompatActivity() {
             return
         }
 
-        setContentView(R.layout.activity_splash)
+        showSplashLayout()
         val statusText = findViewById<TextView>(R.id.statusText)
         val progressBar = findViewById<ProgressBar>(R.id.progressBar)
 
@@ -179,6 +189,24 @@ class SplashActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Logger.e(tag, "Launch-time refresh of $what failed", e)
         }
+    }
+
+    /**
+     * The splash layout, padded for the system bars the window draws behind.
+     *
+     * Every other full-screen root in the app is padded at its own
+     * `setContentView` ([showToolchainPicker], [startDownloads],
+     * [ToolchainActivity]); this one was the exception, because its root carried
+     * no id to look up. Nothing else keeps a child off the navigation bar once
+     * `drawBehindSystemBars()` has run, and the one child that can reach it is
+     * the Retry button [showSetupError] anchors to the bottom.
+     *
+     * A method rather than two padded call sites, so a third cannot arrive
+     * unpadded.
+     */
+    private fun showSplashLayout() {
+        setContentView(R.layout.activity_splash)
+        findViewById<View>(R.id.splashRoot).padForSystemBars()
     }
 
     private fun runSetupWithRetry(
@@ -224,6 +252,16 @@ class SplashActivity : AppCompatActivity() {
         runOnUiThread {
             statusText.text = message
             progressBar.visibility = View.GONE
+            // Nothing is in flight from here, and this screen changes only when a
+            // person taps, so the reason activity_splash.xml holds the display
+            // awake has just expired. Left held, a phone put down or pocketed on
+            // this screen lights until the battery is flat. The layout's own
+            // comment makes this argument for the picker one screen later; the
+            // failure state is the wait it did not cover, because the same layout
+            // hosts it. Retry below turns it back on, and a Retry that succeeds
+            // leaves this layout for one that never had the flag.
+            val root = findViewById<View>(R.id.splashRoot)
+            root.keepScreenOn = false
             // Spoken, because the screen alone cannot say it. Setup writes into one
             // label for minutes; a user not touching the screen hears nothing between
             // the window opening and MainActivity arriving, so "still extracting" and
@@ -245,22 +283,41 @@ class SplashActivity : AppCompatActivity() {
                     statusText.text = getString(R.string.extracting_message)
                     progressBar.visibility = View.VISIBLE
                     progressBar.progress = 0
+                    // Extraction is about to run again, so the reason the flag
+                    // exists is back. Through the captured root rather than
+                    // findViewById here, where the receiver is the button.
+                    root.keepScreenOn = true
                     parent.removeView(this)
                     runSetupWithRetry(setup, statusText, progressBar)
                 }
             }
-            // Constrained below the (hidden) progress bar, centered. Added
-            // without LayoutParams, a ConstraintLayout child lays out at
-            // (0,0), the top-left corner, under the transparent status bar.
+            // Centered, below the (hidden) progress bar and against the bottom of
+            // the root. Added without LayoutParams, a ConstraintLayout child lays
+            // out at (0,0), the top-left corner, under the transparent status bar.
+            //
+            // Both vertical constraints, with the bias against the bottom, and
+            // that pair is what keeps the only control on this screen reachable.
+            // The message above it is the failed step plus up to
+            // FirstRunSetup.DETAIL_LIMIT characters of the cause, in a packed
+            // chain that grows downward as it wraps: anchored to the message
+            // alone, a long one in landscape or at a raised font scale pushes the
+            // button past the bottom of the window, and there is no scroll
+            // container to reach it with. Against the bottom it cannot be pushed
+            // anywhere, and it lands inside the padding showSplashLayout applies,
+            // which is what keeps it clear of the navigation bar. The top
+            // constraint stays so it is never drawn above the message it answers.
             if (parent is ConstraintLayout) {
                 val lp = ConstraintLayout.LayoutParams(
                     ConstraintLayout.LayoutParams.WRAP_CONTENT,
                     ConstraintLayout.LayoutParams.WRAP_CONTENT,
                 ).apply {
                     topToBottom = R.id.progressBar
+                    bottomToBottom = ConstraintLayout.LayoutParams.PARENT_ID
+                    verticalBias = 1f
                     startToStart = ConstraintLayout.LayoutParams.PARENT_ID
                     endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
                     topMargin = (16 * resources.displayMetrics.density).toInt()
+                    bottomMargin = (24 * resources.displayMetrics.density).toInt()
                 }
                 parent.addView(retryButton, lp)
             } else {
@@ -275,6 +332,27 @@ class SplashActivity : AppCompatActivity() {
             // "Tap Retry", so the announcement above carries the instruction and
             // ordinary swiping reaches the control.
         }
+    }
+
+    /**
+     * Re-reads what is on disk for a picker that is still on show.
+     *
+     * The set behind the refusal in `ToolchainCardState.toggleSelection` was read
+     * once, when the cards were built, and this screen can be left and come back:
+     * the launcher shortcut to [ToolchainActivity] is already published on every
+     * launch that reaches the picker with the offer unanswered, so a toolchain can
+     * be installed from there while these cards sit waiting for a person. A card
+     * drawn from the older reading carries no badge and still takes a tick, and
+     * ticking one spends a download that has already been paid for.
+     *
+     * The only lifecycle callback this activity has beyond `onCreate` and
+     * `onDestroy`, and it exists for that one screen; [ToolchainActivity] re-reads
+     * in its own `onStart` for the same reason. Reading here costs one small JSON
+     * file and only while the picker is up.
+     */
+    override fun onStart() {
+        super.onStart()
+        pickerAdapter?.setInstalled(ToolchainManager(this).getInstalledToolchains())
     }
 
     override fun onDestroy() {
@@ -379,14 +457,29 @@ class SplashActivity : AppCompatActivity() {
         adapter.setInstalled(ToolchainManager(this).getInstalledToolchains())
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
+        // So [onStart] can correct these cards when the screen comes back. One
+        // reading is a reading of the moment it was taken, and this screen waits
+        // for a person.
+        pickerAdapter = adapter
 
         continueBtn.setOnClickListener {
-            val selected = adapter.getSelectedPackNames()
+            // Asked of the record again rather than of the cards, because the two
+            // can disagree by the time this is tapped. `setInstalled` replaces what
+            // is installed and does not untick anything, so a pack ticked here and
+            // then installed from the Toolchains screen keeps its tick behind its
+            // own badge; and the record can change with no lifecycle callback to
+            // hang a refresh on, since `reconcileDeliveredPacks` runs on the
+            // toolchain I/O thread from the line that leads to this screen. This is
+            // the last point before the download is spent.
+            val selected = notYetInstalled(
+                adapter.getSelectedPackNames(),
+                ToolchainManager(this).getInstalledToolchains(),
+            )
             markPickerShown()
             if (selected.isEmpty()) {
                 launchMain()
             } else {
-                startDownloads(selected.toList())
+                startDownloads(selected)
             }
         }
 
@@ -399,6 +492,9 @@ class SplashActivity : AppCompatActivity() {
     // -- Download progress phase --
 
     private fun startDownloads(packNames: List<String>) {
+        // The picker's cards go with the layout that held them, so nothing may
+        // push into them after this line.
+        pickerAdapter = null
         setContentView(R.layout.layout_toolchain_progress)
         findViewById<View>(R.id.progressRoot)
             .padForSystemBars(basePx = (24 * resources.displayMetrics.density).toInt())
@@ -740,6 +836,11 @@ class SplashActivity : AppCompatActivity() {
  * until the user finds the Cancel button. Losing one is better than losing the
  * remainder, which is the only reason this defaults to advancing.
  *
+ * A second caller reads it for a different decision: [shouldReleaseSubscription]
+ * asks the same question of one pack to decide whether the Toolchains screen's
+ * Play Core subscription still has anything to hear. The two agree on what the
+ * word means, which is why they share this rather than each spelling out a list.
+ *
  * File scope so it can be tested without an Activity; this project's unit tests
  * have no Robolectric.
  */
@@ -750,6 +851,36 @@ internal fun isTerminalPackStatus(status: Int): Boolean = when (status) {
     AssetPackStatus.WAITING_FOR_WIFI,
     AssetPackStatus.REQUIRES_USER_CONFIRMATION -> false
     else -> true
+}
+
+/**
+ * The ticked packs still worth downloading, given what the install record says.
+ *
+ * The picker refuses to tick a toolchain it knows is installed, and that refusal
+ * reads a set the screen was handed earlier. Two things get past it. A pack
+ * ticked while it was genuinely absent stays ticked when a later reading finds it
+ * installed, because replacing that set unticks nothing; and the record can be
+ * written with no lifecycle callback to hang a re-read on, by the delivered-pack
+ * reconcile that runs on its own thread from the launch this screen is part of.
+ * Neither is caught downstream: `downloadNext` installs what it is given, and
+ * `ToolchainManager.install` has no already-installed branch, so what gets past
+ * here spends the whole download and the whole copy a second time.
+ *
+ * Both sides go through the registry rather than through string surgery, because
+ * the two halves spell a toolchain differently: the install record names it the
+ * short way ("java") and the cards name it the pack way ("toolchain_java"). A
+ * name neither half knows, a toolchain withdrawn from the registry, matches
+ * nothing and is left alone.
+ *
+ * File scope so it can be tested without an Activity; this project's unit tests
+ * have no Robolectric.
+ */
+internal fun notYetInstalled(
+    selected: Collection<String>,
+    installed: Collection<String>,
+): List<String> {
+    val onDisk = installed.mapNotNull { ToolchainRegistry.find(it)?.packName }.toSet()
+    return selected.filterNot { ToolchainRegistry.find(it)?.packName in onDisk }
 }
 
 /**

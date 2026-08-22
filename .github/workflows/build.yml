@@ -275,8 +275,6 @@ jobs:
           fi
           echo "server-main.js present; libnode.so $libnode_size bytes"
 
-      # Needs the extensions tree, so it runs here rather than beside the other
-      # cheap checks in lint. A pattern that matches nothing is invisible twice:
       # Reads the packaged jniLibs, so it belongs here rather than with the
       # source-only checks: the directory is empty until the download scripts
       # above have run, and the gate refuses an empty one rather than passing
@@ -284,6 +282,9 @@ jobs:
       # four-byte libnode.so so Gradle will run.
       - name: Check the documented binary lists match what is packaged
         run: python3 scripts/check-binary-lists.py
+
+      # Needs the extensions tree, so it runs here rather than beside the other
+      # cheap checks in lint. A pattern that matches nothing is invisible twice:
       # the server keeps running, keeps counting against the phantom-process
       # budget, and the feature meant to reclaim it never sees it.
       - name: Check the monitor recognises the language servers that ship

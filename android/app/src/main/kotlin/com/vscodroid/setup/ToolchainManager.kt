@@ -619,7 +619,26 @@ class ToolchainManager(private val context: Context) {
 
         // Remove from state
         state.remove(idx)
-        writeState(state)
+        // Asked, exactly as [installFromDirectoryHoldingPack] asks it, and for the
+        // sibling reason: the record is what everything else reads, so a removal
+        // whose record write failed is not a removal that happened. The files are
+        // gone either way -- they were deleted above -- but reporting
+        // NOT_INSTALLED on top of a record that still names the toolchain tells
+        // the user it is gone while the next launch draws it as installed and
+        // `getAllToolchainEnv` goes on exporting JAVA_HOME for a directory that no
+        // longer exists. Nothing reconciles that later: the repair pass only
+        // checks execute bits.
+        //
+        // FAILED rather than silence, because it is the only channel that reaches
+        // the user with a reason, and the Retry it puts on the card reinstalls the
+        // toolchain, which is the repair for a record that outlived its files.
+        // STORAGE for the reason the install sibling picks it: [writeAtomically]
+        // writes a temporary file and renames it, and what stops that is space or
+        // an I/O fault, both of which "free some space and try again" survives.
+        if (!writeState(state)) {
+            fail("toolchain_$name", ToolchainFailure.STORAGE)
+            return
+        }
         regenerateDerivedFilesLocked()
 
         Logger.i(tag, "Uninstalled toolchain: $name")
@@ -1312,6 +1331,15 @@ class ToolchainManager(private val context: Context) {
                 }
                 Logger.i(tag, "$packName matches the digest the release publishes")
 
+                // Asked again, because the digest above hashes the whole archive
+                // and the card offers Cancel throughout it. Everything past this
+                // line writes: the extraction fills a staging tree the size of the
+                // unpacked toolchain, and the copy after it is ~155 MB into `usr/`.
+                if (download.cancelled) {
+                    Logger.i(tag, "HTTP download cancelled for $packName")
+                    return@execute
+                }
+
                 // Extract: report as TRANSFERRING (file copy phase)
                 download.percent = 90
                 report(packName, AssetPackStatus.TRANSFERRING, 90)
@@ -1323,6 +1351,21 @@ class ToolchainManager(private val context: Context) {
                 // so holding it through installFromDirectory buys nothing and
                 // costs a device its whole download size in headroom.
                 zipFile.delete()
+
+                // The last point at which stopping leaves nothing behind, and the
+                // reason the check is here rather than inside the copy. Extraction
+                // has just spent seconds on a tree the size of the toolchain, and
+                // the card has been offering Cancel for all of it; but
+                // [installFromDirectoryHoldingPack] copies into the shared `usr/`
+                // tree and only then writes the manifest naming what it put there,
+                // so a copy abandoned partway leaves files no uninstall can name,
+                // which is worse than the unwanted install this check refuses. The
+                // staging tree above is this download's own and the finally below
+                // deletes it whole.
+                if (download.cancelled) {
+                    Logger.i(tag, "HTTP download cancelled for $packName")
+                    return@execute
+                }
 
                 // Install from extracted directory (same path as Play Asset Delivery)
                 //
@@ -1356,9 +1399,40 @@ class ToolchainManager(private val context: Context) {
                 // Two-argument remove: a later request for the same pack has
                 // already replaced this entry, and dropping its token would
                 // leave that download uncancellable.
-                httpDownloads.remove(packName, download)
+                val heldThePack = httpDownloads.remove(packName, download)
                 // Clean up temp files
                 tempDir.deleteRecursively()
+                // The cancellation, said out loud. Every `return@execute` on the
+                // flag above leaves without reporting, and a report goes to the
+                // manager that began this download and to no other, so what the
+                // silence withheld was withheld from the only party that could
+                // act on it. The toolchain screen takes the pack out of its own
+                // outstanding set when Cancel is tapped, but that set belongs to
+                // the screen the tap happened on, while the token is process-wide
+                // precisely so a rebuilt screen can stop a transfer the destroyed
+                // one began. Cancelled that way, the destroyed screen's set kept
+                // the pack, and with it the Play Core registration
+                // `ToolchainActivity.shouldReleaseSubscription` hands back only
+                // when that set empties. The first-run queue is the other reader
+                // that needs an ending: it advances on a terminal status, so the
+                // row sat where it was with every pack behind it waiting.
+                //
+                // Here rather than at each of those exits, so a check added later
+                // at a new expensive boundary cannot forget it, and after the
+                // bookkeeping above so a listener asking [packsDownloading] on
+                // its way through does not read this transfer as still running.
+                // Only while this token still held the pack: once a later request
+                // has replaced it, that download owns what is said about the pack.
+                //
+                // CANCELED, because nothing failed and every listener already has
+                // a branch for it -- Play emits it on the other delivery path. A
+                // cancel landing during the final copy is reported after that
+                // copy's COMPLETED, which costs nothing: the card reads CANCELED
+                // against the install record and draws Remove, and the first-run
+                // queue has already moved past the pack.
+                if (heldThePack && download.cancelled) {
+                    report(packName, AssetPackStatus.CANCELED, 0)
+                }
             }
         }
     }
@@ -1731,6 +1805,10 @@ class ToolchainManager(private val context: Context) {
         report(packName, AssetPackStatus.DOWNLOADING, 0)
 
         var bytesRead = 0L
+        // What the last report said, so the loop below reports a figure rather
+        // than an iteration. Starts at the 0 just reported, which is also the
+        // whole of what a transfer with no length to divide by can ever say.
+        var lastReported = 0
         BufferedInputStream(conn.inputStream).use { input ->
             FileOutputStream(destFile).use { output ->
                 val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
@@ -1747,9 +1825,22 @@ class ToolchainManager(private val context: Context) {
                     } else 0
                     // On the token as well as in the report: the report reaches
                     // only the manager that began this download, and a screen
-                    // rebuilt mid-transfer holds a different one.
+                    // rebuilt mid-transfer holds a different one. Written every
+                    // iteration, unlike the report, because it costs a field
+                    // store and it is what [packsDownloading] hands the screens
+                    // that were never subscribed.
                     download.percent = percent
-                    report(packName, AssetPackStatus.DOWNLOADING, percent)
+                    // Only when the figure has moved. The buffer is 8 KB and
+                    // `percent` takes 86 values, so a 55 MB toolchain reported
+                    // 6,763 times to say 86 different things, and both consumers
+                    // post every one of them onto the main thread: the card
+                    // rebinds and the first-run row re-formats its text. The poll
+                    // channel on the toolchain screen already refuses to push an
+                    // unchanged snapshot for exactly this reason.
+                    if (percent != lastReported) {
+                        lastReported = percent
+                        report(packName, AssetPackStatus.DOWNLOADING, percent)
+                    }
                 }
             }
         }
