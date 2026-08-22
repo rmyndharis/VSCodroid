@@ -5,13 +5,17 @@
     android:layout_height="match_parent"
     android:background="@color/colorBackground">
 
-    <!-- App icon -->
+    <!-- App icon. Decorative: the TextView below carries the same @string/app_name
+         as visible text, so describing the icon with it made a screen reader open
+         the app by saying "VSCodroid" twice before reaching the status line that
+         says what is actually happening. importantForAccessibility rather than a
+         null contentDescription, so lint has the answer to why there is none. -->
     <ImageView
         android:id="@+id/appIcon"
         android:layout_width="96dp"
         android:layout_height="96dp"
         android:src="@mipmap/ic_launcher"
-        android:contentDescription="@string/app_name"
+        android:importantForAccessibility="no"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toTopOf="@+id/appName"
         app:layout_constraintStart_toStartOf="parent"

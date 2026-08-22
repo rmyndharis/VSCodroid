@@ -5,6 +5,7 @@ import android.system.Os
 import com.vscodroid.BuildConfig
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -41,6 +42,12 @@ class FirstRunSetup(
     // build-time zero cannot make that credit non-zero at all, and every case
     // exercising the gate would agree with every other whatever the gate did.
     private val bundledUsrBytes: Long = BuildConfig.BUNDLED_USR_BYTES,
+    // And the same for the extensions directory, which is the other capped
+    // credit. Read straight from `BuildConfig` this one was a zero on every
+    // machine that runs the tests, so the credit was pinned at zero and the whole
+    // decision behind it -- which bytes of that directory are ours to claim --
+    // could not be reached from the gate at all.
+    private val bundledExtensionBytes: Long = BuildConfig.BUNDLED_EXTENSION_BYTES,
 ) {
     private val tag = "FirstRunSetup"
     private val prefs = context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE)
@@ -133,6 +140,34 @@ class FirstRunSetup(
         null
     }
 
+    /**
+     * How many bytes of the extensions directory the next unpack writes over.
+     *
+     * Only the bundled directories are measured, one per name in
+     * `assets/extensions`, because only those are what extraction writes. The
+     * rest of that directory is the user's: it is the `--extensions-dir` the
+     * server installs gallery extensions into, and their bytes are not bytes we
+     * are about to replace.
+     *
+     * A bundled directory that is absent contributes nothing, which is the case
+     * that matters on an upgrade bumping a pinned extension version: the new
+     * `id-version` directory is written beside the old one rather than over it,
+     * so nothing of it is on disk to credit.
+     *
+     * An assets listing that cannot be read yields no credit, the same direction
+     * a missing directory takes.
+     */
+    private fun installedBundledExtensionBytes(): Long {
+        val extensionsDir = File(context.filesDir, "home/.vscodroid/extensions")
+        val bundled = try {
+            context.assets.list("extensions") ?: emptyArray()
+        } catch (e: IOException) {
+            Logger.d(tag, "No bundled extensions in assets; crediting none of the directory")
+            emptyArray()
+        }
+        return bundled.sumOf { installedExtractionBytes(File(extensionsDir, it)) }
+    }
+
     private suspend fun runSetupLocked(): SetupResult = withContext(Dispatchers.IO) {
         val previousVersionCode = getPreviousVersionCode()
         val currentVersionCode = getCurrentVersionCode()
@@ -174,8 +209,10 @@ class FirstRunSetup(
             // there at all. Those two answers differ exactly where it matters: a
             // complete tree and a tree an interrupted attempt left half-written both
             // exist, and the first needs almost nothing while the second needs the
-            // rest of itself. [requiredExtractionBytes] carries the arithmetic and
-            // [installedExtractionBytes] the reasons for measuring only `server/`.
+            // rest of itself. [requiredExtractionBytes] carries the arithmetic,
+            // [installedExtractionBytes] what each root is worth, and
+            // [sharedTreeCredit] the clamps on the two roots that are not ours
+            // alone.
             //
             // Asking for the whole asset total unconditionally is what this replaced,
             // and it was survivable only by accident: while PIVOT_VERSION_CODE was
@@ -187,7 +224,7 @@ class FirstRunSetup(
             // 810 MiB the install already occupies, refused on the splash screen,
             // with a Retry button that measures the same thing for ever and a
             // MainActivity that never runs, so nothing the app offers can free a byte.
-            val available = context.filesDir.usableSpace
+            var available = context.filesDir.usableSpace
             // Kept on its own because two different questions read it. It counts
             // toward what is already on disk, and it is also the only honest
             // answer to "is the extracted tree here at all", which is what
@@ -201,14 +238,45 @@ class FirstRunSetup(
                     foreignBytes = installedToolchainBytes(),
                 ) +
                 sharedTreeCredit(
-                    installedBytes = installedExtractionBytes(
-                        File(context.filesDir, "home/.vscodroid/extensions")
-                    ),
-                    bundledBytes = BuildConfig.BUNDLED_EXTENSION_BYTES,
+                    // The bundled directories that are already there, not the
+                    // whole directory. A literal `foreignBytes = 0` over the
+                    // whole directory asserted it was ours alone, which is what
+                    // [sharedTreeCredit]'s own doc names as the assumption to
+                    // avoid: it is the same `--extensions-dir` the server
+                    // installs gallery extensions into. That was worth 60 KB
+                    // while everything bundled here was ours; this release
+                    // bundles five extensions from the gallery and the cap it is
+                    // measured against is 46.6 MiB, so a device with any gallery
+                    // installs at all was credited the whole bundled tree for
+                    // bytes not one of which was on disk. Measured this way the
+                    // zero is a fact rather than an assumption, and it also
+                    // stops a version bump crediting the new directory while the
+                    // old one is still what is on disk.
+                    installedBytes = installedBundledExtensionBytes(),
+                    bundledBytes = bundledExtensionBytes,
                     foreignBytes = 0,
                 )
             val required =
                 requiredExtractionBytes(assetBytes, largestAssetBytes, installed, extractedTreeBytes)
+            // Short of room, and the caches are the one thing this app can give
+            // back on its own. Reclaimed here rather than offered, because the
+            // only route to the same action is a Command Palette command inside
+            // a workbench that this refusal guarantees never loads: an updater
+            // with months of npm cache was told to free 177 MB while several
+            // hundred sat in `cacheDir/npm-cache`, on the same filesystem the
+            // figure above was measured from, reachable by nothing on screen.
+            // What is removed is a cache by construction (npm's, our tmp, crash
+            // logs, the editor's logs), so the cost of being wrong is a
+            // re-download, against an install that otherwise cannot start.
+            if (available < required) {
+                val freed = StorageManager.clearCaches(context)
+                available = context.filesDir.usableSpace
+                Logger.i(
+                    tag,
+                    "Short of room for setup; reclaimed ${freed / 1_048_576}MB of caches, " +
+                        "${available / 1_048_576}MB now free",
+                )
+            }
             if (available < required) {
                 lastRefusedBytes = required
                 Logger.e(
@@ -890,10 +958,28 @@ class FirstRunSetup(
             }
         }
 
-        // Set execute permission on all files in git-core
+        // The execute bit for the entries that are real extracted files: the
+        // shell helpers (git-submodule, git-mergetool, git-sh-setup) and the
+        // handful of standalone binaries git execs by name.
+        //
+        // Links are skipped, and not for tidiness. `File.isFile` follows one, so
+        // this chmod'ed the target inside nativeLibraryDir instead, which SELinux
+        // refuses the app: `avc: denied { setattr } ... tcontext=...
+        // apk_data_file` on every cold start, for a bit those files already
+        // carry. The result was discarded too, so nothing said the call had done
+        // nothing. What it does for the real files is load-bearing, which is why
+        // the loop stays rather than going.
+        //
+        // Asked through `Files.isSymbolicLink` rather than [isSymlink] for the
+        // reason `installedExtractionBytes` gives: both are an lstat on the final
+        // component, but `Os.lstat` throws in a JVM unit test and [isSymlink]
+        // catches that into "not a link", so the skip could be asserted and never
+        // measured.
         gitCorePath.listFiles()?.forEach { file ->
-            if (file.isFile && !file.name.startsWith(".")) {
-                file.setExecutable(true, true)
+            if (file.isFile && !file.name.startsWith(".") && !Files.isSymbolicLink(file.toPath())) {
+                if (!file.setExecutable(true, true)) {
+                    Logger.w(tag, "Could not set the execute bit on ${file.name}")
+                }
             }
         }
 
@@ -1860,8 +1946,19 @@ claude() {
             // install it returns at its own `!exists()` guard and a first
             // session would otherwise run unpinned. See PYTHON_LOCATOR for why
             // neither value is a preference.
+            //
+            // The secondary side bar starts hidden, and on a phone that is not a
+            // preference either. Upstream's default is "visibleInWorkspace" and a
+            // brand-new profile opens it regardless of that, so the first screen a
+            // user ever sees gives a large share of its width to the chat view
+            // while what is beside it wraps mid-word. The provider that view
+            // exists for is not in this build, the Copilot extension being pruned
+            // from it, so the width buys nothing back. It is only a default and
+            // the view's own title menu reverses it, so a user who opens the bar
+            // keeps it open.
             val defaults = """
                 {
+                    "workbench.secondarySideBar.defaultVisibility": "hidden",
                     "workbench.startupEditor": "none",
                     "workbench.colorTheme": "Default Dark Modern",
                     "editor.fontSize": 14,
@@ -2336,9 +2433,24 @@ claude() {
      * constraint with its own reason, see the call site. Everything here only
      * deletes, so nothing it does depends on the room the pre-flight is
      * measuring.
+     *
+     * Runs at most once per device, recorded in [KEY_PIVOT_MIGRATED] rather than
+     * inferred from the version code, and that is what makes a retry keep its
+     * progress. `previousVersionCode` is written by [markSetupComplete], the last
+     * statement of the run, so every failed attempt and every Retry still reads
+     * the pre-upgrade code. Without a record of its own this deleted
+     * `server/vscode-reh` again on each attempt -- by then the partly written NEW
+     * tree -- so the gate measured a freshly emptied device, passed, and the
+     * unpack failed in the same place for ever, which is the one thing the abort
+     * in [runSetupLocked] promises cannot happen.
+     *
+     * Recorded only when the trees are actually gone. A delete that failed leaves
+     * the pre-built tree to be merged into, and skipping the next attempt's
+     * removal would make that permanent.
      */
     private fun runPreExtractionMigrations(fromVersionCode: Int) {
-        if (fromVersionCode < PIVOT_VERSION_CODE) {
+        if (fromVersionCode < PIVOT_VERSION_CODE && !prefs.getBoolean(KEY_PIVOT_MIGRATED, false)) {
+            var reclaimed = true
             // The server tree changed origin, not just version: what was there is a
             // pre-built VS Code Server, and what replaces it is Code - OSS built
             // from source. Their file sets differ (vsda and the bundled node are
@@ -2355,6 +2467,7 @@ claude() {
                     // Not fatal on its own: extraction still writes the new tree over
                     // it. Say so loudly, because what survives is the orphan case
                     // above rather than a clean failure.
+                    reclaimed = false
                     Logger.e(tag, "Could not remove the previous server tree; " +
                         "the new one will be merged into it")
                 }
@@ -2370,8 +2483,13 @@ claude() {
                 if (webTree.deleteRecursively()) {
                     Logger.i(tag, "Removed the orphaned web client tree (${freed / 1_048_576} MB)")
                 } else {
+                    reclaimed = false
                     Logger.e(tag, "Could not remove the orphaned web client tree at $webTree")
                 }
+            }
+
+            if (reclaimed) {
+                prefs.edit().putBoolean(KEY_PIVOT_MIGRATED, true).apply()
             }
         }
     }
@@ -2471,6 +2589,21 @@ claude() {
         private const val KEY_VERSION_CODE = "setup_version_code"
 
         /**
+         * That the pre-pivot server tree has been reclaimed on this device.
+         *
+         * Separate from the two above because it answers a different question.
+         * Those describe the setup that COMPLETED, and are written only when one
+         * does; this describes a deletion that has already happened and must not
+         * happen twice. See [runPreExtractionMigrations].
+         *
+         * Absent on every install that predates it, which reads as false and is
+         * correct for both populations: a device past the pivot never enters the
+         * branch that reads it, and one still on the pre-pivot tree has indeed
+         * not had it reclaimed by a build that could record so.
+         */
+        private const val KEY_PIVOT_MIGRATED = "pivot_tree_reclaimed"
+
+        /**
          * Headroom above the bytes to be written, and the one number here that is
          * still a judgement rather than a measurement.
          *
@@ -2524,12 +2657,22 @@ claude() {
          *    install already holding the tree is not about to write it again from
          *    nothing. Clamped at zero: `installedBytes` can exceed the asset total
          *    when a pin drops files that extraction never removes.
-         *  - the room to rewrite one file, charged only when the extracted tree is
-         *    already there. [writeAtomically] writes `<dest>.tmp~` and renames, so
-         *    while the biggest file is being replaced both copies exist, 113 MiB of
-         *    Copilot runtime, currently. On an install with nothing on disk there
-         *    is no second copy to hold, and charging for one would refuse fresh
+         *  - the room to rewrite one file, bounded by what is on disk to rewrite.
+         *    [writeAtomically] writes `<dest>.tmp~` and renames, so while the
+         *    biggest file is being replaced both copies exist, 113 MiB of Copilot
+         *    runtime, currently. On an install with nothing on disk there is no
+         *    second copy to hold, and charging for one would refuse fresh
          *    installs that fit.
+         *
+         *    The bound is the smaller of the two, not a step from zero to the
+         *    whole figure, because a tree can be present and still far too small
+         *    to hold that file: an upgrade from before the pivot has just had
+         *    `server/vscode-reh` deleted a few lines above and keeps only the two
+         *    bootstrap scripts a pre-pivot release put beside it, about 34 KB.
+         *    The step charged that device 113 MiB of headroom against 34 KB of
+         *    rewritable bytes and refused installs that fit by roughly the width
+         *    of the Copilot runtime. No file already on disk can cost more to
+         *    replace than the bytes already on disk.
          *
          *    [extractedTreeBytes] and not [installedBytes] decides that, and the
          *    two are not interchangeable. `installedBytes` also carries the credit
@@ -2565,7 +2708,7 @@ claude() {
             extractedTreeBytes: Long,
         ): Long {
             val missing = (assetBytes - installedBytes).coerceAtLeast(0)
-            val rewriteHeadroom = if (extractedTreeBytes > 0) largestAssetBytes else 0L
+            val rewriteHeadroom = minOf(largestAssetBytes, extractedTreeBytes)
             return missing + rewriteHeadroom + EXTRACTION_SLACK_BYTES
         }
 
@@ -3121,14 +3264,35 @@ internal const val OWN_EXTENSION_PREFIX = "vscodroid."
  * runtime is never copied over, so that state survives an upgrade; a blanket
  * re-copy would silently revert it.
  *
+ * A fetched extension is also skipped when a NEWER copy of the same identifier
+ * is already installed, which is a user's own gallery install of something this
+ * build has begun to bundle. Nothing else would ever have removed it:
+ * [supersededExtensionDirs] refuses to touch a directory that is currently
+ * bundled, [retiredOwnExtensionDirs] wants our publisher, and
+ * [retiredFetchedExtensionDirs] wants an identifier this build no longer ships.
+ * So it was unpacked, listed by nobody -- `bundledIdsToRelist` declines to add an
+ * entry for an identifier whose own entry survives, deliberately, so the user's
+ * newer install keeps winning -- and left on disk for good, 29 MiB for the
+ * Python extension alone, re-created on every upgrade. Not unpacking it is the
+ * whole remedy: the copy the user chose is the one that runs either way.
+ *
  * Pure, and takes the two listings rather than a directory, so the decision is
  * testable without a Context or a tree. `(present, bundled)` in that order, the
  * same as [supersededExtensionDirs] and [retiredOwnExtensionDirs]: all three
  * take two `List<String>` and a swap between them compiles in silence, so the
  * only protection is that there is nothing to remember.
  */
-internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>): List<String> =
-    bundled.filter { it.startsWith(OWN_EXTENSION_PREFIX) || it !in present }
+internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>): List<String> {
+    val installed = present.mapNotNull(::splitExtensionDir)
+    return bundled.filter { dir ->
+        if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter true
+        if (dir in present) return@filter false
+        val (id, version) = splitExtensionDir(dir) ?: return@filter true
+        installed.none { (otherId, otherVersion) ->
+            otherId == id && isOlderVersion(version, otherVersion)
+        }
+    }
+}
 
 /**
  * How much of `filesDir` the toolchains named in `toolchains.json` occupy.
@@ -3290,24 +3454,42 @@ internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
  * Writing straight to the destination, which is what this replaced, raced too;
  * what this shape adds is the ability to report success while doing it.
  *
+ * The exclusion is per DESTINATION, and that is not a refinement. One monitor
+ * for every write put a 118 MiB inflate on the same lock as a one-line config
+ * rewrite: a second SplashActivity entering while the first instance's
+ * extraction was still running (Home and relaunch, or any config change the
+ * manifest does not declare, neither of which stops the extraction, which
+ * checks for cancellation nowhere) reached `createBashEnvFile` on the MAIN
+ * thread and blocked there for the whole of one asset copy, before the first
+ * frame. The contending pair this exists for is two threads racing for the same
+ * file, and destinations that are not the same file never had anything to say
+ * to each other.
+ *
  * @return true if [dest] now holds what [write] produced. On false, [dest] is
  *   untouched -- it keeps its previous contents, or stays absent.
  */
-internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boolean =
-    synchronized(ATOMIC_WRITE_LOCK) {
-        val tmp = File(dest.parentFile, "${dest.name}.tmp~")
-        try {
-            FileOutputStream(tmp).use(write)
-        } catch (e: IOException) {
-            tmp.delete()
-            return@synchronized false
+internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boolean {
+    val tmp = File(dest.parentFile, "${dest.name}.tmp~")
+    val path = tmp.absolutePath
+    val lock = claimWriteLock(path)
+    try {
+        synchronized(lock) {
+            try {
+                FileOutputStream(tmp).use(write)
+            } catch (e: IOException) {
+                tmp.delete()
+                return false
+            }
+            if (!tmp.renameTo(dest)) {
+                tmp.delete()
+                return false
+            }
+            return true
         }
-        if (!tmp.renameTo(dest)) {
-            tmp.delete()
-            return@synchronized false
-        }
-        true
+    } finally {
+        releaseWriteLock(path, lock)
     }
+}
 
 /**
  * PEM-encodes one certificate, in the shape the concatenated bundle is made of.
@@ -3339,40 +3521,74 @@ private fun sha256HexOf(text: String): String =
         .joinToString("") { "%02x".format(it) }
 
 /**
- * One lock for every atomic write, not one per destination.
+ * One monitor per temporary-file path, held only while a write to that path is
+ * in flight.
  *
- * Concurrent writes to *different* destinations do not happen here -- the
- * contending pair is two threads racing for the same two files -- so per-path
- * locks would buy nothing and cost a map that grows by an entry for each of the
- * 3787 files an extraction writes.
+ * Keyed on the temporary file rather than the destination because the temporary
+ * file is the shared thing: it is what two writers would open together, and it
+ * is derived from the destination, so one key covers both.
+ *
+ * Counted, and removed at zero, so the table holds an entry per write RUNNING
+ * rather than an entry per file ever written. That is what makes a per-path
+ * monitor affordable at all: a single map keyed by every one of the 3787
+ * destinations an extraction touches would be kept for the life of the process
+ * to serialise writes that had already finished. The count is incremented under
+ * this same monitor before the caller blocks on the entry, so an entry cannot be
+ * dropped while anyone is still waiting on it and two threads on one path always
+ * meet the same object.
+ *
+ * A plain `HashMap` guarded by `synchronized` rather than a concurrent map: the
+ * claim and the count have to move together, and the section is two field reads
+ * long.
  */
-private val ATOMIC_WRITE_LOCK = Any()
+private val WRITE_LOCKS = HashMap<String, DestinationLock>()
+
+/** A monitor for one temporary-file path, plus how many writers still need it. */
+private class DestinationLock {
+    var holders = 0
+}
+
+private fun claimWriteLock(path: String): DestinationLock = synchronized(WRITE_LOCKS) {
+    WRITE_LOCKS.getOrPut(path) { DestinationLock() }.also { it.holders++ }
+}
+
+private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized(WRITE_LOCKS) {
+    if (--lock.holders == 0) WRITE_LOCKS.remove(path)
+}
 
 /**
  * How many bytes of the asset tree are already unpacked under [root], for the
  * storage pre-flight to subtract from what it asks for.
  *
- * Only `server/` is passed in, though extraction also fills `usr/` and the
- * bundled extensions, and the asymmetry is the design rather than an omission.
- * `server/` is 700 of the tree's 810 MiB, and near enough every byte counted
- * there is a byte the next unpack writes over. Near enough rather than all:
- * `setupCopilotAndroidAliases` writes an alias `package.json` beside the
- * packages it aliases, and those are counted here without extraction replacing
- * them. That is a credit for bytes overwriting does not give back, so it asks
- * for less space rather than more, which is the direction the paragraph below
- * calls the worse one. They are kilobytes against 700 MiB and the slack absorbs
- * them many times over, so they are left rather than filtered; a repair that
- * ever writes something substantial there would have to be.
- * The other two are shared ground: toolchains install into `usr/`, Java is
- * 146 MB unpacked, `npm install -g` lands there too, and
- * `home/.vscodroid/extensions` fills with whatever the user takes from the
- * gallery. Crediting those would subtract bytes that overwriting does not give
- * back, and that failure is the worse one: the gate passes, extraction runs out
- * of disk partway, and the user is told "Setup failed" rather than how much to
- * free, on every retry, because the toolchains stay where they are. Charging
- * their asset size in full instead over-states the requirement, which costs a
- * user on a tight device one round of freeing space they did not strictly need
- * to free.
+ * Answers only "how many bytes are under this root", and the three roots the
+ * pre-flight passes are believed to different degrees, which is [sharedTreeCredit]'s
+ * job rather than this one's:
+ *
+ *  - `server/` is measured and believed. It is 700 of the tree's 810 MiB and
+ *    near enough every byte counted there is a byte the next unpack writes
+ *    over. Near enough rather than all: `setupCopilotAndroidAliases` writes an
+ *    alias `package.json` beside the packages it aliases, and those are counted
+ *    without extraction replacing them. That credits bytes overwriting does not
+ *    give back, so it asks for less space rather than more, which is the worse
+ *    direction; they are kilobytes against 700 MiB and the slack absorbs them
+ *    many times over, so they are left rather than filtered. A repair that ever
+ *    writes something substantial there would have to be.
+ *  - `usr/` is shared ground. Toolchains install into it, Java is 146 MB
+ *    unpacked, and `npm install -g` lands there too, so its size on disk is not
+ *    an answer to "how much of what we are about to write is already here". It
+ *    goes through [sharedTreeCredit] with the installed toolchains subtracted
+ *    and the bundled figure as a ceiling.
+ *  - the extensions directory is shared in the same way, with the user's gallery
+ *    installs in it, and the pre-flight does not pass the whole of it: it sums
+ *    this over the bundled directories one at a time
+ *    (`installedBundledExtensionBytes`), which is the same question asked where
+ *    the answer is knowable.
+ *
+ * This function used to be the whole of the decision and its first paragraph
+ * argued that crediting the other two roots was the mistake to avoid. That was
+ * true before [sharedTreeCredit] and its clamps existed; charging their asset
+ * size in full is what asked an updater for about 334 MB where roughly 180
+ * would do.
  *
  * Symlinks are skipped rather than followed, and that is not tidiness. The
  * Copilot alias farm links every entry of `copilot-linux-arm64`, including the
@@ -3422,9 +3638,12 @@ internal fun supersededPythonEntries(present: List<String>, runtime: String): Li
     }
 }
 
-// Anchored on purpose. The runtime is libpython3.13.so and the stdlib is
-// python3.13; an unanchored match would also claim libpython3.13.so.1.0 and any
-// directory that merely begins with the same letters.
+// Anchored on purpose. The runtime is libpython3.<minor>.so and the stdlib is
+// python3.<minor>; an unanchored match would also claim libpython3.<minor>.so.1.0
+// and any directory that merely begins with the same letters. No minor version
+// is written out here: `scripts/download-python.sh` resolves it from the Termux
+// index at build time, so a figure in this comment names whatever shipped on the
+// day it was typed and the tree has already moved past two of them.
 internal val PYTHON_RUNTIME_NAME = Regex("""^libpython(3\.\d+)\.so$""")
 internal val PYTHON_STDLIB_NAME = Regex("""^python3\.\d+$""")
 
@@ -3488,33 +3707,50 @@ internal fun bundledIdsToRelist(
  * rather than guessed at.
  */
 internal fun supersededExtensionDirs(present: List<String>, bundled: List<String>): List<String> {
-    fun split(dir: String): Pair<String, String>? {
-        val cut = dir.lastIndexOf('-')
-        if (cut <= 0 || cut == dir.length - 1) return null
-        return dir.substring(0, cut) to dir.substring(cut + 1)
+    val current = bundled.mapNotNull(::splitExtensionDir).toMap()
+    return present.filter { name ->
+        if (name in bundled) return@filter false
+        val (id, version) = splitExtensionDir(name) ?: return@filter false
+        val bundledVersion = current[id] ?: return@filter false
+        isOlderVersion(version, bundledVersion)
     }
+}
 
+/**
+ * Splits a `publisher.name-version` directory name into its identifier and its
+ * version, or null when it is not that shape.
+ *
+ * The last hyphen is the separator, because a publisher or a name may contain
+ * one (`ms-python.python`) while a version may not.
+ *
+ * Shared by the three decisions that compare versions of one identifier, so a
+ * directory cannot be read one way by the sweep that removes it and another way
+ * by the one that decides whether to unpack over it.
+ */
+private fun splitExtensionDir(dir: String): Pair<String, String>? {
+    val cut = dir.lastIndexOf('-')
+    if (cut <= 0 || cut == dir.length - 1) return null
+    return dir.substring(0, cut) to dir.substring(cut + 1)
+}
+
+/**
+ * Whether [a] is a strictly older version than [b].
+ *
+ * False whenever either side is not purely numeric, so a pre-release or a
+ * datestamped build nobody here can order is left alone rather than guessed at.
+ */
+private fun isOlderVersion(a: String, b: String): Boolean {
     fun parts(version: String): List<Int>? =
         version.split('.').map { it.toIntOrNull() ?: return null }
 
-    fun isOlder(a: String, b: String): Boolean {
-        val left = parts(a) ?: return false
-        val right = parts(b) ?: return false
-        for (i in 0 until maxOf(left.size, right.size)) {
-            val l = left.getOrElse(i) { 0 }
-            val r = right.getOrElse(i) { 0 }
-            if (l != r) return l < r
-        }
-        return false
+    val left = parts(a) ?: return false
+    val right = parts(b) ?: return false
+    for (i in 0 until maxOf(left.size, right.size)) {
+        val l = left.getOrElse(i) { 0 }
+        val r = right.getOrElse(i) { 0 }
+        if (l != r) return l < r
     }
-
-    val current = bundled.mapNotNull(::split).toMap()
-    return present.filter { name ->
-        if (name in bundled) return@filter false
-        val (id, version) = split(name) ?: return@filter false
-        val bundledVersion = current[id] ?: return@filter false
-        isOlder(version, bundledVersion)
-    }
+    return false
 }
 
 /**

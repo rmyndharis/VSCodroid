@@ -13,6 +13,7 @@ import io.mockk.unmockkObject
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -75,6 +76,12 @@ class StoragePreflightTest {
     /** The cap on the `usr/` credit. Non-zero, or that credit cannot be exercised. */
     private val bundledUsrBytes = 4 * mb
 
+    /** The cap on the extensions credit, non-zero for the same reason. */
+    private val bundledExtensionBytes = 2 * mb
+
+    /** One of the extensions this build bundles, as `assets/extensions` lists it. */
+    private val bundledExtension = "esbenp.prettier-vscode-12.4.0"
+
     /**
      * The slack the gate adds, read out of the decision rather than repeated
      * here: it is private, and a copy of it would go stale the moment it moved.
@@ -93,6 +100,24 @@ class StoragePreflightTest {
      */
     private class RoomDir(real: File, private val free: Long) : File(real.absolutePath) {
         override fun getUsableSpace(): Long = free
+    }
+
+    /**
+     * A `filesDir` with no room while the npm cache is on disk, and [free] once
+     * it is gone.
+     *
+     * Stubbed rather than arranged for the reason [RoomDir] is, and it has to
+     * answer twice: the whole question is whether the gate re-measures after
+     * reclaiming, and a fixed figure cannot tell a run that cleared the caches
+     * from one that did not.
+     */
+    private class ReclaimingDir(
+        real: File,
+        private val cacheDir: File,
+        private val free: Long,
+    ) : File(real.absolutePath) {
+        override fun getUsableSpace(): Long =
+            if (File(cacheDir, "npm-cache").exists()) 1L else free
     }
 
     @BeforeEach
@@ -136,7 +161,42 @@ class StoragePreflightTest {
     }
 
     private fun setup(free: Long, previousVersionCode: Int = 11) =
-        FirstRunSetup(context(free, previousVersionCode), assetBytes, largestAssetBytes, bundledUsrBytes)
+        FirstRunSetup(
+            context(free, previousVersionCode),
+            assetBytes,
+            largestAssetBytes,
+            bundledUsrBytes,
+            bundledExtensionBytes,
+        )
+
+    /** As [setup], on a device whose free space answers differently once the cache is gone. */
+    private fun setupReclaiming(free: Long): FirstRunSetup {
+        val prefs = mockk<SharedPreferences>(relaxed = true)
+        every { prefs.edit() } returns mockk(relaxed = true)
+        every { prefs.getString(any(), any()) } returns null
+        every { prefs.getInt(any(), any()) } returns 11
+
+        val context = mockk<Context>(relaxed = true)
+        every { context.filesDir } returns ReclaimingDir(filesDir, cacheDir, free)
+        every { context.cacheDir } returns cacheDir
+        every { context.assets } returns assets
+        every { context.getSharedPreferences(any(), any()) } returns prefs
+        every { context.getExternalFilesDir(null) } returns File(filesDir, "external")
+        return FirstRunSetup(
+            context,
+            assetBytes,
+            largestAssetBytes,
+            bundledUsrBytes,
+            bundledExtensionBytes,
+        )
+    }
+
+    /** Writes [bytes] into one extension directory, the way an install leaves it. */
+    private fun stageExtension(dirName: String, bytes: Int) {
+        val dir = File(filesDir, "home/.vscodroid/extensions/$dirName")
+        assertTrue(dir.mkdirs(), "could not stage $dirName")
+        File(dir, "extension.js").writeText("x".repeat(bytes))
+    }
 
     /**
      * Writes [bytes] of server tree, spread over a few files so the walk has
@@ -233,6 +293,35 @@ class StoragePreflightTest {
             required < assetBytes + slack,
             "an upgrade is asked for as much as a fresh install, which is what bricks the " +
                 "upgrade after next on the splash screen",
+        )
+    }
+
+    /**
+     * The headroom is bounded by what is on disk to rewrite, not switched on by
+     * a tree being present at all.
+     *
+     * An upgrade from before the pivot has just had `server/vscode-reh` deleted a
+     * few lines above the gate and keeps only the two bootstrap scripts a
+     * pre-pivot release put beside it, about 34 KB. As a step from zero to the
+     * whole figure that charged the device for a second copy of a 113 MiB file
+     * that is not there, and refused installs that fit by roughly that width, on
+     * the one upgrade path with nothing else to give back.
+     */
+    @Test
+    fun `a tree too small to hold the biggest file is not charged for a copy of it`() {
+        val leftovers = 34L * 1024
+
+        assertEquals(
+            (assetBytes - leftovers) + leftovers + slack,
+            FirstRunSetup.requiredExtractionBytes(
+                assetBytes,
+                largestAssetBytes,
+                installedBytes = leftovers,
+                extractedTreeBytes = leftovers,
+            ),
+            "a tree of a few KB was charged the room to rewrite the biggest file in the " +
+                "APK; nothing already on disk can cost more to replace than the bytes " +
+                "already on disk",
         )
     }
 
@@ -426,6 +515,91 @@ class StoragePreflightTest {
             result,
             "the gate read a half-written tree as a complete one, so it passed a device that " +
                 "then runs out of disk partway and reports Setup failed instead",
+        )
+    }
+
+    /**
+     * The extensions directory is credited for the bundled directories in it and
+     * for nothing else.
+     *
+     * It is the same `--extensions-dir` the server installs gallery extensions
+     * into, and the gate offered the whole of it with a literal `foreignBytes =
+     * 0`, which asserts the directory is ours alone. That was worth 60 KB while
+     * everything bundled here was ours; this release bundles five extensions from
+     * the gallery, so the cap that credit is measured against grew 800-fold and a
+     * device with any gallery installs at all was credited the whole bundled tree
+     * for bytes not one of which was on disk.
+     *
+     * Sized so the credit decides the run: with it the device fits, without it it
+     * does not.
+     */
+    @Test
+    fun `a gallery extension does not buy room the unpack still needs`() {
+        stageServerTree(assetBytes / 2)
+        stageExtension("someone.else-1.0.0", (2 * mb).toInt())
+
+        val result = runBlocking { setup(free = 5 * mb + slack).runSetup() }
+
+        assertEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "an extension the user took from the gallery was credited as bytes the unpack " +
+                "writes over, so the gate passed a device short of that much room",
+        )
+    }
+
+    /**
+     * The control, and it is what stops the case above passing because the credit
+     * stopped working. The same directory, the same size, holding a directory
+     * this build does bundle: that one IS bytes extraction writes over, and the
+     * same device fits.
+     */
+    @Test
+    fun `a bundled extension already on disk does buy that room`() {
+        every { assets.list("extensions") } returns arrayOf(bundledExtension)
+        stageServerTree(assetBytes / 2)
+        stageExtension(bundledExtension, (2 * mb).toInt())
+
+        val result = runBlocking { setup(free = 5 * mb + slack).runSetup() }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "a bundled extension already unpacked was not credited, so the gate asked an " +
+                "upgrade for room it is not going to use",
+        )
+    }
+
+    /**
+     * The caches are reclaimed before the refusal, not offered behind it.
+     *
+     * `StorageManager.clearCaches` had exactly one caller, the bridge command the
+     * bundled saf-bridge extension sends from inside the loaded workbench. A
+     * LOW_STORAGE return guarantees that workbench never loads, so on an updater
+     * whose `cacheDir/npm-cache` held more than the shortfall, the only remedy
+     * the app owns sat behind the screen the refusal was keeping shut, and the
+     * Retry button measured the same device for ever.
+     *
+     * Free space here answers differently once the cache is gone, which is what
+     * lets the run be decided by the reclaim rather than by the figure.
+     */
+    @Test
+    fun `a shortfall the caches would cover is reclaimed rather than refused`() {
+        val cached = File(cacheDir, "npm-cache/_cacache")
+        assertTrue(cached.mkdirs(), "could not stage the npm cache")
+        File(cached, "blob").writeText("x".repeat(4096))
+
+        val result = runBlocking { setupReclaiming(assetBytes + slack).runSetup() }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "setup refused over room its own cache directory was holding, and the only " +
+                "way to free it is a command inside the editor this refusal never opens",
+        )
+        assertFalse(
+            File(cacheDir, "npm-cache").exists(),
+            "the cache the gate needed was never cleared",
         )
     }
 
