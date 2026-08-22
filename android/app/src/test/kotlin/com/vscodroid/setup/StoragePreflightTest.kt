@@ -198,6 +198,13 @@ class StoragePreflightTest {
         File(dir, "extension.js").writeText("x".repeat(bytes))
     }
 
+    /** Writes [bytes] to one path under `usr/`, wherever the caller puts it. */
+    private fun stageUsrFile(relativePath: String, bytes: Int) {
+        val file = File(filesDir, "usr/$relativePath")
+        assertTrue(file.parentFile!!.mkdirs(), "could not stage $relativePath")
+        file.writeText("x".repeat(bytes))
+    }
+
     /**
      * Writes [bytes] of server tree, spread over a few files so the walk has
      * something to walk. Real bytes rather than a sparse trick: 8 MiB costs
@@ -571,6 +578,62 @@ class StoragePreflightTest {
     }
 
     /**
+     * `usr/` is credited for the entries the APK names and for nothing else.
+     *
+     * The estimate this replaces came out of `toolchains.json`, which records the
+     * installs that FINISHED. `ToolchainManager` says at the line where it
+     * happens that a copy which dies after the tree is written and before the
+     * record is leaves about 155 MB in `usr/` that nothing names, and
+     * `npm install -g` and pip never had a record at all. Every one of those
+     * bytes was subtracted from nothing and credited as a byte the unpack writes
+     * over. The cap kept that harmless while the bundled part of `usr/` was
+     * complete, and stopped keeping it harmless exactly where the gate is worth
+     * having: a retry after an aborted unpack, where `usr/` is the tree left
+     * partial because it is extracted last.
+     *
+     * Sized so the credit decides the run, like the extensions pair above.
+     */
+    @Test
+    fun `a toolchain in usr does not buy room the unpack still needs`() {
+        every { assets.list("usr") } returns arrayOf("lib")
+        every { assets.list("usr/lib") } returns arrayOf("libcrypto.so.3")
+        stageServerTree(assetBytes / 2)
+        stageUsrFile("lib/jvm/java-17-openjdk/runtime", (2 * mb).toInt())
+
+        val result = runBlocking { setup(free = 5 * mb + slack).runSetup() }
+
+        assertEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "a toolchain whose install never wrote its record was credited as bytes the " +
+                "unpack writes over, so the gate passed a device short of that much room",
+        )
+    }
+
+    /**
+     * The control, and it is what stops the case above passing for a build that
+     * simply stopped crediting `usr/` at all. The same directory, the same size,
+     * at a path the APK does name: those bytes ARE bytes extraction writes over,
+     * and the same device fits.
+     */
+    @Test
+    fun `a bundled library already in usr does buy that room`() {
+        every { assets.list("usr") } returns arrayOf("lib")
+        every { assets.list("usr/lib") } returns arrayOf("libcrypto.so.3")
+        stageServerTree(assetBytes / 2)
+        stageUsrFile("lib/libcrypto.so.3", (2 * mb).toInt())
+
+        val result = runBlocking { setup(free = 5 * mb + slack).runSetup() }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "a bundled library already unpacked was not credited, so the gate asked an " +
+                "upgrade for room it is not going to use",
+        )
+    }
+
+    /**
      * The caches are reclaimed before the refusal, not offered behind it.
      *
      * `StorageManager.clearCaches` had exactly one caller, the bridge command the
@@ -604,23 +667,62 @@ class StoragePreflightTest {
     }
 
     /**
-     * The figure the user is shown has to be the one the run actually wanted.
-     * `SplashActivity` builds the message from [FirstRunSetup.requiredStorageMb]
-     * the moment a run returns LOW_STORAGE, and a static whole-tree figure there
-     * would tell a device that needs 70 MiB to free 874, which is both
-     * unreachable and untrue.
+     * The figure the user is shown is the one the string asks for.
+     *
+     * `SplashActivity` builds the message from [FirstRunSetup.storageToFreeMb]
+     * the moment a run returns LOW_STORAGE, and the string says "Free at least
+     * %1$d MB". What must be freed is what the device is MISSING; what the gate
+     * computes is what has to BE free, and the two differ by everything the
+     * device already has. Quoting the second told a user 200 MB short to clear
+     * 873 and sent them to delete photos they did not need to lose.
+     *
+     * Both figures are asserted, because the test this replaces was sized so
+     * they were the same number and could not have told them apart.
      */
     @Test
-    fun `the storage message names the figure the refusal was made on`() {
+    fun `the storage message names what the user has to free`() {
         stageServerTree(assetBytes / 2)
+        val free = largestAssetBytes + slack
 
-        val result = runBlocking { setup(free = largestAssetBytes + slack).runSetup() }
+        val result = runBlocking { setup(free = free).runSetup() }
 
         assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
+        val required = assetBytes / 2 + largestAssetBytes + slack
         assertEquals(
-            (assetBytes / 2 + largestAssetBytes + slack) / mb,
-            FirstRunSetup.requiredStorageMb(),
-            "the storage message quotes a figure the gate did not use",
+            (required - free) / mb,
+            FirstRunSetup.storageToFreeMb(),
+            "the message names the whole demand rather than the shortfall, so a device short " +
+                "by 4 MiB is told to free 70",
+        )
+        assertTrue(
+            FirstRunSetup.storageToFreeMb() < required / mb,
+            "the shortfall and the demand are the same number here, so this case cannot tell " +
+                "them apart",
+        )
+    }
+
+    /**
+     * Rounded up, and that is not a detail. Truncation was harmless while the
+     * figure over-stated the answer by everything already free; against the
+     * shortfall itself it names up to a megabyte less than the retry measures,
+     * so a user who frees exactly what was asked is refused again by the
+     * remainder, with nothing on screen to say why.
+     */
+    @Test
+    fun `the figure is rounded up so freeing it is enough`() {
+        stageServerTree(assetBytes / 2)
+        val required = assetBytes / 2 + largestAssetBytes + slack
+        // One byte more than two whole MB short.
+        val free = required - (2 * mb + 1)
+
+        assertEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            runBlocking { setup(free = free).runSetup() },
+        )
+        assertEquals(
+            3L,
+            FirstRunSetup.storageToFreeMb(),
+            "truncation names 2 MB, and a user who frees 2 MB is refused again by one byte",
         )
     }
 }

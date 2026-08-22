@@ -99,45 +99,53 @@ class FirstRunSetup(
     }
 
     /**
-     * How much of `usr/` belongs to installed toolchains rather than to the APK.
+     * How many bytes of `usr/` the next unpack writes over.
      *
-     * Read from `ToolchainRegistry` rather than by measuring the directories a
-     * toolchain occupies, and the imprecision is the point. The registry's
-     * figures are the ones shown to a user before a download and run a little
-     * over what lands on disk (Go is listed at 179 MB against about 163 MB
-     * unpacked), so this over-states what is foreign, which under-states the
-     * credit. That is the direction [sharedTreeCredit] needs to be wrong in.
+     * Only the paths the APK carries are measured, the same question
+     * [installedBundledExtensionBytes] asks of the extensions directory and for
+     * the same reason: `usr/` is shared ground, and its size on disk is not an
+     * answer to "how much of what we are about to write is already here".
+     * Toolchains install into it, `npm install -g` lands there, pip writes into
+     * the stdlib, and only the first of those is recorded anywhere. A record is
+     * therefore not a way to subtract them: it cannot see an install that copied
+     * its tree and then failed to write its own record, which is a state
+     * `ToolchainManager` documents rather than repairs.
      *
-     * Null when the record cannot be read, which [sharedTreeCredit] turns into
-     * no credit at all. Answering zero there would have been the opposite of
-     * safe: zero means "nothing in `usr/` is foreign", so an unreadable record
-     * would have credited the directory in full, which is exactly the direction
-     * that lets the gate pass a device it should refuse. A record that is simply
-     * absent is different and does answer zero, because the file is written by
-     * the first install and its absence means none has run.
+     * One level below `usr`'s own directories, which is neither arbitrary nor
+     * free to change. `assets/usr` holds `lib` and `share`, and that is where
+     * toolchains install too, so naming those two credits everything again.
+     * One level further down separates them: Java writes `usr/lib/jvm`, Ruby
+     * writes `usr/lib/ruby` and `usr/bin` (which the APK does not carry at all),
+     * `npm install -g` writes `usr/lib/node_modules`, and none of those is a
+     * name the APK lists. It costs about 65 `list` calls against the 3400 a walk
+     * of the whole asset tree would.
      *
-     * Reads `toolchains.json` directly rather than through `ToolchainManager`,
-     * whose constructor builds an `AssetPackManagerFactory` and therefore cannot
-     * be instantiated in a JVM unit test. Routing the gate through it took four
-     * existing storage tests down with `NoClassDefFoundError` before this was a
-     * plain file read.
+     * What it still over-counts, so the cap in [sharedTreeCredit] stays: bytes
+     * added INSIDE a bundled directory, `pip install` into
+     * `usr/lib/python3.x/site-packages` being the one that happens. That is
+     * bounded by the bundled figure; the unrecorded trees this replaces were
+     * not.
+     *
+     * An assets listing that cannot be read yields no credit, the same direction
+     * an absent directory takes.
      */
-    private fun installedToolchainBytes(): Long? = try {
-        val record = File(context.filesDir, "home/.vscodroid/toolchains.json")
-        if (!record.exists()) {
-            // Written by the first install; absent means none has run.
-            0L
-        } else {
-            val state = JSONArray(record.readText())
-            toolchainBytesFor(
-                (0 until state.length()).mapNotNull {
-                    state.optJSONObject(it)?.optString("name")?.ifEmpty { null }
-                }
-            )
+    private fun installedBundledUsrBytes(): Long {
+        val usrDir = File(context.filesDir, "usr")
+        return bundledUsrEntries().sumOf { installedExtractionBytes(File(usrDir, it)) }
+    }
+
+    private fun bundledUsrEntries(): List<String> = try {
+        (context.assets.list("usr") ?: emptyArray()).flatMap { top ->
+            val children = context.assets.list("usr/$top") ?: emptyArray()
+            // `list` answers an empty array for a file as well as for an empty
+            // directory (see [extractAssetDir], which reads it the same way), so
+            // a file sitting at the top level is measured where it is rather
+            // than expanded into nothing.
+            if (children.isEmpty()) listOf(top) else children.map { "$top/$it" }
         }
-    } catch (e: Exception) {
-        Logger.w(tag, "Could not read installed toolchains; crediting none of usr/: ${e.message}")
-        null
+    } catch (e: IOException) {
+        Logger.w(tag, "Could not list the bundled usr/ assets; crediting none of it: ${e.message}")
+        emptyList()
     }
 
     /**
@@ -233,9 +241,23 @@ class FirstRunSetup(
             val extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
             val installed = extractedTreeBytes +
                 sharedTreeCredit(
-                    installedBytes = installedExtractionBytes(File(context.filesDir, "usr")),
+                    // The bundled entries that are on disk, not the whole
+                    // directory, for the reason the extensions credit below
+                    // states: measured is a fact, a subtracted estimate is only
+                    // as good as what it can see. The estimate this replaces
+                    // came from `toolchains.json`, which knows the installs that
+                    // FINISHED. A copy that died before its record was written
+                    // leaves about 155 MB in `usr/` that nothing names
+                    // (ToolchainManager says so at the line where it happens),
+                    // and `npm install -g` and pip never had a record at all, so
+                    // every one of those bytes was credited as a byte the next
+                    // unpack writes over. The cap hid it while the bundled part
+                    // of `usr/` was complete and stopped hiding it exactly where
+                    // it matters: a retry after an aborted unpack, where `usr/`
+                    // is the tree left partial because it is extracted last.
+                    installedBytes = installedBundledUsrBytes(),
                     bundledBytes = bundledUsrBytes,
-                    foreignBytes = installedToolchainBytes(),
+                    foreignBytes = 0,
                 ) +
                 sharedTreeCredit(
                     // The bundled directories that are already there, not the
@@ -278,7 +300,14 @@ class FirstRunSetup(
                 )
             }
             if (available < required) {
-                lastRefusedBytes = required
+                // What the user has to FREE, which is not what the unpack needs
+                // to have free: the two differ by everything the device already
+                // has. The message asks them to free this figure, so quoting the
+                // demand told an updater 200 MB short to clear 873 and sent them
+                // to delete photos they did not need to lose. Measured after the
+                // cache reclaim above, so it is a shortfall against the device as
+                // it now stands.
+                lastShortfallBytes = required - available
                 Logger.e(
                     tag,
                     "Insufficient storage: ${available / 1_048_576}MB available, " +
@@ -2211,21 +2240,23 @@ claude() {
         // entries whose directory is gone are unloadable and dropped, freshly
         // extracted bundled versions gain an entry, everything else stays
         // exactly as the server wrote it.
+        //
+        // What this build bundles, and deliberately not what reached the disk;
+        // [bundledExtensionIds] carries the reasoning. Computed once so both
+        // writers of the record agree: an id in one and missing from the other
+        // is read later as an extension the user removed.
+        val bundledIds = bundledExtensionIds(bundled.toList())
+
         val manifestFile = File(extensionsDir, "extensions.json")
         if (!manifestFile.exists()) {
             generateExtensionsManifest(extensionsDir, bundled)
             // Recorded on this path too. A fresh install lists everything, so
-            // nothing here needs the history -- but the *next* upgrade does, and
+            // nothing here needs the history, but the *next* upgrade does, and
             // an install that never wrote it would read an empty set and treat
             // every bundled extension as new.
-            rememberBundledIds(
-                bundled.mapNotNull {
-                    manifestEntryFor(extensionsDir, it)
-                        ?.getJSONObject("identifier")?.getString("id")
-                }
-            )
+            rememberBundledIds(bundledIds)
         } else {
-            reconcileExtensionsManifest(manifestFile, extensionsDir, bundled)
+            reconcileExtensionsManifest(manifestFile, extensionsDir, bundled, bundledIds)
         }
 
         // Reports the decision. Reaching this line now also means every one of
@@ -2345,6 +2376,7 @@ claude() {
         manifestFile: File,
         extensionsDir: File,
         bundledDirs: Array<String>,
+        bundledIds: List<String>,
     ) {
         try {
             val entries = JSONArray(manifestFile.readText())
@@ -2409,9 +2441,15 @@ claude() {
             // reads as one the user removed, so it is never listed again, and
             // every later reconcile writes the bad set back over itself.
             //
-            // Unconditional is still right. With nothing to write the manifest
-            // on disk already matches this set, so the record is accurate.
-            rememberBundledIds(bundledEntries.map { it.first })
+            // The set is what this build BUNDLES, not what an entry could be
+            // built for, and the two differ in exactly one place: a bundled
+            // directory [bundledDirsToExtract] declined to unpack because the
+            // user already holds a newer copy of the same id. That copy carries
+            // the manifest entry, so the id is listed either way, and recording
+            // it is what stops a later uninstall of it reading as an id this app
+            // never shipped. Unconditional is still right for the same reason as
+            // before: with nothing to write, the manifest on disk already agrees.
+            rememberBundledIds(bundledIds)
         } catch (e: ManifestWriteFailed) {
             // Its own type, because IOException is too wide to mean "the write
             // failed" here. `manifestFile.readText()` above is inside this same
@@ -2639,11 +2677,11 @@ claude() {
         private const val EXTRACTION_SLACK_BYTES = 64L * 1_048_576L
 
         /**
-         * What the pre-flight asked for the last time it refused, or 0 if it has
-         * not refused in this process.
+         * How much the device was short the last time the pre-flight refused,
+         * or 0 if it has not refused in this process.
          *
          * The figure depends on what is already unpacked, so it is no longer
-         * something [requiredStorageMb] can compute on its own, and that
+         * something [storageToFreeMb] can compute on its own, and that
          * function cannot take a Context, because `SplashActivity` calls it
          * statically at the point it has a LOW_STORAGE result and nothing else.
          * Recording the refusal is what keeps the message naming the number the
@@ -2656,7 +2694,7 @@ claude() {
          * built on the main thread.
          */
         @Volatile
-        private var lastRefusedBytes: Long = 0
+        private var lastShortfallBytes: Long = 0
 
         /**
          * How much free space the next unpack needs, given what is already there.
@@ -2743,10 +2781,13 @@ claude() {
          *    without this cap a directory swollen by toolchains would credit the
          *    install for space that overwriting never gives back.
          *
-         * A null [foreignBytes] means the share could not be determined and
-         * yields no credit. It is not the same as zero: zero asserts the
-         * directory is ours alone, which is the assumption that would credit a
-         * toolchain-filled `usr/` in full.
+         * A null [foreignBytes] means a caller that cannot work out its own
+         * share, and yields no credit. It is not the same as zero: zero is the
+         * claim that every byte in [installedBytes] is a byte extraction writes
+         * over, and both callers earn that claim by counting only the paths the
+         * APK carries rather than by asserting anything about the directory.
+         * Handing the whole of a shared directory in with a zero here is what
+         * credited a toolchain-filled `usr/` in full.
          *
          * Getting it wrong upward is the failure worth avoiding: the gate passes,
          * extraction runs out of disk partway, and the user is told "Setup
@@ -2764,29 +2805,33 @@ claude() {
         }
 
         /**
-         * What the pre-flight requires, in whole MB, for messages shown to the
-         * user. Asking [FirstRunSetup] rather than repeating a literal in the UI:
-         * a screen telling someone to free 500 MB when 873 is needed sends them
-         * to clear space, come back, and fail again in the same place. (873 is
-         * the gate on a fresh install today: 809.5 MiB of assets plus the 64 MiB
-         * of [EXTRACTION_SLACK_BYTES]. It moves with the asset tree, which is
-         * the reason this function exists rather than a literal in the UI.)
+         * How much the user has to free, in whole MB, for the message shown to
+         * them. Asking [FirstRunSetup] rather than repeating a literal in the
+         * UI: a screen telling someone to free 500 MB when the device is 873
+         * short sends them to clear space, come back, and fail in the same
+         * place.
          *
-         * The refusal that has just happened is the honest answer, and the
-         * whole-tree figure is the fallback for a caller asking before any
-         * refusal, there is none today, and it is the conservative direction
-         * for one that appears.
+         * The shortfall the refusal measured, not the size of the unpack. The
+         * second is the figure a device with nothing free would have to reach,
+         * and it is what the fallback answers for a caller asking before any
+         * refusal has happened; there is none today, and over-stating is the
+         * conservative direction for one that appears.
          */
-        fun requiredStorageMb(): Long =
-            (
-                lastRefusedBytes.takeIf { it > 0 }
-                    ?: requiredExtractionBytes(
-                        BuildConfig.EXTRACTED_ASSET_BYTES,
-                        BuildConfig.LARGEST_ASSET_BYTES,
-                        installedBytes = 0,
-                        extractedTreeBytes = 0,
-                    )
-                ) / 1_048_576L
+        fun storageToFreeMb(): Long {
+            val bytes = lastShortfallBytes.takeIf { it > 0 }
+                ?: requiredExtractionBytes(
+                    BuildConfig.EXTRACTED_ASSET_BYTES,
+                    BuildConfig.LARGEST_ASSET_BYTES,
+                    installedBytes = 0,
+                    extractedTreeBytes = 0,
+                )
+            // Rounded up. Truncation was harmless while this over-stated the
+            // answer by everything already free; against the shortfall itself it
+            // names a figure up to a megabyte short of what the retry measures,
+            // so the user frees exactly what was asked and is refused again by
+            // the remainder, with nothing on screen to say why.
+            return (bytes + 1_048_575L) / 1_048_576L
+        }
 
         /**
          * Bundled extension identifiers as of the last setup. Deliberately not
@@ -3313,32 +3358,33 @@ internal fun bundledDirsToExtract(present: List<String>, bundled: List<String>):
 }
 
 /**
- * How much of `filesDir` the toolchains named in `toolchains.json` occupy.
+ * The extension identifiers this build bundles, read from the directory names
+ * in `assets/extensions` rather than from what reached the disk.
  *
- * A withdrawn toolchain is still counted. `ToolchainRegistry.find` answers null
- * for one, and reading a size through it alone therefore returns 0 for the
- * toolchains most likely to be sitting on a device right now: the ones
- * installed before the withdrawal. The pre-flight subtracts this figure from
- * what it credits as reusable, so a 0 credits space that is occupied, passes a
- * device that should have been refused, and the extraction it admits runs out
- * of disk partway with the toolchain still where it was.
+ * The record these feed is the only thing that tells "the user uninstalled this
+ * bundled extension" from "this build has never shipped it" (see
+ * [bundledIdsToRelist]), so it has to name what the APK carries. Deriving it
+ * from the directories instead named something narrower, the ids a manifest
+ * entry could be built for, and the two were the same set only while every
+ * bundled directory was unpacked. [bundledDirsToExtract] now skips a fetched
+ * one whose id the user already holds at a newer version: that directory is
+ * never created, `manifestEntryFor` answers null for it, its id fell out of the
+ * record, and the user's later uninstall of their own copy then read as an id
+ * this app had never bundled and was put back.
  *
- * The retired lookup strips the prefix itself rather than going through
- * [toolchainShortName], which resolves through the registry and so returns a
- * retired name unchanged by design -- the pass-through that keeps an uninstall
- * working after a row is dropped. `toolchains.json` records the short form
- * today (see the manifests written by `download-ruby.sh` and `download-java.sh`)
- * and this reads either, because the cost of guessing wrong is a toolchain that
- * silently counts as nothing.
+ * The directory is `publisher.name-version` and the identifier is the same
+ * publisher and name lowercased, which is what `manifestEntryFor` builds from
+ * the `package.json` inside. That the two agree is measured rather than
+ * assumed: `BundledExtensionVersionTest` fails the build when a bundled
+ * directory and its own manifest disagree, and `release.yml` runs the unit
+ * tests after `download-extensions.sh`, so the fetched directories are covered
+ * as well as the committed ones.
  *
- * An unrecognised name contributes nothing, which is the same answer as before
- * for a record this build has never heard of.
+ * A name that is not that shape contributes nothing, which is the answer an
+ * unreadable `package.json` already gave.
  */
-internal fun toolchainBytesFor(names: List<String>): Long = names.sumOf { name ->
-    ToolchainRegistry.find(name)?.estimatedSize
-        ?: RETIRED_TOOLCHAINS[name.removePrefix("toolchain_")]
-        ?: 0L
-}
+internal fun bundledExtensionIds(bundled: List<String>): List<String> =
+    bundled.mapNotNull { splitExtensionDir(it)?.first?.lowercase() }
 
 /**
  * Whether the setup recorded on this device belongs to a build other than the
@@ -3593,9 +3639,9 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
  *    writes something substantial there would have to be.
  *  - `usr/` is shared ground. Toolchains install into it, Java is 146 MB
  *    unpacked, and `npm install -g` lands there too, so its size on disk is not
- *    an answer to "how much of what we are about to write is already here". It
- *    goes through [sharedTreeCredit] with the installed toolchains subtracted
- *    and the bundled figure as a ceiling.
+ *    an answer to "how much of what we are about to write is already here".
+ *    Only the entries the APK names are measured, see
+ *    `installedBundledUsrBytes`, and the bundled figure is the ceiling.
  *  - the extensions directory is shared in the same way, with the user's gallery
  *    installs in it, and the pre-flight does not pass the whole of it: it sums
  *    this over the bundled directories one at a time

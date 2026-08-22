@@ -100,10 +100,11 @@ class SharedTreeCreditTest {
      * Null and zero must not be interchangeable, and the same inputs are used
      * for both so the difference cannot come from anywhere else.
      *
-     * Zero asserts the directory is ours alone. Null says we could not tell, and
-     * the honest answer to that is to credit nothing: an unreadable
-     * `toolchains.json` would otherwise credit a `usr/` full of toolchains in
-     * full, which is the exact shape of the bug being avoided.
+     * Zero is the claim that every byte counted is a byte extraction writes
+     * over. Null says we could not tell, and the honest answer to that is to
+     * credit nothing: a caller that cannot work out its own share would
+     * otherwise credit a `usr/` full of toolchains in full, which is the exact
+     * shape of the bug being avoided.
      */
     @Test
     fun `an unknown foreign share credits nothing, unlike a foreign share of zero`() {

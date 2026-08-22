@@ -48,11 +48,14 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">The custom memory limit in settings.json was turned off after repeated crashes. Change vscodroid.server.heapCeilingMb and restart the app to try a different value.</string>
-    <!-- The figure is passed in rather than written here: it is the size of the
-         bundled asset tree, which grows with every VS Code pin. A fixed 500 MB
-         outlived the tree it was measured against and sent people to free half
-         of what unpacking actually needs, so they cleared space, came back, and
-         failed in the same place. See FirstRunSetup.requiredStorageMb().
+    <!-- The figure is passed in rather than written here, and it is the
+         SHORTFALL the refusal measured, not the size of the unpack: this asks
+         the user to free it, and what they have to free is what the device is
+         missing. A fixed 500 MB outlived the tree it was measured against and
+         sent people to free half of what unpacking needs, so they cleared space,
+         came back, and failed in the same place. Quoting the whole demand had
+         the mirror image of that fault, sending someone 200 MB short after 873.
+         See FirstRunSetup.storageToFreeMb().
 
          It ends by naming the button, like its two siblings below. The failure
          screen adds Retry after the fact and does not move accessibility focus
