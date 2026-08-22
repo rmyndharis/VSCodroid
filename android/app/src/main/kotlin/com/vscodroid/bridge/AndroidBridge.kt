@@ -9,8 +9,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.webkit.JavascriptInterface
+import androidx.annotation.StringRes
 import androidx.browser.customtabs.CustomTabsIntent
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.R
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
@@ -120,23 +122,39 @@ internal fun authRequestIdsIn(url: String): List<String> =
  * reason belongs to which failure without pinning the wording, which is not the
  * contract. The wording is user facing: the extension's "Open in Browser" puts
  * whichever of these comes back straight into a `showErrorMessage`.
+ *
+ * A string resource and no longer the sentence itself, and the difference is what
+ * a translator can reach. These leave this app through a return value and are
+ * drawn by the editor, so `check-translatable-strings.py` cannot see them: it is
+ * a predicate over call shapes and finds a literal only where the literal is
+ * written at the sink, which its own docstring names as the hole it has. Written
+ * in Kotlin they stayed English under a translated editor for ever, and nothing
+ * anywhere reported it.
+ *
+ * The identity is what the constant carries, exactly as before; only the text
+ * moved. `res/values/strings.xml` holds the wording and the reasoning for it.
  */
-internal const val OPEN_URL_STALE_SESSION =
-    "VSCodroid did not accept the request. Reload the window and try again."
+@StringRes
+internal val OPEN_URL_STALE_SESSION = R.string.bridge_stale_session
 
 /** The reason that is worth acting on, and the only one the relay used to give. */
-internal const val OPEN_URL_NO_HANDLER =
-    "VSCodroid did not open it. No app on this device handles that link."
+@StringRes
+internal val OPEN_URL_NO_HANDLER = R.string.open_url_no_handler
 
 /**
- * Everything else, with the exception's class name appended.
+ * Everything else, with the exception's class name substituted into it.
  *
  * The class name and not its message: `ActivityNotFoundException` quotes the
  * whole Intent it could not match, and `FileUriExposedException` quotes the
  * file, so a message here would hand the URL to the page that supplied it and,
  * through the extension, to a notification a user may screenshot.
+ *
+ * A format string with the name as its one argument, rather than the prefix this
+ * used to be. A sentence assembled by concatenation puts the cause in the same
+ * place in every language and no translation can move it.
  */
-internal const val OPEN_URL_FAILED_PREFIX = "VSCodroid could not open that link: "
+@StringRes
+internal val OPEN_URL_FAILED = R.string.open_url_failed
 
 /**
  * Why [AndroidBridge.reclaimSafMirror] did not remove a mirror.
@@ -147,13 +165,22 @@ internal const val OPEN_URL_FAILED_PREFIX = "VSCodroid could not open that link:
  * as a success, which for this method means telling the user their disk was freed
  * while it was not.
  *
+ * That convention is worth one warning for whoever writes the next test here:
+ * a relaxed `Context` mock answers `getString` with the empty string, which is
+ * this method's answer for "it was removed". Stub the resource rather than
+ * asserting on what a relaxed mock returns.
+ *
  * A refusal here is never a suggestion to retry harder. Each one names something
  * that has to change first, and the two below are the ones this file can decide
  * on its own; the rest come from the Activity, which is the only place that knows
  * what the editor currently has open.
+ *
+ * The same resource as [OPEN_URL_STALE_SESSION], kept under its own name: it is
+ * one situation with one instruction, and the two names are what let a test say
+ * which call it is pinning.
  */
-internal const val RECLAIM_STALE_SESSION =
-    "VSCodroid did not accept the request. Reload the window and try again."
+@StringRes
+internal val RECLAIM_STALE_SESSION = R.string.bridge_stale_session
 
 /**
  * No Activity wired the callback, so nothing could have been removed.
@@ -163,8 +190,8 @@ internal const val RECLAIM_STALE_SESSION =
  * reporting it as "that folder is in use" would send them looking for a folder to
  * close.
  */
-internal const val RECLAIM_UNAVAILABLE =
-    "VSCodroid cannot manage device folder storage right now."
+@StringRes
+internal val RECLAIM_UNAVAILABLE = R.string.bridge_reclaim_unavailable
 
 /**
  * The sign-in requests this app launched a browser for, and when.
@@ -330,7 +357,7 @@ class AndroidBridge(
     private val onDownloadComplete: (requestId: String, error: String?) -> Unit = { _, _ -> },
     private val onListMirrors: () -> String = { "[]" },
     private val onReclaimMirror: (hash: String, force: Boolean) -> String =
-        { _, _ -> RECLAIM_UNAVAILABLE },
+        { _, _ -> context.getString(RECLAIM_UNAVAILABLE) },
 ) {
     private val tag = "AndroidBridge"
 
@@ -387,7 +414,7 @@ class AndroidBridge(
      */
     @JavascriptInterface
     fun openExternalUrl(url: String, authToken: String): String {
-        if (!security.validateToken(authToken)) return OPEN_URL_STALE_SESSION
+        if (!security.validateToken(authToken)) return context.getString(OPEN_URL_STALE_SESSION)
         // Empty until the launch arms something, and then the ids to take back if
         // the launch that armed them throws. Arming has to precede the launch, so
         // without this a launch nothing accepted still left the callback relay
@@ -443,8 +470,8 @@ class AndroidBridge(
             // inside the trace would only look like a redaction. The frames behind
             // it are all framework, so the class name is what was being read for.
             Logger.e(tag, "Failed to open a URL at ${urlLogLabel(url)} (${e.javaClass.simpleName})")
-            if (e is ActivityNotFoundException) OPEN_URL_NO_HANDLER
-            else OPEN_URL_FAILED_PREFIX + e.javaClass.simpleName
+            if (e is ActivityNotFoundException) context.getString(OPEN_URL_NO_HANDLER)
+            else context.getString(OPEN_URL_FAILED, e.javaClass.simpleName)
         }
     }
 
@@ -679,7 +706,7 @@ class AndroidBridge(
      */
     @JavascriptInterface
     fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String {
-        if (!security.validateToken(authToken)) return RECLAIM_STALE_SESSION
+        if (!security.validateToken(authToken)) return context.getString(RECLAIM_STALE_SESSION)
         return onReclaimMirror(hash, force)
     }
 

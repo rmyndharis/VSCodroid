@@ -188,6 +188,53 @@ class DownloadListenerWiringTest {
         }
     }
 
+    /**
+     * That a download in flight is released whenever the main frame is replaced,
+     * and not only when a renderer crash replaces the whole WebView.
+     *
+     * `recreateWebView` was the only site that told the coordinator, which left
+     * every ordinary page replacement wedging it: `reload()` on the way back from
+     * a long absence, the `loadUrl` in `navigateToFolder`, the server-gave-up
+     * page, and the folder switches the workbench performs on its own without
+     * going through Kotlin. The page that owed the bytes is gone in every one of
+     * those, so nothing further arrives, the request stays live with its stream
+     * open, the document the picker created is never discarded, and because the
+     * coordinator runs one download at a time every later Download tap queues
+     * behind it until the queue fills and the rest are refused. Nothing in
+     * `DownloadCoordinatorTest` can see this: it calls `onPageGone` itself.
+     *
+     * The callback is what all four have in common, so that is where it is
+     * checked. Asserting the position and not just the presence, because the
+     * whole point is that the coordinator hears about a page it did not replace.
+     */
+    @Test
+    fun `every main-frame replacement releases the download the old page owed`() {
+        val bridge = withoutComments(body("initBridge"))
+
+        val loaded = bridge.indexOf("onPageLoaded")
+        assertTrue(loaded >= 0) {
+            "the page-loaded callback is gone from initBridge, so this test is measuring " +
+                "nothing. If the client's callbacks moved, point this at the new site."
+        }
+        val nextCallback = bridge.indexOf("onRetryServer", loaded)
+        assertTrue(nextCallback > loaded) {
+            "cannot find the end of the page-loaded callback; this test would otherwise " +
+                "accept a call made anywhere in initBridge"
+        }
+
+        val pageLoaded = bridge.substring(loaded, nextCallback)
+        assertTrue(pageLoaded.contains("downloads.onPageGone()")) {
+            "a finished main-frame load does not tell the download coordinator that the " +
+                "page owing the bytes is gone. Reload, folder switch, the server-gave-up " +
+                "page and a workbench-driven folder switch all replace the page without " +
+                "passing through recreateWebView, and each one leaves the coordinator " +
+                "holding a transfer nothing can finish: the user's chosen document stays " +
+                "as a part-written file and Download does nothing for the rest of the " +
+                "session. Found in the callback: " +
+                pageLoaded.lines().filter { it.contains("downloads.") }.joinToString("; ")
+        }
+    }
+
     @Test
     fun `the page that answers the listener is given the script that answers it`() {
         val inject = withoutComments(body("injectBridgeToken"))

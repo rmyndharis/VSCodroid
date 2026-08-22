@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.annotation.StringRes
+import com.vscodroid.R
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
 import org.json.JSONArray
@@ -878,8 +880,9 @@ class SafStorageManager(private val context: Context) {
         internal const val RECLAIM_FAILED = -3L
 
         /**
-         * Why a mirror the user asked to remove must not be removed now, or null when
-         * nothing this side knows about stands in the way.
+         * Why a mirror the user asked to remove must not be removed now, as the string
+         * resource that says so, or null when nothing this side knows about stands in
+         * the way.
          *
          * The question is "is anything still using this mirror", and it is separate
          * from the question [mayReclaim] and [SafSyncEngine.holdsOnlyVouchedCopies]
@@ -908,13 +911,14 @@ class SafStorageManager(private val context: Context) {
          * degrades the message rather than opening the hole; removing this one opens
          * it.
          */
+        @StringRes
         internal fun reclaimRefusal(
             hash: String,
             watchedMirror: String?,
             syncingMirror: String?,
             openWorkspaceMirror: String?,
             watchedThisProcess: Set<String>,
-        ): String? = when (hash) {
+        ): Int? = when (hash) {
             watchedMirror -> RECLAIM_FOLDER_OPEN
             syncingMirror -> RECLAIM_FOLDER_OPENING
             openWorkspaceMirror -> RECLAIM_FOLDER_OPEN
@@ -922,11 +926,27 @@ class SafStorageManager(private val context: Context) {
             else -> null
         }
 
-        internal const val RECLAIM_FOLDER_OPEN =
-            "That folder is open in the editor. Open a different folder first."
-        internal const val RECLAIM_FOLDER_OPENING = "That folder is still opening."
-        internal const val RECLAIM_FOLDER_THIS_SESSION =
-            "That folder was open in this session. Restart VSCodroid, then remove it."
+        /**
+         * The three refusals above, as string resources rather than sentences.
+         *
+         * They cross the bridge and the bundled extension shows whichever comes
+         * back verbatim, so they are user-facing text, and a sentence written in
+         * Kotlin is the same in every locale for ever. Nothing reported that:
+         * `check-translatable-strings.py` finds a literal only where the literal
+         * is written at the sink, and these leave through a return value, which
+         * its own docstring names as the hole it has.
+         *
+         * The ids and not the text, so this stays a pure predicate a JVM test can
+         * exercise with no Context: what belongs to which case is decided here and
+         * the words are resolved by the Activity that has one. Resource ids are
+         * never zero, so null still means "no refusal".
+         */
+        @StringRes
+        internal val RECLAIM_FOLDER_OPEN = R.string.saf_mirror_folder_open
+        @StringRes
+        internal val RECLAIM_FOLDER_OPENING = R.string.saf_mirror_folder_opening
+        @StringRes
+        internal val RECLAIM_FOLDER_THIS_SESSION = R.string.saf_mirror_folder_this_session
 
         /**
          * The mirror [path] sits in, or null when it is not under [mirrorsRoot].

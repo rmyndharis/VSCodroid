@@ -182,6 +182,20 @@ registered, which is the whole of why the toolchain management calls have no cal
 Adding a method to `AndroidBridge` does not publish it; the relay branch is a second,
 separate edit, and nothing fails if you forget it.
 
+**A bridge call blocks the page's main thread for as long as the method runs, and four of
+them run for as long as the disk is big.** The relay answers from the workbench page, and
+a call made through `addJavascriptInterface` does not return to JavaScript until the
+Kotlin method has finished. `getStorageBreakdown`, `listSafMirrors`, `reclaimSafMirror`
+and `clearCaches` all walk directory trees before they can answer, and the app's own
+extracted tree is around 875 MB before a project is opened, so on any real install those
+walks take far longer than the moment every other command takes. A caller that puts a
+deadline on the promise must give those four one of their own. The bundled bridge
+extension declares two, `BRIDGE_TIMEOUT_MS` for a command the relay answers at once and
+`DISK_WALK_TIMEOUT_MS` for these four; read the values out of its `extension.js` rather
+than from here, because a copy of a number in a document is how the two drift. Held to
+the short one the four reject while the walk is still running, the user is told the app
+may not be running on Android, and the answer is discarded when it arrives.
+
 #### Clipboard
 
 ```kotlin
@@ -323,11 +337,17 @@ fun getStorageBreakdown(authToken: String): String
 // Returns JSON with per-component disk usage in bytes:
 // {"vscode_server": N, "extensions": N, "user_data": N, "logs": N,
 //  "tools": N, "saf_mirrors": N, "cache": N, "total": N}
+//
+// TAKES AS LONG AS THE DISK. Every figure is a directory walk and "total" walks
+// filesDir again on top, so on an install carrying the extracted server tree
+// (~875 MB before a project is opened) this runs for far longer than a relay
+// hop. See the deadline note at the head of this section.
 
 @JavascriptInterface
 fun clearCaches(authToken: String): Long
 // Clears npm-cache, tmp dir, crash logs, VS Code logs
 // Returns: number of bytes freed
+// Deletes trees, so it takes as long as the disk. Same deadline note.
 
 @JavascriptInterface
 fun getAvailableStorage(authToken: String): Long
@@ -348,6 +368,9 @@ fun listSafMirrors(authToken: String): String
 // removing it destroys the only copy of them. That is the ordinary state of any
 // folder something has been built or cloned in.
 // "[]" if refused, and also "[]" when no SAF manager is wired up.
+//
+// TAKES AS LONG AS THE DISK: every copy is walked twice, once for "bytes" and
+// once for "reclaimable". Same deadline note.
 
 @JavascriptInterface
 fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String
@@ -371,6 +394,9 @@ fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String
 //
 // The call returns as soon as the copy is unreachable; the recursive delete
 // continues afterwards and is finished by the next launch if the process dies.
+//
+// It is still not quick: without `force` the copy is walked to re-ask the gate,
+// and it is walked again to report the bytes freed. Same deadline note.
 ```
 
 #### Device Info

@@ -49,12 +49,43 @@ function getChannel() {
 }
 
 /**
+ * How long to wait for a command that only has to be relayed.
+ *
+ * The relay posts back from the page's main thread as soon as the bridge method
+ * returns, and for most commands that is a field read or a hand-off to an
+ * Activity, so anything past a moment means the relay is not there at all.
+ */
+const BRIDGE_TIMEOUT_MS = 5000;
+
+/**
+ * How long to wait for a command whose cost is the size of the user's disk.
+ *
+ * Four of the bridge methods walk directory trees before they can answer:
+ * `getStorageBreakdown` sizes every component of the app's storage and the whole
+ * of `filesDir` on top; `listSafMirrors` walks every copied device folder twice,
+ * once to size it and once to ask whether the device folder holds everything in
+ * it; `reclaimSafMirror` re-asks that second question and sizes the copy before
+ * removing it; and `clearCaches` deletes trees. The app's own extracted tree is
+ * around 875 MB before a single project is opened, so on any real install those
+ * walks run for far longer than the deadline above, and until this existed they
+ * were all given it: the storage screen and the device-folder screen, the only
+ * two places in the app that can reclaim disk, answered "Bridge timeout: is the
+ * app running on Android?" for every user who had enough files to need them.
+ *
+ * The number is not a guess about how long a walk takes; it cannot be, since it
+ * is the user's disk. It is the point at which "still working" stops being a
+ * plausible explanation and a relay that is not answering at all becomes one.
+ */
+const DISK_WALK_TIMEOUT_MS = 120000;
+
+/**
  * Sends a command to the main page relay and returns a promise for the response.
  * @param {string} cmd
  * @param {Record<string, *>} [extra]
+ * @param {number} [timeoutMs]
  * @returns {Promise<*>}
  */
-function sendBridgeCommand(cmd, extra = {}) {
+function sendBridgeCommand(cmd, extra = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
         const id = Math.random().toString(36).slice(2);
         _pending[id] = { resolve, reject };
@@ -67,13 +98,12 @@ function sendBridgeCommand(cmd, extra = {}) {
             return;
         }
 
-        // Timeout after 5 seconds (relay should respond almost instantly)
         setTimeout(() => {
             if (_pending[id]) {
                 delete _pending[id];
                 reject(new Error('Bridge timeout: is the app running on Android?'));
             }
-        }, 5000);
+        }, timeoutMs);
     });
 }
 
@@ -227,7 +257,7 @@ function activate(context) {
         async () => {
             try {
                 const json = /** @type {string} */ (
-                    await sendBridgeCommand('getStorageBreakdown')
+                    await sendBridgeCommand('getStorageBreakdown', {}, DISK_WALK_TIMEOUT_MS)
                 );
                 const b = JSON.parse(json || '{}');
 
@@ -327,7 +357,7 @@ function activate(context) {
             // had survived a removal they were never offered and never confirmed.
             try {
                 const json = /** @type {string} */ (
-                    await sendBridgeCommand('listSafMirrors')
+                    await sendBridgeCommand('listSafMirrors', {}, DISK_WALK_TIMEOUT_MS)
                 );
                 mirrors = JSON.parse(json || '[]');
 
@@ -388,7 +418,7 @@ function activate(context) {
                 await sendBridgeCommand('reclaimSafMirror', {
                     hash: m.hash,
                     force: !m.reclaimable
-                });
+                }, DISK_WALK_TIMEOUT_MS);
                 // Straight back to the list: the usual reason for opening this is
                 // to free space, and one folder is rarely the whole answer.
                 vscode.commands.executeCommand('vscodroid.manageDeviceFolders');
@@ -408,7 +438,7 @@ function activate(context) {
         'vscodroid.clearCaches',
         async () => {
             try {
-                const freed = Number(await sendBridgeCommand('clearCaches')) || 0;
+                const freed = Number(await sendBridgeCommand('clearCaches', {}, DISK_WALK_TIMEOUT_MS)) || 0;
                 // Say the number. A command that claims to free space without saying how
                 // much is indistinguishable from one that did nothing, and "already
                 // clear" is a useful answer rather than a failure.

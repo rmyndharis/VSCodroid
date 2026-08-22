@@ -17,6 +17,12 @@ import java.io.File
  *
  * Read off both sources rather than restated here, because a third copy of the
  * number is the defect this is about.
+ *
+ * The relay side is read as the SMALLEST deadline it declares. It declares more
+ * than one now: the commands that walk the user's disk before they can answer
+ * cannot be held to the deadline written for a relay hop. The keygen command is
+ * not one of those, so the short one is what it gets, and taking the minimum
+ * stays right if that ever changes.
  */
 class KeygenBudgetTest {
 
@@ -46,7 +52,14 @@ class KeygenBudgetTest {
     fun `the keygen timeout is shorter than the relay that waits on it`() {
         val kotlinSeconds = Regex("""KEYGEN_TIMEOUT_SECONDS = (\d+)L""")
             .find(read(bridge))?.groupValues?.get(1)?.toLong()
-        val relayMillis = Regex("""\}, (\d+)\);""")
+        // Every deadline the relay declares, and the smallest of them, because that
+        // is the one this side has to beat. The relay used to have a single literal
+        // in its `setTimeout`, which is what this read; it now names its deadlines so
+        // the commands that walk the user's disk are not held to the one meant for a
+        // relay hop, and a read of the literal found nothing at all and said so.
+        // Taking the minimum keeps the answer conservative whichever deadline the
+        // keygen command ends up under.
+        val relayMillis = Regex("""const \w*TIMEOUT_MS = (\d+);""")
             .findAll(read(relay))
             .map { it.groupValues[1].toLong() }
             .minOrNull()

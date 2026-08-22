@@ -79,6 +79,18 @@ class OpenExternalUrlRefusalTest {
         /** Named so a failure says the launch was attempted, not that something broke. */
         const val UNREACHABLE = "a browser launch is not reachable from a JVM test"
 
+        /**
+         * What the stubbed resources answer, one recognisable sentinel each.
+         *
+         * The refusals are string resources now, so a `Context` is what turns an id
+         * into a sentence and the test has to say what its own Context returns.
+         * Distinct values, because two refusals answering with the same text would
+         * let a method that always returns the wrong one satisfy both cases.
+         */
+        const val STALE = "stale-session-resource"
+        const val NO_HANDLER = "no-handler-resource"
+        const val FAILED_OTHER = "launch-failed-resource"
+
         const val LOCAL = "http://localhost:3000"
 
         /**
@@ -138,6 +150,13 @@ class OpenExternalUrlRefusalTest {
         every { SystemClock.elapsedRealtime() } returns 1L
 
         context = mockk(relaxed = true)
+        // Stubbed rather than left to the relaxed mock, and not as bookkeeping. A
+        // relaxed Context answers getString with the EMPTY STRING, which is this
+        // method's answer for "it opened". Unstubbed, every refusal below would come
+        // back as a success and each case would pass by agreeing with itself.
+        every { context.getString(OPEN_URL_STALE_SESSION) } returns STALE
+        every { context.getString(OPEN_URL_NO_HANDLER) } returns NO_HANDLER
+        every { context.getString(OPEN_URL_FAILED, *anyVararg()) } returns FAILED_OTHER
         bridge = AndroidBridge(
             context = context,
             security = security,
@@ -160,7 +179,7 @@ class OpenExternalUrlRefusalTest {
         // from "turned away at the door"; the reason now says which happened, so
         // the two assertions corroborate each other instead of one carrying both.
         assertNotEquals(
-            OPEN_URL_STALE_SESSION,
+            STALE,
             bridge.openExternalUrl(LOCAL, security.getSessionToken()),
             "a valid token was treated as a stale one, so the call never reached the launch",
         )
@@ -458,7 +477,7 @@ class OpenExternalUrlRefusalTest {
         every { context.startActivity(any()) } throws ActivityNotFoundException("nothing handles it")
 
         assertEquals(
-            OPEN_URL_NO_HANDLER,
+            NO_HANDLER,
             bridge.openExternalUrl(LOCAL, security.getSessionToken()),
             "nothing claimed the intent, which is the one cause the user can act on",
         )
@@ -467,20 +486,24 @@ class OpenExternalUrlRefusalTest {
         val refused = bridge.openExternalUrl(LOCAL, security.getSessionToken())
 
         assertNotEquals(
-            OPEN_URL_NO_HANDLER, refused,
+            NO_HANDLER, refused,
             "a launch Android refused on its own terms was reported as a missing app, which " +
                 "sends the user to install something that cannot help",
         )
-        assertTrue(
-            refused.startsWith(OPEN_URL_FAILED_PREFIX) && refused.endsWith("SecurityException"),
-            "the reason has to name what actually failed, got: " + refused,
+        assertEquals(
+            FAILED_OTHER, refused,
+            "the reason has to come from the catch-all resource, got: " + refused,
         )
+        // And carrying the class name, which is the whole of what that resource has
+        // to say. Asserting on the returned text cannot show this: the stub above
+        // answers the same sentence whatever it is handed.
+        verify { context.getString(OPEN_URL_FAILED, "SecurityException") }
     }
 
     @Test
     fun `a rejected token is refused before the URL is even looked at`() {
         assertEquals(
-            OPEN_URL_STALE_SESSION,
+            STALE,
             bridge.openExternalUrl(LOCAL, "not the session token"),
             "a URL that would otherwise open must still be refused with a bad token, and " +
                 "the reason has to say so: blaming a missing app sends the user to install " +

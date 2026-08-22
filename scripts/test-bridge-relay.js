@@ -36,6 +36,9 @@ const MAIN_ACTIVITY = path.join(
 const ANDROID_BRIDGE = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt',
 );
+const STRINGS_XML = path.join(
+    ROOT, 'android/app/src/main/res/values/strings.xml',
+);
 
 /**
  * One of the user-facing decline reasons, read from where it now lives.
@@ -48,13 +51,38 @@ const ANDROID_BRIDGE = path.join(
  */
 function bridgeReason(name) {
     const src = fs.readFileSync(ANDROID_BRIDGE, 'utf8');
-    const m = src.match(new RegExp('const val ' + name + '\\s*=\\s*"([^"]*)"'));
+    // Two hops, because the words moved once already. The bridge now names a
+    // resource rather than carrying the sentence, so that a translation can
+    // reach it; the sentence itself lives in strings.xml. Following both hops
+    // keeps this asking the question it has always asked, which is about the
+    // words a user is shown, not about where they happen to be declared.
+    const ref = src.match(new RegExp('val ' + name + '\\s*=\\s*R\\.string\\.(\\w+)'));
     assert.ok(
-        m,
+        ref,
         name + ' is gone from AndroidBridge.kt, so this check has nothing to read. If the ' +
         'reasons moved, point this at their new home rather than deleting the check.',
     );
-    return m[1];
+    const strings = fs.readFileSync(STRINGS_XML, 'utf8');
+    const text = strings.match(
+        new RegExp('<string name="' + ref[1] + '"[^>]*>([\\s\\S]*?)</string>'),
+    );
+    assert.ok(
+        text,
+        name + ' points at R.string.' + ref[1] + ', which strings.xml does not declare. ' +
+        'The bridge would then fail at getString rather than showing the reason.',
+    );
+    // What a user reads, not what the file stores: the resource compiler
+    // unescapes these, and a format argument is filled before the sentence is
+    // shown, so the assertions below would otherwise compare against text that
+    // never appears on screen.
+    return text[1]
+        .replace(/%\d+\$s/g, '')
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .trim();
 }
 
 /** How a literal dollar is written inside a Kotlin raw string. */

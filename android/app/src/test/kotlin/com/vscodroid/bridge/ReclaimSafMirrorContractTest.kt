@@ -41,7 +41,18 @@ class ReclaimSafMirrorContractTest {
     /** The real one, so the token the bridge accepts is not stubbed into existence. */
     private val security = SecurityManager()
 
-    private val context: Context = mockk(relaxed = true)
+    /**
+     * Answers the two refusal resources with recognisable sentinels.
+     *
+     * Not bookkeeping. A relaxed `Context` answers `getString` with the EMPTY
+     * STRING, which is this method's answer for "the copy was removed", so an
+     * unstubbed mock would turn both refusals below into claims that the user's
+     * disk had been freed, and each case would then pass by agreeing with itself.
+     */
+    private val context: Context = mockk(relaxed = true) {
+        every { getString(RECLAIM_STALE_SESSION) } returns STALE
+        every { getString(RECLAIM_UNAVAILABLE) } returns UNAVAILABLE
+    }
 
     private companion object {
         const val HASH = "a1b2c3"
@@ -51,6 +62,13 @@ class ReclaimSafMirrorContractTest {
          * what has to change first. See `MainActivity.removeDeviceFolderCopy`.
          */
         const val IN_USE = "That folder is open in the editor. Close it and try again."
+
+        /**
+         * What the stubbed refusal resources answer. Distinct from each other, so a
+         * method that always returns the wrong one cannot satisfy both cases.
+         */
+        const val STALE = "stale-session-resource"
+        const val UNAVAILABLE = "reclaim-unavailable-resource"
     }
 
     /**
@@ -124,7 +142,7 @@ class ReclaimSafMirrorContractTest {
         val (bridge, asked) = bridgeAnswering("")
 
         val refusal = bridge.reclaimSafMirror("not the session token", HASH, force = true)
-        assertEquals(RECLAIM_STALE_SESSION, refusal, "a rejected token must say the session is stale")
+        assertEquals(STALE, refusal, "a rejected token must say the session is stale")
         assertTrue(
             refusal.isNotEmpty(),
             "the guard answered the way a completed removal does, so a caller holding no " +
@@ -147,7 +165,7 @@ class ReclaimSafMirrorContractTest {
         )
 
         assertEquals(
-            RECLAIM_UNAVAILABLE,
+            UNAVAILABLE,
             bridge.reclaimSafMirror(security.getSessionToken(), HASH, force = false),
             "an unwired bridge must decline in a way the user can read; the empty string " +
                 "here reports a removal that no code path performed",

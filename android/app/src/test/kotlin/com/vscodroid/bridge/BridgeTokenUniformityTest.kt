@@ -11,6 +11,7 @@ import io.mockk.Runs
 import io.mockk.clearMocks
 import io.mockk.confirmVerified
 import io.mockk.every
+import io.mockk.excludeRecords
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -87,6 +88,21 @@ class BridgeTokenUniformityTest {
 
         init {
             every { security.validateToken(any()) } returns false
+            // Reading a string resource is not acting, and two methods have to do it
+            // on the refusal path: openExternalUrl and reclaimSafMirror answer with
+            // the sentence naming why they refused, and those sentences are string
+            // resources so a translator can reach them. Left recorded, the guard
+            // below would read composing a refusal as reaching past the token.
+            //
+            // Narrow on purpose: only the two getString overloads are excluded, and
+            // getString has no effect beyond returning text, so a method that touches
+            // nothing else has not acted. Everything a bridge method could actually
+            // DO through this Context -- startActivity, the content resolver, the
+            // package manager -- is still watched.
+            excludeRecords {
+                context.getString(any())
+                context.getString(any(), *anyVararg())
+            }
         }
     }
 

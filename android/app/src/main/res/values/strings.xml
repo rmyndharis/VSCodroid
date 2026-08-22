@@ -229,6 +229,39 @@
          the recursive delete outlives the call the editor is waiting on. -->
     <string name="saf_mirror_removed">Removed a device folder\'s local copy, freeing %1$s.</string>
 
+    <!-- The refusals the removal guard raises before anything is deleted. They travel
+         back across the bridge and the bundled extension shows them verbatim, so they
+         are the user's whole explanation for a removal that did not happen. Each names
+         the thing that has to change first; none of them invites a bare retry. -->
+    <string name="saf_mirror_folder_open">That folder is open in the editor. Open a different folder first.</string>
+    <string name="saf_mirror_folder_opening">That folder is still opening.</string>
+    <!-- The widest of the three. A write-back drain outlives the folder switch that
+         stopped it and can still be streaming out of the copy, so a restart is what
+         makes the copy safe to remove rather than closing the folder. -->
+    <string name="saf_mirror_folder_this_session">That folder was open in this session. Restart VSCodroid, then remove it.</string>
+
+    <!-- Reasons a bridge call did not do what it was asked. These are returned to the
+         page and rendered by the bundled extension's showErrorMessage, which is the
+         only reason they are resources at all: the gate over translatable strings is a
+         predicate over call shapes and cannot see a sentence that leaves through a
+         return value. -->
+    <!-- The caller's session token did not match. Used by both the external-URL and
+         the folder-removal calls; one string because it is one situation and one
+         instruction. -->
+    <string name="bridge_stale_session">VSCodroid did not accept the request. Reload the window and try again.</string>
+    <!-- No Activity wired the removal callback, so nothing could have been removed.
+         Distinct from a refusal with a reason: this is a mistake in the app rather
+         than a state the user can act on, and saying "that folder is in use" would
+         send them looking for a folder to close. -->
+    <string name="bridge_reclaim_unavailable">VSCodroid cannot manage device folder storage right now.</string>
+    <!-- Nothing on the device claimed the link. The one refusal the user can act on. -->
+    <string name="open_url_no_handler">VSCodroid did not open it. No app on this device handles that link.</string>
+    <!-- Every other launch failure, with the class name of the exception substituted. The
+         class name and never its message: ActivityNotFoundException quotes the whole
+         Intent and FileUriExposedException quotes the file, so the message would hand
+         the address back to the page that supplied it. -->
+    <string name="open_url_failed">VSCodroid could not open that link: %1$s</string>
+
     <!-- A folder copied out to the device that did not arrive whole. Counts entries
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not

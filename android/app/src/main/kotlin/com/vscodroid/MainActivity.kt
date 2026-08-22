@@ -1104,6 +1104,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun removeDeviceFolderCopy(hash: String, force: Boolean): String {
         val mirrorsRoot = Environment.getSafMirrorsDir(this)
+        // The refusal is resolved here because this is the side that has a Context.
+        // The predicate answers WHICH refusal applies and deliberately not what it
+        // says, which is what keeps it pure and reachable from a JVM test with no
+        // Activity. See SafStorageManager.RECLAIM_FOLDER_OPEN.
         val inUse = SafStorageManager.reclaimRefusal(
             hash = hash,
             watchedMirror = watchedSafFolder?.first?.name,
@@ -1112,7 +1116,7 @@ class MainActivity : AppCompatActivity() {
                 openWorkspaceFolder, mirrorsRoot
             ),
             watchedThisProcess = mirrorsWatchedThisProcess,
-        )
+        )?.let { getString(it) }
         if (inUse != null) return inUse
 
         val freed = safManager.reclaimMirror(hash, force)
@@ -1855,6 +1859,26 @@ class MainActivity : AppCompatActivity() {
                     openWorkspaceFolder = it
                     adoptWorkbenchFolder(it)
                 }
+                // A main-frame load is a new document, and the document that owed a
+                // download's bytes went with the old one. [recreateWebView] used to
+                // be the only site that said so, which covered a renderer crash and
+                // nothing else: `reload()` on the way back from the background, the
+                // `loadUrl` in [navigateToFolder], the server-gave-up page, and the
+                // folder switches the workbench performs on its own all replace the
+                // page without passing through it. After any of those the
+                // coordinator was left holding a transfer nothing could finish, the
+                // stream open on the user's chosen document and that document never
+                // discarded, and because it runs one download at a time every later
+                // Download tap queued behind it until the queue filled and the rest
+                // were refused. The feature was dead for the life of the Activity.
+                //
+                // Unconditional, and it can be: a page cannot both have just
+                // finished loading and be the one already pushing bytes. The capture
+                // script is injected below, from this same callback, so no download
+                // can even be named before a page has finished loading. A picker
+                // still on screen is untouched by this; its result is matched by
+                // request id and the document it created is removed.
+                downloads.onPageGone()
                 // Only for a page the server served. onPageFinished fires for
                 // every main-frame load under this client, and one of them is the
                 // server-gave-up page, which is a local `about:blank` document
@@ -2701,7 +2725,24 @@ class MainActivity : AppCompatActivity() {
             .setNeutralButton(getString(R.string.crash_copy_report)) { _, _ ->
                 val report = CrashReporter.generateBugReport(this)
                 val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("VSCodroid Bug Report", report))
+                val clip = android.content.ClipData.newPlainText("VSCodroid Bug Report", report)
+                // Marked sensitive before it goes anywhere, because of what this
+                // clip holds: [CrashReporter.generateBugReport] gathers the last
+                // 200 lines of server output and the text of the three most recent
+                // crash logs. Android 13 and later draw a preview of whatever is
+                // copied, so without this a crashing session's log is rendered
+                // over the editor for anyone looking at the screen, and the
+                // clipboard is readable by every app the user pastes into next.
+                // The preview is suppressed; the paste is unaffected.
+                //
+                // Deliberately not applied to the editor's own copy in
+                // [ClipboardBridge]. There the preview confirms what was copied,
+                // which is the whole affordance, and the text is a line the user
+                // selected rather than a log they never read.
+                clip.description.extras = android.os.PersistableBundle().apply {
+                    putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+                }
+                clipboard.setPrimaryClip(clip)
                 Toast.makeText(this, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
                 CrashReporter.clearCrashLogs()
             }
