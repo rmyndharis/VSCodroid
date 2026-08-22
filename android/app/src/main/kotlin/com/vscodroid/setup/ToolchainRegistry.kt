@@ -115,11 +115,13 @@ object ToolchainRegistry {
     fun find(nameOrPack: String): ToolchainInfo? =
         available.find { it.packName == nameOrPack || it.packName == "toolchain_$nameOrPack" }
 
-    /** Format byte count as human-readable size (e.g. "9 MB"). */
-    fun formatSize(bytes: Long): String = when {
-        bytes >= 1_000_000_000 -> "${bytes / 1_000_000_000} GB"
-        bytes >= 1_000_000 -> "${bytes / 1_000_000} MB"
-        bytes >= 1_000 -> "${bytes / 1_000} KB"
-        else -> "$bytes B"
-    }
+    // There was a `formatSize` here, dividing by 1,000,000 and writing "MB".
+    // Every other byte figure the app shows divides by 1,048,576 and writes the
+    // same word: the low-storage warning, the first-run pre-flight, the storage
+    // breakdown and the device-folder screen. So "MB" meant one thing on the
+    // toolchain cards and another, 4.9% larger, everywhere the user could
+    // compare it against, with nothing on either screen saying which. The cards
+    // go through [com.vscodroid.util.StorageManager.formatSize] now, like
+    // everything else; [ToolchainCardState.sizeFigures] records why that is the
+    // convention kept.
 }

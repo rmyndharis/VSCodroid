@@ -44,9 +44,10 @@ class SettingsPathsTest {
         verifySignature: Boolean = true,
         pythonLocator: String? = "js",
         envExtension: String? = "false",
+        secondarySideBar: String? = "hidden",
     ) = """
         {
-        $preamble    "editor.fontSize": 14,${claudeWrapper?.let { "\n    \"claudeCode.claudeProcessWrapper\": \"$it\"," } ?: ""}${if (verifySignature) "\n        \"extensions.verifySignature\": false," else ""}${pythonLocator?.let { "\n        \"python.locator\": \"$it\"," } ?: ""}${envExtension?.let { "\n        \"python.useEnvironmentsExtension\": $it," } ?: ""}
+        $preamble    "editor.fontSize": 14,${claudeWrapper?.let { "\n    \"claudeCode.claudeProcessWrapper\": \"$it\"," } ?: ""}${if (verifySignature) "\n        \"extensions.verifySignature\": false," else ""}${pythonLocator?.let { "\n        \"python.locator\": \"$it\"," } ?: ""}${envExtension?.let { "\n        \"python.useEnvironmentsExtension\": $it," } ?: ""}${secondarySideBar?.let { "\n        \"workbench.secondarySideBar.defaultVisibility\": \"$it\"," } ?: ""}
             "terminal.integrated.profiles.linux": {
                 "bash": {
                     "path": "$bashPath",
@@ -307,7 +308,9 @@ class SettingsPathsTest {
         fun `returns null when git path is absent rather than inventing one`() {
             val noGit = """{ "claudeCode.claudeProcessWrapper": "$wrapper", """ +
                 """"extensions.verifySignature": false, "python.locator": "js", """ +
-                """"python.useEnvironmentsExtension": false, "editor.fontSize": 14 }"""
+                """"python.useEnvironmentsExtension": false, """ +
+                """"workbench.secondarySideBar.defaultVisibility": "hidden", """ +
+                """"editor.fontSize": 14 }"""
 
             assertNull(refreshManagedPaths(noGit, shell, git, wrapper))
         }
@@ -321,6 +324,7 @@ class SettingsPathsTest {
                     "extensions.verifySignature": false,
                     "python.locator": "js",
                     "python.useEnvironmentsExtension": false,
+                    "workbench.secondarySideBar.defaultVisibility": "hidden",
                     "terminal.integrated.profiles.linux": {
                         "zsh": { "path": "$oldDir/libzsh.so" }
                     }

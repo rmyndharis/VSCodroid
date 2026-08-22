@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.util.StorageManager
 
 /** Which screen the cards are on. */
 enum class ToolchainCardMode {
@@ -16,6 +17,15 @@ enum class ToolchainAction { INSTALL, REMOVE, CANCEL, RETRY }
 
 /** What a card's status line says. */
 enum class ToolchainBadge { NONE, INSTALLED, FAILED }
+
+/**
+ * The two sizes a card quotes, already formatted.
+ *
+ * Two fields rather than one, because they answer different questions and the
+ * card was showing only the second: what the download costs on mobile data, and
+ * what it occupies once unpacked.
+ */
+data class SizeFigures(val download: String, val installed: String)
 
 /**
  * Everything one toolchain card shows, decided without a View.
@@ -55,6 +65,19 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
     private val downloadStatus = mutableMapOf<String, Int>()
     private val downloadPercent = mutableMapOf<String, Int>()
 
+    /**
+     * Downloads the process knows about that this screen was never told of, as
+     * pack name to percentage.
+     *
+     * Kept apart from [downloadStatus] rather than folded into it, because the
+     * two have opposite lifetimes. A report is this screen's own and stays until
+     * the next one replaces it; a seed is a snapshot of what some other manager
+     * is doing and is replaced wholesale by the next [setDownloading]. Folding a
+     * seed into [downloadStatus] would leave a card offering Cancel for a
+     * download that finished, since nothing ever reports its end here.
+     */
+    private val seededDownloads = mutableMapOf<String, Int>()
+
     /** Position of [packName] among [items], or -1 when no card shows it. */
     fun positionOf(packName: String): Int = items.indexOfFirst { it.packName == packName }
 
@@ -70,6 +93,26 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
         installed.addAll(packNames.map { name ->
             if (name.startsWith("toolchain_")) name else "toolchain_$name"
         })
+    }
+
+    /**
+     * Replaces what the process is downloading with [percentByPack].
+     *
+     * A download reports its progress to the manager that began it and to
+     * nothing else, so a screen built after the transfer started hears nothing:
+     * rotating the toolchain screen rebuilds it, and so does opening it while
+     * the first-run queue is still working. With an empty state the card fell
+     * through to Install for a pack that was already downloading, offering no
+     * progress and, worse, no Cancel, which is the only way to stop a 56 MB
+     * transfer once it is running.
+     *
+     * Replaces rather than adds, so a download that has since finished stops
+     * being drawn as running. That matters because its end is not reported here
+     * either.
+     */
+    fun setDownloading(percentByPack: Map<String, Int>) {
+        seededDownloads.clear()
+        seededDownloads.putAll(percentByPack)
     }
 
     /**
@@ -101,6 +144,31 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
     /** A snapshot of what is ticked, safe to hold while the user carries on tapping. */
     fun selectedPackNames(): Set<String> = selected.toSet()
 
+    /**
+     * The two figures the size line shows, both spelled the way the rest of the
+     * app spells them.
+     *
+     * Here rather than in [ToolchainPickerAdapter] for the reason the rest of
+     * this class is: it is part of what the card says, and it is the part that
+     * was wrong without anything failing. The registry used to format these
+     * itself, dividing by 1,000,000, while the low-storage warning, the
+     * first-run pre-flight, the storage breakdown and the device-folder screen
+     * all divide by 1,048,576 and write the same "MB". The card therefore
+     * quoted a toolchain 4.9% larger than the number the user had just read on
+     * the screen they came from.
+     *
+     * The convention kept is 1,048,576, for two reasons. It is what `du -h` and
+     * `df -h` report in this app's own terminal, which is where its users check
+     * a size, and it is what every other figure here already uses, so it is the
+     * one that can be made consistent without changing what a free-space gate
+     * appears to promise. Nothing computes with these strings: every pre-flight
+     * works in raw bytes.
+     */
+    fun sizeFigures(info: ToolchainRegistry.ToolchainInfo): SizeFigures = SizeFigures(
+        download = StorageManager.formatSize(info.downloadSize),
+        installed = StorageManager.formatSize(info.estimatedSize),
+    )
+
     /** The card to draw for [packName] on this screen. */
     fun card(packName: String): ToolchainCard = when (mode) {
         ToolchainCardMode.PICKER -> ToolchainCard(selected = packName in selected)
@@ -109,9 +177,18 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
 
     private fun managerCard(packName: String): ToolchainCard {
         val status = downloadStatus[packName]
+        // A report always wins over a seed, and only a pack with no report at
+        // all is read from the seeds. A report is this screen's own and keeps
+        // arriving; a seed is a one-off snapshot and would otherwise outlive the
+        // download it describes, since nothing reports that download's end here.
+        val seeded = if (status == null) seededDownloads[packName] else null
         return when {
             status in IN_FLIGHT -> ToolchainCard(
                 progressPercent = downloadPercent[packName] ?: 0,
+                action = ToolchainAction.CANCEL,
+            )
+            seeded != null -> ToolchainCard(
+                progressPercent = seeded,
                 action = ToolchainAction.CANCEL,
             )
             status == AssetPackStatus.FAILED -> ToolchainCard(

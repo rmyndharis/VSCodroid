@@ -43,6 +43,18 @@ class ToolchainPickerAdapter(
         notifyDataSetChanged()
     }
 
+    /**
+     * MANAGER mode: replaces the downloads this screen was never told about.
+     *
+     * See [ToolchainCardState.setDownloading]. Called when the screen starts,
+     * because that is the moment a rebuilt one holds no reports at all.
+     */
+    @SuppressLint("NotifyDataSetChanged")
+    fun setDownloading(percentByPack: Map<String, Int>) {
+        cards.setDownloading(percentByPack)
+        notifyDataSetChanged()
+    }
+
     fun updateState(packName: String, status: Int, percent: Int) {
         val pos = cards.updateState(packName, status, percent)
         if (pos >= 0) notifyItemChanged(pos)
@@ -64,10 +76,11 @@ class ToolchainPickerAdapter(
         // used to be here. The single figure was the unpacked size, so a card
         // offered "179 MB" for a 59 MB download, and the person most likely to
         // read it is the one deciding whether to spend mobile data.
+        val sizes = cards.sizeFigures(info)
         holder.size.text = ctx.getString(
             R.string.toolchain_size_download_and_installed,
-            ToolchainRegistry.formatSize(info.downloadSize),
-            ToolchainRegistry.formatSize(info.estimatedSize),
+            sizes.download,
+            sizes.installed,
         )
 
         when (mode) {

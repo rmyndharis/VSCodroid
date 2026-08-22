@@ -1,6 +1,7 @@
 package com.vscodroid.util
 
 import android.content.Context
+import com.vscodroid.setup.ToolchainManager
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
@@ -110,6 +111,58 @@ class ClearableStorageTest {
             )
             planted.delete()
         }
+    }
+
+    /**
+     * The staging directory a toolchain download expands into sits under
+     * `cacheDir`, so the `cache` row has always counted it and the screen has
+     * always offered that row to the clear action. Nothing cleared it: an
+     * abandoned Java download is roughly 155 MB, against a few MB for everything
+     * else the action reaches, so the button reported success and left the
+     * largest number on the screen exactly where it was.
+     */
+    @Test
+    fun `the toolchain staging bytes the cache row counts are bytes the clear frees`() {
+        val staging = File(cacheDir, "toolchain-download/toolchain_java-1700000000/payload.bin")
+        staging.parentFile?.mkdirs()
+        staging.writeText("x".repeat(8192))
+
+        val counted = StorageManager.getStorageBreakdown(context).getLong("cache")
+        assertTrue(
+            counted >= 8192,
+            "the cache row does not even count these bytes, so this proves nothing",
+        )
+
+        val freed = StorageManager.clearCaches(context)
+
+        assertTrue(!staging.exists(), "$staging survived a clear that counted it")
+        assertTrue(freed >= 8192, "only $freed bytes were reported freed")
+    }
+
+    /**
+     * And the directory a download is still using is left alone, which is why
+     * this is not one more line beside the other four. Each transfer writes its
+     * archive, expands it and copies out of it in a directory of its own;
+     * removing that under a running download fails the transfer, and can leave
+     * the copy into `usr/` reading a tree being deleted beneath it. The storage
+     * screen is exactly where a user goes while a large download is running.
+     */
+    @Test
+    fun `a staging directory a running download owns survives the clear`() {
+        mockkObject(ToolchainManager.Companion)
+        every { ToolchainManager.packsDownloading() } returns mapOf("toolchain_java" to 40)
+
+        val live = File(cacheDir, "toolchain-download/toolchain_java-1700000000/payload.bin")
+        live.parentFile?.mkdirs()
+        live.writeText("x".repeat(8192))
+        val abandoned = File(cacheDir, "toolchain-download/toolchain_ruby-1600000000/payload.bin")
+        abandoned.parentFile?.mkdirs()
+        abandoned.writeText("x".repeat(8192))
+
+        StorageManager.clearCaches(context)
+
+        assertTrue(live.exists(), "$live was pulled out from under a running download")
+        assertTrue(!abandoned.exists(), "$abandoned belongs to no download and should have gone")
     }
 
     @Test

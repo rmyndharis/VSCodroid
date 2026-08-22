@@ -14,7 +14,7 @@ import org.junit.jupiter.params.provider.ValueSource
 import java.io.File
 
 /**
- * Tests for [ToolchainRegistry]: catalog lookups and size formatting.
+ * Tests for [ToolchainRegistry]: the catalog and its lookups.
  */
 class ToolchainRegistryTest {
 
@@ -186,37 +186,9 @@ class ToolchainRegistryTest {
         }
     }
 
-    // ── formatSize() ─────────────────────────────────────────────────────
-
-    @Nested
-    inner class FormatSizeTest {
-
-        @Test
-        fun `formats bytes`() {
-            assertEquals("500 B", ToolchainRegistry.formatSize(500))
-        }
-
-        @Test
-        fun `formats kilobytes`() {
-            assertEquals("1 KB", ToolchainRegistry.formatSize(1_000))
-            assertEquals("512 KB", ToolchainRegistry.formatSize(512_000))
-        }
-
-        @Test
-        fun `formats megabytes`() {
-            assertEquals("1 MB", ToolchainRegistry.formatSize(1_000_000))
-            assertEquals("179 MB", ToolchainRegistry.formatSize(179_000_000))
-        }
-
-        @Test
-        fun `formats gigabytes`() {
-            assertEquals("1 GB", ToolchainRegistry.formatSize(1_000_000_000))
-            assertEquals("2 GB", ToolchainRegistry.formatSize(2_500_000_000))
-        }
-
-        @Test
-        fun `formats zero`() {
-            assertEquals("0 B", ToolchainRegistry.formatSize(0))
-        }
-    }
+    // ToolchainRegistry.formatSize was here, and with it a nested class pinning
+    // its 1,000,000 divisor. Sizes are formatted by
+    // com.vscodroid.util.StorageManager.formatSize now, like every other byte
+    // figure the app shows, and the card's use of it is pinned by
+    // ToolchainCardStateTest.SizeLine.
 }

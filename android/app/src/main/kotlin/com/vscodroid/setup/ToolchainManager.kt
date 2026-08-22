@@ -138,6 +138,19 @@ class ToolchainManager(private val context: Context) {
      */
     private class HttpDownload {
         @Volatile var cancelled = false
+
+        /**
+         * How far the transfer has got, kept on the token as well as reported.
+         *
+         * The report goes to `onStateChange`, which belongs to the manager that
+         * began the download and to nothing else. A screen rebuilt while the
+         * transfer runs holds a different manager and hears none of it, so
+         * without a figure the process itself can be asked for, the only card
+         * such a screen could draw would be a progress bar frozen at zero.
+         * Volatile because the download thread writes it and the main thread
+         * reads it through [packsDownloading].
+         */
+        @Volatile var percent = 0
     }
 
     /**
@@ -276,6 +289,29 @@ class ToolchainManager(private val context: Context) {
          * `remove` in the download's `finally` keeps the later one cancellable.
          */
         private val httpDownloads = ConcurrentHashMap<String, HttpDownload>()
+
+        /**
+         * Every pack with an HTTP transfer outstanding right now, and how far
+         * each has got.
+         *
+         * Asked of the process rather than of one manager, because progress is
+         * reported only to the manager that began the download. Two readers need
+         * the answer and neither holds that manager. The toolchain screen rebuilds
+         * its cards from nothing on every `onCreate` -- a rotation, or simply
+         * opening it while the first-run queue is still working -- and a card with
+         * no report to go on drew Install for a pack that was already downloading:
+         * no progress, and no Cancel, which is the one button that stops a 56 MB
+         * transfer on mobile data. [com.vscodroid.util.StorageManager.clearCaches]
+         * needs it for the opposite reason: to leave a running download's staging
+         * directory alone while it clears the abandoned ones.
+         *
+         * The Play path is not here and does not need to be. Play Core re-delivers
+         * state for a pack it is still fetching once [registerListener] runs, which
+         * the activities do in `onStart`, so a rebuilt screen learns about that
+         * download on its own. The HTTP path has no such redelivery.
+         */
+        internal fun packsDownloading(): Map<String, Int> =
+            httpDownloads.mapValues { (_, download) -> download.percent }
     }
 
     private val listener = AssetPackStateUpdateListener { state ->
@@ -1260,6 +1296,7 @@ class ToolchainManager(private val context: Context) {
                 Logger.i(tag, "$packName matches the digest the release publishes")
 
                 // Extract: report as TRANSFERRING (file copy phase)
+                download.percent = 90
                 report(packName, AssetPackStatus.TRANSFERRING, 90)
                 extractDir.deleteRecursively()
                 extractDir.mkdirs()
@@ -1691,6 +1728,10 @@ class ToolchainManager(private val context: Context) {
                     val percent = if (totalBytes > 0) {
                         ((bytesRead * 85) / totalBytes).toInt().coerceAtMost(85)
                     } else 0
+                    // On the token as well as in the report: the report reaches
+                    // only the manager that began this download, and a screen
+                    // rebuilt mid-transfer holds a different one.
+                    download.percent = percent
                     report(packName, AssetPackStatus.DOWNLOADING, percent)
                 }
             }

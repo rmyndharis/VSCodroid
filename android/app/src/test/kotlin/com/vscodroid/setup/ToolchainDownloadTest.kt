@@ -93,6 +93,11 @@ class ToolchainDownloadTest {
             .apply { isAccessible = true }
             .newInstance()
 
+    private fun setPercent(token: Any, percent: Int) =
+        token.javaClass.getDeclaredField("percent")
+            .apply { isAccessible = true }
+            .setInt(token, percent)
+
     private fun isCancelled(token: Any): Boolean =
         token.javaClass.getDeclaredField("cancelled")
             .apply { isAccessible = true }
@@ -204,6 +209,27 @@ class ToolchainDownloadTest {
             "a manager built after the screen was recreated could not reach the download " +
                 "the first one started, so nothing short of a force-stop ends it",
         )
+    }
+
+    /**
+     * What the toolchain screen has to be able to ask when it opens.
+     *
+     * A transfer reports its progress to the manager that began it and to
+     * nothing else, so a screen rebuilt while one is running -- a rotation, or
+     * the launcher shortcut opened while the first-run queue is still working --
+     * hears nothing about it. Its cards then fell through to Install for a pack
+     * already downloading: no progress, and no Cancel, which is the only way to
+     * stop a 56 MB transfer on mobile data.
+     *
+     * Putting the map or the percentage back on an instance turns this red.
+     */
+    @Test
+    fun `the process can be asked what is downloading and how far along it is`() {
+        val token = newDownloadToken()
+        setPercent(token, 42)
+        outstanding()["toolchain_java"] = token
+
+        assertEquals(mapOf("toolchain_java" to 42), ToolchainManager.packsDownloading())
     }
 
     /**

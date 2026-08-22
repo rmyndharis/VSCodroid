@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.util.StorageManager
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -192,6 +193,126 @@ class ToolchainCardStateTest {
             val card = state.card(go)
             assertEquals(ToolchainAction.RETRY, card.action)
             assertEquals(ToolchainBadge.FAILED, card.badge)
+        }
+    }
+
+    @Nested
+    inner class DownloadsThisScreenWasNotTold {
+
+        /**
+         * A download reports only to the manager that started it, and a manager
+         * belongs to whoever built it. Two ordinary things build a second one:
+         * rotating this screen, which has no `configChanges` and so is destroyed
+         * and rebuilt, and opening it from the launcher shortcut while the
+         * first-run queue is still working. In both, the cards start with no
+         * reports at all and fell through to Install for a pack that was already
+         * downloading, offering no progress and no way to stop a 56 MB transfer.
+         */
+        @Test
+        fun `a download begun elsewhere is drawn as running, with a way to stop it`() {
+            val state = manager()
+            state.setDownloading(mapOf(ruby to 42))
+
+            val card = state.card(ruby)
+            assertEquals(
+                ToolchainAction.CANCEL, card.action,
+                "a download already running was offered as a fresh Install",
+            )
+            assertEquals(42, card.progressPercent)
+        }
+
+        @Test
+        fun `this screen's own report wins over what it was told at the start`() {
+            // The report keeps arriving; the seed is a single snapshot taken when
+            // the screen opened. Letting the stale one win freezes the bar.
+            val state = manager()
+            state.setDownloading(mapOf(ruby to 42))
+            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 77)
+
+            assertEquals(77, state.card(ruby).progressPercent)
+        }
+
+        @Test
+        fun `a download that has since finished stops being drawn as running`() {
+            // Its end is not reported here either, so a seed that only ever
+            // accumulated would leave the card offering Cancel for a transfer
+            // that is over, and Cancel is destructive.
+            val state = manager()
+            state.setDownloading(mapOf(ruby to 42))
+            state.setDownloading(emptyMap())
+            state.setInstalled(listOf("ruby"))
+
+            assertEquals(ToolchainAction.REMOVE, state.card(ruby).action)
+            assertNull(state.card(ruby).progressPercent)
+        }
+
+        @Test
+        fun `a completed report ends the seed as well`() {
+            val state = manager()
+            state.setDownloading(mapOf(ruby to 42))
+            state.updateState(ruby, AssetPackStatus.COMPLETED, 100)
+
+            val card = state.card(ruby)
+            assertEquals(ToolchainAction.REMOVE, card.action)
+            assertEquals(ToolchainBadge.INSTALLED, card.badge)
+            assertNull(card.progressPercent)
+        }
+
+        @Test
+        fun `the picker draws no download at all`() {
+            // First-run cards carry a tick and nothing else. A Cancel button
+            // there would take the tap that selects the toolchain.
+            val state = picker()
+            state.setDownloading(mapOf(ruby to 42))
+
+            val card = state.card(ruby)
+            assertNull(card.action)
+            assertNull(card.progressPercent)
+        }
+    }
+
+    @Nested
+    inner class SizeLine {
+
+        private val rubyInfo = ToolchainRegistry.find("toolchain_ruby")
+
+        /**
+         * The card used to format these itself, dividing by 1,000,000, while the
+         * low-storage warning, the first-run pre-flight and the storage
+         * breakdown all divide by 1,048,576 and write the same "MB". So the same
+         * quantity read 4.9% differently depending on which screen the user was
+         * on, with nothing to tell them which reading they were looking at.
+         */
+        @Test
+        fun `the card quotes sizes the way the rest of the app quotes them`() {
+            val info = requireNotNull(rubyInfo) { "the registry no longer lists Ruby" }
+            val figures = manager().sizeFigures(info)
+
+            assertEquals(StorageManager.formatSize(info.downloadSize), figures.download)
+            assertEquals(StorageManager.formatSize(info.estimatedSize), figures.installed)
+        }
+
+        /**
+         * The convention itself, pinned separately from the agreement above: if
+         * both sides were moved to 1,000,000 together the case above would still
+         * pass, and every free-space figure in the app would then be quoting a
+         * different "MB" from the one this card quotes.
+         */
+        @Test
+        fun `a hundred mebibytes is what the card calls a hundred MB`() {
+            // A hundred and not one: 1,048,576 divided by 1,000,000 rounds to
+            // "1.0 MB" as well, so a one-mebibyte case reads as a test of the
+            // convention while agreeing with both of them.
+            val info = ToolchainRegistry.ToolchainInfo(
+                packName = "toolchain_test",
+                displayName = "Test",
+                shortLabel = "Test",
+                descriptionRes = 0,
+                estimatedSize = 100L * 1_048_576,
+                downloadSize = 100L * 1_048_576,
+            )
+
+            assertEquals("100.0 MB", manager().sizeFigures(info).installed)
         }
     }
 

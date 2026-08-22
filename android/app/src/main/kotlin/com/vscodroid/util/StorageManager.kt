@@ -1,6 +1,7 @@
 package com.vscodroid.util
 
 import android.content.Context
+import com.vscodroid.setup.ToolchainManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -14,7 +15,7 @@ import java.nio.file.Files
  * - Extensions (marketplace + bundled)
  * - User data (settings, state, logs)
  * - Tools (usr/: bash, git, python, npm, etc.)
- * - Cache (npm-cache, tmp, crash-logs)
+ * - Cache (npm-cache, tmp, crash-logs, toolchain staging directories)
  */
 object StorageManager {
     private const val TAG = "StorageManager"
@@ -61,7 +62,8 @@ object StorageManager {
     internal val CLEARABLE_KEYS = setOf("logs", "cache")
 
     /**
-     * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs.
+     * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs, and the
+     * toolchain staging directories no download is using.
      * Returns the number of bytes freed.
      */
     fun clearCaches(context: Context): Long {
@@ -85,7 +87,58 @@ object StorageManager {
         freed += deleteRecursive(vscodeLogs)
         vscodeLogs.mkdirs() // recreate
 
+        // Toolchain staging directories
+        freed += clearAbandonedToolchainDownloads(context)
+
         Logger.i(TAG, "Caches cleared: ${formatSize(freed)} freed")
+        return freed
+    }
+
+    /**
+     * Removes the toolchain staging directories no download is using, and reports
+     * the bytes that went.
+     *
+     * These sit under `cacheDir`, so [getStorageBreakdown] has always counted them
+     * in the `cache` row, and [CLEARABLE_KEYS] offers that row to [clearCaches].
+     * Leaving them out meant the Clear action reported success and left the figure
+     * on the same screen unmoved, and it is by some way the largest thing here: an
+     * abandoned Java download is roughly 155 MB of expanded tree, against a few MB
+     * for the other four directories put together. The user who opens that screen
+     * is the one who is out of space.
+     *
+     * A directory belonging to a running download is left alone, and that is the
+     * whole reason this is not one more line beside the others. `toolchainTempDir`
+     * gives each transfer a directory of its own and the download writes its
+     * archive, expands it and copies out of it there; pulling it out mid-flight
+     * fails the transfer at best, and at worst leaves the copy into `usr/` reading
+     * a tree that is being deleted underneath it. The name carries the pack and a
+     * timestamp only the download itself knows, so the test is on the pack: every
+     * directory of a pack being fetched stays, including an older abandoned one.
+     * That keeps at most one extra directory for the length of one download, and
+     * the launch sweep takes it a day later.
+     *
+     * The listing is taken before the in-flight set is read, not after. A download
+     * publishes its pack name before it queues the task that creates the directory,
+     * so anything already on disk at listing time is named in a set read afterwards.
+     * The other order has a window: a download starting in between would have its
+     * directory in the listing and its name in neither set.
+     *
+     * `ToolchainManager` also sweeps these on every launch, but only once they are a
+     * day old, deliberately: nothing there can tell a stalled download from a
+     * finished one. This is the user asking, so it takes everything it safely can.
+     */
+    private fun clearAbandonedToolchainDownloads(context: Context): Long {
+        val root = File(context.cacheDir, "toolchain-download")
+        val entries = root.listFiles() ?: return 0
+        val inFlight = ToolchainManager.packsDownloading().keys
+        var freed = 0L
+        for (entry in entries) {
+            if (inFlight.any { entry.name.startsWith("$it-") }) {
+                Logger.i(TAG, "Keeping ${entry.name}: a download is still using it")
+                continue
+            }
+            freed += deleteRecursive(entry)
+        }
         return freed
     }
 

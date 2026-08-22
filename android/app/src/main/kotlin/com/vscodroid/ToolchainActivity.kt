@@ -111,6 +111,14 @@ class ToolchainActivity : AppCompatActivity() {
         toolchainManager.registerListener()
         // Refresh installed state on resume (user may have installed from terminal)
         adapter.setInstalled(toolchainManager.getInstalledToolchains())
+        // And what is downloading, which this screen is not told about at all when
+        // another manager began the transfer. A rotation destroys this Activity and
+        // rebuilds it with a new manager, and opening the screen while the first-run
+        // queue is still working never had one; either way the cards started empty
+        // and offered Install for a pack already downloading, with no progress and
+        // no Cancel. Play's own downloads are not in this map and do not need to be:
+        // registerListener above makes Play re-deliver their state.
+        adapter.setDownloading(ToolchainManager.packsDownloading())
     }
 
     override fun onStop() {
