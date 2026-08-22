@@ -1034,6 +1034,29 @@ class ToolchainManager(private val context: Context) {
      * Runs entirely on ioExecutor. Fires onStateChange with AssetPackStatus constants.
      */
     private fun downloadViaHttp(packName: String, url: String, estimatedSize: Long) {
+        // Asked, not claimed, and the difference is the whole of why this is here.
+        //
+        // The claim that actually excludes a second install is taken where both
+        // delivery paths converge, in [installFromDirectory], because that is the
+        // one point every route into the shared tree passes through. But this path
+        // reaches it last: it downloads the archive and expands it first, so two
+        // managers installing the same pack each spend a whole download and a
+        // whole extraction before one of them declines, on a device whose
+        // pre-flight reserved for one of them. Rotating the toolchain screen
+        // mid-download is enough to arrange it.
+        //
+        // A second claim here would be worse than the waste: it is the same key,
+        // so the install that owns it would meet its own claim further down and
+        // refuse itself. Reading the set instead cannot do that, and it cannot
+        // make anything worse either. If two callers both read it as free they
+        // proceed exactly as they do today and the real claim still decides; what
+        // this catches is the ordinary case, where one is already well into the
+        // copy by the time the other starts.
+        if (packName in installsInFlight) {
+            Logger.i(tag, "Another install already holds $packName; not downloading it again")
+            report(packName, AssetPackStatus.UNKNOWN, 0)
+            return
+        }
         // Published before the task is queued rather than reset once it starts.
         // A cancellation can arrive while this pack is still waiting behind
         // another one, and it has to survive the wait: resetting at task start
