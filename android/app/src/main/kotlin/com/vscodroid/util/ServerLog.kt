@@ -38,6 +38,19 @@ internal class ServerLog(private val file: File) {
      * its next write. A report missing its server output is the state this class
      * improves on, and it is not worth trading a running server for.
      */
+    /**
+     * Synchronized because this file has two writers, and one of them rewrites it.
+     *
+     * The drain thread reading the server's stdout was the only caller until the
+     * start summary began mirroring itself here, and that summary is written by
+     * whichever thread started the server, after [startOutputReader] has already
+     * put the drain on its own thread. A rotation is a read of the whole file
+     * followed by a write of the whole file, so an append landing inside one is
+     * written to a length that is about to stop existing, and the line is lost or
+     * the file is left holding half of each. One line of contention against a
+     * drain that is idle most of the time is not a cost worth the risk.
+     */
+    @Synchronized
     fun append(line: String) {
         try {
             // One stat answers both questions, because length() is 0 for a file

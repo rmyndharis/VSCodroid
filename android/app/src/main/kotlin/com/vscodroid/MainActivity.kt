@@ -959,7 +959,23 @@ class MainActivity : AppCompatActivity() {
             SafStorageManager.RECLAIM_REFUSED -> getString(R.string.saf_mirror_not_a_copy)
             // The copy is still there and still whole: nothing was released and
             // nothing was deleted, so the sentence is the one that invites a retry.
-            SafStorageManager.RECLAIM_FAILED -> getString(R.string.saf_mirror_not_removed)
+            //
+            // The sweep is started here as well, and that is what makes the retry
+            // worth inviting. The rename fails because a `discarded-` directory an
+            // earlier removal left behind is still sitting on the name this one
+            // needs, so a retry fails the same way until something clears it, and
+            // until now the only thing that did was the next launch. Sweeping now
+            // takes the obstacle away while the user is still on the screen.
+            SafStorageManager.RECLAIM_FAILED -> {
+                thread(name = "saf-sweep", isDaemon = true) {
+                    try {
+                        safManager.sweepDiscardedMirrors()
+                    } catch (e: Exception) {
+                        Logger.w(tag, "Sweeping the removed copies failed: ${e.message}")
+                    }
+                }
+                getString(R.string.saf_mirror_not_removed)
+            }
             else -> {
                 // The mirror is already unreachable at this point; what is left is
                 // the recursive delete, which takes as long as the tree is big.
