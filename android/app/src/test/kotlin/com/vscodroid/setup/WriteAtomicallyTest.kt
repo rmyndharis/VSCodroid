@@ -142,6 +142,66 @@ class WriteAtomicallyTest {
         assertTrue(tempFiles().isEmpty(), "a temporary file survived")
     }
 
+    /**
+     * Two writers to DIFFERENT destinations never wait on each other.
+     *
+     * The exclusion above is per destination, and the test above cannot tell that
+     * from one global monitor because both its writers share a file. This is the
+     * half that can: one monitor for every write put an asset copy and a
+     * launch-time config write on the same lock, and the asset copies here are
+     * the 118 MiB and 96 MiB Copilot runtimes inflating out of the APK. A second
+     * SplashActivity entering while the first instance's extraction was still
+     * running (Home and relaunch, or a configuration change the manifest does not
+     * declare; neither stops the extraction, which checks for cancellation
+     * nowhere) reached `createBashEnvFile` on the MAIN thread and blocked there
+     * for the length of one such copy, before the first frame was drawn.
+     *
+     * Written so that a global monitor DEADLOCKS the pair rather than merely
+     * slowing it, and then times out: the slow writer will not leave the body
+     * until the quick one has finished, which a shared monitor makes impossible.
+     * The waits are bounded so the failure is a red assertion rather than a hung
+     * suite.
+     */
+    @Test
+    fun `a write to one destination does not hold up a write to another`() {
+        val slow = File(dir, "runtime.node")
+        val quick = File(dir, "bash-env.sh")
+        val slowInside = java.util.concurrent.CountDownLatch(1)
+        val quickFinished = java.util.concurrent.CountDownLatch(1)
+        val quickGotThrough = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        val slowWriter = Thread {
+            writeAtomically(slow) { out ->
+                slowInside.countDown()
+                quickGotThrough.set(
+                    quickFinished.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                )
+                out.write("the asset copy".toByteArray())
+            }
+        }
+        slowWriter.start()
+
+        assertTrue(
+            slowInside.await(10, java.util.concurrent.TimeUnit.SECONDS),
+            "the slow writer never entered the body",
+        )
+        assertTrue(
+            writeAtomically(quick) { it.write("the config write".toByteArray()) },
+            "the config write failed",
+        )
+        quickFinished.countDown()
+        slowWriter.join(15_000)
+
+        assertTrue(
+            quickGotThrough.get(),
+            "a write to one destination was held up by a write to another, so a " +
+                "launch-time config write waits on however long an asset copy takes",
+        )
+        assertEquals("the asset copy", slow.readText())
+        assertEquals("the config write", quick.readText())
+        assertTrue(tempFiles().isEmpty(), "a temporary file survived")
+    }
+
     @Test
     fun `overwrites a stray temporary file from an earlier failure`() {
         // The name is derived from the destination rather than randomised, so a

@@ -66,6 +66,76 @@ class BundledExtractionSplitTest {
         )
     }
 
+    /**
+     * A user's own newer install of something this build has begun to bundle
+     * stops the bundled copy being unpacked at all.
+     *
+     * The four sweeps that read this directory all decline it:
+     * [supersededExtensionDirs] refuses to touch a directory that is currently
+     * bundled, [retiredOwnExtensionDirs] wants our publisher and
+     * [retiredFetchedExtensionDirs] wants an id this build no longer ships. Nor
+     * does it gain a manifest entry, because `bundledIdsToRelist` deliberately
+     * leaves an id whose own entry survives alone, so the user's newer install
+     * keeps winning. Unpacked, listed by nobody, removable by nothing: 29 MiB for
+     * the Python extension, re-created on every upgrade. The copy the user chose
+     * runs either way, so not writing it is the whole remedy.
+     */
+    @Test
+    fun `a newer install of the same id stops the bundled copy being unpacked`() {
+        val theirs = "ms-python.python-2026.9.0"
+
+        assertTrue(
+            bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)).isEmpty(),
+            "29 MiB was written for a version nothing will ever load or remove",
+        )
+    }
+
+    /**
+     * The control, and it is what keeps the case above from being "fetched
+     * extensions stopped being unpacked". An OLDER install is exactly the version
+     * bump the split exists to serve: the bundled copy is unpacked and the older
+     * directory is removed by supersession.
+     */
+    @Test
+    fun `an older install of the same id is still replaced`() {
+        val theirs = "ms-python.python-2026.1.0"
+
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)),
+        )
+        assertEquals(listOf(theirs), supersededExtensionDirs(listOf(theirs), listOf(fetchedPython)))
+    }
+
+    /**
+     * A version neither side can order is unpacked rather than guessed at, the
+     * same direction [supersededExtensionDirs] takes for one it cannot parse.
+     * Unpacking a copy that is already there costs disk; skipping one that should
+     * have landed costs the extension.
+     */
+    @Test
+    fun `an unorderable installed version does not suppress the bundled copy`() {
+        val theirs = "ms-python.python-2026.9.0-rc1"
+
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)),
+        )
+    }
+
+    @Test
+    fun `a newer install of a DIFFERENT id changes nothing`() {
+        // The id has to match. Without that test every fetched extension would
+        // be suppressed by any newer directory in the same folder.
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(
+                present = listOf("PKief.material-icon-theme-9.99.0"),
+                bundled = listOf(fetchedPython),
+            ),
+        )
+    }
+
     @Test
     fun `a clean install unpacks everything`() {
         val bundled = listOf(ourMonitor, fetchedIcons, ourWelcome, fetchedPython)

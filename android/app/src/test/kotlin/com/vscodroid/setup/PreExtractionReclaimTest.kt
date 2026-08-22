@@ -146,6 +146,72 @@ class PreExtractionReclaimTest {
     }
 
     /**
+     * A context whose SharedPreferences remember what was written to them.
+     *
+     * The relaxed mock above answers every read with a default and drops every
+     * write, which is exactly what a run-once record cannot be tested against:
+     * the second run would read the same false whatever the first one did.
+     */
+    private fun rememberingContext(previousVersionCode: Int): Context {
+        val stored = mutableMapOf<String, Boolean>()
+        val editor = mockk<SharedPreferences.Editor>(relaxed = true)
+        every { editor.putBoolean(any(), any()) } answers {
+            stored[firstArg()] = secondArg()
+            editor
+        }
+
+        val prefs = mockk<SharedPreferences>(relaxed = true)
+        every { prefs.edit() } returns editor
+        every { prefs.getString(any(), any()) } returns null
+        every { prefs.getInt(any(), any()) } returns previousVersionCode
+        every { prefs.getBoolean(any(), any()) } answers { stored[firstArg()] ?: secondArg() }
+
+        val context = mockk<Context>(relaxed = true)
+        every { context.filesDir } returns NoRoomDir(tmp)
+        every { context.cacheDir } returns cacheDir
+        every { context.assets } returns assets
+        every { context.getSharedPreferences(any(), any()) } returns prefs
+        every { context.getExternalFilesDir(null) } returns File(tmp, "external")
+        return context
+    }
+
+    /**
+     * The reclaim runs once per device, so a retry keeps what the last attempt
+     * wrote.
+     *
+     * `previousVersionCode` is written by `markSetupComplete`, the last statement
+     * of a successful run, so every failed attempt and every Retry still reads
+     * the pre-upgrade code. Deciding from that alone, this deleted
+     * `server/vscode-reh` again on each attempt, and by then that path holds the
+     * partly written NEW tree: the gate measured a freshly emptied device,
+     * passed, and the unpack failed in the same place for ever, with no figure
+     * the user could act on. Which is the one thing the abort in `runSetupLocked`
+     * says cannot happen.
+     */
+    @Test
+    fun `the pivot reclaim runs once, so a retry keeps the tree it has written`() {
+        val (server, _) = stalePivotTrees()
+        val context = rememberingContext(previousVersionCode = 10)
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, runBlocking { FirstRunSetup(context).runSetup() })
+        assertFalse(server.exists(), "the first attempt must still reclaim the pre-pivot tree")
+
+        // What a partly finished attempt leaves at the same path. Nothing about
+        // it says which release wrote it, which is why the record and not the
+        // directory has to answer.
+        assertTrue(File(server, "out").mkdirs())
+        File(server, "out/server-main.js").writeText("what this attempt got through")
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, runBlocking { FirstRunSetup(context).runSetup() })
+        assertTrue(
+            server.exists(),
+            "the retry threw away everything the previous attempt wrote, so the gate " +
+                "measures an emptied device, passes, and the unpack fails in the same " +
+                "place with nothing the user can act on",
+        )
+    }
+
+    /**
      * A fresh install has no previous versionCode, so there is no migration to
      * run and nothing to reclaim. Stated because the branch is decided by
      * `previousVersionCode > 0` and `0 < PIVOT_VERSION_CODE` is true, reading

@@ -101,7 +101,7 @@
 **Mitigation**:
 1. **Take Termux's build**: `scripts/download-node.sh` fetches the `nodejs-lts` package and installs `bin/node` as `jniLibs/arm64-v8a/libnode.so`. Termux has been building Node.js for ARM64 Android for years.
 2. **Version is not a preference**: `remote/.npmrc` `target` at the pinned VS Code tag names the Node the server ships against, so the Termux package has to match it. Bumping one means checking the other.
-3. **Gate every bundled ELF**: `scripts/verify-android-elf.py` checks 16KB alignment and refuses any DT_NEEDED that neither Bionic provides nor we bundle.
+3. **Gate every downloaded ELF**: `scripts/verify-android-elf.py` checks 16KB alignment and refuses any DT_NEEDED that neither Bionic provides nor we bundle. It runs on everything a download script places, and the `verifyBundledBinaries` Gradle task sweeps all of `jniLibs/` again at packaging time. The server tree's `.node` addons are not in its population: `verify-server-tree.py` reads their architecture and `gen-glibc-forwarders.py --scan` their `DT_NEEDED`, and nothing reads their alignment. See `docs/04-TECHNICAL_SPEC.md` section 1.2.
 4. **Early validation**: M0 milestone is specifically designed to validate this risk first.
 
 **Contingency**: Stay on the last known-good Termux package version until the newer one is understood.

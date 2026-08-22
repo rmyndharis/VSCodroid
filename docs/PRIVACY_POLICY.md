@@ -23,13 +23,24 @@ VSCodroid runs a local code editor server entirely on your Android device. The e
 
 All code execution -- whether Node.js, Python, Bash, or any other bundled runtime -- happens 100% on your device.
 
-The app declares four Android permissions and no others. `INTERNET` covers the
+The app asks for four Android permissions of its own. `INTERNET` covers the
 user-initiated cases listed under **Network Access** below, and the loopback
 traffic between the editor page and the local server. `FOREGROUND_SERVICE` and
 `FOREGROUND_SERVICE_SPECIAL_USE` keep that local server alive while you are
 working. `POST_NOTIFICATIONS` is for the notification showing the server's
-status. There is no permission here for location, contacts, the camera, the
-microphone, the phone state, or any device identifier.
+status.
+
+Two more are added by libraries the app is built with, and the Play listing
+shows that merged set rather than ours, so they are named here as well.
+`FOREGROUND_SERVICE_DATA_SYNC` comes from Google's asset delivery library, which
+is what downloads a language toolchain when you pick one. The other is a
+permission the app defines for itself, `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
+added by AndroidX at signature protection level, which means only code signed
+with the same key as this app can use it; it exists so that a receiver the app
+registers while running cannot be reached by another app.
+
+There is no permission here for location, contacts, the camera, the microphone,
+the phone state, or any device identifier.
 
 ## Network Access
 

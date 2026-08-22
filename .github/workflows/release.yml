@@ -194,6 +194,15 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # The privacy policy is the one document here that makes a closed statement
+      # about permissions, and nothing measured it: it said four and no others
+      # while the installed app declared six, because the two extras are folded in
+      # by the manifest merger and appear in no committed file. A bare checkout has
+      # no merged manifest, so this covers the committed half and says so; the
+      # merged half runs from the checkPermissionClaims Gradle task on a real build.
+      - name: Check the privacy policy matches the permissions that ship
+        run: python3 scripts/check-permission-claims.py
+
       - name: Check no user-facing text is stranded in Kotlin
         run: python3 scripts/check-translatable-strings.py
 
@@ -213,14 +222,24 @@ jobs:
       - name: Check no document offers a withdrawn toolchain
         run: python3 scripts/check-toolchain-claims.py
 
+      # Also in lint.yml, and here for the reason the block's header gives: a tag
+      # may name a commit that reached neither pull_request nor push to main, and
+      # this was the one committed-source check such a tree could skip. The set
+      # build.yml runs is held to a subset of this block by check-build-steps.py;
+      # lint.yml's set is not, so the omission was silent rather than caught.
+      - name: Check the tree writes plain punctuation
+        run: python3 scripts/check-plain-punctuation.py
+
       - name: Check the device-test checklist accounts for its own rows
         run: python3 scripts/check-checklist-totals.py
 
-      # Needs real history, which is why it is here and not in lint.yml: that
-      # workflow takes actions/checkout's default single-commit clone, where
-      # `git log -1 -- <file>` reports the tip for everything it can see. The
-      # check refuses a shallow clone rather than skipping, so a wrong placement
-      # fails loudly instead of reporting a pass it never earned.
+      # Needs real history, which both this job and lint.yml now take: in
+      # actions/checkout's default single-commit clone `git log -1 -- <file>`
+      # reports the tip for everything it can see, and the check refuses a
+      # shallow clone rather than skipping, so a wrong placement fails loudly
+      # instead of reporting a pass it never earned. It ran here alone until a
+      # punctuation sweep restaled both dates and nothing said so until the tag
+      # was pushed and this job aborted on it.
       - name: Check the shipped documents are not dated before their contents
         run: python3 scripts/check-document-dates.py
 

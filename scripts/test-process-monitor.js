@@ -66,6 +66,58 @@ const ENVIRONMENT = path.join(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/util/Environment.kt',
 );
 
+// The status bar extension, loaded for its label table alone.
+//
+// It requires 'vscode', which exists only inside the workbench, so the name is
+// resolved to a stub the way scripts/test-process-monitor-extension.js does.
+// Nothing here activates it; only the exported table is read, and that is the
+// point of taking the module rather than reading its source. A regex over the
+// file would agree with anything once it stopped matching.
+const Module = require('module');
+const { newestExtensionDir } = require('./lib/bundled-extension');
+const resolveFilename = Module._resolveFilename;
+Module._resolveFilename = function (request, ...rest) {
+    return request === 'vscode' ? 'vscode' : resolveFilename.call(this, request, ...rest);
+};
+require.cache.vscode = { id: 'vscode', filename: 'vscode', loaded: true, exports: {} };
+const { TYPE_LABELS } = require(path.join(
+    newestExtensionDir('vscodroid.vscodroid-process-monitor-'), 'extension.js',
+));
+
+/**
+ * Every type the monitor really emitted has a word a person can read.
+ *
+ * The two vocabularies are declared in different files with no compiler and,
+ * until this, nothing else between them. classify() gained 'bootstrap' so the
+ * monitor would count the process it runs inside, the extension's table was not
+ * told, and the tooltip rendered the internal word beside human ones: '1
+ * bootstrap, 3 system'. The extension now falls back to the word 'unknown'
+ * maps to rather than to the type itself, so a future gap is no longer visible
+ * to a user, and this is what makes it visible to whoever opens the gap.
+ *
+ * Asked of the snapshot rather than of classify()'s source, so it covers the
+ * type scan() assigns without going through the classifier at all, which is
+ * exactly the one that was missing. What it cannot see is a classification no
+ * fixture above produces; the count below is printed so a shrinking one is
+ * readable from a run.
+ */
+function checkLabelCoverage(snapshot) {
+    assert.ok(
+        Object.keys(TYPE_LABELS).length > 0,
+        'the extension exported no label table, so this check would agree with anything',
+    );
+    const types = [...new Set(snapshot.tree.map((entry) => entry.type))].sort();
+    assert.ok(types.length > 1, `only ${types.length} type(s) reached the snapshot`);
+
+    const unlabelled = types.filter((type) => !(type in TYPE_LABELS));
+    assert.deepStrictEqual(
+        unlabelled, [],
+        'the monitor emits these types and the status bar extension has no word for ' +
+        `them, so the tooltip would offer the reader an internal identifier: ${unlabelled.join(', ')}`,
+    );
+    return types;
+}
+
 /**
  * The severity contract, read from both sides rather than restated here.
  *
@@ -370,10 +422,12 @@ function main() {
     assert.strictEqual(snapshot.total, cases.length + 1, 'the count moved');
 
     const contract = checkPressureContract(tmp);
+    const labelled = checkLabelCoverage(snapshot);
 
     fs.rmSync(tmp, { recursive: true, force: true });
     console.log(
         `ok -- ${snapshot.total} processes counted, ${cases.length} classifications checked, ` +
+        `${labelled.length} types all labelled by the status bar extension, ` +
         `pressure contract agrees on ${JSON.stringify(contract.critical)} in ${contract.filename}`,
     );
 }

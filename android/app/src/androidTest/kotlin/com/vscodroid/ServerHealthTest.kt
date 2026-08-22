@@ -28,10 +28,11 @@ class ServerHealthTest {
     @Before
     fun setUp() {
         // Asserted BEFORE markSetupComplete, which is not cosmetic ordering.
-        // markSetupComplete writes setup_version, and FirstRunSetup.isFirstRun()
-        // returns whether that key differs from the current versionName -- so
-        // running it first would make the very launch this message asks for skip
-        // extraction, leaving the operator to repeat a remedy that cannot work.
+        // markSetupComplete writes setup_version and setup_version_code, and
+        // FirstRunSetup.isFirstRun() returns whether EITHER differs from what the
+        // package reports now -- so running it first would make the very launch
+        // this message asks for skip extraction, leaving the operator to repeat a
+        // remedy that cannot work.
         //
         // This used to be an assumption, which meant the class silently did not run
         // on a clean install. Measured, not inferred:

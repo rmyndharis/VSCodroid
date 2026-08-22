@@ -55,7 +55,15 @@ line; bumping either means checking the other.
 32 MB on its own and is not optional; the other ICU libraries do nothing without it.
 
 **16KB page alignment** (Android 16): Termux's build is already aligned, and
-`verify-android-elf.py` gates every bundled ELF on it.
+`verify-android-elf.py` checks it on everything a download script places: all of
+`jniLibs/arm64-v8a` (swept as a directory by the `verifyBundledBinaries` Gradle task),
+`assets/usr/lib`, the Python stdlib including `lib-dynload`, and the toolchain packs.
+It does **not** reach the server tree's own `.node` addons. Those are covered for
+architecture by `verify-server-tree.py` and for `DT_NEEDED` by
+`gen-glibc-forwarders.py --scan`, which the `verifyNativeAddons` Gradle task runs over
+`assets/vscode-reh` and `assets/extensions`; neither reads `p_align`. Every addon in the
+tree is 16 KB-aligned today, so this is a gap in what is checked rather than in what
+ships. `CONTRIBUTING.md` lists the callers, and it is the honest list.
 
 ### 1.3 Python Runtime
 

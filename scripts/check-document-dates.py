@@ -17,14 +17,19 @@ The oracle is git: a document may not claim a date earlier than the last commit
 that changed it. Later is fine and expected, because a policy can be dated for
 the release it ships in, ahead of the commit that writes it.
 
-Runs at release time rather than on a pull request, and that placement is the
-whole reason this can answer at all. `actions/checkout` clones one commit by
-default, which is what lint.yml and build.yml take; `git log -1 -- <file>` in
-that clone reports the tip commit for every file it can see and nothing for the
-rest, so the same check there would return confident wrong answers. release.yml
-sets `fetch-depth: 0`. A shallow clone is therefore refused outright rather than
-skipped: a check that cannot run is not a check that passed, which this
+Needs real history, and that is what decides where it can run. `actions/checkout`
+clones one commit by default; `git log -1 -- <file>` in that clone reports the tip
+commit for every file it can see and nothing for the rest, so the same check there
+would return confident wrong answers. A shallow clone is therefore refused outright
+rather than skipped: a check that cannot run is not a check that passed, which this
 repository has already paid for once.
+
+It ran in release.yml alone for that reason, and the cost of that was measured: a
+punctuation sweep rewrote both documents without moving either date, every pull
+request stayed green because none of them runs this, and the first notice would
+have been the release job aborting on a tag that was already public. lint.yml now
+takes `fetch-depth: 0` for this step, so the sweep that restales a date reddens on
+the way in.
 """
 
 import datetime

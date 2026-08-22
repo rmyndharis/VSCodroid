@@ -206,6 +206,17 @@ android {
     // (pattern "_*"). npm's @sigstore/protobuf-specs has a __generated__/
     // directory that gets silently dropped, breaking `npm install`. Override
     // to only skip dotfiles and VCS metadata (keep underscore-prefixed dirs).
+    //
+    // The `.*` entry is kept on purpose and is not the other half of the same
+    // defect. Every dotfile under assets/ today is inert build-time metadata
+    // that would only add bytes on a device: measured 2026-08-22, nine of them
+    // (npm's own .npmrc at 0 bytes, three language-server .npmrc, .gitignore,
+    // two .gitattributes, .travis.yml, .release-please-manifest.json), none
+    // present in the release APK and none read at runtime. What would make this
+    // wrong is a load-bearing dotfile arriving in the server tree, which would
+    // ship in the repository, pass verify-server-tree.py and be absent on
+    // device. Patch 0010 is the near miss: it exists because a .moduleignore
+    // matters, and the file it keeps is sdk/index.js, which is not a dotfile.
     aaptOptions {
         ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*.orig:*~"
     }
@@ -798,6 +809,95 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     }
 }
 
+// The binaries that must BE there, as opposed to the properties the sweeps above
+// ask of whatever happens to be there.
+//
+// Every other check on this directory enumerates: verifyBundledBinaries reads the
+// files it finds, verifyBundledShellPaths reads the files it finds, and both are
+// armed by "some .so is larger than the placeholder". None of them can notice a
+// file that was never produced, so a jniLibs missing one binary outright passed
+// every gate and produced a signed, installable, uploadable bundle.
+//
+// Measured rather than hypothetical: libexec-trampoline.so, which is newer than
+// the workflows that build it, was absent from a signed release bundle on a
+// developer machine while every packaging gate ran and passed. Nothing on the CI
+// path was at risk, because release.yml's build step is unconditional; what
+// produces that bundle is scripts/build-aab.sh, or a bare `./gradlew
+// bundleRelease`, neither of which prepares an asset tree.
+//
+// The names are not a wish list. Each is resolved by absolute path at runtime,
+// from nativeLibraryDir, by Kotlin that ships:
+//   * Environment.kt names libnode.so, libbash.so, libgit.so, libldmusl.so and
+//     libexec-trampoline.so directly;
+//   * FirstRunSetup.setupToolSymlinks() maps bash, git, node, python3, python,
+//     rg, tmux, make, ssh and ssh-keygen onto their lib*.so, and
+//     setupGitCore() maps every git-remote-<protocol> onto libgit-remote-curl.so.
+// A missing one is not a degraded feature: the symlink resolves to nothing, and
+// a PATH lookup for the command fails with ENOENT, which on a device is
+// indistinguishable from the tool never having been installed.
+//
+// Same arming predicate as its neighbours, for the same reason: the lint,
+// unit-test and R8 jobs write a placeholder tree that has no binaries to require.
+val requiredJniLibs = listOf(
+    "libbash.so",
+    "libexec-trampoline.so",
+    "libgit.so",
+    "libgit-remote-curl.so",
+    "libldmusl.so",
+    "libmake.so",
+    "libnode.so",
+    "libpython.so",
+    "libripgrep.so",
+    "libssh.so",
+    "libssh-keygen.so",
+    "libtmux.so",
+)
+
+// Which script places each of the above, so the failure below can name the one
+// command that fixes it rather than sending the reader to read three scripts.
+val jniLibProducers = mapOf(
+    "libbash.so" to "scripts/download-termux-tools.sh",
+    "libexec-trampoline.so" to "scripts/build-exec-trampoline.sh",
+    "libgit.so" to "scripts/download-termux-tools.sh",
+    "libgit-remote-curl.so" to "scripts/download-termux-tools.sh",
+    "libldmusl.so" to "scripts/download-musl-loader.sh",
+    "libmake.so" to "scripts/download-termux-tools.sh",
+    "libnode.so" to "scripts/download-node.sh",
+    "libpython.so" to "scripts/download-python.sh",
+    "libripgrep.so" to "scripts/fetch-vscode-oss.sh",
+    "libssh.so" to "scripts/download-termux-tools.sh",
+    "libssh-keygen.so" to "scripts/download-termux-tools.sh",
+    "libtmux.so" to "scripts/download-termux-tools.sh",
+)
+
+val verifyRequiredBinaries = tasks.register("verifyRequiredBinaries") {
+    group = "verification"
+    description = "Checks every binary the app resolves by name is in jniLibs."
+
+    val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
+    val required = requiredJniLibs
+    val producers = jniLibProducers
+
+    onlyIf { jniLibsHoldsRealBinary() }
+
+    doLast {
+        val missing = required.filterNot { File(jniLibsDir, it).isFile }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "jniLibs is missing ${missing.size} of the ${required.size} binaries " +
+                    "this app resolves by name:\n" +
+                    missing.joinToString("\n") { "  $it   run ${producers[it]}" } +
+                    "\n\nEach is reached through an absolute path in nativeLibraryDir, " +
+                    "so on a device the command it backs fails with ENOENT and looks " +
+                    "exactly like a tool that was never installed.\n" +
+                    "scripts/build-all.sh runs every producer above in the order that " +
+                    "works. scripts/build-aab.sh does not: it builds and signs only, " +
+                    "and packages whatever the last preparation left behind."
+            )
+        }
+    }
+}
+
 // No bundled binary may name a shell it cannot reach.
 //
 // Termux compiles /data/data/com.termux/files/usr/bin/sh into the binaries this
@@ -1048,15 +1148,15 @@ tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
-// The eight, once. They were written twice before, here as task providers and
+// The nine, once. They were written twice before, here as task providers and
 // again below as a list of strings for the graph check, with nothing keeping the
-// two in step. The dangerous drift is one-directional and quiet: add a ninth gate
+// two in step. The dangerous drift is one-directional and quiet: add a tenth gate
 // here and forget the other list, and the new gate is wired but never verified,
 // which is the state the check exists to make impossible.
 val packagingGates = listOf(
     checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
-    verifyBundledShellPaths, verifyRubyPackShellPaths, verifyNativeAddons,
-    checkPackOverlap, verifyPythonPlatform,
+    verifyRequiredBinaries, verifyBundledShellPaths, verifyRubyPackShellPaths,
+    verifyNativeAddons, checkPackOverlap, verifyPythonPlatform,
 )
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
@@ -1065,7 +1165,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
         dependsOn(bundleNotices)
     }
 
-// The same eight, by name, so the graph can be asked whether they are in it.
+// The same nine, by name, so the graph can be asked whether they are in it.
 //
 // The wiring above is by name SHAPE, which is right: AGP has moved this family
 // between versions and matching two literal names would fail the build at
@@ -1182,4 +1282,51 @@ gradle.taskGraph.whenReady {
 // declared both ways, make a cycle.
 tasks.matching { it.name == "bundleRelease" }.configureEach {
     finalizedBy(checkBundleSize)
+}
+
+// The privacy policy makes a closed statement about permissions, and the set it
+// has to match is the MERGED one: AGP folds in every library's declarations, and
+// the Play listing shows that result rather than this app's own manifest. The
+// policy said "four and no others" while the installed app declared six, for at
+// least one release, because the two extras appear in no committed file.
+//
+// `finalizedBy` for the same reason as the bundle check above: the merged
+// manifest is a Gradle product and does not exist until this task has run.
+//
+// The RELEASE manifest alone, deliberately. Both variants would be a second run
+// of a check whose subject is the artefact that ships, and debug's applicationId
+// suffix renames the app-defined receiver permission, which the script normalises
+// but which is not the name a Play reviewer reads.
+//
+// The script also runs from lint.yml and release.yml, where a bare checkout has
+// no merged manifest and only the committed half can answer. It says which half
+// ran rather than reporting a pass it did not earn, so the two placements are
+// complementary rather than duplicates.
+val checkPermissionClaims = tasks.register<Exec>("checkPermissionClaims") {
+    group = "verification"
+    description = "Checks the privacy policy names every permission the app ships with."
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("python3", "scripts/check-permission-claims.py")
+
+    isIgnoreExitValue = true
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(
+                "The published privacy policy does not describe the permissions " +
+                    "this build ships.\nThe FAIL line above names which way it " +
+                    "disagrees.\n" +
+                    "\n" +
+                    "docs/PRIVACY_POLICY.md is what the Play listing links to, so a " +
+                    "reader comparing\nthe two sees an undisclosed capability rather " +
+                    "than a library dependency.\ndocs/06-SECURITY.md section 4.1 " +
+                    "carries the same two tables and has to move with it."
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "processReleaseMainManifest" }.configureEach {
+    finalizedBy(checkPermissionClaims)
 }

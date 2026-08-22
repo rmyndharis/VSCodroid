@@ -30,6 +30,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, for the document-date check below and nothing else.
+          # `git log -1 -- <file>` in checkout's default single-commit clone
+          # reports the tip commit for every file it can see, so that check
+          # cannot answer here without this and refuses to guess. 58 MiB of
+          # pack, measured 2026-08-22, against a release that used to be the
+          # first place anybody found out.
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -112,6 +120,15 @@ jobs:
       - name: Check local network access survives the targetSdk in use
         run: python3 scripts/check-local-network-permission.py
 
+      # The privacy policy is the one document here that makes a closed statement
+      # about permissions, and nothing measured it: it said four and no others
+      # while the installed app declared six, because the two extras are folded in
+      # by the manifest merger and appear in no committed file. A bare checkout has
+      # no merged manifest, so this covers the committed half and says so; the
+      # merged half runs from the checkPermissionClaims Gradle task on a real build.
+      - name: Check the privacy policy matches the permissions that ship
+        run: python3 scripts/check-permission-claims.py
+
       # Beside `Run lint` rather than inside it, and the pairing is the point:
       # lint's own HardcodedText detector reads layouts and nothing else, so a
       # message raised from Kotlin has never been anyone's to catch. Reads the
@@ -157,6 +174,15 @@ jobs:
       # pass covered everything, so a wrong count is a coverage claim nobody made.
       - name: Check the device-test checklist accounts for its own rows
         run: python3 scripts/check-checklist-totals.py
+
+      # Also in release.yml, where it is the last thing standing between a tag
+      # and a published build. It ran there alone, and there is no cheaper place
+      # for a check whose oracle is git history, so a documentation sweep that
+      # restaled either date was invisible until the tag was already public and
+      # the release job had aborted twenty seconds in. The checkout above takes
+      # full history for this step.
+      - name: Check the shipped documents are not dated before their contents
+        run: python3 scripts/check-document-dates.py
 
       # `git apply --stat` parses a patch without needing the tree it applies to,
       # so the one thing that cannot be checked on a pull request -- whether the

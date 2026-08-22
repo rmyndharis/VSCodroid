@@ -175,19 +175,35 @@ function killIdleLanguageServers() {
     );
 }
 
+// The words a person reads in the status bar tooltip, one per type that
+// process-monitor.js scan() can put in a snapshot.
+//
+// Two ways this went wrong, and the fallback below is why only one of them was
+// visible. A type with no entry here was rendered as the internal word itself,
+// so the tooltip read '1 bootstrap, 3 system' and offered the reader a term
+// that means nothing outside this repository. Falling back to the word
+// 'unknown' already maps to keeps that impossible whatever is added to the
+// classifier next, and scripts/test-process-monitor.js now fails when a type
+// the monitor really emits has no entry here, so the fallback is a floor
+// rather than somewhere a type is meant to land.
+//
+// The other direction was 'ptyHost', an entry for a type classify() cannot
+// return: the pty host became a worker_thread and stopped being a process in
+// /proc at all, and the stale entry read as evidence that it still was.
+const TYPE_LABELS = {
+    bootstrap: 'system',
+    server: 'system',
+    fileWatcher: 'system',
+    safSync: 'storage',
+    system: 'system',
+    tmux: 'terminal',
+    terminal: 'terminal',
+    langserver: 'language server',
+    unknown: 'other'
+};
+
 function typeLabel(type) {
-    const labels = {
-        server: 'system',
-        fileWatcher: 'system',
-        safSync: 'storage',
-        ptyHost: 'system',
-        system: 'system',
-        tmux: 'terminal',
-        terminal: 'terminal',
-        langserver: 'language server',
-        unknown: 'other'
-    };
-    return labels[type] || type;
+    return TYPE_LABELS[type] || TYPE_LABELS.unknown;
 }
 
 function showProcessTree() {
@@ -260,4 +276,6 @@ function deactivate() {
     if (pollTimer) clearInterval(pollTimer);
 }
 
-module.exports = { activate, deactivate };
+// TYPE_LABELS is exported for scripts/test-process-monitor.js, which pairs it
+// against the types a real scan produces. Nothing in the workbench reads it.
+module.exports = { activate, deactivate, TYPE_LABELS };

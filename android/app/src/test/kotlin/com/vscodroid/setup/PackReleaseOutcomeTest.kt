@@ -3,28 +3,35 @@ package com.vscodroid.setup
 import android.content.Context
 import android.content.pm.InstallSourceInfo
 import android.content.pm.PackageManager
+import android.os.StatFs
 import com.google.android.gms.tasks.OnFailureListener
 import com.google.android.gms.tasks.OnSuccessListener
 import com.google.android.gms.tasks.Task
 import com.google.android.play.core.assetpacks.AssetPackLocation
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
+import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.slot
 import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * What happens to Play's copy of a pack after the install has taken what it needs.
@@ -119,6 +126,47 @@ class PackReleaseOutcomeTest {
     }
 
     /**
+     * Writes a real delivered tree for [pack] where [playHolds] says one is, with
+     * a manifest good enough for the install to run through to its record write.
+     */
+    private fun deliver(pack: String, name: String) {
+        val dir = File(filesDir, "delivered/$pack").apply { mkdirs() }
+        File(dir, "$pack.json").writeText("""{"name":"$name","installRoot":"usr/opt/$name"}""")
+        File(dir, "usr/opt/$name/bin").mkdirs()
+        File(dir, "usr/opt/$name/bin/$name").writeText("payload")
+    }
+
+    /** Room to spare, so the space pre-flight passes and the copy is reached. */
+    private fun plentyOfRoom() {
+        mockkConstructor(StatFs::class)
+        every { anyConstructed<StatFs>().availableBytes } returns 8L * 1024 * 1024 * 1024
+    }
+
+    private val outcomes: MutableList<Int> = Collections.synchronizedList(mutableListOf())
+    private val settled = CountDownLatch(1)
+
+    /** A manager whose reports this test can wait on. */
+    private fun watchedManager() = ToolchainManager(context).apply {
+        onStateChange = { _, status, _, _ ->
+            outcomes.add(status)
+            if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
+                settled.countDown()
+            }
+        }
+    }
+
+    /**
+     * Occupies the temporary path `writeAtomically` derives from `toolchains.json`,
+     * which is how the rest of this package arranges a record write that fails.
+     * Non-empty, so the cleanup `delete()` cannot quietly reclaim it.
+     */
+    private fun blockTheRecordWrite() {
+        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
+        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
+        File(blocker, "occupied").writeText("x")
+    }
+
+    /**
      * A pack Play still holds for a toolchain that is already installed is storage
      * nothing will ever read again.
      *
@@ -159,6 +207,88 @@ class PackReleaseOutcomeTest {
         // that has not started.
         verify(timeout = 10_000) { packManager.getPackLocation("toolchain_java") }
         verify(exactly = 0) { packManager.removePack(any()) }
+    }
+
+    /**
+     * A delivery whose install could not write the record is KEPT, so the next
+     * launch can finish it.
+     *
+     * `toolchains.json` is four lines written after the whole tree has already
+     * been copied, which makes it exactly the write a device that has just filled
+     * up fails. The user is told to free some space and try again -- the same
+     * sentence the space refusal shows -- and the space refusal keeps Play's copy
+     * for precisely that reason: the next launch reconciles and finishes the
+     * install with no download at all. This exit released it instead, so the
+     * repair the class advertises had nothing to work from and the user paid for
+     * the whole delivery again.
+     *
+     * Returning true from the record-write failure turns this red.
+     */
+    @Test
+    fun `a delivery whose record cannot be written is kept for the next launch`() {
+        plentyOfRoom()
+        playHolds("toolchain_java")
+        deliver("toolchain_java", "java")
+        blockTheRecordWrite()
+
+        watchedManager().reconcileDeliveredPacks()
+
+        assertTrue(settled.await(10, TimeUnit.SECONDS), "the install never reported an outcome")
+        assertEquals(
+            listOf(AssetPackStatus.FAILED), outcomes,
+            "the install did not fail at the record write, so this proves nothing",
+        )
+        verify(exactly = 0) { packManager.removePack(any()) }
+    }
+
+    /**
+     * The control: the same delivery, with the record write left alone, IS handed
+     * back. Without it the case above would pass against a build that never
+     * released anything.
+     */
+    @Test
+    fun `a delivery whose install finishes is handed back`() {
+        plentyOfRoom()
+        playHolds("toolchain_java")
+        deliver("toolchain_java", "java")
+
+        watchedManager().reconcileDeliveredPacks()
+
+        assertTrue(settled.await(10, TimeUnit.SECONDS), "the install never reported an outcome")
+        assertEquals(listOf(AssetPackStatus.COMPLETED), outcomes, "the install did not finish")
+        verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
+    }
+
+    /**
+     * One pack that throws does not end the pass for the packs behind it.
+     *
+     * The catch used to wrap the whole loop rather than an iteration, and
+     * `installDeliveredPack` throws readily: `JSONObject` on a malformed manifest,
+     * `copyDirectoryTree` on a directory it cannot list or a disk that fills up.
+     * Ruby is first in the registry, so one throw on Ruby meant Java's delivery
+     * was never examined at all -- neither installed if it was outstanding, nor
+     * reclaimed if it was a whole toolchain of duplicate storage that no space
+     * pre-flight counts. Every later launch repeated exactly that, so the reclaim
+     * that could have made room for Ruby was the thing Ruby's failure prevented.
+     *
+     * Moving the catch back around the `forEach` turns this red.
+     */
+    @Test
+    fun `a pack that throws does not stop the packs behind it`() {
+        plentyOfRoom()
+        // Ruby comes first in ToolchainRegistry.available, and its manifest is
+        // not JSON, so JSONObject throws out of the middle of its install.
+        playHolds("toolchain_ruby")
+        File(filesDir, "delivered/toolchain_ruby").mkdirs()
+        File(filesDir, "delivered/toolchain_ruby/toolchain_ruby.json").writeText("not json at all")
+        // Java is behind it and is pure duplicate storage: already recorded as
+        // installed, with a delivery nobody released.
+        recordInstalled("java")
+        playHolds("toolchain_java")
+
+        ToolchainManager(context).reconcileDeliveredPacks()
+
+        verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
     }
 
     /**
