@@ -13,6 +13,32 @@ const path = require('path');
 
 const SCAN_INTERVAL_MS = 10_000;
 const IDLE_KILL_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+// What this app costs when nothing is happening, measured rather than guessed:
+// on a cold start left untouched, /proc under the app's own uid holds the
+// bootstrap, the editor server, the file watcher, the agent host, and the chat
+// agent's model backend. Five, on API 33 and on API 37 alike.
+//
+// The number matters because the thresholds below are read against it. The soft
+// budget used to be 5, chosen when the idle set was smaller, so a fresh install
+// sat exactly on its own warning with nothing open and the status item was amber
+// from the first paint. A warning that is always lit is one nobody reads, which
+// costs more than the warning was worth.
+const IDLE_BASELINE = 5;
+
+// Idle, plus a terminal and two language servers: a session with real work in
+// it. Below this the count says nothing a user could act on.
+const SOFT_BUDGET = 8;
+
+// Far enough above the soft budget to mean something has gone wrong rather than
+// that the user is busy, and still well short of the hard limit, so there is
+// room to act. This used to live in the status bar extension as a bare 10 with
+// no relation to anything; both numbers now come from here, so they cannot
+// drift apart in two languages with nothing to make them agree.
+const ERROR_BUDGET = 14;
+
+// Android's system-wide phantom process limit, shared with every other app.
+const HARD_LIMIT = 32;
 // The severities that justify shedding idle language servers, as words written
 // by the Android side. It used to be a number compared with >= against Android's
 // trim levels, which are not ordered by severity: TRIM_MEMORY_UI_HIDDEN is 20
@@ -404,7 +430,13 @@ function scan() {
         const snapshot = {
             timestamp: now,
             total: tree.length,
-            budget: { current: tree.length, soft: 5, hard: 32 },
+            budget: {
+                current: tree.length,
+                idle: IDLE_BASELINE,
+                soft: SOFT_BUDGET,
+                error: ERROR_BUDGET,
+                hard: HARD_LIMIT,
+            },
             tree,
             warnings
         };

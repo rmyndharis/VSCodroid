@@ -65,12 +65,20 @@ function updateStatusBar(snapshot) {
 
     statusBarItem.text = `$(pulse) ${total}`;
 
-    // Color thresholds (soft budget = 5, system hard limit = 32)
-    if (total >= 10) {
+    // Read from the snapshot rather than repeated here. These two numbers used
+    // to be literals in this file with a comment naming a third literal in
+    // process-monitor.js, and nothing made the three agree: when the idle set
+    // grew, the warning threshold stayed where it was and the item went amber on
+    // a fresh install with nothing open. The fallbacks cover a snapshot written
+    // before the budget carried them, which is only ever a stale file on disk.
+    const budget = snapshot.budget || {};
+    const soft = budget.soft || 8;
+    const error = budget.error || 14;
+    if (total >= error) {
         statusBarItem.backgroundColor = new vscode.ThemeColor(
             'statusBarItem.errorBackground'
         );
-    } else if (total >= 5) {
+    } else if (total >= soft) {
         statusBarItem.backgroundColor = new vscode.ThemeColor(
             'statusBarItem.warningBackground'
         );
@@ -259,7 +267,9 @@ function showProcessTree() {
     const tree = s.tree || [];
     const langservers = tree.filter(p => p.type === 'langserver');
     const terminals = tree.filter(p => p.type === 'terminal' || p.type === 'tmux');
-    if (s.total >= 5) {
+    // The same threshold the status item colours on, from the same place, so
+    // advice appears exactly when the count is worth acting on.
+    if (s.total >= ((s.budget && s.budget.soft) || 8)) {
         outputChannel.appendLine('');
         outputChannel.appendLine('Recommendations:');
         if (terminals.length > 2) {

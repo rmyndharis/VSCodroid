@@ -485,6 +485,30 @@ function main() {
 
     assert.strictEqual(snapshot.total, snapshot.tree.length, 'total disagrees with the tree it summarises');
     assert.strictEqual(snapshot.budget.current, snapshot.total, 'budget.current disagrees with total');
+
+    // The thresholds have to stand clear of what the app costs when nothing is
+    // happening. They did not: the soft budget was chosen when the idle set was
+    // smaller, the idle set grew to meet it, and a fresh install came up with
+    // its own warning already lit and nothing open. An always-on warning is one
+    // nobody reads, so this pins the relation rather than the numbers.
+    const budget = snapshot.budget;
+    for (const key of ['idle', 'soft', 'error', 'hard']) {
+        assert.ok(
+            Number.isInteger(budget[key]),
+            `budget.${key} is missing, so the status bar has nothing to colour against ` +
+            'and falls back to numbers of its own, which is the split this replaced',
+        );
+    }
+    assert.ok(
+        budget.soft > budget.idle,
+        `the soft budget (${budget.soft}) is not above the idle baseline (${budget.idle}), ` +
+        'so an untouched install shows a warning it can do nothing about',
+    );
+    assert.ok(
+        budget.error > budget.soft && budget.hard > budget.error,
+        `thresholds out of order: idle ${budget.idle}, soft ${budget.soft}, ` +
+        `error ${budget.error}, hard ${budget.hard}`,
+    );
     assert.strictEqual(snapshot.total, cases.length + 1, 'the count moved');
 
     const contract = checkPressureContract(tmp);
