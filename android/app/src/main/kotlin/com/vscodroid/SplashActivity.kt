@@ -139,12 +139,12 @@ class SplashActivity : AppCompatActivity() {
                 findViewById<TextView>(R.id.statusText).text = getString(R.string.status_updating_python)
                 lifecycleScope.launch {
                     withContext(Dispatchers.IO) { setup.reconcilePythonRuntime() }
-                    launchMain()
+                    continueAfterSetup()
                 }
                 return
             }
-            Logger.i(tag, "Not first run, launching main activity")
-            launchMain()
+            Logger.i(tag, "Not first run, setup is already behind this launch")
+            continueAfterSetup()
             return
         }
 
@@ -197,7 +197,7 @@ class SplashActivity : AppCompatActivity() {
             val result = setup.runSetup()
             when (result) {
                 FirstRunSetup.SetupResult.SUCCESS -> {
-                    if (shouldShowPicker()) showToolchainPicker() else launchMain()
+                    continueAfterSetup()
                 }
                 FirstRunSetup.SetupResult.LOW_STORAGE -> {
                     val message = getString(
@@ -290,6 +290,39 @@ class SplashActivity : AppCompatActivity() {
     }
 
     // -- Picker phase --
+
+    /**
+     * Where a launch goes once setup is behind it: the picker, or the editor.
+     *
+     * The single place that decision is made, and that is the fix rather than a
+     * tidy-up. It used to live in the continuation of the coroutine that ran
+     * setup, which is the one place it cannot survive: `runSetupLocked`'s body is
+     * blocking with no suspension point in it, so a relaunch part-way through
+     * cancels the coroutine while the extraction runs on to `markSetupComplete()`.
+     * `isFirstRun()` then goes false with the continuation never resumed, and the
+     * offer was only ever made inside the `isFirstRun()` branch, so the picker was
+     * gone for the life of that install. The way back is a launcher long-press,
+     * which nothing tells the user about.
+     *
+     * Not a corner case. Locale, font scale and display size are all undeclared in
+     * this activity's `configChanges` on purpose, so changing any of them during
+     * an extraction that runs for minutes relaunches the activity, and the
+     * manifest says as much where it lists them.
+     *
+     * Asking on every launch rather than only after setup costs nothing on an
+     * install that answered the picker, because answering it is what writes the
+     * preference: both the Continue and the Skip buttons call [markPickerShown].
+     * An upgrade is unaffected either way, since a new versionName makes
+     * `isFirstRun()` true and that route already passed through here.
+     */
+    private fun continueAfterSetup() {
+        if (shouldShowPicker()) {
+            Logger.i(tag, "The toolchain picker has not been answered yet; offering it")
+            showToolchainPicker()
+        } else {
+            launchMain()
+        }
+    }
 
     private fun shouldShowPicker(): Boolean {
         val prefs = getSharedPreferences("vscodroid", MODE_PRIVATE)

@@ -35,10 +35,15 @@ class SplashActivityTest {
 
     @Before
     fun setUp() {
-        // Clear setup_version so SplashActivity runs first-run extraction.
-        getSetupPrefs().edit().remove("setup_version").commit()
-        // Keep toolchain_picker_shown=true to prevent the picker UI from
-        // blocking (it waits for user interaction).
+        // Both version keys, through the shared helper. Removing setup_version
+        // alone does force extraction, because the staleness test is an OR, but
+        // it leaves a version code behind that names a build no record here
+        // agrees with, for whatever runs next in the same session to read.
+        ServerReadyHelper.clearSetupState(context)
+        // After the clear, which also removes this: keep toolchain_picker_shown
+        // true to prevent the picker UI from blocking (it waits for user
+        // interaction, and it is now offered on any launch that has not answered
+        // it rather than only on the first).
         getAppPrefs().edit().putBoolean("toolchain_picker_shown", true).commit()
     }
 
@@ -103,6 +108,7 @@ class SplashActivityTest {
         )
         val before = serverJs.lastModified()
         val versionBefore = getSetupPrefs().getString("setup_version", null)
+        val codeBefore = getSetupPrefs().getInt("setup_version_code", 0)
 
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
         Thread.sleep(3000)  // give it time to transition
@@ -110,6 +116,14 @@ class SplashActivityTest {
         val version = getSetupPrefs().getString("setup_version", null)
         assertNotNull("setup_version should still be set after skip", version)
         assertEquals("setup_version changed across a launch that skipped setup", versionBefore, version)
+        // The other half of the pair, which is what the skip is decided on: either
+        // one differing re-runs the whole of setup, so a launch that rewrote only
+        // the code would look identical to this test while having extracted 810 MB.
+        assertEquals(
+            "setup_version_code changed across a launch that skipped setup",
+            codeBefore,
+            getSetupPrefs().getInt("setup_version_code", 0),
+        )
         assertEquals(
             "server.js was rewritten, so extraction ran instead of being skipped",
             before,

@@ -1,8 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- keepScreenOn is load-bearing, and the manifest points here for it. First-run
+     setup unpacks over 800 MB and takes minutes with nothing for the user to
+     touch, so the display times out partway through every time. What that costs
+     is not the drawing: the window stops being visible, the activity is stopped,
+     and a process holding nothing but a stopped activity is what the system
+     reclaims first, in the middle of a write that has no skip-if-present branch
+     to make the next attempt cheaper.
+
+     On the root view rather than as a window flag, so it lasts exactly as long as
+     this screen does. setContentView swaps in the picker next, which waits on a
+     person and could hold the display awake until the battery is flat; a window
+     flag would keep burning through that wait, and this drops the moment the
+     view is detached. -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:keepScreenOn="true"
     android:background="@color/colorBackground">
 
     <!-- App icon. Decorative: the TextView below carries the same @string/app_name

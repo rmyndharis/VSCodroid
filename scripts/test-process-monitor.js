@@ -52,6 +52,11 @@ const REH = '/data/user/0/com.vscodroid/files/server/vscode-reh';
 // Marketplace and bundled-by-us extensions are extracted here, which is a
 // different tree from the editor's own extensions under REH.
 const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
+// The ceiling ProcessManager derives from device RAM and puts on the command
+// line. It is on the real processes and it belongs on the fixtures, because it
+// is the argument that used to be the only thing the details view printed.
+const HEAP = '--max-old-space-size=488';
+const DATA = '/data/user/0/com.vscodroid/files/home/.vscodroid/data';
 
 const MAIN_ACTIVITY = path.join(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
@@ -116,6 +121,51 @@ function checkLabelCoverage(snapshot) {
         `them, so the tooltip would offer the reader an internal identifier: ${unlabelled.join(', ')}`,
     );
     return types;
+}
+
+/**
+ * Every row says which program it is.
+ *
+ * The details view and the counter's tooltip are the only places a person can
+ * find out what is holding a slot, and both print this string. It used to be
+ * argv[0] plus argv[1], which on this device is the bundled Node binary plus the
+ * heap ceiling for nearly every process the app owns: on an idle API 33 emulator
+ * five of six rows read `libnode.so --max-old-space-size=488` and the view named
+ * nothing.
+ *
+ * The pairs matter as much as the strings. `bootstrap-fork` is launched twice
+ * with different `--type=`, so a rule that keeps only the program name leaves two
+ * rows sharing one identity, and a rule that keeps only the first argument leaves
+ * every row sharing the heap flag. Both failures are asserted for, and the
+ * expectations are compared as a set so that a pid dropping out of the snapshot
+ * cannot quietly empty the check.
+ */
+function checkCommandNames(snapshot, byPid) {
+    const expected = new Map([
+        [process.pid, 'libnode.so server.js'],
+        [1001, 'libnode.so server-main.js'],
+        [1007, 'libnode.so bootstrap-fork --type=fileWatcher'],
+        [1029, 'libnode.so bootstrap-fork --type=agentHost'],
+        [1030, 'libnode.so copilot-android-arm64/index.js'],
+        [1004, 'libbash.so'],
+    ]);
+    for (const [pid, want] of expected) {
+        const got = byPid.get(pid);
+        assert.ok(got, `pid ${pid} never reached the snapshot, so its name was never compared`);
+        assert.strictEqual(
+            got.cmd, want,
+            `pid ${pid} is printed as ${JSON.stringify(got.cmd)}; a reader cannot tell it ` +
+            `from the other rows built on the same runtime`,
+        );
+    }
+
+    const names = snapshot.tree.map((entry) => entry.cmd);
+    assert.ok(
+        !names.includes(`libnode.so ${HEAP}`),
+        'a row is named after the runtime and its heap ceiling, which every process here ' +
+        'shares, so the details view says nothing about it',
+    );
+    return expected.size;
 }
 
 /**
@@ -294,7 +344,7 @@ function main() {
         [1004, ['/data/data/com.vscodroid/lib/arm64/libbash.so', '-l'], 'terminal'],
         [1005, [NODE, '/data/user/0/com.vscodroid/files/home/projects/my-eslint-tool/index.js'], 'unknown'],
         [1006, [NODE, '/data/user/0/com.vscodroid/files/usr/share/reporter/index.js'], 'unknown'],
-        [1007, [NODE, `${REH}/out/bootstrap-fork.js`, '--type=fileWatcher'], 'fileWatcher'],
+        [1007, [NODE, HEAP, `${REH}/out/bootstrap-fork`, '--type=fileWatcher'], 'fileWatcher'],
         [1008, [NODE, '/data/user/0/com.vscodroid/files/saf-mirrors/a1b2c3/sync.js'], 'safSync'],
         // A marketplace language server, not one of the three bundled with the
         // editor, and the reason it is here: check-langserver-patterns.py globs
@@ -387,6 +437,22 @@ function main() {
         // user's. It is gone, and this is what its absence has to keep true.
         [1028, [NODE, '/data/user/0/com.vscodroid/files/home/projects/vscode-eslint-shim.js'],
             'unknown'],
+        // The two processes a signed-out, untouched editor leaves running on this
+        // device beyond its own core, measured on an API 33 and an API 37
+        // emulator: the agent host, and the model backend it forks. The backend
+        // is the one that was invisible. Its basename is `index.js`, so no
+        // pattern above can name it, and as 'unknown' it was outside both the
+        // idle kill and the command that sheds language servers by hand.
+        [1029, [NODE, HEAP, `${REH}/out/bootstrap-fork`, '--type=agentHost',
+            '--logsPath', `${DATA}/logs`], 'system'],
+        [1030, [NODE, `${REH}/node_modules/@github/copilot-android-arm64/index.js`,
+            '--headless', '--no-auto-update', '--stdio', '--no-auto-login'], 'langserver'],
+        // The other direction for that needle. It carries the node_modules and
+        // scope segments precisely so a name merely containing 'copilot' stays
+        // the user's, and being classified 'langserver' is what makes a process
+        // eligible to be killed.
+        [1031, [NODE, '/data/user/0/com.vscodroid/files/home/projects/copilot-demo/index.js'],
+            'unknown'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
@@ -423,11 +489,13 @@ function main() {
 
     const contract = checkPressureContract(tmp);
     const labelled = checkLabelCoverage(snapshot);
+    const named = checkCommandNames(snapshot, byPid);
 
     fs.rmSync(tmp, { recursive: true, force: true });
     console.log(
         `ok -- ${snapshot.total} processes counted, ${cases.length} classifications checked, ` +
         `${labelled.length} types all labelled by the status bar extension, ` +
+        `${named} rows named after the program they run, ` +
         `pressure contract agrees on ${JSON.stringify(contract.critical)} in ${contract.filename}`,
     );
 }

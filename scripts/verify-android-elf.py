@@ -2,6 +2,8 @@
 """Check that an ELF binary can actually load on Android.
 
     verify-android-elf.py <file> [--lib-dir DIR]...
+    verify-android-elf.py --dir DIR [--lib-dir DIR]...
+    verify-android-elf.py --tree DIR
 
 Three things, each of which fails the same quiet way at runtime (the file is
 present, the build is green, and the process dies or the addon refuses to load
@@ -13,12 +15,18 @@ with a message nobody sees):
   * every LOAD segment aligned to at least 16 KB, which Android 16 requires and
     NDK 27 does not do by default.
 
+`--tree` asks the third question only, of a whole directory tree. What it is
+for is written at [alignment_sweep]; the short version is that the first two
+cannot be asked of a tree this app packages without failing it for files that
+are correct.
+
 Pure Python on purpose: the NDK's readelf is not available everywhere this runs,
 and having one implementation means the addon build and the runtime download
 cannot drift apart in what they consider acceptable.
 """
 
 import argparse
+import os
 import pathlib
 import stat
 import struct
@@ -26,6 +34,11 @@ import sys
 
 ELF_MAGIC = b"\x7fELF"
 EM_AARCH64 = 0xB7
+# A relocatable object, which is the one ELF the loader never maps: it has no
+# LOAD segment to align, and the alignment sweep would read that absence as an
+# alignment of zero. Python's build ships one, usr/lib/python3.x/config-*/
+# python.o, and it is the only one in the packaged tree (measured).
+ET_REL = 1
 PT_LOAD, PT_DYNAMIC = 1, 2
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ = 0, 1, 5, 10
 MIN_ALIGN = 16384
@@ -56,6 +69,7 @@ def read_elf(path: pathlib.Path):
     if data[4] != 2:
         raise NotAnElf(f"{path.name} is not 64-bit")
 
+    e_type = struct.unpack_from("<H", data, 16)[0]
     machine = struct.unpack_from("<H", data, 18)[0]
     phoff, = struct.unpack_from("<Q", data, 32)
     phentsize, phnum = struct.unpack_from("<HH", data, 54)
@@ -98,7 +112,7 @@ def read_elf(path: pathlib.Path):
                     end = table.index(b"\0", val)
                     needed.append(table[val:end].decode())
 
-    return machine, needed, [a for *_, a in loads]
+    return machine, e_type, needed, [a for *_, a in loads]
 
 
 def resolvable_names(lib_dirs: list):
@@ -141,7 +155,7 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     # that tells its reader "the FAIL line above names the file" would be lying.
     # Caught per file so the sweep finishes and still fails.
     try:
-        machine, needed, aligns = read_elf(path)
+        machine, _e_type, needed, aligns = read_elf(path)
     # ValueError covers the two that read_elf can raise out of a corrupt dynamic
     # string table: bytes.index() when a DT_NEEDED offset has no NUL after it, and
     # .decode() on a non-UTF-8 name (UnicodeDecodeError is a ValueError). Those
@@ -179,6 +193,81 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     return not failed
 
 
+def alignment_sweep(root: pathlib.Path) -> int:
+    """Ask one question of every ELF under [root]: is it 16 KB aligned.
+
+    The population this exists for is the packaged asset tree, and it was
+    covered by nothing. Every download script checks the file it just placed,
+    and the Gradle sweep covers `jniLibs/` as a directory, but the ~150 aarch64
+    binaries under `assets/` are examined only at the moment they are fetched
+    and never again. A cache restore, a re-run of `package-assets.sh`, or a
+    server tree fetched whole from a release all reach packaging with nothing
+    having asked, and a misaligned addon is a `dlopen` failure on an Android 16
+    device with no sign of it at build time.
+
+    Alignment only, and the two questions it drops are dropped for one reason:
+    a tree we package is not a tree we built. It legitimately carries payloads
+    for platforms this app never runs (upstream ships x86_64 copies of ripgrep
+    beside the arm64 ones) and dependencies nothing here ever loads (both copies
+    of `kerberos.node` name `libstdc++.so.6`, measured, and no code path opens
+    them). Asking the full question of that tree would fail a build that is
+    correct. Alignment is different: it is a property of every file that could
+    be mapped, whoever built it, and a wrong answer is only ever a defect.
+    DT_NEEDED for these same trees is asked separately, by
+    `gen-glibc-forwarders.py --scan`, which knows about the shim.
+
+    A tree with no aarch64 ELF in it fails rather than passes, for the reason
+    `--dir` refuses an empty directory: "nothing was checked" must not read like
+    "everything passed".
+    """
+    checked = skipped = failed = 0
+    # os.walk rather than rglob: it does not follow directory symlinks, and the
+    # trees this runs over are node_modules, where a symlink pointing at an
+    # ancestor is ordinary rather than exotic.
+    for parent, _dirs, names in os.walk(root):
+        for name in sorted(names):
+            path = pathlib.Path(parent) / name
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                # Four bytes rather than read_elf's whole file. Most of a tree
+                # this size is JavaScript, and reading all of it to find out
+                # would cost more than the check.
+                with path.open("rb") as handle:
+                    if handle.read(4) != ELF_MAGIC:
+                        continue
+            except OSError as e:
+                print(f"  FAIL   {path}: {e}")
+                failed += 1
+                continue
+            try:
+                machine, e_type, _needed, aligns = read_elf(path)
+            except (NotAnElf, IndexError, struct.error, OSError, ValueError) as e:
+                # It claimed to be an ELF in its first four bytes and then could
+                # not be read as one, which is a broken file rather than a file
+                # this mode has no opinion about.
+                print(f"  FAIL   {path}: {e}")
+                failed += 1
+                continue
+            if machine != EM_AARCH64 or e_type == ET_REL:
+                skipped += 1
+                continue
+            checked += 1
+            worst = min(aligns, default=0)
+            if worst < MIN_ALIGN:
+                print(f"  FAIL   {path}")
+                print(f"         LOAD segments aligned to {worst:#x}; "
+                      f"Android 16 needs {MIN_ALIGN:#x}")
+                failed += 1
+
+    if not checked:
+        print(f"  FAIL   no aarch64 ELF under {root}; nothing was examined")
+        return 1
+    print(f"  {'FAIL  ' if failed else 'ok    '} {checked} aarch64 binaries under {root}, "
+          f"{failed} misaligned, {skipped} skipped as another ABI or not loadable")
+    return 1 if failed else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     # Optional so --dir can stand in for it. The nine existing callers each pass
@@ -196,9 +285,17 @@ def main() -> int:
     #     grep -c 'verify-android-elf.py' .github/workflows/*.yml
     ap.add_argument("--dir", type=pathlib.Path,
                     help="check every *.so in this directory instead of one file")
+    # --tree is the same idea one level out: --dir asks about a directory, this
+    # asks about a tree, and it asks less of it. See alignment_sweep for which
+    # question it keeps and why the other two cannot be asked there.
+    ap.add_argument("--tree", type=pathlib.Path,
+                    help="check LOAD alignment on every aarch64 ELF under this tree")
     ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
                     help="directory whose libraries ship with the app")
     args = ap.parse_args()
+
+    if args.tree is not None:
+        return alignment_sweep(args.tree)
 
     if args.dir is not None:
         targets = sorted(args.dir.glob("*.so"))
@@ -211,7 +308,7 @@ def main() -> int:
     elif args.file is not None:
         targets = [args.file]
     else:
-        ap.error("give a file, or --dir to check a whole directory")
+        ap.error("give a file, --dir for a directory, or --tree for a whole tree")
 
     bundled = resolvable_names(args.lib_dir)
     if bundled is None:

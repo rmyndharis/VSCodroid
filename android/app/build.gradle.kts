@@ -658,6 +658,75 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
     }
 }
 
+/**
+ * Refuses a packaged asset tree carrying a binary Android 16 will not map.
+ *
+ * The page-size rule is enforced everywhere a binary is produced and nowhere a
+ * binary is packaged, for everything except `jniLibs/`. Each download script
+ * checks the one file it just placed, and `verifyBundledBinaries` sweeps
+ * `jniLibs/` as a directory, so the ~150 aarch64 binaries under `assets/` were
+ * answered for at fetch time and never again. Three ordinary routes reach
+ * packaging with no fetch having run: a cache restore in CI, a local build after
+ * an old fetch, and `package-assets.sh` copying `server/vscode-reh` over the
+ * tree wholesale. The server tree also arrives from a release as a tarball,
+ * where only ripgrep is examined on the way in.
+ *
+ * What it costs when it goes wrong is a `dlopen` that fails on a 16 KB-page
+ * device and nowhere else, which is the shape of failure the whole checker
+ * exists for: the file is present, the build is green, and the feature the addon
+ * backs is simply missing on the devices that ship today.
+ *
+ * Alignment only. The tree is packaged rather than built here, so it
+ * legitimately holds payloads for other platforms and dependencies nothing
+ * loads, and asking the full question of it would fail a correct build; the
+ * script's `alignment_sweep` names both cases and the measurements behind them.
+ * The dependency half of the question is already asked of these same
+ * directories by `verifyNativeAddons`.
+ *
+ * Armed by the same file as its two neighbours, and skipped with them: the lint
+ * and unit-test jobs stub an empty assets tree so Gradle will configure, and a
+ * tree that was never downloaded has nothing to judge.
+ *
+ * Measured on the real tree: 158 aarch64 binaries, 4 skipped as another ABI or
+ * not loadable, 0.8s.
+ */
+val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
+    group = "verification"
+    description = "Checks every packaged aarch64 binary is 16 KB page aligned."
+
+    val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/verify-android-elf.py",
+        "--tree", "android/app/src/main/assets",
+    )
+
+    onlyIf { entryPoint.isFile }
+
+    isIgnoreExitValue = true
+    val alignResult = executionResult
+    doLast {
+        if (alignResult.get().exitValue != 0) {
+            throw GradleException(
+                "A binary in the packaged asset tree is not 16 KB page aligned.\n" +
+                    "The FAIL line above names the file and the alignment it has.\n" +
+                    "\n" +
+                    "Android 16 refuses to map it, so whatever loads it fails on a\n" +
+                    "current device and works everywhere older. Re-run the script that\n" +
+                    "places the file: scripts/build-native-addons.sh for an addon under\n" +
+                    "vscode-reh/node_modules, scripts/download-termux-tools.sh or\n" +
+                    "download-python.sh for anything under assets/usr, and\n" +
+                    "scripts/fetch-vscode-oss.sh for the server tree itself.\n" +
+                    "\n" +
+                    "A file that arrives misaligned from upstream is not fixable here:\n" +
+                    "it has to be rebuilt with -Wl,-z,max-page-size=16384, which is what\n" +
+                    "build-native-addons.sh already passes."
+            )
+        }
+    }
+}
+
 val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     group = "verification"
     description = "Checks the server tree in assets/ is one this app can run."
@@ -1148,15 +1217,16 @@ tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
-// The nine, once. They were written twice before, here as task providers and
-// again below as a list of strings for the graph check, with nothing keeping the
-// two in step. The dangerous drift is one-directional and quiet: add a tenth gate
-// here and forget the other list, and the new gate is wired but never verified,
-// which is the state the check exists to make impossible.
+// The set, once. It was written twice before, here as task providers and again
+// below as a list of strings for the graph check, with nothing keeping the two in
+// step. The dangerous drift is one-directional and quiet: add a gate here and
+// forget the other list, and the new gate is wired but never verified, which is
+// the state the check exists to make impossible.
 val packagingGates = listOf(
     checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
     verifyRequiredBinaries, verifyBundledShellPaths, verifyRubyPackShellPaths,
-    verifyNativeAddons, checkPackOverlap, verifyPythonPlatform,
+    verifyNativeAddons, verifyPackagedAlignment, checkPackOverlap,
+    verifyPythonPlatform,
 )
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
@@ -1165,7 +1235,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
         dependsOn(bundleNotices)
     }
 
-// The same nine, by name, so the graph can be asked whether they are in it.
+// The same set, by name, so the graph can be asked whether they are in it.
 //
 // The wiring above is by name SHAPE, which is right: AGP has moved this family
 // between versions and matching two literal names would fail the build at
