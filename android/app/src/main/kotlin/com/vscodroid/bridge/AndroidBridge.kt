@@ -25,6 +25,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.lang.ref.WeakReference
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 /**
  * How long generateSshKey waits for ssh-keygen before killing it.
@@ -194,6 +196,23 @@ internal val RECLAIM_STALE_SESSION = R.string.bridge_stale_session
 internal val RECLAIM_UNAVAILABLE = R.string.bridge_reclaim_unavailable
 
 /**
+ * Why a command that answers by reply id refused before it started any work.
+ *
+ * The same resource as [OPEN_URL_STALE_SESSION] and [RECLAIM_STALE_SESSION] and
+ * under its own name for the reason those two carry theirs: one situation with
+ * one instruction, and a name is what lets a test say which call it pinned.
+ *
+ * It travels back on the CALLER's thread, as the return value, while everything
+ * else these four commands answer is posted later against the reply id. That
+ * split is deliberate: a caller holding no valid token must learn so without
+ * anything outside the bridge being touched, which is the property
+ * `BridgeTokenUniformityTest` checks by watching every collaborator. A refusal
+ * routed through the reply hook would touch one.
+ */
+@StringRes
+internal val STORAGE_STALE_SESSION = R.string.bridge_stale_session
+
+/**
  * The sign-in requests this app launched a browser for, and when.
  *
  * Keyed by request id rather than being a single reading, and that is the whole
@@ -358,8 +377,68 @@ class AndroidBridge(
     private val onListMirrors: () -> String = { "[]" },
     private val onReclaimMirror: (hash: String, force: Boolean) -> String =
         { _, _ -> context.getString(RECLAIM_UNAVAILABLE) },
+    /**
+     * Answers a command that could not be answered while its caller waited.
+     *
+     * [payload] is the value the method would have returned, or the reason it
+     * failed when [ok] is false. [replyId] is the id the caller sent with the
+     * command; the relay posts the answer back under it and the extension routes
+     * it to the promise that is still waiting.
+     */
+    private val onAsyncAnswer: (replyId: String, ok: Boolean, payload: String) -> Unit =
+        { _, _, _ -> },
+    /**
+     * The one thread every disk-walking command runs on.
+     *
+     * Single, deliberately. These used to run on the WebView's JavaBridge
+     * thread, which serialises every bridge call, so one at a time is the
+     * ordering they already had and the one their callers were written against;
+     * a pool would let two removals of the same copy overlap. Daemon, so it
+     * never holds the process up. Nothing shuts it down, and the reason that is
+     * bounded rather than a leak is that a bridge is built once per WebView:
+     * only a renderer crash produces a second one, and what the first leaves
+     * behind is an idle thread with no work and no queue.
+     *
+     * A constructor argument rather than a private field so that a test can
+     * watch it. `BridgeTokenUniformityTest` decides whether a method OBEYED the
+     * token by asking whether anything outside the bridge was touched, and work
+     * handed to a thread this class owned privately would be touched on that
+     * thread, racing the verification. Here the hand-off itself is the signal,
+     * and it is recorded on the caller's thread.
+     */
+    private val diskWork: Executor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "bridge-disk").apply { isDaemon = true }
+    },
 ) {
     private val tag = "AndroidBridge"
+
+    /**
+     * Runs [work] off the caller's thread and posts what it answers.
+     *
+     * The caller is the page's own thread. A `@JavascriptInterface` call does
+     * not return to JavaScript until this method does, and the relay that makes
+     * the call is injected into the workbench's main frame, so anything
+     * unbounded answered inline freezes the editor: it stops rendering and stops
+     * taking input for the length of the work, and nothing in the app detects
+     * it. So the methods below hand back at once and the answer follows.
+     *
+     * The Boolean [work] returns decides whether the caller's promise resolves
+     * or rejects. It is decided here rather than in the relay because this is
+     * the side that knows: for [reclaimSafMirror] the answer is the
+     * empty-string-means-removed convention its own documentation sets out, and
+     * a relay cannot tell that apart from a listing that happens to be empty.
+     */
+    private fun answerLater(replyId: String, work: () -> Pair<Boolean, String>) {
+        diskWork.execute {
+            val (ok, payload) = try {
+                work()
+            } catch (e: Exception) {
+                Logger.e(tag, "A bridge command failed off the caller's thread", e)
+                false to (e.message ?: "unknown error")
+            }
+            onAsyncAnswer(replyId, ok, payload)
+        }
+    }
 
     @JavascriptInterface
     fun copyToClipboard(authToken: String, text: String): Boolean {
@@ -642,23 +721,40 @@ class AndroidBridge(
     // -- Storage Management --
 
     /**
-     * Returns per-component storage breakdown as JSON.
+     * Asks for the per-component storage breakdown, which arrives by [replyId].
      * Keys: vscode_server, extensions, user_data, logs, tools, saf_mirrors, cache, total
      * Values in bytes.
+     *
+     * Every figure is a directory walk and `total` walks `filesDir` again on top
+     * of them, so this takes as long as the disk is big. See [answerLater] for
+     * why that cannot be answered where the caller waits.
+     *
+     * @return the empty string once the walk is under way, and otherwise the
+     *   reason it was refused before starting. The JSON itself is posted later
+     *   against [replyId].
      */
     @JavascriptInterface
-    fun getStorageBreakdown(authToken: String): String {
-        if (!security.validateToken(authToken)) return "{}"
-        return StorageManager.getStorageBreakdown(context).toString()
+    fun getStorageBreakdown(authToken: String, replyId: String): String {
+        if (!security.validateToken(authToken)) return context.getString(STORAGE_STALE_SESSION)
+        answerLater(replyId) { true to StorageManager.getStorageBreakdown(context).toString() }
+        return ""
     }
 
     /**
-     * Clears caches (npm, tmp, crash logs, VS Code logs). Returns bytes freed.
+     * Clears caches (npm, tmp, crash logs, VS Code logs). The bytes freed arrive
+     * by [replyId], as the decimal spelling of a Long.
+     *
+     * It deletes trees, so it takes as long as the disk is big; see
+     * [answerLater].
+     *
+     * @return the empty string once the deletion is under way, and otherwise the
+     *   reason it was refused before starting.
      */
     @JavascriptInterface
-    fun clearCaches(authToken: String): Long {
-        if (!security.validateToken(authToken)) return 0
-        return StorageManager.clearCaches(context)
+    fun clearCaches(authToken: String, replyId: String): String {
+        if (!security.validateToken(authToken)) return context.getString(STORAGE_STALE_SESSION)
+        answerLater(replyId) { true to StorageManager.clearCaches(context).toString() }
+        return ""
     }
 
     /**
@@ -679,13 +775,25 @@ class AndroidBridge(
      * which folder is holding the disk and decide about that folder rather than about
      * a total.
      *
-     * Answers `[]` when refused and also when no SAF manager is wired up, which are
-     * indistinguishable here, as they are in [getRecentFolders].
+     * Every copy is walked twice before the list exists, once to size it and once
+     * to ask whether the device folder holds everything in it, so this takes as
+     * long as the disk is big; see [answerLater].
+     *
+     * The posted answer is `[]` when no SAF manager is wired up, which is
+     * indistinguishable from an install that has copied no device folder, as it
+     * is in [getRecentFolders]. A refusal is no longer among those cases: it
+     * comes back here as a sentence instead, so a caller can tell "nothing to
+     * show" from "we would not tell you".
+     *
+     * @return the empty string once the walk is under way, and otherwise the
+     *   reason it was refused before starting. The JSON array is posted later
+     *   against [replyId].
      */
     @JavascriptInterface
-    fun listSafMirrors(authToken: String): String {
-        if (!security.validateToken(authToken)) return "[]"
-        return onListMirrors()
+    fun listSafMirrors(authToken: String, replyId: String): String {
+        if (!security.validateToken(authToken)) return context.getString(STORAGE_STALE_SESSION)
+        answerLater(replyId) { true to onListMirrors() }
+        return ""
     }
 
     /**
@@ -700,14 +808,28 @@ class AndroidBridge(
      * the caller must have said what is at stake in a modal the user had to accept. It
      * is not a retry flag.
      *
-     * @return the empty string when the mirror was removed, and otherwise the sentence
-     *   naming why it was not. Success is the falsy value, so a truthiness test reads
-     *   backwards and claims every refusal as a removal.
+     * Without [force] the copy is walked to re-ask the gate and walked again to
+     * report the bytes freed, so this takes as long as the disk is big; see
+     * [answerLater].
+     *
+     * The empty string means two different things here, one on each road back,
+     * and they do not conflict. The RETURN says only that the removal was
+     * accepted and its outcome will follow. The POSTED answer is the outcome:
+     * empty when the mirror was removed, and otherwise the sentence naming why
+     * it was not, which is decided into `ok: false` before it leaves.
+     *
+     * @return the empty string once the removal is under way, and otherwise the
+     *   reason it was refused before starting. Success is the falsy value on
+     *   both roads, so a truthiness test reads backwards on either.
      */
     @JavascriptInterface
-    fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String {
+    fun reclaimSafMirror(authToken: String, hash: String, force: Boolean, replyId: String): String {
         if (!security.validateToken(authToken)) return context.getString(RECLAIM_STALE_SESSION)
-        return onReclaimMirror(hash, force)
+        answerLater(replyId) {
+            val answer = onReclaimMirror(hash, force)
+            answer.isEmpty() to answer
+        }
+        return ""
     }
 
     // -- Crash Reporting --

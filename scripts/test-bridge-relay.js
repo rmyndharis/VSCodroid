@@ -165,16 +165,38 @@ function extractInjected(fnName, mustMention) {
 // it did. A boolean here would let a relay that inverted the test stay green.
 let bridgeAnswer = '';
 const bridgeCalls = [];
+
+// The four disk-walking commands answer by reply id: they hand back at once and
+// the value follows through the relay's reply hook. So the stub's return value
+// is not the answer, it is only the refusal channel, and every case below that
+// wants an answer has to post one.
+let listAnswer = '';
+let reclaimAnswer = '';
+const listCalls = [];
+const reclaimCalls = [];
+
 const AndroidBridge = {
     openExternalUrl(url, token) {
         bridgeCalls.push({ url, token });
         return bridgeAnswer;
+    },
+    listSafMirrors(token, replyId) {
+        listCalls.push({ token, replyId });
+        return listAnswer;
+    },
+    reclaimSafMirror(token, hash, force, replyId) {
+        reclaimCalls.push({ token, hash, force, replyId });
+        return reclaimAnswer;
     },
 };
 
 // ---- the vscode API, stubbed ---------------------------------------------
 const shown = { info: [], error: [] };
 let inputBoxAnswer = null;
+// What the user does at each prompt of the device-folder flow. Null is the
+// dismissal, which is what every case that does not reach a removal wants.
+let quickPickChoice = null;
+let warningChoice = null;
 const commands = new Map();
 const vscodeStub = {
     commands: {
@@ -185,8 +207,8 @@ const vscodeStub = {
         showInputBox: async () => inputBoxAnswer,
         showInformationMessage: (m) => { shown.info.push(m); },
         showErrorMessage: (m) => { shown.error.push(m); },
-        showWarningMessage: () => {},
-        showQuickPick: async () => undefined,
+        showWarningMessage: async () => warningChoice || undefined,
+        showQuickPick: async (items) => (quickPickChoice ? quickPickChoice(items) : undefined),
         createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
     },
     env: { clipboard: { writeText: async () => {} } },
@@ -280,13 +302,25 @@ function checkCommandCoverage(relay) {
 async function main() {
     const relay = extractInjected('injectBridgeRelay', 'openExternalUrl');
     const NO_HANDLER = bridgeReason('OPEN_URL_NO_HANDLER');
+    const STALE_SESSION = bridgeReason('STORAGE_STALE_SESSION');
     const coverage = checkCommandCoverage(relay);
+    // Held rather than written inline, because the relay installs the reply hook
+    // ON this object. That hook is the road a late answer takes back into the
+    // page, so a test that cannot reach it cannot drive any command that answers
+    // by id, which is four of the fourteen.
+    const relayWindow = { __vscodroid: { authToken: 'test-token' } };
     vm.runInNewContext(relay, {
         AndroidBridge,
         BroadcastChannel,
-        window: { __vscodroid: { authToken: 'test-token' } },
+        window: relayWindow,
         console,
     });
+    assert.strictEqual(
+        typeof relayWindow.__vscodroidBridgeReply, 'function',
+        'the relay installed no reply hook, so nothing can answer the four commands that ' +
+        'hand back before their work is done. Every one of them would then sit until the ' +
+        'extension\'s two-minute deadline and report that the app may not be on Android.',
+    );
 
     const context = { subscriptions: [] };
     require(bridgeExtension()).activate(context);
@@ -450,12 +484,156 @@ async function main() {
         'did nothing and said nothing',
     );
 
+    // ---- the commands that answer by reply id ----------------------------
+    //
+    // These four hand back the empty string and deliver the value afterwards,
+    // because a bridge call holds the calling JavaScript thread until it returns
+    // and the caller here is the workbench page's own thread. Nothing else runs
+    // this shape: the Kotlin tests stop at the language boundary, and the
+    // extension is only ever driven against a relay that answered inline.
+    //
+    // The pending promise is what makes the case meaningful, so the handler is
+    // started rather than awaited, and it is only awaited once an answer has been
+    // posted. If a branch ever went back to answering inline, `started` below
+    // settles with the stub's empty return and every assertion about the posted
+    // answer fails.
+    const manageDeviceFolders = commands.get('vscodroid.manageDeviceFolders');
+    assert.ok(manageDeviceFolders,
+        'the bundled extension no longer registers vscodroid.manageDeviceFolders');
+
+    /** Lets queued channel messages and the awaits behind them run. */
+    async function settle() {
+        for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    }
+
+    /** Starts the command and reports whether it has finished. */
+    function start() {
+        shown.info.length = 0; shown.error.length = 0;
+        listCalls.length = 0; reclaimCalls.length = 0;
+        const state = { done: false };
+        state.running = manageDeviceFolders().then(() => { state.done = true; });
+        return state;
+    }
+
+    listAnswer = '';
+    reclaimAnswer = '';
+    quickPickChoice = null;
+    warningChoice = null;
+
+    // The listing is asked for with the session token and a reply id, and NOTHING
+    // has happened by the time the call returns.
+    const listing = start();
+    await settle();
+    assert.strictEqual(listCalls.length, 1, 'the relay never reached listSafMirrors');
+    assert.strictEqual(
+        listCalls[0].token, 'test-token',
+        'the relay passed the wrong first argument to listSafMirrors: ' +
+        JSON.stringify(listCalls[0]),
+    );
+    assert.ok(
+        typeof listCalls[0].replyId === 'string' && listCalls[0].replyId.length > 0,
+        'the relay called listSafMirrors without a reply id, so the answer has no way ' +
+        'back and the caller waits for its own deadline: ' + JSON.stringify(listCalls[0]),
+    );
+    assert.strictEqual(
+        listing.done, false,
+        'the listing settled before Android posted anything back, so the relay is not ' +
+        'waiting for the answer -- it took the empty acceptance for the list itself',
+    );
+    assert.deepStrictEqual(
+        { info: shown.info, error: shown.error }, { info: [], error: [] },
+        'something was shown to the user while the walk was still running: ' +
+        JSON.stringify(shown),
+    );
+
+    // The answer arrives by id and the flow carries on. showQuickPick is dismissed,
+    // so what is asserted is that nothing went wrong on the way there.
+    relayWindow.__vscodroidBridgeReply(
+        listCalls[0].replyId, true,
+        JSON.stringify([{ hash: 'abc123', name: 'Notes', bytes: 12, reclaimable: true }]),
+    );
+    await listing.running;
+    assert.deepStrictEqual(
+        { info: shown.info, error: shown.error }, { info: [], error: [] },
+        'a listing that arrived by reply id was not understood: ' + JSON.stringify(shown),
+    );
+
+    // A refusal posted by id reaches the user in the words Android chose. This is
+    // openExternalUrl's pass-through property, on the other road back.
+    const POSTED_ONLY_HERE = 'a refusal that exists only inside this check';
+    const rejected = start();
+    await settle();
+    relayWindow.__vscodroidBridgeReply(listCalls[0].replyId, false, POSTED_ONLY_HERE);
+    await rejected.running;
+    assert.ok(
+        shown.error.length === 1 && shown.error[0].includes(POSTED_ONLY_HERE),
+        'a refusal posted by reply id did not reach the user unchanged. Saw: ' +
+        JSON.stringify(shown.error),
+    );
+
+    // A refusal decided before any work started travels back as the RETURN value,
+    // and the relay has to post it rather than dropping it: the caller is waiting
+    // for an answer that will never come otherwise.
+    listAnswer = STALE_SESSION;
+    const refusedAtOnce = start();
+    await refusedAtOnce.running;
+    assert.ok(
+        shown.error.length === 1 && shown.error[0].includes(STALE_SESSION),
+        'a command refused before it started did not reach the user, so the caller waits ' +
+        'two minutes and is then told the app may not be running on Android. Saw: ' +
+        JSON.stringify(shown.error),
+    );
+    listAnswer = '';
+
+    // The removal, end to end: the confirmed removal is sent with its hash, its
+    // force flag and a reply id, and the refusal that comes back by id is the
+    // sentence the user is shown.
+    quickPickChoice = (items) => items[0];
+    warningChoice = 'Remove';
+    const removal = start();
+    await settle();
+    relayWindow.__vscodroidBridgeReply(
+        listCalls[0].replyId, true,
+        JSON.stringify([{ hash: 'abc123', name: 'Notes', bytes: 12, reclaimable: false }]),
+    );
+    await settle();
+    assert.strictEqual(reclaimCalls.length, 1, 'the confirmed removal never reached the bridge');
+    assert.deepStrictEqual(
+        { token: reclaimCalls[0].token, hash: reclaimCalls[0].hash, force: reclaimCalls[0].force },
+        { token: 'test-token', hash: 'abc123', force: true },
+        'the relay passed the wrong arguments to reclaimSafMirror. The reply id is LAST ' +
+        'here and first nowhere, so an argument out of place hands the hash to the token ' +
+        'check or deletes with the wrong force flag: ' + JSON.stringify(reclaimCalls[0]),
+    );
+    assert.ok(
+        typeof reclaimCalls[0].replyId === 'string' && reclaimCalls[0].replyId.length > 0,
+        'the removal was sent without a reply id: ' + JSON.stringify(reclaimCalls[0]),
+    );
+    assert.strictEqual(
+        removal.done, false,
+        'the removal settled before its outcome was posted, so a refusal could not have ' +
+        'been reported and the user is told nothing about a copy that is still there',
+    );
+
+    const IN_USE = 'That folder is open in the editor.';
+    relayWindow.__vscodroidBridgeReply(reclaimCalls[0].replyId, false, IN_USE);
+    await removal.running;
+    assert.ok(
+        shown.error.length === 1 && shown.error[0].includes(IN_USE),
+        'a refused removal did not reach the user in the words Android chose, so the ' +
+        'thing that has to change first is never named. Saw: ' + JSON.stringify(shown.error),
+    );
+    quickPickChoice = null;
+    warningChoice = null;
+
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
         : '';
     say(
         `ok -- a declined URL surfaces "${refused.error[0]}", an opened one stays silent, ` +
-        'and window.open claims only the clicks the bridge opened; ' +
+        'and window.open claims only the clicks the bridge opened; a device-folder listing ' +
+        'and a removal each hand back before their work is done and are answered by reply ' +
+        'id, and a refusal on either road reaches the user in the bridge\'s own words; ' +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }

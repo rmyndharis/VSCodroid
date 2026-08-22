@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.util.concurrent.Executor
 
 /**
  * Every method exposed to the page through `@JavascriptInterface` must ask the session
@@ -63,6 +64,30 @@ class BridgeTokenUniformityTest {
         val onDownloadNamed: (String, String) -> Unit = mockk(relaxed = true)
         val onDownloadChunk: (String, String) -> Boolean = mockk(relaxed = true)
         val onDownloadComplete: (String, String?) -> Unit = mockk(relaxed = true)
+        // The two that were left at their defaults for as long as they existed,
+        // and the pair the note above was written about. Neither default is
+        // observable from here: `{ "[]" }` touches nothing at all, and the other
+        // acts only through context.getString, which the exclusion below is
+        // deliberately blind to. So listSafMirrors and reclaimSafMirror could
+        // call the validator, discard the answer and reach the callback, and the
+        // OBEY test had no signal to raise.
+        val onListMirrors: () -> String = mockk(relaxed = true)
+        val onReclaimMirror: (String, Boolean) -> String = mockk(relaxed = true)
+        // The two roads out of a command that answers by reply id, and both have
+        // to be watched here.
+        //
+        // `diskWork` is the one that keeps the OBEY test honest for those four.
+        // Their work is handed to this executor rather than run inline, so a
+        // method that consulted the validator and dropped the answer would touch
+        // the callback on the executor's thread, racing the verification below
+        // instead of being caught by it. Injected, the hand-off itself is
+        // recorded on this thread, before anything is verified.
+        //
+        // `onAsyncAnswer` is watched for the opposite reason: a refusal must
+        // come back as the return value on the caller's own thread, so this
+        // being touched at all under a rejected token is the method having acted.
+        val onAsyncAnswer: (String, Boolean, String) -> Unit = mockk(relaxed = true)
+        val diskWork: Executor = mockk(relaxed = true)
 
         val bridge = AndroidBridge(
             context = context,
@@ -77,6 +102,10 @@ class BridgeTokenUniformityTest {
             onDownloadNamed = onDownloadNamed,
             onDownloadChunk = onDownloadChunk,
             onDownloadComplete = onDownloadComplete,
+            onListMirrors = onListMirrors,
+            onReclaimMirror = onReclaimMirror,
+            onAsyncAnswer = onAsyncAnswer,
+            diskWork = diskWork,
         )
 
         /** Everything the bridge can reach except the validator it is allowed to consult. */
@@ -84,6 +113,7 @@ class BridgeTokenUniformityTest {
             context, clipboard, onBackPressed, onMinimize,
             onOpenFolderPicker, onOpenRecentFolder, onShowAbout, safManager,
             onDownloadNamed, onDownloadChunk, onDownloadComplete,
+            onListMirrors, onReclaimMirror, onAsyncAnswer, diskWork,
         )
 
         init {
@@ -197,6 +227,47 @@ class BridgeTokenUniformityTest {
         } catch (_: Throwable) {
             // Throwing on a rejected token is still a refusal; the verify decides.
         }
+    }
+
+    /**
+     * The Fixture watches every collaborator the bridge is built from.
+     *
+     * Written because the note inside [Fixture] was already there, stating the
+     * rule, when two callbacks were added without following it. A rule a person
+     * has to remember at the moment they extend a constructor is not a guard; the
+     * two that slipped through were the newest ones, which is what that shape of
+     * mistake looks like every time.
+     *
+     * Arity rather than names, because names are not in the class file. Kotlin
+     * keeps parameter names in its own metadata and reading them needs
+     * kotlin-reflect, which is not on this test classpath and is not worth adding
+     * for one assertion. So this cannot say WHICH one is missing, only that one
+     * is, and the message carries the instruction instead.
+     *
+     * The constructor is picked by the marker rather than by counting, because
+     * there are two: Kotlin emits a second, synthetic one for the defaulted
+     * parameters, ending in an int mask and a DefaultConstructorMarker, and it is
+     * the one with MORE parameters.
+     */
+    @Test
+    fun `the fixture watches every collaborator the bridge is built from`() {
+        val ctor = AndroidBridge::class.java.declaredConstructors.single { c ->
+            c.parameterTypes.none { it.name.endsWith("DefaultConstructorMarker") }
+        }
+        val watched = Fixture().collaborators.size
+        // One, and it is SecurityManager: the validator is the single thing a
+        // bridge method is allowed to reach, so it is watched by the
+        // confirmVerified below rather than by `wasNot Called`.
+        assertEquals(
+            ctor.parameterCount - 1, watched,
+            "AndroidBridge takes ${ctor.parameterCount} constructor arguments and the " +
+                "fixture watches $watched of them beside the validator. A collaborator " +
+                "left at its default is not merely untested: a bridge method reaching it " +
+                "past a rejected token touches no mock, throws nothing and consults " +
+                "nothing, so the OBEY test below has no signal at all. Pass the new one " +
+                "into the fixture's AndroidBridge(...) call as a mock and add it to " +
+                "`collaborators`."
+        )
     }
 
     /**

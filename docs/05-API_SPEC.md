@@ -152,13 +152,14 @@ The OAuth pair described a flow this app does not implement; see §2.5.
 Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
-with a token that does not match is refused before the method acts. Thirty of
+with a token that does not match is refused before the method acts. Twenty-seven of
 the thirty-three then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
-`0`, or nothing. **Three do not, and each is truthy on refusal.**
+`0`, or nothing. **Six do not, and each is truthy on refusal.**
 `generateSshKey` returns `{"success":false,"error":"unauthorized"}`, so a caller
 testing `if (!result)` reads a refusal as success; test its `success` field.
-`openExternalUrl` and `reclaimSafMirror` return the refusal sentence itself,
-because for those two the EMPTY string is the success value, so the polarity is
+`openExternalUrl`, `reclaimSafMirror`, `getStorageBreakdown`, `clearCaches` and
+`listSafMirrors` return the refusal sentence itself,
+because for those five the EMPTY string is the success value, so the polarity is
 reversed and a truthiness test reads backwards in the other direction. Read the token from
 `window.__vscodroid.authToken`, which MainActivity sets once the bridge is installed.
 `BridgeTokenUniformityTest` enumerates the methods by reflection and fails if one is
@@ -182,19 +183,31 @@ registered, which is the whole of why the toolchain management calls have no cal
 Adding a method to `AndroidBridge` does not publish it; the relay branch is a second,
 separate edit, and nothing fails if you forget it.
 
-**A bridge call blocks the page's main thread for as long as the method runs, and four of
-them run for as long as the disk is big.** The relay answers from the workbench page, and
-a call made through `addJavascriptInterface` does not return to JavaScript until the
-Kotlin method has finished. `getStorageBreakdown`, `listSafMirrors`, `reclaimSafMirror`
-and `clearCaches` all walk directory trees before they can answer, and the app's own
-extracted tree is around 875 MB before a project is opened, so on any real install those
-walks take far longer than the moment every other command takes. A caller that puts a
-deadline on the promise must give those four one of their own. The bundled bridge
-extension declares two, `BRIDGE_TIMEOUT_MS` for a command the relay answers at once and
-`DISK_WALK_TIMEOUT_MS` for these four; read the values out of its `extension.js` rather
-than from here, because a copy of a number in a document is how the two drift. Held to
-the short one the four reject while the walk is still running, the user is told the app
-may not be running on Android, and the answer is discarded when it arrives.
+**A bridge call blocks the page's main thread for as long as the method runs, so the four
+that run for as long as the disk is big do not answer where the caller waits.** A call
+made through `addJavascriptInterface` does not return to JavaScript until the Kotlin
+method has finished, and the relay makes its calls from the workbench page's own main
+frame, so the thread it holds is the one the editor renders and takes input on.
+`getStorageBreakdown`, `listSafMirrors`, `reclaimSafMirror` and `clearCaches` all walk
+directory trees before they can answer, and the app's own extracted tree is around 875 MB
+before a project is opened; answered inline they froze the workbench for the length of the
+walk, and no `WebViewRenderProcessClient` is installed anywhere, so nothing detected it.
+
+**Those four therefore take a `replyId` and answer against it.** Each returns at once,
+and what it returns is not the value asked for: the EMPTY string means the work has
+started and the answer will follow, and anything else is a refusal decided before any
+work began. The value itself is posted later, into the same BroadcastChannel and under
+the id the caller sent, so a caller that routes replies by id (which the relay protocol
+already requires) needs no other change. A caller must not read the return as the answer.
+
+The deadline a caller puts on the promise is therefore no longer a bound on the walk; it
+bounds a relay that is not there at all. The bundled bridge extension still declares two,
+`BRIDGE_TIMEOUT_MS` and `DISK_WALK_TIMEOUT_MS`, and the longer one still belongs to these
+four, because a walk that has started still has to finish before its answer is posted.
+Read the values out of its `extension.js` rather than from here, because a copy of a
+number in a document is how the two drift. An answer that arrives after its deadline is
+discarded rather than resolving anything, and an answer that arrives after the page has
+navigated is dropped on the Android side, since the relay it would post into is gone.
 
 #### Clipboard
 
@@ -333,28 +346,39 @@ fun openRecentFolder(authToken: String, uriString: String)
 // to test for validity.
 
 @JavascriptInterface
-fun getStorageBreakdown(authToken: String): String
-// Returns JSON with per-component disk usage in bytes:
+fun getStorageBreakdown(authToken: String, replyId: String): String
+// ANSWERS BY replyId. Returns "" once the walk has started; anything else is a
+// refusal decided before it started, and is the sentence to show.
+//
+// Posted against replyId: JSON with per-component disk usage in bytes:
 // {"vscode_server": N, "extensions": N, "user_data": N, "logs": N,
 //  "tools": N, "saf_mirrors": N, "cache": N, "total": N}
 //
 // TAKES AS LONG AS THE DISK. Every figure is a directory walk and "total" walks
 // filesDir again on top, so on an install carrying the extracted server tree
 // (~875 MB before a project is opened) this runs for far longer than a relay
-// hop. See the deadline note at the head of this section.
+// hop, which is why it does not answer where the caller waits. See the note at
+// the head of this section.
 
 @JavascriptInterface
-fun clearCaches(authToken: String): Long
+fun clearCaches(authToken: String, replyId: String): String
 // Clears npm-cache, tmp dir, crash logs, VS Code logs
-// Returns: number of bytes freed
-// Deletes trees, so it takes as long as the disk. Same deadline note.
+// ANSWERS BY replyId. Returns "" once the deletion has started; anything else is
+// a refusal decided before it started.
+// Posted against replyId: the number of bytes freed, as decimal text. Parse it;
+// the bridge carries strings, so this is "0" and not 0 when nothing was freed.
+// Deletes trees, so it takes as long as the disk. Same note.
 
 @JavascriptInterface
 fun getAvailableStorage(authToken: String): Long
 // Returns: available disk space in bytes
 
 @JavascriptInterface
-fun listSafMirrors(authToken: String): String
+fun listSafMirrors(authToken: String, replyId: String): String
+// ANSWERS BY replyId. Returns "" once the walk has started; anything else is a
+// refusal decided before it started, and is the sentence to show.
+//
+// Posted against replyId: a
 // JSON array of the local copies of device folders, largest first. This is the
 // contents of the `saf_mirrors` row that getStorageBreakdown reports as one
 // number, and there is no other listing of them anywhere in the app.
@@ -367,23 +391,30 @@ fun listSafMirrors(authToken: String): String
 // "reclaimable" false means the copy holds files the device folder does not, so
 // removing it destroys the only copy of them. That is the ordinary state of any
 // folder something has been built or cloned in.
-// "[]" if refused, and also "[]" when no SAF manager is wired up.
+// The posted array is "[]" when no SAF manager is wired up, which an install
+// that has copied no device folder cannot be told apart from. A refusal is no
+// longer one of those cases: it comes back as the return value instead.
 //
 // TAKES AS LONG AS THE DISK: every copy is walked twice, once for "bytes" and
-// once for "reclaimable". Same deadline note.
+// once for "reclaimable". Same note.
 
 @JavascriptInterface
-fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String
+fun reclaimSafMirror(authToken: String, hash: String, force: Boolean, replyId: String): String
 // Removes the local copy of one device folder. `hash` comes from listSafMirrors.
+//
+// ANSWERS BY replyId. Returns "" once the removal has started; anything else is
+// a refusal decided before it started, and is the sentence to show.
 //
 // `force` removes a copy whose "reclaimable" is false, which DELETES FILES THAT
 // EXIST NOWHERE ELSE. Only set it after the user has confirmed a modal that says
 // so. It is not a retry flag, and nothing else in this API deletes user data.
 //
-// Returns the empty string when the copy was removed, and otherwise the reason it
-// was not. CALLERS MUST COMPARE AGAINST THE EMPTY STRING: success is the falsy
-// value here, exactly as in openExternalUrl, so a truthiness test reads backwards
-// and reports every refusal as freed disk.
+// The answer posted against replyId is the empty string when the copy was
+// removed, and otherwise the reason it was not. CALLERS MUST COMPARE AGAINST THE
+// EMPTY STRING: success is the falsy value on both roads back, exactly as in
+// openExternalUrl, so a truthiness test reads backwards and reports every refusal
+// as freed disk. The relay decides that comparison on the Android side and posts
+// a refusal as ok:false, so an extension using the relay sees it as a rejection.
 //
 // The refusals name something that has to change first: the folder is open, it is
 // still opening, or it was open in this session and VSCodroid must be restarted.
@@ -392,11 +423,11 @@ fun reclaimSafMirror(authToken: String, hash: String, force: Boolean): String
 // each device document with "wt", which truncates at open, so deleting the copy
 // underneath it empties the user's file on the device.
 //
-// The call returns as soon as the copy is unreachable; the recursive delete
+// The answer is posted as soon as the copy is unreachable; the recursive delete
 // continues afterwards and is finished by the next launch if the process dies.
 //
 // It is still not quick: without `force` the copy is walked to re-ask the gate,
-// and it is walked again to report the bytes freed. Same deadline note.
+// and it is walked again to report the bytes freed. Same note.
 ```
 
 #### Device Info

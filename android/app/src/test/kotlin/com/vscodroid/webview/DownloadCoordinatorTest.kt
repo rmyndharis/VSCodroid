@@ -508,7 +508,59 @@ class DownloadCoordinatorTest {
         coordinator.onPageGone()
 
         assertEquals(listOf(target), discarded)
-        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported)
+        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported,
+            "and the silence is only for the one in flight: with nothing queued behind " +
+                "it there is nothing else to say, which is what stops the case below " +
+                "from being satisfied by reporting everything")
+    }
+
+    /**
+     * The queue behind a lost download, which is not the same case as the
+     * download itself and does not get the same answer.
+     *
+     * The silence above is argued for a renderer crash: the user is watching a
+     * recovery and a toast about a download explains neither event. That reason
+     * does not reach the queue, and the placement of the clear extended it there
+     * anyway. `onPageGone` runs on every finished main-frame load as well, so a
+     * multi-select download crossing a folder switch is the ordinary way to
+     * reach it: the user taps Download on five files, receives one, and hears
+     * nothing at all about the other four.
+     */
+    @Test
+    fun `downloads still waiting when the page goes are said out loud`() {
+        coordinator.onDownloadNamed("blob:one", "first.txt")
+        coordinator.onDownloadNamed("blob:two", "second.txt")
+        coordinator.onDownloadNamed("blob:three", "third.txt")
+        startAndChoose("blob:one", destination("first"))
+        coordinator.onDownloadStart("blob:two", null)
+        coordinator.onDownloadStart("blob:three", null)
+
+        coordinator.onPageGone()
+
+        assertEquals(
+            listOf(DownloadOutcome.FAILED to "second.txt", DownloadOutcome.FAILED to "third.txt"),
+            reported,
+            "each download the user asked for and is not getting has to say so, in the " +
+                "order they were asked for, and the one in flight stays silent",
+        )
+    }
+
+    /**
+     * And saying so is all that changes. A queued download never reached a
+     * picker, so it owns no document, and discarding one for it would be
+     * deleting a file that belongs to something else.
+     */
+    @Test
+    fun `a queue reported as gone does not also leave documents behind`() {
+        val target = destination("first")
+        coordinator.onDownloadNamed("blob:two", "second.txt")
+        startAndChoose("blob:one", target)
+        coordinator.onDownloadStart("blob:two", null)
+
+        coordinator.onPageGone()
+
+        assertEquals(listOf(target), discarded,
+            "only the download that had a document open loses one")
     }
 
     /**

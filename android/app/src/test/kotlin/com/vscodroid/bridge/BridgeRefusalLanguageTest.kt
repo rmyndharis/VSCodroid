@@ -9,11 +9,12 @@ import java.io.File
  * That a refusal leaving through a return value is still something a translator
  * can reach.
  *
- * These sentences are as user-facing as anything in a Toast: `openExternalUrl`
- * and `reclaimSafMirror` answer with the reason they refused, the relay posts it
- * as the error of a rejected promise, and the bundled bridge extension puts it
- * straight into `showErrorMessage`. `SafStorageManager.reclaimRefusal` produces
- * three more that travel the same way. Written as Kotlin they are the same in
+ * These sentences are as user-facing as anything in a Toast: `openExternalUrl`,
+ * `reclaimSafMirror` and the three commands that answer by reply id all answer
+ * with the reason they refused, the relay posts it as the error of a rejected
+ * promise, and the bundled bridge extension puts it straight into
+ * `showErrorMessage`. `SafStorageManager.reclaimRefusal` produces three more
+ * that travel the same way. Written as Kotlin they are the same in
  * every locale for ever, so the app would half-translate and the English half
  * would read as an oversight by the translator rather than as a defect here.
  *
@@ -40,7 +41,7 @@ class BridgeRefusalLanguageTest {
      */
     private val sources = mapOf(
         "src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt" to
-            listOf("OPEN_URL_", "RECLAIM_"),
+            listOf("OPEN_URL_", "RECLAIM_", "STORAGE_"),
         "src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt" to
             listOf("RECLAIM_FOLDER_"),
     )
@@ -82,9 +83,9 @@ class BridgeRefusalLanguageTest {
 
         // Control, and not a formality: every assertion below is satisfied by an
         // empty scan, so a regex that stopped matching would leave this file
-        // reporting green over sentences nobody can translate. Eight is what the
-        // two families hold; a refusal added later only raises it.
-        assertTrue(seen >= 8) {
+        // reporting green over sentences nobody can translate. Nine is what the
+        // three families hold; a refusal added later only raises it.
+        assertTrue(seen >= 9) {
             "only found $seen refusal declaration(s); the scan is no longer reading them, " +
                 "so this test is measuring nothing"
         }

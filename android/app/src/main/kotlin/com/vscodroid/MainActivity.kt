@@ -231,6 +231,16 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var openWorkspaceFolder: String? = null
 
+    /**
+     * Where the last open workspace is remembered, resolved once.
+     *
+     * The same file `PortFinder` and `SplashActivity` use, under a key of its
+     * own. Lazy because the first `getSharedPreferences` for a file reads it off
+     * disk on the calling thread, and there is no reason to pay that on a launch
+     * that never opens a folder.
+     */
+    private val workspacePrefs by lazy { getSharedPreferences(WORKSPACE_PREFS, MODE_PRIVATE) }
+
     private lateinit var securityManager: SecurityManager
     private lateinit var safManager: SafStorageManager
 
@@ -873,7 +883,16 @@ class MainActivity : AppCompatActivity() {
      *   would throw away the page the user just opened.
      */
     private fun openSafFolder(uri: Uri, navigate: Boolean) {
-        Logger.i(tag, "SAF folder selected: $uri")
+        // The mirror's name and never the tree URI. A SAF tree URI spells the
+        // user's own directory (`.../tree/primary%3ADocuments%2F<folder>`),
+        // `Logger.i` is not gated on a debuggable build, and logcat is readable
+        // by anything holding READ_LOGS as well as by whoever a device bug report
+        // is sent to. `persistPermission` one line below already names this same
+        // folder by the six-byte digest of that URI, which is stable and is not
+        // reversible; saying it in full here put the value back in logcat by
+        // another route. The digest is a hash of the URI string and nothing else,
+        // so it is answerable before any permission has been taken.
+        Logger.i(tag, "Opening the device folder ${safManager.getMirrorDir(uri).name}")
 
         // Persist permission so we can access this folder after app restart
         safManager.persistPermission(uri)
@@ -1082,6 +1101,30 @@ class MainActivity : AppCompatActivity() {
         }.toString()
 
     /**
+     * Posts one late answer into the page's relay, against the id its caller
+     * sent.
+     *
+     * Guarded on the hook existing rather than assumed, and neither guard is
+     * defensive. A folder switch navigates this same WebView, so an answer that
+     * arrives after the navigation reaches a page with no relay in it and no
+     * promise waiting for one; a renderer crash replaces the view entirely, and
+     * `webView` is null between the two. Nothing is lost by dropping the answer
+     * in either case, because the extension host that asked the question went
+     * with the page, and the caller's own deadline is what ends the wait.
+     *
+     * Both values are quoted through [JSONObject.quote] rather than
+     * interpolated. The payload is a listing built from device folder names,
+     * which the user chose and this app never sanitised, so a quote or a
+     * backslash in one would otherwise end the string literal early and the rest
+     * of the name would be evaluated as script in our own page's realm.
+     */
+    private fun answerBridgeCommand(id: String, ok: Boolean, payload: String) {
+        val script = "if (window.__vscodroidBridgeReply) window.__vscodroidBridgeReply(" +
+            "${JSONObject.quote(id)}, $ok, ${JSONObject.quote(payload)})"
+        webView?.evaluateJavascript(script, null)
+    }
+
+    /**
      * Removes the local copy of one device folder, or says why it cannot be.
      *
      * Two refusals, in two places, because they answer different questions and
@@ -1257,7 +1300,7 @@ class MainActivity : AppCompatActivity() {
         if (!shouldActOnResume(nodeService?.isServerReady(), ts, serverPort)) return
 
         val bgMs = SystemClock.elapsedRealtime() - ts
-        when (resumeAction(bgMs, signInIsPending(), fileChooserIsPending())) {
+        when (resumeAction(bgMs, signInIsPending(), fileChooserIsPending(), savePickerIsPending())) {
             ResumeAction.RELOAD -> {
                 Logger.i(tag, "Reloading after ${bgMs / 1000}s in background")
                 // reload(), not a rebuilt URL. The WebView URL is the only
@@ -1316,6 +1359,22 @@ class MainActivity : AppCompatActivity() {
      */
     private fun fileChooserIsPending(): Boolean =
         (webView?.webChromeClient as? VSCodroidWebChromeClient)?.hasPendingFileChooser == true
+
+    /**
+     * Whether the create-document picker for a download is still waiting to be
+     * answered.
+     *
+     * Read from [pickerRequestId] rather than from the coordinator, because this
+     * is the record the picker's own result clears: it is set where the launch is
+     * made and taken back in [downloadDestinationLauncher]'s callback, both on
+     * the main thread and both in this file, so it cannot drift from the answer
+     * it is waiting for. A launch that threw clears it too.
+     *
+     * It is still set when this is asked. Android delivers an activity result
+     * after `onStart` and before `onResume`, and this decision is made from
+     * `onStart`, so the picker's answer is still in flight at exactly this point.
+     */
+    private fun savePickerIsPending(): Boolean = pickerRequestId != null
 
     /**
      * Probes the WebView for an IndexedDB connection that did not survive being
@@ -1680,9 +1739,19 @@ class MainActivity : AppCompatActivity() {
         // started directly, and the folder can be deleted while the app is
         // running. The URL-derived branch below already refuses a path that is
         // not a directory; the default deserves the same care.
+        //
+        // The URL still outranks the remembered folder, and that ordering is the
+        // whole of how this keeps the invariant: the workbench switches folders by
+        // navigating itself, so while there is a page its URL is the truth. The
+        // remembered one answers only where there is no URL to ask, which is a
+        // WebView still holding the data: placeholder after this activity was
+        // rebuilt over a server that never stopped.
         navigateToFolder(
             port,
-            folderPath ?: folderFromUrl(webView?.url) ?: FirstRunSetup(this).ensureProjectsDir()
+            folderPath
+                ?: folderFromUrl(webView?.url)
+                ?: rememberedWorkspaceFolder()
+                ?: FirstRunSetup(this).ensureProjectsDir()
         )
     }
 
@@ -1755,13 +1824,24 @@ class MainActivity : AppCompatActivity() {
             onDownloadNamed = { url, fileName -> downloads.onDownloadNamed(url, fileName) },
             onDownloadChunk = { requestId, base64 -> downloads.onBytes(requestId, base64) },
             onDownloadComplete = { requestId, error -> downloads.onComplete(requestId, error) },
-            // Not hopped either, and for the reason the download three are not:
-            // each returns a String the caller reads synchronously, and
-            // runOnUiThread returns Unit. Both walk the filesystem, which is
-            // correct on this thread and would not be on the UI one; the caller
-            // is a promise in the extension host with a five-second timeout.
+            // Still off the UI thread, and now off the JavaBridge thread as
+            // well: the bridge runs both on a worker of its own and posts the
+            // answer back through onAsyncAnswer below. Each walks every copied
+            // device folder before it can answer, and a bridge call does not
+            // return to JavaScript until it finishes, so answering where the
+            // caller waited parked the workbench page's own thread for the
+            // length of the walk. It stopped rendering and stopped taking input,
+            // and nothing in the app detected it. Each still returns a String
+            // rather than hopping, because the value is what gets posted and
+            // runOnUiThread returns Unit.
             onListMirrors = { deviceFolderCopiesAsJson() },
             onReclaimMirror = { hash, force -> removeDeviceFolderCopy(hash, force) },
+            // The answer's road back into the page. evaluateJavascript is a
+            // WebView call and belongs to the thread the view was made on, which
+            // is why this hops while the two above must not.
+            onAsyncAnswer = { id, ok, payload ->
+                runOnUiThread { answerBridgeCommand(id, ok, payload) }
+            },
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
@@ -1856,7 +1936,7 @@ class MainActivity : AppCompatActivity() {
             },
             onPageLoaded = { url ->
                 folderFromUrl(url)?.let {
-                    openWorkspaceFolder = it
+                    rememberWorkspaceFolder(it)
                     adoptWorkbenchFolder(it)
                 }
                 // A main-frame load is a new document, and the document that owed a
@@ -1939,6 +2019,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Records [folderPath] as the workspace, for this Activity and for the next.
+     *
+     * Both records, in one place, because they answer the same question at
+     * different lifetimes and a site that set one without the other would drift.
+     * [openWorkspaceFolder] is what the resource interceptor and the mirror
+     * removal guard read while this Activity lives; the preference is what is
+     * left when it does not, and the server outlives it by design.
+     *
+     * It never competes with the URL. This is only ever written from the URL, by
+     * the page-loaded callback, or from the navigation this activity is itself
+     * performing, and it is read only where there is no URL to read: see
+     * [loadVSCode], where it sits after [folderFromUrl] and before the default.
+     */
+    private fun rememberWorkspaceFolder(folderPath: String) {
+        openWorkspaceFolder = folderPath
+        // Written only on a change: this runs on every main-frame load, and the
+        // server redirects, so a folder switch alone reaches it twice.
+        if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == folderPath) return
+        workspacePrefs.edit().putString(KEY_LAST_FOLDER, folderPath).apply()
+    }
+
+    /**
+     * The remembered workspace, when reopening it is still the right thing.
+     *
+     * Two ways it stops being so, and the second is the one that costs
+     * something. A folder that is gone (deleted, storage unmounted) would pin
+     * the WebView to a dead path, which is the same reason [folderFromUrl] stats
+     * the folder it reads. And a device-folder mirror whose grant has lapsed is
+     * worse than useless: nothing would sync it, the launch reclaim pass is
+     * entitled to delete it out from under the editor, and the user would go on
+     * editing in the belief that their work is reaching the device.
+     */
+    private fun rememberedWorkspaceFolder(): String? = rememberedFolderToReopen(
+        remembered = workspacePrefs.getString(KEY_LAST_FOLDER, null),
+        mirrorsRoot = Environment.getSafMirrorsDir(this),
+        exists = { File(it).isDirectory },
+        mirrorIsGranted = { safManager.folderForOpenedPath(it) != null },
+    )
+
+    /**
      * Navigates the WebView to a specific folder without re-initializing the bridge.
      * Safe to call multiple times (e.g., when switching SAF folders).
      */
@@ -1949,7 +2069,7 @@ class MainActivity : AppCompatActivity() {
         // loadUrl below and onPageFinished the workbench is already fetching
         // resources, against a supplier that would still be answering null, so
         // everything inside the workspace would 404 for the length of the load.
-        openWorkspaceFolder = folderPath
+        rememberWorkspaceFolder(folderPath)
         // The token rides in the query once. The server consumes it on `/`, turns
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself: the cookie for pages, the
@@ -2202,7 +2322,17 @@ class MainActivity : AppCompatActivity() {
             (function() {
                 if (window.__vscodroidDownload) return;
 
-                var HOLD_MS = 120000;
+                // Long enough to outlast the queue behind it. Only one download
+                // holds the create-document picker at a time, so a file clicked as
+                // part of a multi-select waits behind up to MAX_QUEUED pickers
+                // before anyone asks for its bytes, and each of those is a trip
+                // into another app that takes the user as long as it takes. At two
+                // minutes the later files were revoked while their own picker was
+                // still on screen, so the user chose a folder and a name and was
+                // handed a failure. The hold is released as soon as the bytes are
+                // being read (see readerFor), so this ceiling is only ever paid by
+                // a download nobody ever completes.
+                var HOLD_MS = 600000;
                 var MAX_TRACKED = 8;
 
                 // url -> the object behind it. The page is asked for the bytes
@@ -2235,8 +2365,8 @@ class MainActivity : AppCompatActivity() {
                 };
 
                 // Each hold releases itself, so a download nobody completes
-                // costs one blob for two minutes rather than for the life of
-                // the page.
+                // costs one blob for the length of HOLD_MS rather than for the
+                // life of the page.
                 function hold(url) {
                     if (held.has(url)) return;
                     held.set(url, made.get(url));
@@ -2256,7 +2386,18 @@ class MainActivity : AppCompatActivity() {
                 // URL the policy already allows.
                 function readerFor(url) {
                     var blob = held.get(url);
-                    if (blob && blob.stream) return Promise.resolve(blob.stream().getReader());
+                    if (blob && blob.stream) {
+                        var reader = blob.stream().getReader();
+                        // The hold has done its job the moment the reader exists:
+                        // the reader keeps the bytes alive by itself, so the page
+                        // gets the memory back now rather than at the end of the
+                        // budget above. Only on this branch, because the fetch
+                        // below has not read anything yet and revoking under it
+                        // would refuse the very request the hold exists for.
+                        held.delete(url);
+                        revoke(url);
+                        return Promise.resolve(reader);
+                    }
                     return fetch(url).then(function(response) {
                         if (!response.ok) throw new Error('status ' + response.status);
                         return response.body.getReader();
@@ -2353,6 +2494,18 @@ class MainActivity : AppCompatActivity() {
                 if (window.__vscodroidRelayActive) return;
                 window.__vscodroidRelayActive = true;
                 var ch = new BroadcastChannel('vscodroid-bridge');
+                // How an answer that could not be given while the caller waited
+                // gets back to it. A bridge call does not return to JavaScript
+                // until the Kotlin method has finished, and the thread it holds
+                // is this page's own, so a method that walks the disk freezes the
+                // workbench for as long as the walk. Those methods hand back at
+                // once and Android posts the answer here against the same id the
+                // caller sent; the extension already routes a reply by id.
+                window.__vscodroidBridgeReply = function(id, ok, payload) {
+                    ch.postMessage(ok
+                        ? {id: id, ok: true, data: payload}
+                        : {id: id, ok: false, error: payload});
+                };
                 ch.onmessage = function(e) {
                     var d = e.data;
                     var token = (window.__vscodroid || {}).authToken;
@@ -2369,11 +2522,14 @@ class MainActivity : AppCompatActivity() {
                             AndroidBridge.openRecentFolder(token, d.uri);
                             ch.postMessage({id: d.id, ok: true});
                         } else if (d.cmd === 'getStorageBreakdown') {
-                            result = AndroidBridge.getStorageBreakdown(token);
-                            ch.postMessage({id: d.id, ok: true, data: result});
+                            // Answered later, by id, through the hook above. A
+                            // non-empty answer HERE is a refusal decided before
+                            // any work started, so it is posted as the error.
+                            result = AndroidBridge.getStorageBreakdown(token, d.id);
+                            if (result !== '') ch.postMessage({id: d.id, ok: false, error: result});
                         } else if (d.cmd === 'clearCaches') {
-                            result = AndroidBridge.clearCaches(token);
-                            ch.postMessage({id: d.id, ok: true, data: result});
+                            result = AndroidBridge.clearCaches(token, d.id);
+                            if (result !== '') ch.postMessage({id: d.id, ok: false, error: result});
                         } else if (d.cmd === 'generateBugReport') {
                             result = AndroidBridge.generateBugReport(token);
                             ch.postMessage({id: d.id, ok: true, data: result});
@@ -2414,20 +2570,21 @@ class MainActivity : AppCompatActivity() {
                                 ? {id: d.id, ok: true}
                                 : {id: d.id, ok: false, error: result});
                         } else if (d.cmd === 'listSafMirrors') {
-                            result = AndroidBridge.listSafMirrors(token);
-                            ch.postMessage({id: d.id, ok: true, data: result});
+                            result = AndroidBridge.listSafMirrors(token, d.id);
+                            if (result !== '') ch.postMessage({id: d.id, ok: false, error: result});
                         } else if (d.cmd === 'reclaimSafMirror') {
-                            // The second branch that can decline, and it follows
-                            // openExternalUrl's convention exactly: empty means it
-                            // was removed, anything else is the sentence to show.
-                            // Posting ok:true flatly here would tell the user their
-                            // disk had been freed when the removal was refused
-                            // because the folder is still open.
+                            // openExternalUrl's convention, now applying twice
+                            // over. Empty from the call below means the removal
+                            // was accepted and its outcome follows by id; the
+                            // outcome itself is empty for a removal and a
+                            // sentence for a refusal, and the Kotlin side decides
+                            // which of the two it posted. Posting ok:true flatly
+                            // for either would tell the user their disk had been
+                            // freed when the removal was refused because the
+                            // folder is still open.
                             result = AndroidBridge.reclaimSafMirror(
-                                token, d.hash, d.force === true);
-                            ch.postMessage(result === ''
-                                ? {id: d.id, ok: true}
-                                : {id: d.id, ok: false, error: result});
+                                token, d.hash, d.force === true, d.id);
+                            if (result !== '') ch.postMessage({id: d.id, ok: false, error: result});
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
@@ -2820,6 +2977,12 @@ class MainActivity : AppCompatActivity() {
 
 
     companion object {
+
+        /** The preferences file `PortFinder` and `SplashActivity` already use. */
+        private const val WORKSPACE_PREFS = "vscodroid"
+
+        /** The workspace to reopen when there is no page left to read one from. */
+        private const val KEY_LAST_FOLDER = "last_workspace_folder"
 
         /**
          * The page shown while the server starts, in one place.
@@ -3214,6 +3377,16 @@ internal enum class ResumeAction {
  * delivered now, and the next trip through the background judges the page afresh
  * on its own absence.
  *
+ * [savePickerPending] is the same absence reached by the other picker and gets
+ * the same answer. Saving a download opens the create-document picker, which is
+ * another app, and the answer comes back into this same document: the
+ * coordinator asks the page for the bytes only after the destination is chosen,
+ * so a reload here leaves the user having named a file that can no longer be
+ * read. The default is false so that this stays one argument per signal at the
+ * call site rather than a boolean nobody can see; the call site is checked by a
+ * test for naming it, because a dropped argument is exactly what the default
+ * would otherwise hide.
+ *
  * An earlier shape of this held the reload for later by putting the caller's
  * backgrounded reading back. That reading is written afresh by `onStop`, which
  * Android always delivers before the next `onStart`, so the restored value was
@@ -3224,8 +3397,9 @@ internal fun resumeAction(
     bgMs: Long,
     signInPending: Boolean,
     fileChooserPending: Boolean,
+    savePickerPending: Boolean = false,
 ): ResumeAction = when {
-    fileChooserPending -> ResumeAction.NOTHING
+    fileChooserPending || savePickerPending -> ResumeAction.NOTHING
     bgMs > FORCE_RELOAD_THRESHOLD_MS && signInPending -> ResumeAction.PROBE_CONNECTION
     bgMs > FORCE_RELOAD_THRESHOLD_MS -> ResumeAction.RELOAD
     bgMs > HEALTH_CHECK_THRESHOLD_MS -> ResumeAction.PROBE_CONNECTION
@@ -3309,6 +3483,28 @@ internal fun workbenchUrl(port: Int, folderPath: String, token: String?): String
  */
 internal fun shouldRestorePreviousWatcher(previousUri: String?, failedUri: String): Boolean =
     previousUri != null && previousUri != failedUri
+
+/**
+ * The remembered workspace folder, or null when reopening it is not safe.
+ *
+ * A function rather than a branch inside the Activity, for the reason
+ * [shouldRestorePreviousWatcher] is one: `File`, `Uri` and a `Context` cannot be
+ * had in a plain JVM test, and what is decided here is a rule over one string.
+ *
+ * A path that is not under [mirrorsRoot] is an ordinary project folder and needs
+ * no grant, so the absence of one must not refuse it; that asymmetry is the
+ * whole reason the mirror test is asked first and separately.
+ */
+internal fun rememberedFolderToReopen(
+    remembered: String?,
+    mirrorsRoot: String,
+    exists: (String) -> Boolean,
+    mirrorIsGranted: (String) -> Boolean,
+): String? {
+    val path = remembered?.takeIf(exists) ?: return null
+    SafStorageManager.mirrorNameFor(path, mirrorsRoot) ?: return path
+    return path.takeIf { mirrorIsGranted(it) }
+}
 
 /**
  * The script the resume health check evaluates in the page.

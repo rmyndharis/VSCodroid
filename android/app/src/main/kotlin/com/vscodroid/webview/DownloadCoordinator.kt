@@ -26,8 +26,11 @@ private const val MAX_NAMES = 8
  * started while it is open queue behind it. A bound rather than a capacity:
  * every waiting download is holding a file's bytes in the page, and the page
  * decides how many downloads to start.
+ *
+ * The page-side hold on a download's bytes is sized from this; see
+ * `MainActivity.injectDownloadCapture`.
  */
-private const val MAX_QUEUED = 8
+internal const val MAX_QUEUED = 8
 
 /**
  * Everything [DownloadCoordinator] needs from the Activity it runs inside.
@@ -165,6 +168,21 @@ class DownloadCoordinator(private val host: DownloadHost) {
         val fileName: String,
         var destination: Uri? = null,
         var stream: OutputStream? = null,
+        /**
+         * Whether a thread is inside `write` or `close` on [stream] right now,
+         * outside the monitor.
+         *
+         * The claim, and the whole of the exclusion. The stream comes from
+         * `contentResolver.openOutputStream`, and a stream to a cloud or MTP
+         * provider has no timeout, so the call cannot be made while holding the
+         * monitor: every teardown here arrives on the UI thread (`onDestroy`,
+         * `onPageFinished`, `recreateWebView`) and would queue behind a provider
+         * free to take as long as it likes. What the monitor still guarantees is
+         * that this is set before the call and cleared after it, so no second
+         * writer starts and no teardown closes the stream underneath one: the
+         * download is claimed, not unguarded.
+         */
+        var busy: Boolean = false,
     )
 
     /**
@@ -312,30 +330,82 @@ class DownloadCoordinator(private val host: DownloadHost) {
     /**
      * Bytes for [requestId], base64 as the bridge can only carry text.
      *
+     * The write happens outside the monitor and the download is claimed for the
+     * length of it. That split is not an optimisation: a provider stream has no
+     * timeout, so a write can sit inside the provider for as long as that
+     * provider likes, and under the monitor it held every other caller with it.
+     * Three of those arrive on the UI thread ([onPageGone] from `onDestroy`,
+     * from `onPageFinished` and from `recreateWebView`), which turns a slow save
+     * into an ANR. [Pending.busy] is what keeps the split honest.
+     *
      * @return true when they were written, false on anything else. The page
      *   stops reading when this says false, which is the only backpressure in
      *   the design and also how a failed write stops a transfer that would
      *   otherwise run to completion and report success over a file with a hole
      *   in it.
      */
-    @Synchronized
     fun onBytes(requestId: String, base64: String): Boolean {
-        val request = live(requestId) ?: return false
-        val stream = request.stream ?: return false
+        val chunk = synchronized(this) { claim(requestId, base64) } ?: return false
+        val failure = try {
+            chunk.stream.write(chunk.bytes)
+            null
+        } catch (e: IOException) {
+            e
+        }
+        return synchronized(this) {
+            val request = chunk.request
+            request.busy = false
+            when {
+                // Something ended this download while the write was outstanding
+                // and could not free the stream, because this thread was inside
+                // it. Identity against `pending` rather than a flag of its own:
+                // every path that drops a request clears or replaces it, so one
+                // test answers for all of them, the queued download that has
+                // since been started in its place included.
+                pending !== request -> {
+                    closeAndDiscard(request)
+                    false
+                }
+                failure != null -> {
+                    Logger.w(tag, "Write to the chosen document failed", failure)
+                    fail(request, "writing to the chosen document failed")
+                    false
+                }
+                else -> true
+            }
+        }
+    }
+
+    /** One claimed write: the download, the stream it owns, and the bytes for it. */
+    private class Chunk(val request: Pending, val stream: OutputStream, val bytes: ByteArray)
+
+    /**
+     * Claims the live download for one write, or answers null when there is
+     * nothing to write to. Called holding the monitor.
+     */
+    private fun claim(requestId: String, base64: String): Chunk? {
+        val request = live(requestId) ?: return null
+        val stream = request.stream ?: return null
+        if (request.busy) {
+            // Ended rather than merely refused. Returning false stops the page
+            // reading and the page does not report a refused chunk back, so a
+            // request left in `pending` here would never end: the queue behind
+            // it would never drain and every later download would be refused.
+            Logger.w(
+                tag,
+                "Two writers for ${redactToken(request.fileName)}; ending the download"
+            )
+            fail(request, "the page sent two pieces of this download at once")
+            return null
+        }
         val bytes = try {
             Base64.getDecoder().decode(base64)
         } catch (e: IllegalArgumentException) {
             fail(request, "the page sent bytes that are not base64")
-            return false
+            return null
         }
-        return try {
-            stream.write(bytes)
-            true
-        } catch (e: IOException) {
-            Logger.w(tag, "Write to the chosen document failed", e)
-            fail(request, "writing to the chosen document failed")
-            false
-        }
+        request.busy = true
+        return Chunk(request, stream, bytes)
     }
 
     /**
@@ -346,36 +416,74 @@ class DownloadCoordinator(private val host: DownloadHost) {
      * `content://` stream can buffer, so the write that actually reaches
      * storage may be the one `close` performs, and reporting success before it
      * returns would report on a file that had not been written yet.
+     *
+     * Which is also why the close is outside the monitor and claimed, exactly as
+     * the write in [onBytes] is: a close that commits to a provider blocks for as
+     * long as a write to one does.
      */
-    @Synchronized
     fun onComplete(requestId: String, error: String?) {
-        val request = live(requestId) ?: return
-        if (error != null) {
-            fail(request, error)
-            return
+        val request = synchronized(this) {
+            val request = live(requestId) ?: return
+            if (error != null) {
+                fail(request, error)
+                return
+            }
+            if (request.busy) {
+                // The page says it is finished while a piece of its own is still
+                // inside the provider. Nothing sequential produces that, and the
+                // close cannot run under the write, so the download ends as a
+                // failure and the thread inside the write removes the file.
+                fail(request, "the page ended the download while it was still writing")
+                return
+            }
+            request.busy = true
+            request
         }
-        try {
+        val failure = try {
             request.stream?.close()
+            null
         } catch (e: IOException) {
-            Logger.w(tag, "Closing the chosen document failed", e)
-            request.stream = null
-            fail(request, "the file could not be finished")
-            return
+            e
         }
-        pending = null
-        host.report(DownloadOutcome.SAVED, request.fileName, null)
-        startNextIfIdle()
+        synchronized(this) {
+            request.busy = false
+            // Cleared however this ends, so the stream is never closed twice and
+            // a teardown that deferred to this thread finds it already released.
+            request.stream = null
+            if (failure != null) {
+                Logger.w(tag, "Closing the chosen document failed", failure)
+                if (pending === request) fail(request, "the file could not be finished")
+                else closeAndDiscard(request)
+                return
+            }
+            // The bytes are committed, so the file is whole. A teardown that ran
+            // during the close left the discard to this thread, and this is the
+            // answer to it: a finished save is kept rather than deleted because
+            // the page went away after it finished. Dropping the destination is
+            // what makes that deferred discard a no-op.
+            request.destination = null
+            if (pending !== request) return
+            pending = null
+            host.report(DownloadOutcome.SAVED, request.fileName, null)
+            startNextIfIdle()
+        }
     }
 
     /**
-     * Drops every download that can no longer be completed, without reporting.
+     * Drops every download that can no longer be completed.
      *
      * For the WebView going away underneath one. The page that owed the bytes
      * no longer exists, so nothing will ever arrive for the download in flight
      * or for any of the ones queued behind it, and the document created for it
      * has to go rather than stay as an empty file the user did not ask for.
-     * Silent because the user is watching a renderer crash recover, and a
-     * download failure toast on top of that explains nothing.
+     * The one in flight goes silently, because the user is watching a renderer
+     * crash recover and a download failure toast on top of that explains
+     * nothing.
+     *
+     * The downloads queued behind it are reported rather than dropped in
+     * silence. They own no document yet, so nothing is left on disk either way,
+     * but each one is a file the user asked for and would otherwise simply not
+     * arrive.
      *
      * A picker still on screen is left alone, because it belongs to the user
      * rather than to the page. Its result arrives naming a download that is
@@ -383,7 +491,18 @@ class DownloadCoordinator(private val host: DownloadHost) {
      */
     @Synchronized
     fun onPageGone() {
-        waiting.clear()
+        // Reported, unlike the download in flight below. Every entry here names a
+        // URL the departing document owned, so none of them can be read by the
+        // page that replaced it and dropping them is right; what was wrong was
+        // doing it in silence. Nothing was created on disk for these, so there is
+        // no half-written file to explain, but the user did ask for each one and
+        // was getting one file out of five with no word about the other four,
+        // which is the silence this class exists to end. The queue is bounded at
+        // MAX_QUEUED, so the number of notices is bounded with it.
+        while (waiting.isNotEmpty()) {
+            val dropped = waiting.removeFirst()
+            host.report(DownloadOutcome.FAILED, dropped.fileName, "the page went away first")
+        }
         val request = pending ?: return
         Logger.w(
             tag,
@@ -410,6 +529,16 @@ class DownloadCoordinator(private val host: DownloadHost) {
      * prevent.
      */
     private fun closeAndDiscard(request: Pending) {
+        if (request.busy) {
+            // Left to the thread inside the provider, which is the only one that
+            // can free the stream without closing it under a write in progress.
+            // It re-enters here on its way out, by which time `pending` no longer
+            // names this request. Waiting for that thread instead is the stall
+            // this whole split exists to avoid: the caller here is routinely the
+            // UI thread.
+            Logger.d(tag, "Deferring the discard of a download still inside a write")
+            return
+        }
         try {
             request.stream?.close()
         } catch (e: IOException) {
