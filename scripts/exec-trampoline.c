@@ -156,6 +156,18 @@ int main(int argc, char **argv) {
             while ((c = fgetc(f)) != EOF && c != '\n') { }
             continue;
         }
+        // A record that fitted, did not end a line, and is not the last thing in
+        // the file: fgets stopped at a newline it consumed, so what strlen sees
+        // ending early means a NUL inside the record. Skipped rather than parsed,
+        // and this is the whole reason to test for it. strlen would hand the tab
+        // scan below a path cut off at that byte, and an absolute path cut short
+        // is still absolute, so it would reach the loader as a real request to
+        // run something the table never named. Not drained, because fgets already
+        // took this record's newline and the next record is intact.
+        if (!filled && line[len - 1] != '\n' && !feof(f)) {
+            fprintf(stderr, "vscodroid: %s: skipping a damaged toolchain entry\n", name);
+            continue;
+        }
         if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
 
         char *tab = strchr(line, '\t');
