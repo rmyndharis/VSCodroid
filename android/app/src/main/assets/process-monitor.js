@@ -239,6 +239,38 @@ function namesProgram(name, needle) {
 }
 
 /**
+ * The name the details view prints for a process.
+ *
+ * This was the basename of argv[0] followed by argv[1], and on this device that
+ * is the same string for nearly everything: every process the app owns is the
+ * one bundled Node binary, and the first argument it is given is the heap
+ * ceiling. Measured on an API 33 emulator sitting idle, five of the six rows
+ * rendered as `libnode.so --max-old-space-size=488`, so the view whose whole job
+ * is to say what is running distinguished none of them, and neither did the
+ * counter's tooltip.
+ *
+ * What identifies a process is the first argument that is not an option: the
+ * script the runtime was asked to run. `--type=` is carried along beside it
+ * because `bootstrap-fork` is launched more than once with different ones and is
+ * otherwise several rows sharing one name. A script called `index.js` is named
+ * by the directory holding it rather than by itself, which is how a Node
+ * package's entry point is spelled.
+ */
+function shortCommand(cmdline) {
+    const parts = cmdline.split(' ').filter(Boolean);
+    const program = path.basename(parts[0] || '');
+    const script = parts.slice(1).find((arg) => !arg.startsWith('-'));
+    const type = parts.find((arg) => arg.startsWith('--type='));
+
+    let name = script ? path.basename(script) : '';
+    if (name === 'index.js') {
+        const pkg = path.basename(path.dirname(script));
+        if (pkg && pkg !== '.' && pkg !== path.sep) name = `${pkg}/${name}`;
+    }
+    return [program, name, type].filter(Boolean).join(' ');
+}
+
+/**
  * Classify a process by its cmdline.
  */
 function classify(cmdline) {
@@ -273,6 +305,27 @@ function classify(cmdline) {
     // No "and not bash" guard needed once this is an exact name rather than a
     // substring: 'bash' is simply not 'sh'.
     if (names.includes('sh')) return 'terminal';
+
+    // The agent host's model backend, which `bootstrap-fork --type=agentHost`
+    // launches as node_modules/@github/copilot-<platform>/index.js. No
+    // LANG_SERVER_PATTERNS entry can reach it, because the basename every rule
+    // above compares is `index.js`: that names the package's entry point and not
+    // the program, so a bare word would miss it and a substring would claim every
+    // index.js on the device, the user's own included. Matched on the package path
+    // instead, the exception the saf paths above already take, and the
+    // node_modules segment is what keeps the needle off a directory someone chose
+    // themselves.
+    //
+    // Being unclassified was not cosmetic here. Measured idle on an API 33 and an
+    // API 37 emulator, signed out, nothing but the Welcome tab open: 226 MB
+    // resident, the largest process this app owns after the Android process
+    // itself, and one of only five counted against the phantom budget. As
+    // 'unknown' it was in neither reclaim path -- not lsCpuTracker, so the idle
+    // kill could not shed it under critical memory pressure, and not the
+    // 'Kill Idle Servers' command, which filters on this very type. Both exist for
+    // a lazily started, idle-killable server forked by a host, which is what this
+    // is.
+    if (cmd.includes('node_modules/@github/copilot-')) return 'langserver';
 
     for (const pattern of LANG_SERVER_PATTERNS) {
         const needle = pattern.toLowerCase();
@@ -322,10 +375,7 @@ function scan() {
             // command line matches no pattern and would come out 'unknown'.
             const type = pid === process.pid ? 'bootstrap' : classify(cmdline);
             if (type === 'app') continue; // main Android process, not a phantom
-            const parts = cmdline.split(' ');
-            const shortCmd = path.basename(parts[0]) + (parts[1] ? ' ' + parts[1] : '');
-
-            tree.push({ pid, ppid: info.ppid, type, cmd: shortCmd });
+            tree.push({ pid, ppid: info.ppid, type, cmd: shortCommand(cmdline) });
 
             if (type === 'langserver') {
                 activeLsPids.add(pid);
