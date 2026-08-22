@@ -40,6 +40,21 @@ object PortFinder {
     private val LOOPBACK: InetAddress = InetAddress.getByName("127.0.0.1")
 
     /**
+     * The port this install last served on, or 0 when there is none.
+     *
+     * Split out of [getOrAllocatePort] because the two answer different questions
+     * and only one of them is allowed to move. [getOrAllocatePort] answers "what can
+     * be bound now", so a held port makes it walk to a free one and take the
+     * workbench's storage with it. A caller deciding whether the HOLDER is worth
+     * adopting needs the port itself, held or not, and needs it before that walk.
+     *
+     * The single reader of [KEY_PORT], so the two cannot drift into disagreeing
+     * about which key the remembered port lives under.
+     */
+    fun rememberedPort(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getInt(KEY_PORT, 0)
+
+    /**
      * The port this install serves the workbench on, stable across cold starts.
      *
      * The port is part of the WebView's origin, and the browser keys IndexedDB by
@@ -54,7 +69,7 @@ object PortFinder {
      */
     fun getOrAllocatePort(context: Context): Int {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val remembered = prefs.getInt(KEY_PORT, 0)
+        val remembered = rememberedPort(context)
         if (remembered != 0 && isPortAvailable(remembered)) {
             return remembered
         }

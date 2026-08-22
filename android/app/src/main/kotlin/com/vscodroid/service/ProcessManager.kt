@@ -298,7 +298,26 @@ class ProcessManager(private val context: Context) {
         // hands in between and record a doomed spawn as a healthy one. A port
         // this call allocates is free by construction, PortFinder either
         // verified the remembered one or scanned for another.
-        val portIsFree = if (_port == 0) {
+        //
+        // On the FIRST start in this process the candidate is the REMEMBERED port,
+        // not whatever the allocator would hand back, and that difference is the
+        // whole of the adoption path. `getOrAllocatePort` answers a held port by
+        // moving to a free one, so it can only ever return a port nothing is
+        // holding: the true below was unconditional on every cold start, both
+        // readers of the note are gated on its negation, and adoption could not run
+        // on the one launch it exists for, a server that outlived the process that
+        // spawned it. Moving is not free either; it is the line PortFinder logs as
+        // "Workbench storage keyed to the old origin is lost".
+        //
+        // Re-deriving the port here is not the re-derivation the note above
+        // forbids. That one is about a port this instance has already published to
+        // the WebView and its client. Nothing has seen this one: `_port` is zero
+        // only on an instance that has never started a server, MainActivity reads
+        // the port only beside `isServerReady()`, which is false throughout, and
+        // the replacement happens inside this same call.
+        val firstStart = _port == 0
+        if (firstStart) _port = PortFinder.rememberedPort(context)
+        var portIsFree = if (_port == 0) {
             _port = PortFinder.getOrAllocatePort(context)
             true
         } else {
@@ -376,6 +395,23 @@ class ProcessManager(private val context: Context) {
             startAdoptionWatch()
             return true
         }
+        // A candidate this start cannot claim is not a port to spawn onto, and on a
+        // first start there is a way out that a restart does not have: nothing is
+        // bound to it yet, so moving costs only the workbench storage the allocator
+        // already logs, while spawning costs a child that wedges on EADDRINUSE
+        // without exiting. This is the cold-start behaviour that has always
+        // shipped, kept rather than changed; what is new above it is that the
+        // remembered port gets asked about before it is abandoned.
+        //
+        // Deliberately ABOVE the reap. A cold start that declines adoption leaves an
+        // orphan of ours where it is, exactly as it does today. Reaping it and
+        // keeping the port would preserve the origin as well, and is a larger
+        // decision than this: the reap below is argued from "the spawn is about to
+        // hit this port", which stops being true the moment we move off it.
+        if (firstStart && !portIsFree) {
+            _port = PortFinder.getOrAllocatePort(context)
+            portIsFree = true
+        }
         // An editor server of ours that is alive, holds the port, and is not one this
         // start can adopt is the one shape worth ending before spawning over it. Adoption
         // already declined it just above, and leaving it there guarantees the spawn below
@@ -393,7 +429,8 @@ class ProcessManager(private val context: Context) {
         // decision rather than an oversight. What it is serving is not this build, or
         // cannot be shown to be, and the alternative is not "leave the user's editor
         // alone" but a launch that fails for as long as the holder lives, because nothing
-        // here can bind the port while it is held and `_port` is never re-derived. A
+        // here can bind the port while it is held and `_port` is re-derived only on the
+        // first start in a process, which is handled above and never reaches here. A
         // server ended a second early is restarted by the line below; one left alone is
         // not.
         var reapedThisStart = false
@@ -1603,7 +1640,7 @@ internal const val HEAP_PREFS_NAME = "vscodroid"
  * The largest ceiling a user may ask for on a device of this size.
  *
  * ```
- * heapOverrideMaxMb(T) = clamp(T / 4, 768, 1536)
+ * heapOverrideMaxMb(T) = clamp(T / 4, heapCeilingMb(T, isLowRam = false), 1536)
  * ```
  *
  * Each bound answers a different failure, and none of the three is decorative.
@@ -1626,15 +1663,36 @@ internal const val HEAP_PREFS_NAME = "vscodroid"
  * from `oom_score_adj` and does not read V8 flags, so with VSCodroid in the
  * foreground the processes it reaches first belong to somebody else.
  *
- * The floor, 768, is [HEAP_CEILING_MAX_MB]: the override ceiling can never sit
- * below what the derived arm would have handed the same device. Without it, a 2 GB
- * phone would compute an override maximum of 500 and a user asking for more than
- * that would be clamped BELOW the 768 the same device could have reached by
- * setting nothing at all, which reads as the setting having broken something.
+ * The floor is what the DERIVED arm hands this same device, so the override
+ * ceiling can never sit below the number the user would have had by setting
+ * nothing at all, which would read as the setting having broken something. It is
+ * computed rather than written down, and that is the correction: the floor used to
+ * be [HEAP_CEILING_MAX_MB], which is the derived arm's MAXIMUM and not its value,
+ * and the paragraph defending it worked from a 2 GB phone reaching 768 with no
+ * setting. It reaches 256 there, `clamp(2048 / 8, 256, 768)`, pinned by `the
+ * derived band binds exactly where the arithmetic says`. So T/4 exceeded a flat 768
+ * only from 3072 MiB upward, and below that the fraction, which is the whole of the
+ * safety argument on a small device, bound on nothing: a 2 GB phone was allowed
+ * 768, and the flag being per-isolate makes that about three times 768 of V8 old
+ * space on a device that holds 2048.
+ *
+ * `isLowRam = false` is not an assumption about the device. [heapCeilingMb]
+ * consults this only on the arm where a request is honoured, and
+ * [heapOverrideHonoured] requires the flag to be clear before it takes that arm, so
+ * the low-RAM case cannot reach here.
+ *
+ * The floor also keeps the clamp it feeds non-empty, which is worth knowing before
+ * anyone replaces it with a bare fraction. [heapCeilingMb] coerces a request into
+ * `[HEAP_CEILING_MIN_MB, heapOverrideMaxMb(T)]` and `coerceIn` throws on a maximum
+ * below its minimum; the derived arm never answers below [HEAP_CEILING_MIN_MB], so
+ * this cannot. A bare T/4 could: a quarter of a 900 MiB device is 225.
  */
 internal fun heapOverrideMaxMb(totalRamMb: Long): Int =
     (totalRamMb / HEAP_OVERRIDE_DIVISOR)
-        .coerceIn(HEAP_CEILING_MAX_MB.toLong(), HEAP_OVERRIDE_ABS_MAX_MB.toLong())
+        .coerceIn(
+            heapCeilingMb(totalRamMb, isLowRam = false).toLong(),
+            HEAP_OVERRIDE_ABS_MAX_MB.toLong(),
+        )
         .toInt()
 
 /**

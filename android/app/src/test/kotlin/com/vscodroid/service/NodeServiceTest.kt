@@ -219,6 +219,188 @@ class LaunchOutcomeTest {
 }
 
 /**
+ * Where one start command ends up, including the end it did not used to have.
+ *
+ * `ServiceCompat.startForeground` was called bare, so a refusal left
+ * `onStartCommand`, took the process with it, and a START_STICKY re-delivery
+ * brought it straight back to the same refusal with no visible component in
+ * front of it. Whether a real device reaches that refusal is unmeasured and the
+ * production KDoc says so; what is settled is which of the two failures is
+ * better, and that is what these hold.
+ *
+ * The promotion is a supplier here for the same reason [launchOutcome] takes
+ * suppliers: the ORDER is the behaviour. Stop must not promote the service it is
+ * about to tear down, and a start arriving at a service already serving must not
+ * re-enter the foreground, so both are asserted by counting promotions rather
+ * than by reading the outcome alone.
+ */
+class StartCommandTest {
+
+    private var promotions = 0
+
+    private fun promoting(result: Boolean): () -> Boolean = { promotions++; result }
+
+    @Test
+    fun `a stop is answered without entering the foreground`() {
+        assertEquals(
+            StartCommand.STOP_REQUESTED,
+            startCommand(NodeService.ACTION_STOP, serviceRunning = false, promote = promoting(true)),
+        )
+        assertEquals(
+            0, promotions,
+            "the Stop action must not promote the service it is about to tear down",
+        )
+
+        // And Stop wins over the serving arm too, which is today's behaviour: the
+        // action is tested before anything else is asked.
+        assertEquals(
+            StartCommand.STOP_REQUESTED,
+            startCommand(NodeService.ACTION_STOP, serviceRunning = true, promote = promoting(true)),
+        )
+        assertEquals(0, promotions, "a Stop at a serving service still promotes nothing")
+    }
+
+    @Test
+    fun `a service already serving does not promote a second time`() {
+        assertEquals(
+            StartCommand.ALREADY_SERVING,
+            startCommand(null, serviceRunning = true, promote = promoting(true)),
+        )
+        assertEquals(
+            0, promotions,
+            "a relaunch at a serving service must not re-enter the foreground, and must " +
+                "not reach the arm that launches a second server",
+        )
+    }
+
+    @Test
+    fun `a refused promotion stands the service down rather than serving`() {
+        assertEquals(
+            StartCommand.STAND_DOWN,
+            startCommand(null, serviceRunning = false, promote = promoting(false)),
+        )
+        assertEquals(
+            1, promotions,
+            "the promotion has to have been attempted, or this proves nothing",
+        )
+    }
+
+    @Test
+    fun `an accepted promotion serves`() {
+        // The control for the case above. An unconditional STAND_DOWN would satisfy
+        // it while starting no server ever, and the promotion count would not
+        // notice: the count says the promotion ran, never what was done with its
+        // answer.
+        assertEquals(
+            StartCommand.SERVE,
+            startCommand(null, serviceRunning = false, promote = promoting(true)),
+        )
+        assertEquals(1, promotions)
+    }
+
+    @Test
+    fun `an action this service does not own is an ordinary start`() {
+        // Only equality with ACTION_STOP is matched, and that is deliberate rather
+        // than incidental. A predicate of "some action is set" would let a stray
+        // intent shut the server down.
+        assertEquals(
+            StartCommand.SERVE,
+            startCommand(
+                "com.vscodroid.action.SOMETHING_ELSE",
+                serviceRunning = false,
+                promote = promoting(true),
+            ),
+        )
+    }
+}
+
+/**
+ * That the start command no longer enters the foreground itself, and that the
+ * promotion it delegates to is wrapped.
+ *
+ * The weaker of the two layers, and the KDoc says plainly what it cannot see.
+ * Reading the source cannot tell that the `catch` answers false rather than
+ * rethrowing, and it cannot tell that a real refusal on a real device takes this
+ * path at all: neither Robolectric nor a `Service` exists in this suite, so the
+ * method that would prove it is unreachable. [StartCommandTest] holds the
+ * decision; this holds only the shape of the wiring feeding it.
+ *
+ * The comment filter is load-bearing rather than tidiness, for the reason
+ * [HeapLatchCallSiteTest] gives: the paragraphs above the production code name
+ * `ServiceCompat.startForeground` in prose, and a scan over raw text would read
+ * those sentences as code and pass on them.
+ */
+class ForegroundPromotionCallSiteTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    /** The file with comment lines removed, for the cases that cut a window out of it. */
+    private fun code(): String {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by reading nothing"
+        }
+        return nodeService.readLines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }.joinToString("\n")
+    }
+
+    /**
+     * The body of [name], located by brace depth from its declaration.
+     *
+     * Depth over the comment-free rendering, for the reason the class header
+     * gives: a brace inside a comment widens the window without bounding
+     * anything.
+     */
+    private fun bodyOf(name: String): String {
+        val lines = code().lines()
+        val declaration = lines.indexOfFirst { it.contains(name) }
+        assertTrue(declaration >= 0, "$name is gone; this guard names a method")
+        val body = StringBuilder()
+        var depth = 0
+        var entered = false
+        for (line in lines.drop(declaration)) {
+            body.append(line).append('\n')
+            depth += line.count { it == '{' } - line.count { it == '}' }
+            if (depth > 0) entered = true
+            if (entered && depth <= 0) break
+        }
+        return body.toString()
+    }
+
+    @Test
+    fun `the start command does not enter the foreground itself`() {
+        val body = bodyOf("override fun onStartCommand(")
+        assertTrue(
+            body.contains("startCommand("),
+            "onStartCommand no longer routes through the extracted decision, so this " +
+                "guard is reading a method that decides something else",
+        )
+        assertFalse(
+            body.contains("ServiceCompat.startForeground"),
+            "the promotion is the one step whose failure the app can answer better than " +
+                "by dying, and inlined here a throw takes the process with it:\n$body",
+        )
+    }
+
+    @Test
+    fun `the promotion the start command uses is wrapped`() {
+        val body = bodyOf("private fun promoteToForeground(")
+        assertTrue(
+            body.contains("ServiceCompat.startForeground("),
+            "promoteToForeground no longer promotes anything, so this guard is reading " +
+                "the wrong method and would pass whatever the wrapping does",
+        )
+        assertTrue(
+            body.contains("catch ("),
+            "the promotion has to answer a refusal rather than let it leave " +
+                "onStartCommand:\n$body",
+        )
+    }
+}
+
+/**
  * Which outcomes leave nothing running, and therefore have to leave the app able
  * to start again.
  *

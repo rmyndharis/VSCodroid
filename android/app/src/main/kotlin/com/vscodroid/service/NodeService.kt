@@ -165,27 +165,37 @@ class NodeService : Service() {
         setupProcessCallbacks()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        when (startCommand(intent?.action, isServiceRunning, ::promoteToForeground)) {
+            StartCommand.STOP_REQUESTED -> {
                 shutdown()
-                return START_NOT_STICKY
+                START_NOT_STICKY
+            }
+
+            StartCommand.ALREADY_SERVING -> START_STICKY
+
+            StartCommand.SERVE -> {
+                isServiceRunning = true
+                launchServer()
+                START_STICKY
+            }
+
+            // Nothing is started, and that is the whole of the answer. Carrying on
+            // is the tempting version and the wrong one: it would leave a Node
+            // process with no foreground service behind it, no card in the shade,
+            // and therefore no Stop, which is the state the notification path
+            // exists to prevent. Stopping instead gives the system the process
+            // back, and the next launch comes from a visible activity, which is
+            // the condition the promotion was refused for.
+            //
+            // START_NOT_STICKY because the system re-delivering this is how it got
+            // here: asking to be brought back would repeat a refusal rather than
+            // recover from one.
+            StartCommand.STAND_DOWN -> {
+                stopSelf()
+                START_NOT_STICKY
             }
         }
-
-        if (!isServiceRunning) {
-            ServiceCompat.startForeground(
-                this,
-                VSCodroidApp.NOTIFICATION_ID,
-                createNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-            isServiceRunning = true
-            launchServer()
-        }
-
-        return START_STICKY
-    }
 
     override fun onDestroy() {
         Logger.i(tag, "Service destroying")
@@ -317,6 +327,45 @@ class NodeService : Service() {
     }
 
     // -- Internal --
+
+    /**
+     * Enters the foreground, or answers false when the system refuses.
+     *
+     * The one promotion in this class that is not an update to a card already
+     * posted, which is why it is the one wrapped. [refreshNotification] and
+     * [stopServingRecoverably] both run while this service is already in the
+     * foreground, where `startForeground` rewrites the existing notification and
+     * the restriction that governs ENTERING the foreground does not apply. That
+     * last sentence is read from the documented behaviour and has not been
+     * measured here; a throw from either of those is a defect worth crashing on
+     * rather than absorbing.
+     *
+     * What is being defended against is not measured either, and it should not be
+     * presented as though it were: on a START_STICKY re-delivery this app has no
+     * visible component, which is the condition the Android 12 refusal is written
+     * for, and nobody here has reproduced it. What decides the wrapping is the
+     * comparison of the two failures rather than the odds. Uncaught, the throw
+     * leaves [onStartCommand], takes the process with it, and the same re-delivery
+     * brings it back: a crash loop with no screen in front of it. Caught, the
+     * caller has one honest response available, which is to start nothing.
+     *
+     * Logged at error with the throwable, so a promotion refused for a reason
+     * nobody predicted (a missing manifest type, a missing permission) still
+     * arrives in the report naming itself, rather than being swallowed as a
+     * quiet no-op.
+     */
+    private fun promoteToForeground(): Boolean = try {
+        ServiceCompat.startForeground(
+            this,
+            VSCodroidApp.NOTIFICATION_ID,
+            createNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+        true
+    } catch (e: Exception) {
+        Logger.e(tag, "The foreground promotion was refused; starting no server", e)
+        false
+    }
 
     /**
      * Stops the server and this service, in response to the notification's Stop
@@ -1271,6 +1320,51 @@ internal fun endsUnreported(outcome: LaunchOutcome): Boolean = when (outcome) {
  */
 internal fun stillOurRun(serviceRunning: Boolean, startedRun: Int, currentRun: Int): Boolean =
     serviceRunning && startedRun == currentRun
+
+/** Where one start command ends up. */
+internal enum class StartCommand {
+    /** The notification's Stop action; nothing is promoted and nothing is started. */
+    STOP_REQUESTED,
+
+    /** A start arriving at a service that is already serving. */
+    ALREADY_SERVING,
+
+    /** The service is in the foreground and the server may be launched. */
+    SERVE,
+
+    /** The foreground promotion was refused, so nothing is started. */
+    STAND_DOWN,
+}
+
+/**
+ * Which of the four a start command reaches.
+ *
+ * Extracted for the reason [launchOutcome] gives: the branch it replaces lived in
+ * a `Service` method, and nothing in a plain JVM can build one, so the decision
+ * was reached by no test at all.
+ *
+ * The promotion arrives as a supplier rather than as a boolean because the ORDER
+ * is the behaviour, not a detail of it. Written to take a value, every caller
+ * would have to promote before asking, so the Stop action would promote the
+ * service it is about to tear down, and a start arriving at a service that is
+ * already serving would re-enter the foreground for nothing. Short-circuiting is
+ * what is being pinned, so it is expressed where a test can hold it.
+ *
+ * A refused promotion is [StartCommand.STAND_DOWN] and not a quieter form of
+ * [StartCommand.SERVE]. The caller has no card, so it has no Stop lever and
+ * nowhere to say what happened, and a server started into that has nothing
+ * tracking it.
+ */
+internal fun startCommand(
+    action: String?,
+    serviceRunning: Boolean,
+    promote: () -> Boolean,
+): StartCommand = when {
+    action == NodeService.ACTION_STOP -> StartCommand.STOP_REQUESTED
+    serviceRunning -> StartCommand.ALREADY_SERVING
+    promote() -> StartCommand.SERVE
+    else -> StartCommand.STAND_DOWN
+}
 
 /** What a crash report gets. */
 internal enum class CrashAction {

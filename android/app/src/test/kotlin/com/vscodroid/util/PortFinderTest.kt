@@ -287,6 +287,42 @@ class PortFinderTest {
         }
 
         @Test
+        fun `the remembered port is answered even while something holds it`() {
+            // The question `getOrAllocatePort` cannot answer, which is why there are
+            // two functions. It answers "what can be bound now", so a held port makes
+            // it walk away; ProcessManager has to decide whether the HOLDER is one of
+            // ours worth adopting, and that decision needs the port itself, held or
+            // not, and needs it before the walk.
+            val port = PortFinder.findAvailablePort()
+            assertTrue(port < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+            stored = port
+
+            hold(port).use {
+                assertEquals(
+                    port, PortFinder.rememberedPort(context),
+                    "a held port is still the remembered one; the caller deciding whether to " +
+                        "adopt its holder needs it before the allocator moves",
+                )
+                assertNotEquals(
+                    port, PortFinder.getOrAllocatePort(context),
+                    "precondition: the allocator is what moves off it",
+                )
+            }
+        }
+
+        @Test
+        fun `nothing remembered reads as zero`() {
+            // The absent case has to be distinguishable, not merely plausible: the
+            // caller treats zero as "no candidate" and goes straight to allocating.
+            // Answering DEFAULT_PORT here would make every fresh install probe 13337
+            // as though a previous process had left something on it.
+            assertEquals(
+                0, PortFinder.rememberedPort(context),
+                "a fresh install has no port to adopt a holder of",
+            )
+        }
+
+        @Test
         fun `moves off a remembered port that something else has taken`() {
             val first = PortFinder.getOrAllocatePort(context)
 

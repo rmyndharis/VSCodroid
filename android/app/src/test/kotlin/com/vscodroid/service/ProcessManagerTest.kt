@@ -397,10 +397,9 @@ class ProcessManagerTest {
         // something already legal would pass against a wiring that skipped the
         // clamp, which is the half that carries the safety argument.
         //
-        // 3 GiB of visible RAM gives an override maximum of 768 (a quarter is 768,
-        // which is also where the floor on that maximum sits), so a request of 4096
-        // must arrive as 768. That collides with HEAP_CEILING_MAX_MB, so the sizes
-        // are chosen again below to keep the assertion discriminating.
+        // 3 GiB of visible RAM gives an override maximum of 768, a quarter of it, so
+        // a request of 4096 must arrive as 768. That collides with HEAP_CEILING_MAX_MB,
+        // so the sizes are chosen again below to keep the assertion discriminating.
         val totalMb = 6L * 1024
         val am = mockk<ActivityManager>(relaxed = true) {
             every { isLowRamDevice } returns false
@@ -1624,6 +1623,27 @@ class AdoptionTest {
         StubServer(status, reports).also { stub = it; manager.portField = it.port }
 
     /**
+     * Makes [port] the one a previous process left behind in preferences.
+     *
+     * The counterpart to [serving] for a COLD start: that one writes the port
+     * straight into the field, which is the restart path, and every adoption case
+     * written before this one took it. A cold start has to find the port the way
+     * production finds it, out of preferences, or the branch under test is not the
+     * one that runs.
+     *
+     * The key is restated rather than read from PortFinder, which keeps it private.
+     * The failure direction of that drift is the loud one: a key that stops matching
+     * makes the remembered port read as absent, no adoption happens, and the case
+     * below goes red rather than green.
+     */
+    private fun remember(port: Int) {
+        val prefs = mockk<android.content.SharedPreferences>(relaxed = true) {
+            every { getInt("server_port", any()) } returns port
+        }
+        every { contextMock.getSharedPreferences(any(), any()) } returns prefs
+    }
+
+    /**
      * Writes the note `assets/server.js` leaves naming the editor server it
      * forked, and a matching `/proc` entry, then points the manager at both.
      *
@@ -1682,6 +1702,64 @@ class AdoptionTest {
             asked!!.contains("tkn"),
             "the liveness probe must not carry the connection token: $asked",
         )
+    }
+
+    @Test
+    fun `the first start in a process adopts the server still holding the remembered port`() {
+        // The launch adoption exists for, and the one it could not reach. Every
+        // case above puts the port into the field by hand, which is what a RESTART
+        // looks like; a cold start arrives with the field at zero, and the port
+        // was then taken from `getOrAllocatePort`, which answers a held port by
+        // walking to a free one. So the port handed back was free by construction,
+        // the "is it free" answer was unconditionally yes, both readers of the note
+        // are gated on its negation, and the server that outlived its bootstrap was
+        // abandoned together with the IndexedDB keyed to its origin.
+        //
+        // Built without `serving`, deliberately, so the field is left at zero and
+        // the port has to be found the way production finds it.
+        val holder = StubServer(200, commit).also { stub = it }
+        remember(holder.port)
+        recordEditorServer(pid = 4242, port = holder.port)
+
+        assertEquals(0, manager.port, "the fixture must start from a manager that has never held a port")
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertTrue(manager.isAdopted(), "a cold start must adopt the server that outlived the last process")
+        assertEquals(
+            holder.port, manager.port,
+            "and stay on the origin the workbench's IndexedDB is keyed to",
+        )
+        assertNull(manager.serverProcessField, "adoption spawns nothing")
+    }
+
+    @Test
+    fun `a cold start moves off a remembered port a stranger is holding`() {
+        // The other half of asking about the remembered port: having asked, a start
+        // that cannot claim the holder still has to get somewhere. Nothing is bound
+        // yet on a cold start, so moving costs only the storage the allocator
+        // already logs, while staying costs a child that prints EADDRINUSE and then
+        // does not exit.
+        val holder = StubServer(null).also { stub = it }
+        remember(holder.port)
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted(), "an unrecorded holder is not ours to adopt")
+        assertNotEquals(
+            holder.port, manager.port,
+            "a port a stranger holds must not be the one the spawn is pointed at",
+        )
+        assertFalse(
+            manager.spawnedOntoHeldPort(),
+            "and the server it spawned must be allowed to be slow",
+        )
+
+        // Last, for the reason `a recorded server that is not answering on the port
+        // is not adopted` gives: a timeout here would report a stuck watchdog and
+        // send the reader to the wrong file, so the assertions naming the defect go
+        // first.
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
     }
 
     @Test
@@ -2376,15 +2454,52 @@ class HeapOverrideTest {
 
     @Test
     fun `the override ceiling never sits below what the device would get anyway`() {
-        // A 2 GB phone computes a quarter of 500, which is below the 768 the derived
-        // arm can reach. Without the floor on the override maximum, a user asking
-        // for more than the derived value would be handed LESS than it, and the
-        // setting would read as having broken something.
-        assertEquals(HEAP_CEILING_MAX_MB, heapOverrideMaxMb(2000))
-        assertEquals(
-            HEAP_CEILING_MAX_MB,
-            heapCeilingMb(2000, isLowRam = false, requestedMb = 1200),
-        )
+        // The property this name states, asserted instead of a number, and that is
+        // a change of intent rather than of wording. It used to assert
+        // HEAP_CEILING_MAX_MB, 768, at 2000 MiB, on the premise that 768 is "what
+        // the device would get anyway" there. It is not: the derived arm is
+        // clamp(T / 8, 256, 768), so a 2 GB phone gets 256, which `the derived band
+        // binds exactly where the arithmetic says` already pins. The floor was
+        // therefore the derived arm's MAXIMUM standing in for its VALUE, and it
+        // swallowed the fraction on every device below 3072 MiB, where a flat 768
+        // is about three isolates of 768 on a device that holds 2048.
+        //
+        // Written as a comparison against the derived arm so it cannot go stale the
+        // same way: whatever either arm is retuned to, the ordering between them is
+        // what the name promises.
+        for (total in listOf(512L, 800L, 1024L, 2000L, 2048L, 3072L, 3700L, 6144L, 15500L)) {
+            assertTrue(
+                heapOverrideMaxMb(total) >= heapCeilingMb(total, isLowRam = false),
+                "at $total MiB a user asking for more than the derived value would be handed " +
+                    "less than it",
+            )
+        }
+    }
+
+    @Test
+    fun `below three gigabytes the fraction is what bounds a request`() {
+        // A 2 GB phone derives 256 and a quarter of it is 500, so 500 is the most a
+        // request may reach there. Not the 768 the old floor allowed: the flag is
+        // per-isolate, so 768 authorises roughly three times that of V8 old space
+        // on a device that holds 2048.
+        //
+        // `on a small device the fraction is what bounds a request` uses 3700,
+        // where a quarter already exceeds 768 and the floor never bound, so it
+        // stayed green throughout. This is the range the defect lived in.
+        assertEquals(500, heapOverrideMaxMb(2000))
+        assertEquals(500, heapCeilingMb(2000, isLowRam = false, requestedMb = 1200))
+    }
+
+    @Test
+    fun `the floor still binds where a quarter falls under the editor's minimum`() {
+        // Under 1 GiB a quarter is below HEAP_CEILING_MIN_MB, and heapCeilingMb
+        // coerces a request into [256, heapOverrideMaxMb(T)]. A maximum under that
+        // minimum is an empty range and coerceIn throws, inside heapCeilingForDevice's
+        // try, where it is swallowed into the flat default with a line naming the
+        // wrong cause. So the floor is not only about what the user is owed; it is
+        // what keeps the range it feeds legal, and a bare fraction would not.
+        assertEquals(HEAP_CEILING_MIN_MB, heapOverrideMaxMb(800))
+        assertEquals(HEAP_CEILING_MIN_MB, heapCeilingMb(800, isLowRam = false, requestedMb = 1200))
     }
 
     @Test
