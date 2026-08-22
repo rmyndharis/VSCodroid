@@ -67,6 +67,13 @@ class LaunchRepairWiringTest {
      * The order matters at one place and is worth keeping honest everywhere:
      * `repairTruncatedSetupFiles` has to precede the three appenders that extend
      * `.bashrc` only when it already exists.
+     *
+     * One toolchain repair is deliberately absent: `reconcileDeliveredPacks` runs
+     * from `continueAfterSetup` instead, because it is the only member of the
+     * block that spends disk rather than reclaiming it, and here it would start
+     * copying a toolchain into `usr/` minutes before the first run has finished
+     * unpacking into the same tree. The case further down pins it in both
+     * directions, so restoring it to this list is not the way to fix a failure.
      */
     private val repairs = listOf(
         "setupToolSymlinks",
@@ -83,20 +90,26 @@ class LaunchRepairWiringTest {
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
         "repairInstalledToolchains",
-        "reconcileDeliveredPacks",
         "reclaimRevokedMirrors",
     )
 
-    private fun onCreateBody(): String {
+    /**
+     * The body of one declaration, brace-matched from its signature and bounded.
+     *
+     * [bounds] is per-declaration because the bound is the only thing standing
+     * between the matcher and the rest of the file: an extraction that ran on to
+     * the end would contain every name for entirely the wrong reason.
+     */
+    private fun bodyOf(declaration: String, bounds: IntRange): String {
         check(source.isFile) {
             "SplashActivity.kt not found at ${source.absolutePath}, this test would " +
                 "otherwise pass by looking at nothing"
         }
         val text = source.readText()
-        val declaration = text.indexOf("override fun onCreate(")
-        check(declaration >= 0) { "onCreate is gone from SplashActivity.kt" }
+        val start = text.indexOf(declaration)
+        check(start >= 0) { "$declaration is gone from SplashActivity.kt" }
 
-        val open = text.indexOf('{', declaration)
+        val open = text.indexOf('{', start)
         var depth = 0
         var i = open
         while (i < text.length) {
@@ -105,18 +118,17 @@ class LaunchRepairWiringTest {
             if (depth == 0) break
             i++
         }
-        check(depth == 0) { "no closing brace found for onCreate" }
+        check(depth == 0) { "no closing brace found for $declaration" }
         val body = text.substring(open, i + 1)
-        // The brace matcher is the weak part, so it is bounded rather than
-        // trusted: an extraction that ran to the end of the file would contain
-        // every name for entirely the wrong reason. 5,000-odd characters when
-        // this was written, most of it comment.
-        check(body.length in 1_000..12_000) {
-            "extracted ${body.length} characters of onCreate, which means the extraction " +
+        check(body.length in bounds) {
+            "extracted ${body.length} characters of $declaration, which means the extraction " +
                 "is wrong rather than the code"
         }
         return body
     }
+
+    // 5,000-odd characters when this was written, most of it comment.
+    private fun onCreateBody(): String = bodyOf("override fun onCreate(", 1_000..12_000)
 
     /**
      * Names are searched for in code, not in prose. Commenting a call out leaves
@@ -300,6 +312,54 @@ class LaunchRepairWiringTest {
             repairs,
             guarded.map { calledName(it) ?: it },
             "the guards in onCreate no longer match this list, in count, membership or order",
+        )
+    }
+
+    /**
+     * The one toolchain repair that deliberately does NOT run beside the others.
+     *
+     * It is the only one that spends disk rather than reclaiming it, and on a
+     * first run or an upgrade onCreate is minutes ahead of the unpack finishing.
+     * Pinned in both directions: gone from onCreate, and present in the one place
+     * every route out of onCreate passes through, so it cannot drift back and
+     * cannot be dropped.
+     *
+     * What this pins is the call site and nothing else. No JVM test here can drive
+     * the race it is ordered against: that needs an Activity, a filesystem that
+     * actually fills up, and Play Core. The reasoning for the ordering is in the
+     * comment beside the code, not verified by execution anywhere.
+     */
+    @Test
+    fun `the delivered-pack reconcile runs after setup, not beside it`() {
+        val onCreate = code(onCreateBody())
+        assertEquals(
+            0, onCreate.lines().count { it.contains("reconcileDeliveredPacks(") },
+            "the delivered-pack reconcile is back in onCreate, where it copies a " +
+                "toolchain into `usr/` while the first run is still unpacking into it",
+        )
+
+        val after = guardedLines(code(bodyOf("private fun continueAfterSetup(", 200..4_000)))
+        assertEquals(
+            listOf("reconcileDeliveredPacks"), after.map { calledName(it) ?: it },
+            "continueAfterSetup no longer runs the delivered-pack reconcile in a guard " +
+                "of its own, so a Play delivery that completed unwatched is never finished",
+        )
+    }
+
+    /**
+     * The control for the extraction above, and without it the length bound is the
+     * only thing between [bodyOf] and the rest of the file. `shouldShowPicker` is
+     * the declaration immediately after `continueAfterSetup`, so its signature
+     * appearing inside the extracted body is precisely the failure this guards.
+     */
+    @Test
+    fun `the continueAfterSetup extraction stops at the function it names`() {
+        val body = bodyOf("private fun continueAfterSetup(", 200..4_000)
+
+        assertTrue(
+            "fun shouldShowPicker" !in body,
+            "bodyOf ran past continueAfterSetup and swallowed the next declaration, so " +
+                "the assertion above is really a file-wide search: ${body.length} chars",
         )
     }
 

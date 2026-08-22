@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Deliberately no keepScreenOn, unlike the two screens either side of it.
+     Nothing is in flight here: setup has already been recorded complete
+     (FirstRunSetup.markSetupComplete runs before runSetup returns), so a timeout
+     costs a relaunch that lands back on this same screen, and this is the wait
+     activity_splash.xml refused a window flag for because it may never be
+     answered. If a sweep ever wants to add it here, that is the argument to
+     rebut first. -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/pickerRoot"

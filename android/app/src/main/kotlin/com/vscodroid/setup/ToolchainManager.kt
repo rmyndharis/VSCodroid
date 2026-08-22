@@ -14,6 +14,7 @@ import com.google.android.play.core.assetpacks.model.AssetPackErrorCode
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
+import com.vscodroid.webview.redactToken
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -113,7 +114,12 @@ class ToolchainManager(private val context: Context) {
         // at launch, so a manifest it could not read or a state file it could not
         // write vanished without trace. Every screen that installs does set the
         // callback, which is why this was invisible.
-        Logger.e(tag, "Toolchain $packName failed: $why")
+        // Redacted because one caller's pack name is a string a page chose:
+        // [install] reports INTERNAL for a name the registry does not know, and a
+        // name the registry does not know is arbitrary text. The bridge redacts it
+        // for its own line and hands the raw value on, so the asymmetry is paid
+        // here. A registry pack name carries nothing for this to remove.
+        Logger.e(tag, "Toolchain ${redactToken(packName)} failed: $why")
         onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why)
     }
 
@@ -381,7 +387,10 @@ class ToolchainManager(private val context: Context) {
     fun install(packName: String) {
         val info = ToolchainRegistry.find(packName)
         if (info == null) {
-            Logger.e(tag, "Unknown toolchain: $packName")
+            // The one line here that fires BECAUSE the string is not a known
+            // toolchain, which is to say exactly when it is whatever the caller
+            // sent. Logger.e is not gated on a debuggable build.
+            Logger.e(tag, "Unknown toolchain: ${redactToken(packName)}")
             fail(packName, ToolchainFailure.INTERNAL)
             return
         }
@@ -477,7 +486,11 @@ class ToolchainManager(private val context: Context) {
             try {
                 uninstallSync(name)
             } catch (e: Exception) {
-                Logger.e(tag, "Failed to uninstall $name", e)
+                // The throwable is kept: nothing that throws on this path builds
+                // its message from this argument, they name paths taken from the
+                // install record, so the second channel does not repeat what the
+                // first one hides.
+                Logger.e(tag, "Failed to uninstall ${redactToken(name)}", e)
             }
         }
     }
@@ -519,7 +532,11 @@ class ToolchainManager(private val context: Context) {
         }
 
         if (manifestObj == null) {
-            Logger.w(tag, "Toolchain $name not found in state")
+            // The uninstall twin of the "Unknown toolchain" line in [install]:
+            // [toolchainShortName] returns a name it does not recognise unchanged,
+            // deliberately, so that a retired toolchain can still be removed, and
+            // that is what puts arbitrary text here.
+            Logger.w(tag, "Toolchain ${redactToken(name)} not found in state")
             return
         }
 
@@ -2655,9 +2672,10 @@ internal fun toolchainInstallBytes(unpackedBytes: Long): Long =
  * reserves the bare buffer for a tree of any size. Zero is a real answer here
  * only for a pack that genuinely occupies nothing, which none do.
  *
- * [RETIRED_TOOLCHAINS] is consulted second for the same reason `toolchainBytesFor`
- * consults it: the packs most likely to be on a device right now are the ones
- * installed before a withdrawal, and the registry is exactly where they are not.
+ * [RETIRED_TOOLCHAINS] is consulted second for the same reason the setup
+ * pre-flight consults it: the packs most likely to be on a device right now are
+ * the ones installed before a withdrawal, and the registry is exactly where they
+ * are not.
  * The prefix is stripped here rather than through `toolchainShortName`, which
  * resolves through the registry and returns a retired name unchanged.
  */

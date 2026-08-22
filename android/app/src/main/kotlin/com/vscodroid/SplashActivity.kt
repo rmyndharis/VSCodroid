@@ -110,13 +110,6 @@ class SplashActivity : AppCompatActivity() {
         // I/O thread, because the trees involved have thousands of files
         // and this block is on the main thread.
         repair("the toolchain repair pass") { ToolchainManager(this).repairInstalledToolchains() }
-        // A Play pack that finished downloading after its screen went away was
-        // never installed: the COMPLETED callback is the only thing that installs
-        // one, and both screens drop their listener at teardown. This is the
-        // reconcile that was missing, and launch is where it belongs, because the
-        // alternative is a listener outliving the Activity that registered it.
-        // Returns immediately; the copy runs on the toolchain I/O thread.
-        repair("the delivered toolchain reconcile") { ToolchainManager(this).reconcileDeliveredPacks() }
         // A folder whose permission the user withdrew in system settings never
         // comes back through the app, so its mirror is disk nothing can reach.
         // Here because it is the one point that is guaranteed to have no folder
@@ -201,7 +194,7 @@ class SplashActivity : AppCompatActivity() {
                 }
                 FirstRunSetup.SetupResult.LOW_STORAGE -> {
                     val message = getString(
-                        R.string.error_storage_full, FirstRunSetup.requiredStorageMb()
+                        R.string.error_storage_full, FirstRunSetup.storageToFreeMb()
                     )
                     showSetupError(statusText, progressBar, message, setup)
                 }
@@ -314,8 +307,33 @@ class SplashActivity : AppCompatActivity() {
      * preference: both the Continue and the Skip buttons call [markPickerShown].
      * An upgrade is unaffected either way, since a new versionName makes
      * `isFirstRun()` true and that route already passed through here.
+     *
+     * It is also where the delivered-pack reconcile runs, so that a first run has
+     * finished unpacking before anything copies a toolchain into the same tree.
      */
     private fun continueAfterSetup() {
+        // A Play pack that finished downloading after its screen went away was
+        // never installed: the COMPLETED callback is the only thing that installs
+        // one, and both screens drop their listener at teardown. Returns
+        // immediately; the copy runs on the toolchain I/O thread.
+        //
+        // Here rather than in onCreate, and the difference is minutes on the one
+        // launch that matters. This copies up to 155 MB into the same `usr/` the
+        // first run unpacks 810 MB into, and the two space pre-flights cannot see
+        // each other: setup measures usableSpace before extracting, the install
+        // measures it before copying, and neither reserves for the other, so both
+        // can pass and one then meets ENOSPC. The extraction survives that, it
+        // aborts and the retry keeps credit for every byte it wrote. The install
+        // does not: a copy that lands and then cannot write its record leaves the
+        // tree under no manifest, and installFromDirectoryHoldingPack says plainly
+        // that nothing reclaims it.
+        //
+        // Reached from every route out of onCreate, so it still runs on every
+        // launch. A launch whose setup failed skips it, and that costs nothing it
+        // could have given back: the reclaim half calls removePack, which posts
+        // the delete and returns, so it was never going to free bytes in time for
+        // a pre-flight that had already read them.
+        repair("the delivered toolchain reconcile") { ToolchainManager(this).reconcileDeliveredPacks() }
         if (shouldShowPicker()) {
             Logger.i(tag, "The toolchain picker has not been answered yet; offering it")
             showToolchainPicker()
@@ -346,6 +364,19 @@ class SplashActivity : AppCompatActivity() {
         val skipBtn = findViewById<TextView>(R.id.skipButton)
 
         val adapter = ToolchainPickerAdapter(ToolchainCardMode.PICKER)
+        // What is already on disk, which this screen used to be able to assume was
+        // nothing. That held while the picker was reached only from the end of a
+        // fresh first run; it stopped holding when the offer moved to every launch
+        // that has not answered it. An install whose first run was interrupted
+        // reached the editor with the preference unset and with the launcher
+        // shortcut published, and ToolchainActivity installs without touching that
+        // preference, so a toolchain can be installed long before this screen is
+        // offered. Ticking one of those spends the download a second time.
+        //
+        // Read on the main thread, as ToolchainActivity already reads it twice: it
+        // is one small JSON file, and the alternative is drawing the cards wrong
+        // and correcting them afterwards.
+        adapter.setInstalled(ToolchainManager(this).getInstalledToolchains())
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
 

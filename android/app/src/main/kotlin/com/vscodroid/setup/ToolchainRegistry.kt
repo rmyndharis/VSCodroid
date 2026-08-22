@@ -39,7 +39,7 @@ object ToolchainRegistry {
          * **Understating it is the direction that costs a user something.** Four
          * readers key off this one number: both install pre-flights
          * (`packInstallBytes` for Play, `toolchainInstallBytes` for HTTP), the
-         * `foreignBytes` that `FirstRunSetup.toolchainBytesFor` subtracts from
+         * `foreignBytes` that `FirstRunSetup.sharedTreeCredit` subtracts from
          * the reusable credit in the setup pre-flight, and the card the user
          * reads. A figure below the real tree eats the 50 MB buffer the
          * reservations are built on, and credits occupied `usr/` as reusable,

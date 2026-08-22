@@ -138,6 +138,13 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
 
     /** PICKER: ticks [packName] if it is not ticked, unticks it if it is. */
     fun toggleSelection(packName: String) {
+        // An installed toolchain is not a choice. Continue starts a fresh install
+        // for everything ticked, and install() has no already-installed branch, so
+        // a tick here spends the whole transfer and the whole copy again for bytes
+        // that are on disk, against a pre-flight that asks for twice the unpacked
+        // tree. Refused in the model as well as in the binding, because this half
+        // is the one a test can reach.
+        if (packName in installed) return
         if (!selected.remove(packName)) selected.add(packName)
     }
 
@@ -171,7 +178,17 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
 
     /** The card to draw for [packName] on this screen. */
     fun card(packName: String): ToolchainCard = when (mode) {
-        ToolchainCardMode.PICKER -> ToolchainCard(selected = packName in selected)
+        // The badge, and only the badge: the picker still carries no button and no
+        // progress bar. What it has to be able to say is that a toolchain is
+        // already on disk, because the screen is offered on any launch that has
+        // not answered it rather than only on the launch that just unpacked the
+        // app. An install whose first run was interrupted reaches the editor with
+        // the preference unset and the launcher shortcut published, so it can
+        // install from ToolchainActivity long before this screen is offered.
+        ToolchainCardMode.PICKER -> ToolchainCard(
+            selected = packName in selected,
+            badge = if (packName in installed) ToolchainBadge.INSTALLED else ToolchainBadge.NONE,
+        )
         ToolchainCardMode.MANAGER -> managerCard(packName)
     }
 

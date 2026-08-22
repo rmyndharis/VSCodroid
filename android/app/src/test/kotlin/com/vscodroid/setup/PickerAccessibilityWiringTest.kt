@@ -144,6 +144,32 @@ class PickerAccessibilityWiringTest {
     }
 
     /**
+     * The picker was written under an invariant that no longer holds: that nothing
+     * can be installed while it is on screen. It is now offered on any launch that
+     * has not answered it, so a toolchain installed from the Toolchains screen
+     * reaches it, and a card that says nothing about that is an offer to download
+     * it again. [ToolchainCardState] decides it and this is the half that draws it.
+     */
+    @Test
+    fun `the picker draws the badge it is now given`() {
+        val body = bodyOf(adapter, "private fun bindPickerMode(")
+
+        assertTrue(
+            body.contains("ToolchainBadge.INSTALLED"),
+            "bindPickerMode ignores the badge the card state now carries, so an " +
+                "installed toolchain is drawn as a fresh download",
+        )
+        // Line-anchored for the reason the checked-state case above gives: a
+        // commented-out assignment is still an assignment to a substring search.
+        assertTrue(
+            Regex("""(?m)^\s*holder\.statusBadge\.visibility\s*=\s*View\.VISIBLE""")
+                .containsMatchIn(body),
+            "bindPickerMode never makes the status badge visible, so the state it " +
+                "reads is decided and then thrown away",
+        )
+    }
+
+    /**
      * The rebind has to carry a payload. Without one RecyclerView runs the default
      * change animation, which swaps the item view and takes accessibility focus
      * with it, so a user who just double-tapped a card is returned to the top of

@@ -78,12 +78,10 @@ class ToolchainRegistryTest {
          * The recorded unpacked size is a floor, measured against the tree the
          * release is built from, not an estimate.
          *
-         * Four readers key off it, and an understatement is the direction that
+         * Three readers key off it, and an understatement is the direction that
          * costs someone something: both install pre-flights shrink toward the
-         * 50 MB buffer they are built on, `FirstRunSetup.toolchainBytesFor`
-         * credits occupied `usr/` as reusable in the setup pre-flight, which
-         * admits a device that gate exists to refuse, and the card tells the user
-         * a smaller number than the install writes. It went wrong exactly that
+         * 50 MB buffer they are built on, and the card tells the user a smaller
+         * number than the install writes. It went wrong exactly that
          * way once already: `download-java.sh` stopped deleting OpenJDK's
          * `legal/` and began dereferencing symlinks on copy, and the constant
          * every gate reads stayed at 146,000,000 for a tree that had grown to

@@ -20,9 +20,10 @@ import javax.xml.parsers.DocumentBuilderFactory
  * enough simply ran under the button. Every string on that row is translated, so
  * the width that does it is not knowable from the English ones.
  *
- * PICKER mode hides both views, so it cannot be affected by a constraint between
- * them; what it can be affected by is the button being moved, which is what the
- * last case here refuses.
+ * PICKER mode shows the badge for a toolchain that is already installed and never
+ * shows the button at all, so the two are still never on that screen together and
+ * a constraint between them cannot reach it; what it can be affected by is the
+ * button being moved, which is what the last case here refuses.
  *
  * Read from the XML with a parser rather than by matching text, so an attribute
  * written on a different line or in a different order still answers.

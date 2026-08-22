@@ -1,9 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- keepScreenOn, for the reason activity_splash.xml gives and one this screen
+     adds. setContentView replaces the content view, so the flag on the splash
+     layout is already gone by the time this one is shown, and this is the longer
+     unattended wait of the two: Java 17 is a transfer the download path sizes at
+     56 MB, expanding to the 156 MB ToolchainRegistry declares, then copied into
+     filesDir.
+
+     What the timeout costs is not the drawing. It stops the activity, and a
+     process holding nothing but a stopped activity is what the system reclaims
+     first. Off Play the transfer runs on a daemon thread inside this process
+     with no resume (ToolchainManager.downloadViaHttp), so a reclaim loses all of
+     it, and the user is not simply offered it again: markPickerShown() has run
+     before this screen appears, so the next launch goes straight to the editor
+     and the only way back is the launcher long press.
+
+     On the root view rather than as a window flag, which is the distinction
+     activity_splash.xml draws and the reason the picker beside this one
+     deliberately has neither: a window flag raised in onCreate would still be up
+     while the picker waits on a person, and would have to be cleared by hand.
+     This drops the moment setContentView swaps the view out. -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/progressRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:keepScreenOn="true"
     android:background="@color/colorBackground"
     android:padding="24dp">
 

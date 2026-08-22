@@ -92,8 +92,36 @@ class ToolchainPickerAdapter(
     override fun getItemCount() = cards.items.size
 
     private fun bindPickerMode(holder: ViewHolder, info: ToolchainRegistry.ToolchainInfo) {
-        val isSelected = cards.card(info.packName).selected
+        val state = cards.card(info.packName)
         val card = holder.card
+
+        // Already on disk, so this card is a statement rather than an offer, and it
+        // returns before any of the selection wiring below: no tick, no checked
+        // state for a screen reader to act on, and no listener.
+        // ToolchainCardState.toggleSelection refuses it too; that is the half a
+        // test can drive, this is the half the user sees.
+        //
+        // Drawn rather than dropped from the grid: two cards are the whole list,
+        // and one going missing reads as a build that withdrew the toolchain.
+        // Every field is set on both paths because a recycled holder arrives
+        // carrying the previous card's badge, listener and clickability.
+        if (state.badge == ToolchainBadge.INSTALLED) {
+            card.strokeWidth = 0
+            card.setCardBackgroundColor(card.context.getColor(R.color.colorSurface))
+            holder.checkmark.visibility = View.GONE
+            card.isCheckable = false
+            card.isChecked = false
+            card.setOnClickListener(null)
+            card.isClickable = false
+            holder.statusBadge.visibility = View.VISIBLE
+            holder.statusBadge.text = card.context.getString(R.string.toolchain_installed)
+            holder.statusBadge.setTextColor(card.context.getColor(R.color.colorSuccess))
+            holder.actionButton.visibility = View.GONE
+            holder.downloadProgress.visibility = View.GONE
+            return
+        }
+
+        val isSelected = state.selected
 
         // Visual selection state
         card.strokeWidth = if (isSelected) 2.dpToPx(card) else 0

@@ -36,6 +36,35 @@ class ToolchainActivity : AppCompatActivity() {
     private lateinit var toolchainManager: ToolchainManager
     private lateinit var adapter: ToolchainPickerAdapter
 
+    /** Held as a field because the poll below posts on it and takes it back. */
+    private lateinit var grid: RecyclerView
+
+    /**
+     * What [ToolchainManager.packsDownloading] said the last time this screen
+     * asked, so the poll can push only when the answer has changed. Pushing an
+     * unchanged snapshot costs a full rebind of every card once a second, and a
+     * rebind is what takes accessibility focus off a button someone is on.
+     */
+    private var lastSeenDownloads: Map<String, Int> = emptyMap()
+
+    /**
+     * Re-asks the process what is downloading, because nothing tells this screen.
+     *
+     * Progress reaches the manager that began the transfer and nothing else, so a
+     * download some other manager started is visible here only through the
+     * process-wide snapshot. That snapshot was read once, at onStart, and the
+     * thing it describes keeps moving: the bar sat at whichever percentage it
+     * happened to read and the card went on offering Cancel after the install had
+     * finished. A screen with no subscription can only ask again, and it asks only
+     * while it is in front: the callback is taken back in onStop.
+     */
+    private val pollDownloads = object : Runnable {
+        override fun run() {
+            refreshDownloads()
+            grid.postDelayed(this, DOWNLOAD_POLL_MS)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
@@ -64,12 +93,25 @@ class ToolchainActivity : AppCompatActivity() {
                 }
                 ToolchainAction.CANCEL -> {
                     toolchainManager.cancel(packName)
-                    adapter.updateState(packName, AssetPackStatus.NOT_INSTALLED, 0)
+                    // CANCELED, and specifically not the neighbouring
+                    // NOT_INSTALLED, which is the same trap ToolchainManager
+                    // documents where it had to pick a status for something that
+                    // is not an uninstall. Cancelling stops a transfer and hands
+                    // Play's delivery back; it deletes nothing from `usr/` and
+                    // takes nothing out of `toolchains.json`. NOT_INSTALLED is
+                    // this app's word for a completed uninstall, written at the
+                    // end of uninstallLocked, and the card state reads it as
+                    // exactly that and drops the pack from its installed set, so
+                    // cancelling a re-download of an installed toolchain hid its
+                    // Remove button until the screen was reopened. CANCELED
+                    // carries no such meaning, so the card falls back to what the
+                    // install record says.
+                    adapter.updateState(packName, AssetPackStatus.CANCELED, 0)
                 }
             }
         }
 
-        val grid = findViewById<RecyclerView>(R.id.toolchainGrid)
+        grid = findViewById(R.id.toolchainGrid)
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
 
@@ -112,18 +154,41 @@ class ToolchainActivity : AppCompatActivity() {
         // Refresh installed state on resume (user may have installed from terminal)
         adapter.setInstalled(toolchainManager.getInstalledToolchains())
         // And what is downloading, which this screen is not told about at all when
-        // another manager began the transfer. A rotation destroys this Activity and
-        // rebuilds it with a new manager, and opening the screen while the first-run
-        // queue is still working never had one; either way the cards started empty
-        // and offered Install for a pack already downloading, with no progress and
-        // no Cancel. Play's own downloads are not in this map and do not need to be:
-        // registerListener above makes Play re-deliver their state.
-        adapter.setDownloading(ToolchainManager.packsDownloading())
+        // another manager began the transfer: the cards started empty and offered
+        // Install for a pack already downloading, with no progress and no Cancel.
+        // Asked again on a timer from here on, because one reading goes stale while
+        // the screen is still looking at it. Play's own downloads are not in this
+        // map and do not need to be: registerListener above makes Play re-deliver
+        // their state.
+        refreshDownloads()
+        grid.postDelayed(pollDownloads, DOWNLOAD_POLL_MS)
     }
 
     override fun onStop() {
+        // Before the listener, so nothing is posted onto a screen that is going
+        // away. The callback is the only thing keeping this activity referenced
+        // from the view's message queue.
+        grid.removeCallbacks(pollDownloads)
         toolchainManager.unregisterListener()
         super.onStop()
+    }
+
+    /**
+     * Pushes a fresh view of the process's downloads into the cards, if it has
+     * changed since the last one.
+     */
+    private fun refreshDownloads() {
+        val downloading = ToolchainManager.packsDownloading()
+        val refresh = downloadRefreshFor(lastSeenDownloads, downloading)
+        if (!refresh.push) return
+        lastSeenDownloads = downloading
+        adapter.setDownloading(downloading)
+        // Only when a pack has LEFT the snapshot, which is the moment its outcome
+        // becomes readable and the moment this screen would otherwise draw Install
+        // for something that has just finished installing. Reading the record on
+        // every percentage tick instead would be a file read a second for an
+        // answer that cannot have changed.
+        if (refresh.rereadInstalled) adapter.setInstalled(toolchainManager.getInstalledToolchains())
     }
 
     private fun showRemoveConfirmation(packName: String) {
@@ -140,3 +205,33 @@ class ToolchainActivity : AppCompatActivity() {
             .show()
     }
 }
+
+/**
+ * How often the Toolchains screen re-asks the process what is downloading.
+ *
+ * A second is well under the pace a progress bar has to keep and well over the
+ * cost of the question, which is one snapshot of a map that holds an entry per
+ * transfer in flight, usually none. It runs only while this screen is in front.
+ */
+private const val DOWNLOAD_POLL_MS = 1_000L
+
+/** What one reading of the download snapshot asks the screen to do. */
+internal data class DownloadRefresh(val push: Boolean, val rereadInstalled: Boolean)
+
+/**
+ * The decision behind `ToolchainActivity.refreshDownloads`, at file scope so it
+ * can be tested without an Activity; this project's unit tests have no
+ * Robolectric, the same reason [isTerminalPackStatus] and [isCurrentDownload]
+ * live beside SplashActivity.
+ *
+ * Two separate questions, and folding them into one would lose the cheaper half:
+ * anything at all changing is worth a repaint, while only a pack leaving the map
+ * is worth re-reading the install record from disk.
+ */
+internal fun downloadRefreshFor(
+    previous: Map<String, Int>,
+    current: Map<String, Int>,
+): DownloadRefresh = DownloadRefresh(
+    push = current != previous,
+    rereadInstalled = (previous.keys - current.keys).isNotEmpty(),
+)

@@ -141,12 +141,49 @@ class ToolchainCardStateTest {
 
         @Test
         fun `a cancelled or uninstalled pack goes back to offering Install`() {
-            // ToolchainActivity reports NOT_INSTALLED itself after cancelling, and
-            // it is also what Play reports once a pack is removed. A card stuck on
-            // Remove leaves no way to install the toolchain again.
+            // NOT_INSTALLED is what uninstallLocked reports when a toolchain has
+            // actually been removed, and what Play reports once a pack is gone.
+            // Cancelling reports CANCELED instead, because it removes nothing; see
+            // ToolchainActivity. A card stuck on Remove leaves no way to install
+            // the toolchain again.
             val state = manager()
             state.setInstalled(listOf("go"))
             state.updateState(go, AssetPackStatus.NOT_INSTALLED, 0)
+
+            val card = state.card(go)
+            assertEquals(ToolchainAction.INSTALL, card.action)
+            assertEquals(ToolchainBadge.NONE, card.badge)
+        }
+
+        /**
+         * Characterisation, not a guard, and it matters which: this passes both
+         * before and after the change it was written for, because the defect was
+         * `ToolchainActivity` choosing NOT_INSTALLED for a cancel rather than
+         * anything here. What it records is the meaning CANCELED has to keep for
+         * that choice to be right. The guard is in ToolchainCancelWiringTest.
+         */
+        @Test
+        fun `a cancelled download leaves an installed toolchain installed`() {
+            // Cancelling deletes nothing: it flips the download token, asks Play
+            // to cancel and hands the delivery back. The toolchain is still on
+            // disk, so the card owes the user its Remove button.
+            val state = manager()
+            state.setInstalled(listOf("ruby"))
+            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 30)
+            state.updateState(ruby, AssetPackStatus.CANCELED, 0)
+
+            val card = state.card(ruby)
+            assertEquals(ToolchainAction.REMOVE, card.action)
+            assertEquals(ToolchainBadge.INSTALLED, card.badge)
+            assertNull(card.progressPercent, "a cancelled download must leave no bar behind")
+        }
+
+        /** The other half of the case above, and characterisation for the same reason. */
+        @Test
+        fun `a cancelled first download goes back to offering Install`() {
+            val state = manager()
+            state.updateState(go, AssetPackStatus.DOWNLOADING, 30)
+            state.updateState(go, AssetPackStatus.CANCELED, 0)
 
             val card = state.card(go)
             assertEquals(ToolchainAction.INSTALL, card.action)
@@ -350,8 +387,54 @@ class ToolchainCardStateTest {
 
             val card = state.card(go)
             assertNull(card.action, "a picker card must carry no action button")
-            assertEquals(ToolchainBadge.NONE, card.badge)
+            // The badge is the one thing the picker does say: it states that the
+            // toolchain is already installed, and still offers no control at all.
+            assertEquals(ToolchainBadge.INSTALLED, card.badge)
             assertNull(card.progressPercent)
+        }
+
+        @Test
+        fun `an installed toolchain is stated rather than offered`() {
+            // The picker is offered on any launch that has not answered it, not
+            // only on the launch that unpacked the app, so a toolchain installed
+            // from the Toolchains screen can be on disk before this screen is ever
+            // shown. Drawn as a plain offer, ticking it spends the whole transfer
+            // and the whole copy again.
+            val state = picker()
+            state.setInstalled(listOf("ruby"))
+
+            val card = state.card(ruby)
+            assertEquals(ToolchainBadge.INSTALLED, card.badge)
+            assertNull(card.action, "a picker card must carry no action button")
+            assertNull(card.progressPercent)
+            assertFalse(card.selected, "an installed toolchain starts unticked")
+        }
+
+        @Test
+        fun `an installed toolchain cannot be ticked`() {
+            // Continue starts a fresh install for everything ticked and install()
+            // has no already-installed branch, so a tick that survived here is a
+            // second download of bytes the user already has, refused for space on
+            // a tight device because the pre-flight asks for twice the tree.
+            val state = picker()
+            state.setInstalled(listOf("ruby"))
+
+            state.toggleSelection(ruby)
+
+            assertEquals(emptySet<String>(), state.selectedPackNames())
+            assertFalse(state.card(ruby).selected)
+        }
+
+        @Test
+        fun `a toolchain that is not installed still ticks`() {
+            // The positive control for the case above: a refusal that refused
+            // everything would satisfy it while making the screen useless.
+            val state = picker()
+            state.setInstalled(listOf("ruby"))
+
+            state.toggleSelection("toolchain_java")
+
+            assertEquals(setOf("toolchain_java"), state.selectedPackNames())
         }
 
         @Test
