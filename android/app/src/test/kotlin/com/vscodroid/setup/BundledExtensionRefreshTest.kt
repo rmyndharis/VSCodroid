@@ -171,6 +171,13 @@ class BundledExtensionRefreshTest {
 
         val dir = File(extensionsDir, fetched)
         dir.mkdirs()
+        // Its own manifest, which every installed extension has and which this
+        // fixture did not: a directory holding none is now read as the wreckage
+        // of an unpack that never finished ([unpackWasAbandoned]), so without it
+        // the case below would be the abandoned one rather than this one.
+        File(dir, "package.json").writeText(
+            """{"publisher":"PKief","name":"material-icon-theme","version":"5.37.0"}""",
+        )
         val generated = File(dir, "extension.js")
         generated.writeText("// regenerated on the device")
 
