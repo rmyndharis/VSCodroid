@@ -15,7 +15,9 @@ import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.os.Bundle
 import android.net.Uri
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.text.util.Linkify
@@ -78,6 +80,7 @@ import org.json.JSONObject
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -425,6 +428,21 @@ class MainActivity : AppCompatActivity() {
             } ?: downloads.onComplete(requestId, "there is no page to read this download")
         }
 
+        /**
+         * Hopped and unanswered, unlike [requestBytes]. A download can end on
+         * the WebView's bridge thread and `evaluateJavascript` is the main
+         * thread's alone; and there is nothing to learn from the answer, since
+         * a page that has no hold for this URL is the ordinary case rather than
+         * a failure.
+         */
+        override fun releaseBytes(url: String) {
+            val script = "(function() {" +
+                "  var d = window.__vscodroidDownload;" +
+                "  if (d) d.release(${JSONObject.quote(url)});" +
+                "})()"
+            runOnUiThread { webView?.evaluateJavascript(script, null) }
+        }
+
         override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
             // Both halves are page supplied and this line is not gated on a
             // debuggable build, so it ships. `fileName` arrives through
@@ -478,15 +496,29 @@ class MainActivity : AppCompatActivity() {
         if (handOffToSetup()) return
         setContentView(R.layout.activity_main)
 
-        safManager = SafStorageManager(this)
+        // The application context, and that is the whole of what this outlives an
+        // Activity by. The manager's engine owns the `saf-writeback` daemon, which
+        // onDestroy waits two seconds for and then leaves running rather than
+        // discarding writes the user expects on the device; every reference the
+        // engine holds is held for as long as that drain takes. Built with `this`,
+        // that was a destroyed Activity and its whole inflated view tree, on a
+        // device this app is trying to leave memory on.
+        safManager = SafStorageManager(applicationContext)
+        // Read into locals for the same reason, and used by all three notices below:
+        // a lambda that says `this@MainActivity`, `getString` or `runOnUiThread`
+        // captures the Activity and hands it straight back to the engine. The
+        // notices themselves have to survive, because the drain they report on is
+        // exactly the part that outlives the screen.
+        val appContext = applicationContext
+        val toMainThread = Handler(Looper.getMainLooper())
         // A save that never reached the device folder looks exactly like one that did.
         // The engine has no screen, so the notice is wired here; it is throttled inside
         // the manager, because a provider that starts refusing refuses everything.
         safManager.onWriteBackFailed { file ->
-            runOnUiThread {
+            toMainThread.post {
                 Toast.makeText(
-                    this@MainActivity,
-                    getString(R.string.saf_write_back_failed, file.name),
+                    appContext,
+                    appContext.getString(R.string.saf_write_back_failed, file.name),
                     Toast.LENGTH_LONG,
                 ).show()
             }
@@ -498,12 +530,14 @@ class MainActivity : AppCompatActivity() {
         // device refusing.
         safManager.onUploadIncomplete { dir, lost, capped ->
             val message = if (capped) {
-                getString(R.string.saf_upload_capped, dir.name)
+                appContext.getString(R.string.saf_upload_capped, dir.name)
             } else {
-                resources.getQuantityString(R.plurals.saf_upload_incomplete, lost, lost, dir.name)
+                appContext.resources.getQuantityString(
+                    R.plurals.saf_upload_incomplete, lost, lost, dir.name
+                )
             }
-            runOnUiThread {
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            toMainThread.post {
+                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
             }
         }
 
@@ -511,10 +545,10 @@ class MainActivity : AppCompatActivity() {
         // Its own wording, because "the only copy is inside VSCodroid" is the opposite of
         // true for these, and would send the user looking for a file that is safe.
         safManager.onDocumentsNotCopied { count, outOfRoom ->
-            runOnUiThread {
+            toMainThread.post {
                 Toast.makeText(
-                    this@MainActivity,
-                    resources.getQuantityString(
+                    appContext,
+                    appContext.resources.getQuantityString(
                         if (outOfRoom) R.plurals.saf_documents_not_copied_no_room
                         else R.plurals.saf_documents_not_copied,
                         count,
@@ -751,9 +785,17 @@ class MainActivity : AppCompatActivity() {
         // throws, and a throw here is a crash on a path whose whole purpose is
         // to recover quietly.
         //
-        // Both captured into locals so nothing about this activity outlives it.
-        // Reading `safManager` or `tag` from inside the lambda would capture the
-        // Activity, and with it the view tree, for as long as the drain runs.
+        // Both captured into locals, which keeps this thread from holding the
+        // Activity: reading `safManager` or `tag` from inside the lambda would
+        // capture `this`, and with it the view tree, until the thread returns.
+        //
+        // Only half of what that costs was ever here, and the half that was is the
+        // smaller one: this thread ends when stopWatching does, about two seconds.
+        // The manager it names is what outlives the Activity, because the engine
+        // leaves the write-back worker running when the drain outruns that wait,
+        // which is why the manager is built on the application context and why the
+        // three notices in onCreate close over that and a main-thread Handler
+        // rather than over this Activity.
         val stopping = if (::safManager.isInitialized) safManager else null
         val logTag = tag
         if (stopping != null) {
@@ -793,6 +835,12 @@ class MainActivity : AppCompatActivity() {
             }
             serviceBindingInitiated = false
         }
+        // Dropped before the view it wraps, exactly as recreateWebView does it
+        // and for the same reason. The key row polls the page while a modifier
+        // is latched, and a tick already in the looper's queue still runs after
+        // this method returns; with the injector left in place it asks a
+        // destroyed WebView, which answers by logging and never calling back.
+        extraKeyRow?.keyInjector = null
         webView?.destroy()
         webView = null
         super.onDestroy()
@@ -859,11 +907,23 @@ class MainActivity : AppCompatActivity() {
      * activity is itself mid-sync on will start its own watcher when it finishes.
      */
     private fun adoptWorkbenchFolder(folderPath: String) {
-        val folder = safManager.folderForOpenedPath(folderPath) ?: return
-        if (watchedSafFolder?.first?.path == folder.mirrorPath) return
-        if (syncingFolder == folder.uri) return
-        Logger.i(tag, "Adopting a device folder the workbench opened on its own")
-        openSafFolder(folder.uri, navigate = false)
+        lifecycleScope.launch {
+            // Off the main thread, because this arrives from onPageFinished: the
+            // lookup asks the system server for every persisted grant and prunes
+            // the recent list against the answer, and a cold start whose remembered
+            // workspace is a mirror reaches it with the workbench already drawn.
+            val folder = withContext(Dispatchers.IO) {
+                safManager.folderForOpenedPath(folderPath)
+            } ?: return@launch
+            // Back on the main thread, which is where both of these are written:
+            // the coroutine resumes on Dispatchers.Main.immediate, and a second
+            // page load cannot interleave between the resume and openSafFolder's
+            // own assignment because that assignment is made before it suspends.
+            if (watchedSafFolder?.first?.path == folder.mirrorPath) return@launch
+            if (syncingFolder == folder.uri) return@launch
+            Logger.i(tag, "Adopting a device folder the workbench opened on its own")
+            openSafFolder(folder.uri, navigate = false)
+        }
     }
 
     /**
@@ -887,22 +947,25 @@ class MainActivity : AppCompatActivity() {
         // user's own directory (`.../tree/primary%3ADocuments%2F<folder>`),
         // `Logger.i` is not gated on a debuggable build, and logcat is readable
         // by anything holding READ_LOGS as well as by whoever a device bug report
-        // is sent to. `persistPermission` one line below already names this same
+        // is sent to. `persistPermission` in the hop below already names this same
         // folder by the six-byte digest of that URI, which is stable and is not
         // reversible; saying it in full here put the value back in logcat by
         // another route. The digest is a hash of the URI string and nothing else,
         // so it is answerable before any permission has been taken.
         Logger.i(tag, "Opening the device folder ${safManager.getMirrorDir(uri).name}")
 
-        // Persist permission so we can access this folder after app restart
-        safManager.persistPermission(uri)
-
-        val displayName = safManager.getDisplayName(uri)
-
-        // Show progress dialog during sync
+        // Up before the provider is asked anything, and named from the tree URI
+        // until it answers. Everything that used to run ahead of this dialog was a
+        // cross-process round trip: persistPermission resolves the display name and
+        // reads the persisted grants to prune the recent list, and getDisplayName
+        // queries the tree a second time. All three callers are on the thread that
+        // draws the screen (the picker result, the bridge through runOnUiThread, and
+        // onPageFinished through adoptWorkbenchFolder), so against a network- or
+        // MTP-backed provider that was seconds of frozen editor with nothing on it
+        // to say why. The real name replaces the placeholder below.
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.saf_sync_title))
-            .setMessage(getString(R.string.saf_sync_message, displayName))
+            .setMessage(getString(R.string.saf_sync_message, treeUriLabel(uri.lastPathSegment)))
             .setCancelable(false)
             .create()
         dialog.show()
@@ -912,6 +975,19 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
+                // NonCancellable, and for the permission alone. The grant used to be
+                // taken on the way in, so it was taken whatever happened next; a
+                // plain hop here would drop it if this activity were destroyed in
+                // the moment after the picker returned, and the folder would be
+                // missing from the recent list with nothing to explain it. The sync
+                // below must still be skipped in that case, which the ordinary hop
+                // after this one does by throwing.
+                val displayName = withContext(NonCancellable + Dispatchers.IO) {
+                    safManager.persistPermission(uri)
+                    safManager.getDisplayName(uri)
+                }
+                dialog.setMessage(getString(R.string.saf_sync_message, displayName))
+
                 // Before the sync, and this call was moved rather than added:
                 // there used to be one after it, which `startWatching` has since
                 // made redundant by stopping the previous watcher itself. Reading
@@ -1000,14 +1076,26 @@ class MainActivity : AppCompatActivity() {
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
                 throw e
             } catch (e: SecurityException) {
-                dialog.dismiss()
+                // Guarded like the cancellation branch above, and for the reason
+                // that one gives. A real failure can land here while this screen
+                // is going away (a grant revoked mid-sync, a provider giving up
+                // on a network share, in the moment the user swipes the app
+                // away): dismissing a dialog whose window has already been torn
+                // down throws, and a throw raised inside a catch leaves the
+                // coroutine by the scope's uncaught handler rather than being
+                // handled here at all, which is a crash on the way out of a
+                // screen the user has already left. Skipping it leaves nothing on
+                // screen, because the window that carried the dialog is what has
+                // gone; the notice below is a toast and outlives it.
+                if (!isFinishing && !isDestroyed) dialog.dismiss()
                 Logger.e(tag, "SAF permission revoked during sync", e)
                 reportSyncFailure(
                     getString(R.string.saf_sync_denied),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
             } catch (e: Exception) {
-                dialog.dismiss()
+                // Guarded for the reason the handler above it is.
+                if (!isFinishing && !isDestroyed) dialog.dismiss()
                 Logger.e(tag, "SAF sync failed", e)
                 reportSyncFailure(
                     getString(R.string.saf_sync_failed, e.message),
@@ -1428,7 +1516,9 @@ class MainActivity : AppCompatActivity() {
             wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
             // viewport-fit=cover enables rendering into display cutout area
-            wv.loadData(LOADING_PAGE, "text/html", "utf-8")
+            // Through dataUrlSafe, which is not cosmetic here: see its comment for
+            // what the unescaped page rendered as.
+            wv.loadData(dataUrlSafe(LOADING_PAGE), "text/html", "utf-8")
         }
     }
 
@@ -1725,7 +1815,7 @@ class MainActivity : AppCompatActivity() {
      * again anyway. Only the start is missing, and only the start is sent.
      */
     private fun retryServerStart() {
-        webView?.loadData(LOADING_PAGE, "text/html", "utf-8")
+        webView?.loadData(dataUrlSafe(LOADING_PAGE), "text/html", "utf-8")
         startForegroundService(Intent(this, NodeService::class.java))
     }
 
@@ -1746,13 +1836,32 @@ class MainActivity : AppCompatActivity() {
         // remembered one answers only where there is no URL to ask, which is a
         // WebView still holding the data: placeholder after this activity was
         // rebuilt over a server that never stopped.
-        navigateToFolder(
-            port,
-            folderPath
-                ?: folderFromUrl(webView?.url)
-                ?: rememberedWorkspaceFolder()
-                ?: FirstRunSetup(this).ensureProjectsDir()
-        )
+        //
+        // The first two answers cost nothing and are given here, on the thread
+        // that asked, so the ordinary navigation is as immediate as it ever was.
+        val known = folderPath ?: folderFromUrl(webView?.url)
+        if (known != null) {
+            navigateToFolder(port, known)
+            return
+        }
+        lifecycleScope.launch {
+            // Off the main thread for the reason adoptWorkbenchFolder hops, and
+            // this is the same lookup: deciding whether a remembered mirror is
+            // still granted asks the system server for every persisted grant and
+            // prunes the recent list against the answer, and the default is a
+            // directory this may have to create. Both are here on the cold-start
+            // path, on the thread drawing the screen, in the moment before the
+            // workbench is put up.
+            val folder = withContext(Dispatchers.IO) {
+                rememberedWorkspaceFolder() ?: FirstRunSetup(this@MainActivity).ensureProjectsDir()
+            }
+            // Asked again rather than carried across the hop. The URL outranks
+            // the remembered folder before the suspension and has to go on
+            // outranking it after: a renderer crash recovering into the folder it
+            // was showing arrives through this same method, and a remembered
+            // folder resolved before it would otherwise land last and win.
+            navigateToFolder(port, folderFromUrl(webView?.url) ?: folder)
+        }
     }
 
     /**
@@ -2330,8 +2439,11 @@ class MainActivity : AppCompatActivity() {
                 // minutes the later files were revoked while their own picker was
                 // still on screen, so the user chose a folder and a name and was
                 // handed a failure. The hold is released as soon as the bytes are
-                // being read (see readerFor), so this ceiling is only ever paid by
-                // a download nobody ever completes.
+                // being read (see readerFor), and again the moment Android gives
+                // up on a download it never read (see release), so this ceiling
+                // is the backstop for the one case neither covers: a download
+                // whose end nobody can report, because the page it belonged to
+                // is the thing that went away.
                 var HOLD_MS = 600000;
                 var MAX_TRACKED = 8;
 
@@ -2429,6 +2541,18 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 window.__vscodroidDownload = {
+                    // Lets go of a download Android has finished with without
+                    // ever reading it: refused for being one of too many at
+                    // once, cancelled at the picker, or failed before the
+                    // bytes were asked for. Without this the blob stays
+                    // pinned here for the whole of HOLD_MS after the user has
+                    // been told the file is not coming, and a multi-select
+                    // pins every file the queue turned away at once.
+                    release: function(url) {
+                        if (!held.has(url)) return;
+                        held.delete(url);
+                        revoke(url);
+                    },
                     // Reads url and pushes it back in pieces under id. Answers
                     // whether it started, which is the one failure Android
                     // cannot be told about any other way.
@@ -2903,6 +3027,13 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
                 CrashReporter.clearCrashLogs()
             }
+            // The third exit, and the one most people take. Back and a tap outside
+            // cancel the dialog without running either button, and the guard above
+            // is false only once the files are gone, so the same modal came back
+            // over the loading editor on every later launch and there was nothing
+            // on screen offering a way to stop it. Clearing here is what the user
+            // believes the gesture already did.
+            .setOnCancelListener { CrashReporter.clearCrashLogs() }
             .setCancelable(true)
             .show()
     }
@@ -3553,3 +3684,46 @@ internal fun escapeHtml(s: String): String = s
     .replace(">", "&gt;")
     .replace("\"", "&quot;")
     .replace("'", "&#39;")
+
+/**
+ * Markup made safe for the `data:` URL that `WebView.loadData` splices it into.
+ *
+ * `loadData` does not load a document, it builds a URL out of one, and for an app
+ * targeting Q or later the platform stops escaping the content: the first `#`
+ * ends the URL and every byte after it becomes the fragment. The loading page
+ * opens with `background:#1e1e1e`, so what the WebView actually parsed was an
+ * unterminated `<body` start tag, which is dropped at end of input. The document
+ * was empty and the view painted its own default white for the whole of the
+ * server start, which is the first screen of every cold start and the screen the
+ * Retry link puts back.
+ *
+ * `%` is escaped before `#`, or the `%23` written here would be escaped a second
+ * time into `%2523` and reach the page as literal text.
+ *
+ * Not needed by [MainActivity.showServerGaveUp]: `loadDataWithBaseURL` with a
+ * base URL that is not a data URL loads the content as a plain string, which is
+ * why that page renders today while this one does not.
+ */
+internal fun dataUrlSafe(html: String): String = html
+    .replace("%", "%25")
+    .replace("#", "%23")
+
+/**
+ * A folder name read straight off a SAF tree URI, for the moment before the
+ * provider has been asked for the real one.
+ *
+ * Never the final name: [SafStorageManager.getDisplayName] replaces it as soon as
+ * the query answers. It exists because that query is a cross-process round trip
+ * and a network- or MTP-backed provider can make it a long one, and the sync
+ * dialog has to be on screen before it, not after.
+ *
+ * The last path segment of a tree URI arrives decoded, as `primary:Documents/Work`,
+ * so the tail after the last separator is the folder the user picked. A root
+ * (`primary:`) has no tail, and there the whole segment is closer to a name than
+ * an empty pair of quotes is.
+ */
+internal fun treeUriLabel(lastPathSegment: String?): String {
+    val segment = lastPathSegment.orEmpty()
+    val tail = segment.substringAfterLast('/').substringAfterLast(':')
+    return tail.ifBlank { segment }
+}

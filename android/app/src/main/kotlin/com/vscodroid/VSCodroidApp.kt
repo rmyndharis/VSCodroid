@@ -1,8 +1,10 @@
 package com.vscodroid
 
+import android.app.Activity
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.Bundle
 import android.webkit.WebView
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
@@ -20,7 +22,20 @@ class VSCodroidApp : Application() {
         // WebView creation (~200-400ms). Creating and immediately destroying
         // a throwaway WebView triggers the library load so the real WebView
         // in MainActivity starts faster.
-        preWarmWebView { WebView(this).destroy() }
+        //
+        // Hung on the first Activity rather than run here, because this method
+        // runs for every process instantiation and not every one of them is a
+        // launch. NodeService declares no `android:process`, so a process the
+        // system creates purely to deliver a service intent runs all of this
+        // first: the notification's Stop action after the process was reclaimed,
+        // which routes straight to `shutdown()`, and the START_STICKY
+        // re-delivery whose foreground promotion is refused, which calls
+        // `stopSelf()` without starting anything. Neither ever hosts a WebView,
+        // and both were paying the whole Chromium load before they could act.
+        // Nothing is lost on the path this exists for: `Activity.onCreate`
+        // dispatches the callback below from `super.onCreate()`, so the library
+        // is still loading before the Activity has inflated anything.
+        registerActivityLifecycleCallbacks(FirstActivityPreWarm { WebView(this).destroy() })
 
         createNotificationChannel()
         Logger.i("VSCodroidApp", "Application created")
@@ -67,6 +82,45 @@ class VSCodroidApp : Application() {
         const val NOTIFICATION_CHANNEL_ID = "vscodroid_server"
         const val NOTIFICATION_ID = 1
     }
+}
+
+/**
+ * Runs [warm] when this process gets its first Activity, and never in one that
+ * only ever hosts a service.
+ *
+ * The distinction cannot be made in `Application.onCreate`, which is handed no
+ * account of what the process was created for; an Activity being created is the
+ * fact itself rather than a guess at it. It arrives from `super.onCreate()`,
+ * ahead of anything the Activity inflates, which is what keeps the saving this
+ * whole statement exists for.
+ *
+ * The flag is a plain `Boolean` and not an `AtomicBoolean`: activity lifecycle
+ * callbacks are dispatched on the main thread, so there is one writer. It is
+ * needed at all because the callback stays registered for the life of the
+ * process and every later Activity would otherwise build another WebView for
+ * nothing.
+ *
+ * Failure is still swallowed, by [preWarmWebView], and for the same reason: a
+ * missing WebView provider must not take down the process, only now it also
+ * cannot take down an Activity that would have thrown for itself a moment later.
+ */
+internal class FirstActivityPreWarm(private val warm: () -> Unit) :
+    Application.ActivityLifecycleCallbacks {
+
+    private var warmed = false
+
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+        if (warmed) return
+        warmed = true
+        preWarmWebView(warm)
+    }
+
+    override fun onActivityStarted(activity: Activity) = Unit
+    override fun onActivityResumed(activity: Activity) = Unit
+    override fun onActivityPaused(activity: Activity) = Unit
+    override fun onActivityStopped(activity: Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+    override fun onActivityDestroyed(activity: Activity) = Unit
 }
 
 /**

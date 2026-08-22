@@ -108,9 +108,10 @@ class ResourceInterceptionWiringTest {
      * answer to "who may read this" was anybody who could reach the interceptor -- and
      * a remote page in the bundled Simple Browser can, with no network involved.
      *
-     * Proved by making the file unreadable rather than by the log alone, the same way
-     * `a refused resource is never opened` does: if the refusal did not happen, the open
-     * would, and the fixture would throw.
+     * The fixture is unreadable so that letting it through cannot look like a refusal:
+     * a gate that stopped refusing would reach the open, and the open failure logs a
+     * line of its own that names the open rather than the origin, so the assertion
+     * below still tells the two apart.
      */
     @Test
     fun `a foreign origin is refused before the file is opened`() {
@@ -241,10 +242,10 @@ class ResourceInterceptionWiringTest {
      * larger failure than the one being prevented.
      *
      * Asserted against the path this test is about rather than against an empty
-     * list, because it cannot be empty: the refusal of the workspace is
-     * reported on every resource request for as long as that folder stays open,
-     * so a successful serve arrives with that warning already sitting there.
-     * `isEmpty` reads the same and asks a different question.
+     * list, because it need not be empty: the refusal of the workspace is
+     * reported once for the folder, and this is the first request naming it, so a
+     * successful serve arrives with that warning already sitting there. `isEmpty`
+     * reads the same and asks a different question.
      */
     @Test
     fun `a refused workspace leaves the published roots serving`() {
@@ -267,10 +268,14 @@ class ResourceInterceptionWiringTest {
      * served satisfied all four.
      *
      * What separates the two without touching the response is whether the file is
-     * opened. The serve branch calls `FileInputStream(file)` with no `try` around
-     * it and nothing catching upstream, so making the key unreadable turns any
-     * attempt to serve it into a thrown `FileNotFoundException`. Refusing never
-     * reaches that line and returns normally.
+     * opened, and the key is made unreadable so that an attempt to open it cannot
+     * pass unnoticed. The instrument used to be the crash itself: the serve branch
+     * called `FileInputStream(file)` with no `try` around it, so serving an
+     * unreadable file threw `FileNotFoundException` out of the whole callback.
+     * That throw was a defect of its own and is now caught, which is why the two
+     * outcomes are told apart by WHICH warning arrives rather than by whether one
+     * arrives at all: a refusal names the roots, an open failure names the open.
+     * Both quote the path, so the path alone no longer discriminates.
      *
      * [ResourceOutcomeTest] covers the same decision as a value; this is the half
      * that proves the interceptor obeys it.
@@ -282,13 +287,49 @@ class ResourceInterceptionWiringTest {
             "the fixture is still readable, so this test would pass without proving anything"
         }
 
-        // Throws if the interceptor reaches FileInputStream on it.
         intercept(sshKey.path, openFolder = null)
 
         assertTrue(
-            warnings.any { it.contains(sshKey.path) },
-            "the private key was neither refused nor opened, which is a third outcome " +
-                "this test does not understand: $warnings",
+            warnings.any { it.contains("outside the published roots") && it.contains(sshKey.path) },
+            "the private key was not refused: $warnings",
+        )
+        assertTrue(
+            warnings.none { it.contains("could not be opened") },
+            "the interceptor tried to open the private key and only failed because the " +
+                "fixture is unreadable: $warnings",
+        )
+    }
+
+    /**
+     * A file that resolves inside a root, exists, and still cannot be opened.
+     *
+     * `resourceOutcome` answers `Serve` from `exists()` and `isFile`, and the open
+     * is a second syscall: a watch build or a `git checkout` can unlink the file in
+     * the gap, and a file with no read permission fails there every time with no
+     * race at all. Nothing on the path from either entry point catches, so the
+     * `FileNotFoundException` left `shouldInterceptRequest` for the WebView's own
+     * callback, where `CrashReporter` recorded the process death rather than
+     * preventing it. The population is every webview resource request.
+     *
+     * NEGATIVE CONTROL: remove the `try` around `FileInputStream(file)` in
+     * `interceptResourceRequest` and this case goes red with the exception it
+     * describes.
+     */
+    @Test
+    fun `a resource that cannot be opened is answered rather than thrown`() {
+        val locked = File(serverTree, "extensions/md/media/locked.css").apply {
+            writeText("body{}")
+            check(setReadable(false, false)) { "could not make the fixture unreadable" }
+        }
+        check(!locked.canRead()) {
+            "the fixture is still readable, so this test would pass without proving anything"
+        }
+
+        intercept(locked.path, openFolder = null)
+
+        assertTrue(
+            warnings.any { it.contains("could not be opened") && it.contains(locked.path) },
+            "the open failure was neither reported nor recognisable in the log: $warnings",
         )
     }
 
