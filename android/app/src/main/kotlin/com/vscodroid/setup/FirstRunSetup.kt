@@ -1948,14 +1948,24 @@ claude() {
             // neither value is a preference.
             //
             // The secondary side bar starts hidden, and on a phone that is not a
-            // preference either. Upstream's default is "visibleInWorkspace" and a
-            // brand-new profile opens it regardless of that, so the first screen a
-            // user ever sees gives a large share of its width to the chat view
-            // while what is beside it wraps mid-word. The provider that view
-            // exists for is not in this build, the Copilot extension being pruned
-            // from it, so the width buys nothing back. It is only a default and
-            // the view's own title menu reverses it, so a user who opens the bar
-            // keeps it open.
+            // preference either: it takes roughly 45 percent of the width for a
+            // chat view whose provider this build prunes, and what is beside it
+            // then wraps mid-word.
+            //
+            // Writing the key here does not by itself close the bar, however
+            // plainly its name reads. It decides a workspace with no recorded
+            // layout, and by the time this file reaches the web client that
+            // record exists: the workbench starts from a copy of these settings
+            // in browser storage that the first load in a profile has not
+            // written yet, falls back to
+            // upstream's "visibleInWorkspace", opens the bar and stores
+            // `workbench.auxiliaryBar.hidden: false` against the workspace. Every
+            // later load reads the record and never consults the default again.
+            // The bundled welcome extension is what corrects the record, once per
+            // workspace; this is the value it reads to decide whether to.
+            //
+            // Still only a default, and the view's own title menu reverses it, so
+            // a user who opens the bar keeps it open.
             val defaults = """
                 {
                     "workbench.secondarySideBar.defaultVisibility": "hidden",
@@ -3062,6 +3072,14 @@ private val CLAUDE_WRAPPER_KEY = Regex(""""claudeCode\.claudeProcessWrapper"\s*:
 private val VERIFY_SIGNATURE = Regex(""""extensions\.verifySignature"\s*:""")
 
 /**
+ * Whether the user's settings already mention the secondary side bar's default.
+ *
+ * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives: the bar
+ * open is a working window and a user who asked for it meant to.
+ */
+private val SECONDARY_SIDE_BAR = Regex(""""workbench\.secondarySideBar\.defaultVisibility"\s*:""")
+
+/**
  * The two settings that route Python environment discovery through `pet`, the
  * Python extension's native locator.
  *
@@ -3772,8 +3790,8 @@ private fun isOlderVersion(a: String, b: String): Boolean {
  * than only refreshed, so they reach installs made before the setting existed:
  * `claudeCode.claudeProcessWrapper`, itself a `nativeLibraryDir` path and so
  * refreshed too, but left alone when it points somewhere the user chose;
- * `extensions.verifySignature`; and the two Python pins [PYTHON_LOCATOR] and
- * [PYTHON_ENV_EXTENSION].
+ * `extensions.verifySignature`; `workbench.secondarySideBar.defaultVisibility`;
+ * and the two Python pins [PYTHON_LOCATOR] and [PYTHON_ENV_EXTENSION].
  *
  * Substitutes values in place and leaves every other byte untouched.
  * settings.json is JSONC: comments and trailing commas are legal there, so
@@ -3825,6 +3843,25 @@ internal fun refreshManagedPaths(
     // switching it back on is a decision worth keeping.
     if (!VERIFY_SIGNATURE.containsMatchIn(updated)) {
         updated = insertSetting(updated, "extensions.verifySignature", "false")
+    }
+
+    // Same reach, and it is the whole point here: v1.1.0 shipped no such key, and
+    // createDefaultSettings() writes only when settings.json is absent, so every
+    // device upgrading into this release would otherwise never see the value at
+    // all. Inserted when absent and never rewritten, in company with
+    // [VERIFY_SIGNATURE].
+    //
+    // The key is not on its own enough to close the bar, and was never expected
+    // to be: it decides a workspace that has no recorded layout, and the record
+    // is written before this file reaches the web client. What acts on the record
+    // is the bundled welcome extension, once per workspace. This is what gives it
+    // something to read.
+    if (!SECONDARY_SIDE_BAR.containsMatchIn(updated)) {
+        updated = insertSetting(
+            updated,
+            "workbench.secondarySideBar.defaultVisibility",
+            "\"hidden\"",
+        )
     }
 
     // Reaches installs that already have a settings.json, which is every device
