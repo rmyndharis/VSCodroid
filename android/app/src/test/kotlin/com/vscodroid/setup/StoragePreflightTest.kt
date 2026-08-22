@@ -72,6 +72,9 @@ class StoragePreflightTest {
     private val assetBytes = 8 * mb
     private val largestAssetBytes = 2 * mb
 
+    /** The cap on the `usr/` credit. Non-zero, or that credit cannot be exercised. */
+    private val bundledUsrBytes = 4 * mb
+
     /**
      * The slack the gate adds, read out of the decision rather than repeated
      * here: it is private, and a copy of it would go stale the moment it moved.
@@ -133,7 +136,7 @@ class StoragePreflightTest {
     }
 
     private fun setup(free: Long, previousVersionCode: Int = 11) =
-        FirstRunSetup(context(free, previousVersionCode), assetBytes, largestAssetBytes)
+        FirstRunSetup(context(free, previousVersionCode), assetBytes, largestAssetBytes, bundledUsrBytes)
 
     /**
      * Writes [bytes] of server tree, spread over a few files so the walk has
@@ -357,6 +360,36 @@ class StoragePreflightTest {
             result,
             "an install already holding the tree was told to free the size of the tree again, " +
                 "which is the state no Retry can reach and no in-app cleanup can fix",
+        )
+    }
+
+    /**
+     * The gate itself, on the state a real fresh install is actually in.
+     *
+     * The arithmetic is pinned elsewhere, but the defect this closes lived at the
+     * call site: the headroom was decided from the whole credit, and SplashActivity
+     * writes into `usr/` before the gate is ever reached, so a device with nothing
+     * unpacked was charged for a rewrite it was not about to do. Every other case
+     * here leaves `usr/` empty, so passing the credit again instead of the
+     * extracted tree would satisfy all of them.
+     *
+     * Sized so the two answers differ: enough room for the tree and the slack, not
+     * enough for the rewrite headroom on top.
+     */
+    @Test
+    fun `a fresh install is not charged the headroom for a file the repairs left in usr`() {
+        File(filesDir, "usr/etc/tls").mkdirs()
+        File(filesDir, "usr/etc/tls/cert.pem").writeText("a repair wrote this before the gate ran")
+
+        val result = runBlocking {
+            setup(free = assetBytes + slack, previousVersionCode = 0).runSetup()
+        }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "a device with room for the whole tree was refused because a launch-time " +
+                "repair had left a file in usr/, which the rewrite headroom must not read",
         )
     }
 

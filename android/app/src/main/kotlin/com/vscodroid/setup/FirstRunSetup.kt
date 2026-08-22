@@ -36,6 +36,11 @@ class FirstRunSetup(
     private val context: Context,
     private val assetBytes: Long = BuildConfig.EXTRACTED_ASSET_BYTES,
     private val largestAssetBytes: Long = BuildConfig.LARGEST_ASSET_BYTES,
+    // Injected for the reason the two above are, and it is not optional here: the
+    // credit for `usr/` is capped at this figure, so a test that leaves it at a
+    // build-time zero cannot make that credit non-zero at all, and every case
+    // exercising the gate would agree with every other whatever the gate did.
+    private val bundledUsrBytes: Long = BuildConfig.BUNDLED_USR_BYTES,
 ) {
     private val tag = "FirstRunSetup"
     private val prefs = context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE)
@@ -192,7 +197,7 @@ class FirstRunSetup(
             val installed = extractedTreeBytes +
                 sharedTreeCredit(
                     installedBytes = installedExtractionBytes(File(context.filesDir, "usr")),
-                    bundledBytes = BuildConfig.BUNDLED_USR_BYTES,
+                    bundledBytes = bundledUsrBytes,
                     foreignBytes = installedToolchainBytes(),
                 ) +
                 sharedTreeCredit(
