@@ -11,8 +11,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.PopupWindow
-import android.widget.TextView
 import com.vscodroid.R
+import androidx.appcompat.widget.AppCompatTextView
 
 class LongPressPopup(
     private val context: Context,
@@ -155,7 +155,7 @@ class LongPressPopup(
  * A class rather than an accessibility delegate on each entry, so the override
  * sits where the row's does and one JVM-free case can read it off a single view.
  */
-internal class AlternateKeyView(context: Context) : TextView(context) {
+internal class AlternateKeyView(context: Context) : AppCompatTextView(context) {
     override fun getAccessibilityClassName(): CharSequence =
         android.widget.Button::class.java.name
 }
