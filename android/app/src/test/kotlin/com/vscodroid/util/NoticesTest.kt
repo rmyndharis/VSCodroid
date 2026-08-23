@@ -215,8 +215,9 @@ class NoticesTest {
      * file, so swapping which name opens which file leaves every hash here
      * satisfied and still puts the wrong licence in front of the reader.
      *
-     * These are the FSF texts as shipped in Termux's liblzma package, which this
-     * APK redistributes. Re-derive with:
+     * Three of the four are the FSF texts as shipped in Termux's liblzma
+     * package, which this APK redistributes; LGPL-3.0 is the FSF publication,
+     * because no package in the base APK carries a copy of it. Re-derive with:
      *   shasum -a 256 licenses/COPYING.*
      */
     private data class Verbatim(
@@ -244,6 +245,17 @@ class NoticesTest {
             "Version 2.1, February 1999",
             "That's all there is to it!",
             "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        ),
+        // The one text here that no binary in the base APK needs. GMP is
+        // LGPL-3.0 and ships in the Ruby toolchain pack, which has no licence
+        // screen of its own, so this dialog is the only route to it on a device
+        // that installed Ruby. The FSF publication at
+        // https://www.gnu.org/licenses/lgpl-3.0.txt, byte for byte.
+        "COPYING.LGPLv3" to Verbatim(
+            "GNU Lesser General Public License v3.0",
+            "Version 3, 29 June 2007",
+            "Library.",
+            "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
         )
     )
 
@@ -280,9 +292,9 @@ class NoticesTest {
     @Test
     fun `each licence text is the whole licence, byte for byte`() {
         // The obligation the source offer does not discharge. GPL-2.0 section 1,
-        // GPL-3.0 section 4 and LGPL-2.1 section 1 each require a copy of the
-        // licence to reach whoever receives the binary, and an edited or
-        // half-copied licence is not a copy of it.
+        // GPL-3.0 section 4, LGPL-2.1 section 1 and LGPL-3.0 section 4 each
+        // require a copy of the licence to reach whoever receives the binary,
+        // and an edited or half-copied licence is not a copy of it.
         val copied = copiedPaths().associateBy { File(it).name }
         for ((asset, expected) in licenseTexts) {
             val path = copied[asset]

@@ -352,15 +352,27 @@ class ForegroundPromotionCallSiteTest {
      * Depth over the comment-free rendering, for the reason the class header
      * gives: a brace inside a comment widens the window without bounding
      * anything.
+     *
+     * Depth alone is not a bound, which is why the second break is here. A
+     * declaration whose body is an expression carries no brace of its own, so the
+     * window never opens and never closes: it runs on until the NEXT declaration
+     * opens one, and everything asserted about it is then being asserted about a
+     * method nobody named. `degradableNotificationText` was that shape until it
+     * gained a `when`, and it sits directly above `createNotification`, so the
+     * trap is one edit away rather than hypothetical. Stopping at the next
+     * declaration turns that into a case that fails on its own terms.
      */
     private fun bodyOf(name: String): String {
         val lines = code().lines()
         val declaration = lines.indexOfFirst { it.contains(name) }
         assertTrue(declaration >= 0, "$name is gone; this guard names a method")
         val body = StringBuilder()
+        val nextDeclaration =
+            Regex("""^\s*(private |internal |protected |public )*(override |suspend )*fun \w""")
         var depth = 0
         var entered = false
-        for (line in lines.drop(declaration)) {
+        for ((offset, line) in lines.drop(declaration).withIndex()) {
+            if (offset > 0 && !entered && nextDeclaration.containsMatchIn(line)) break
             body.append(line).append('\n')
             depth += line.count { it == '{' } - line.count { it == '}' }
             if (depth > 0) entered = true
@@ -396,6 +408,57 @@ class ForegroundPromotionCallSiteTest {
             body.contains("catch ("),
             "the promotion has to answer a refusal rather than let it leave " +
                 "onStartCommand:\n$body",
+        )
+    }
+
+    @Test
+    fun `the card carries the whole of its line and not the first few words`() {
+        // NotificationCompat needs Android, so the card itself is out of reach from
+        // here and this reads the builder instead. Without a style the shade shows
+        // one truncated line in both the collapsed and the expanded form, and the
+        // longest string that reaches this builder is heap_override_suspended, a
+        // little over 160 characters: the half that disappears is the half naming
+        // the setting to change, on the one surface that outlives the toast and
+        // the notice.
+        val body = bodyOf("private fun createNotification(")
+        assertTrue(
+            body.contains("BigTextStyle"),
+            "a long card line has to be given a style or the user sees the first " +
+                "line of it and nothing else:\n$body",
+        )
+    }
+
+    @Test
+    fun `the running card does not warn about a network the server has`() {
+        // The adopted line said the session had no network, which was true while
+        // the DNS proxy was bound by the bootstrap: an adopted server is by
+        // construction one whose bootstrap is gone, so it went on pointing
+        // HTTPS_PROXY at a closed port. server.js now preloads the proxy into the
+        // child it forks, so the listener lives exactly as long as the server that
+        // uses it and a survivor carries a working one.
+        //
+        // The premise is asserted rather than assumed. If the preload is ever taken
+        // back out, this goes red beside the card it justifies rather than leaving
+        // a silent adopted session with no network and nothing on screen.
+        val bootstrap = File("src/main/assets/server.js")
+        check(bootstrap.isFile) { "server.js not found at ${bootstrap.absolutePath}" }
+        val forked = bootstrap.readText()
+        assertTrue(
+            forked.contains("--require") && forked.contains("dns-proxy.js"),
+            "the bootstrap no longer preloads the DNS proxy into the editor server, so " +
+                "an adopted server loses its network again and the card has to say so",
+        )
+
+        val body = bodyOf("private fun degradableNotificationText(")
+        assertFalse(
+            body.contains("notification_text_adopted"),
+            "the adopted server's network is not broken any more, and a card that says " +
+                "it is sends the user to stop a server that is working:\n$body",
+        )
+        assertTrue(
+            body.contains("heapOverrideIgnored"),
+            "the control for the assertion above: a method that derived nothing at all " +
+                "would satisfy it while saying nothing",
         )
     }
 }
@@ -1294,5 +1357,88 @@ class RestartBackoffTest {
                 "attempt $attempt gave ${restartBackoffMs(attempt)}",
             )
         }
+    }
+}
+
+/**
+ * The two questions the service asks about a server that is not answering yet.
+ *
+ * Both are private members of a `Service`: one is a supplier handed to
+ * [launchOutcome] from inside a coroutine on a main dispatcher, the other is the
+ * loop condition of a private suspending function. This suite can build neither a
+ * `Service` nor a main dispatcher, so this reads the source, which is the weaker
+ * layer and is the only one available. [LaunchOutcomeTest] owns what the decision
+ * DOES with the answer; this owns which answer it is given.
+ *
+ * `ProcessManager.isRunning()` is `serverProcess?.isAlive` and is structurally
+ * false for an adopted server, which has no `Process` at all: the adoption branch
+ * returns without ever assigning one. Asked the narrower question, a slow adopted
+ * server is classified DIED_BEFORE_ANSWERING, which [endsUnreported] treats as
+ * already owned by the crash path, so nothing retries it, and the late-readiness
+ * loop leaves on its first turn. `ProcessManager.hasLiveServer()` is the same
+ * question with adoption in it, and is pinned behaviourally by `AdoptionTest`.
+ */
+class LivenessQuestionCallSiteTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> =
+        nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+    @Test
+    fun `an adopted server is not mistaken for one that never existed`() {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = codeLines()
+
+        val narrow = lines
+            .filter { (_, l) -> l.contains("processManager.isRunning()") }
+            .map { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+        assertEquals(
+            emptyList<String>(), narrow,
+            "isRunning() answers false for an adopted server that is serving perfectly " +
+                "well, so a decision about whether one is merely slow must not read it:\n" +
+                narrow.joinToString("\n"),
+        )
+
+        // A floor of two rather than of one: the launch outcome's supplier and the
+        // late-readiness loop are separate decisions, and reverting either alone
+        // restores half the defect. The control for the assertion above, which a
+        // file with neither call would also satisfy.
+        val asked = lines.count { (_, l) -> l.contains("processManager.hasLiveServer()") }
+        assertTrue(
+            asked >= 2,
+            "both decisions must ask whether a server of ours is still there; found " +
+                "$asked call site(s)",
+        )
+    }
+
+    @Test
+    fun `a suspended heap ceiling reaches the card that outlives the toast`() {
+        // The suspension is raised once, through a callback that is null when no
+        // activity is bound and into a record that the retry's own launchServer
+        // clears as its first statement, so the whole of it can last one backoff.
+        // The suspension itself lasts until the user edits the value. The card is
+        // the only surface that outlives both, and it is where the running
+        // server's condition is derived onto.
+        check(nodeService.isFile) { "NodeService.kt not found" }
+
+        val card = codeLines().filter { (_, l) -> l.contains("R.string.heap_override_suspended") }
+        assertTrue(
+            card.any { (_, l) -> !l.contains("reportStartupNotice") },
+            "the suspension must be readable somewhere other than the notice that the " +
+                "next launch clears; found only " +
+                card.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" },
+        )
+        assertTrue(
+            codeLines().any { (_, l) -> l.contains("processManager.heapOverrideIgnored()") },
+            "and the card must derive it rather than remember it, or a value the user " +
+                "has since repaired keeps being reported as ignored",
+        )
     }
 }

@@ -18,8 +18,10 @@ import java.io.File
  * Kotlin reads. Rename or retype either side and the setting still shows up, still
  * accepts a value, still writes it to disk, and does nothing. Nothing fails to
  * compile, no test would go red, and no log line would say so. This project already
- * carries one of those: `AndroidBridge.openToolchainSettings` is a command with no
- * sender, and it took a long time to notice.
+ * carries one of those: `AndroidBridge.generateBugReport` is a relay branch with no
+ * sender, which `scripts/test-bridge-relay.js` reports on every run. This example
+ * used to name `openToolchainSettings`, which has had a sender since the saf-bridge
+ * extension gained its `VSCodroid: Manage Toolchains` command.
  *
  * The manifest is read from the assets tree rather than from an installed copy on a
  * device, which is the right window: what an extension contributes is decided by

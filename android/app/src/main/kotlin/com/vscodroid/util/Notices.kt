@@ -36,13 +36,24 @@ object Notices {
     /**
      * The verbatim licence texts, display name to asset basename.
      *
-     * GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1 section 1 each require a
-     * copy of the licence to be given to whoever receives the binary. Every one
-     * of those licences is in this APK: Git and Zstandard under GPL-2.0; Bash,
-     * GNU Make, readline and gdbm under GPL-3.0; libiconv and liblzma under
-     * LGPL-2.1. Those three texts are therefore the whole set, and the licence
-     * column of the inventory in `docs/LEGAL_NOTICES.md` is where to re-derive it
-     * when the bundled binaries change.
+     * GPL-2.0 section 1, GPL-3.0 section 4, LGPL-2.1 section 1 and LGPL-3.0
+     * section 4 each require a copy of the licence to be given to whoever
+     * receives the binary. Every one of those licences is redistributed here:
+     * Git and Zstandard under GPL-2.0; Bash, GNU Make, readline and gdbm under
+     * GPL-3.0; libiconv and liblzma under LGPL-2.1; GMP under LGPL-3.0.
+     *
+     * GMP is why the fourth text is here. It ships in the Ruby toolchain pack
+     * rather than the base APK, so only a device that installed Ruby holds the
+     * library, but the pack has no licence screen of its own: this dialog is the
+     * only place a copy of LGPL-3.0 can reach that device. LGPL-3.0 is drafted
+     * as additional permissions on top of GPL-3.0 and its section 4 asks for
+     * both documents, so it is the supplement that was missing rather than the
+     * whole obligation.
+     *
+     * The licence column of the inventory in `docs/LEGAL_NOTICES.md`, and
+     * `TOOLCHAIN_LIBRARIES` in `scripts/check-library-attribution.py`, are where
+     * to re-derive this set when the bundled binaries change; that script fails
+     * a build whose components carry a copyleft licence with no text here.
      *
      * Deliberately not in [BUNDLED]. These are 78 KiB of legalese that nobody
      * opens the notices screen to read, and appending them to the body would
@@ -55,7 +66,8 @@ object Notices {
     val LICENSE_TEXTS = linkedMapOf(
         "GNU General Public License v2.0" to "COPYING.GPLv2",
         "GNU General Public License v3.0" to "COPYING.GPLv3",
-        "GNU Lesser General Public License v2.1" to "COPYING.LGPLv2.1"
+        "GNU Lesser General Public License v2.1" to "COPYING.LGPLv2.1",
+        "GNU Lesser General Public License v3.0" to "COPYING.LGPLv3"
     )
 
     /**
