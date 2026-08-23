@@ -1,6 +1,5 @@
 package com.vscodroid.setup
 
-import android.annotation.SuppressLint
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -37,10 +36,46 @@ class ToolchainPickerAdapter(
 
     fun getSelectedPackNames(): Set<String> = cards.selectedPackNames()
 
-    @SuppressLint("NotifyDataSetChanged")
+    /**
+     * Replaces what this screen believes is on disk.
+     *
+     * A range with a payload, like every other rebind channel here, and this was
+     * the last one still calling `notifyDataSetChanged`. The plain call runs the
+     * default change animation, which swaps the item view and takes
+     * accessibility focus with it, and `ToolchainActivity.refreshDownloads` makes
+     * this call at exactly the moment a pack leaves the download map: the
+     * instant the button under a TalkBack user's finger stops being Cancel and
+     * becomes Remove. The range covers every card because the item list is fixed
+     * ([ToolchainCardState.items] is the registry), so nothing here can add or
+     * remove a row.
+     */
     fun setInstalled(packNames: Collection<String>) {
         cards.setInstalled(packNames)
-        notifyDataSetChanged()
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
+    }
+
+    /**
+     * MANAGER mode: a download this screen still draws as running has settled
+     * where nothing reports back to it.
+     *
+     * See [ToolchainCardState.clearSettledDownload], which decides what may be
+     * dropped and what a card would lose with it.
+     */
+    fun clearSettledDownload(packName: String) {
+        val pos = cards.clearSettledDownload(packName)
+        if (pos >= 0) notifyItemChanged(pos, PAYLOAD_REBIND)
+    }
+
+    /**
+     * MANAGER mode: the user has confirmed a removal that has not run yet.
+     *
+     * See [ToolchainCardState.setRemoving] for why the card stops offering
+     * anything until something reports back.
+     */
+    fun setRemoving(packName: String) {
+        cards.setRemoving(packName)
+        val pos = cards.positionOf(packName)
+        if (pos >= 0) notifyItemChanged(pos, PAYLOAD_REBIND)
     }
 
     /**

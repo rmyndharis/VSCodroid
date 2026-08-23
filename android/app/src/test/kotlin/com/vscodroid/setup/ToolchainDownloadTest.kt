@@ -243,6 +243,47 @@ class ToolchainDownloadTest {
         assertNotSame(newDownloadToken(), newDownloadToken())
     }
 
+    // -- how far along a Play delivery is --
+
+    /**
+     * The guard this function exists for, and the reason it is not inlined at
+     * its two call sites.
+     *
+     * `AssetPackState.totalBytesToDownload()` is zero until Play has decided how
+     * big the pack is, which is the state every delivery passes through on its
+     * first update. Divided by unguarded, that is an ArithmeticException raised
+     * inside a Play Core callback on the main thread, on the first update of
+     * every install rather than on some rare one.
+     */
+    @Test
+    fun `a delivery Play has not sized yet is zero percent and not a divide by zero`() {
+        assertEquals(0, packDownloadPercent(bytesDownloaded = 0, totalBytes = 0))
+        assertEquals(0, packDownloadPercent(bytesDownloaded = 12_000, totalBytes = 0))
+        assertEquals(0, packDownloadPercent(bytesDownloaded = 12_000, totalBytes = -1))
+    }
+
+    /**
+     * The ordinary readings, both ends included. 100 has to be reachable: a bar
+     * that stops at 99 for a transfer that has finished is what the user is left
+     * looking at for the whole of the copy that follows it.
+     */
+    @Test
+    fun `a sized delivery reports its share of the total`() {
+        assertEquals(0, packDownloadPercent(bytesDownloaded = 0, totalBytes = 55_400_000))
+        assertEquals(50, packDownloadPercent(bytesDownloaded = 27_700_000, totalBytes = 55_400_000))
+        assertEquals(100, packDownloadPercent(bytesDownloaded = 55_400_000, totalBytes = 55_400_000))
+    }
+
+    /**
+     * The multiplication happens before the division. Written the other way round
+     * this is integer zero for everything short of the whole file, which is a
+     * progress bar that sits at nothing and then jumps to done.
+     */
+    @Test
+    fun `a partial delivery is a percentage rather than an integer division`() {
+        assertEquals(99, packDownloadPercent(bytesDownloaded = 54_999_999, totalBytes = 55_400_000))
+    }
+
     // -- transfer completeness --
 
     /**

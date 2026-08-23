@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.SourceScan
 import com.vscodroid.util.StorageManager
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -261,6 +262,71 @@ class ToolchainCardStateTest {
     }
 
     @Nested
+    inner class RemovalsAlreadyConfirmed {
+
+        /**
+         * An uninstall is queued onto the same single-thread executor a download
+         * occupies for its whole transfer, extraction and ~155 MB copy, so
+         * confirming "Remove Ruby?" while Java 17 is downloading is answered
+         * minutes later. Until then the card went on offering Remove, which says
+         * the tap did nothing, and tapping again queued a second removal that
+         * would also do nothing.
+         */
+        @Test
+        fun `a confirmed removal takes the button away and leaves the badge`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby"))
+            assertEquals(ToolchainAction.REMOVE, state.card(ruby).action)
+
+            state.setRemoving(ruby)
+
+            val card = state.card(ruby)
+            assertNull(card.action, "the card still offers a removal the user has confirmed")
+            assertEquals(
+                ToolchainBadge.INSTALLED, card.badge,
+                "the files are there until the removal runs, so the card still says so",
+            )
+        }
+
+        @Test
+        fun `the removal that ran puts the card back to offering Install`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby"))
+            state.setRemoving(ruby)
+
+            state.updateState(ruby, AssetPackStatus.NOT_INSTALLED, 0)
+
+            assertEquals(ToolchainAction.INSTALL, state.card(ruby).action)
+        }
+
+        /**
+         * Every route out of an uninstall reports something, and any of them ends
+         * the wait. A declined removal is the one that must not leave the card
+         * mute: nothing was deleted, so the toolchain is still there to remove.
+         */
+        @Test
+        fun `a declined removal gives the button back`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby"))
+            state.setRemoving(ruby)
+
+            state.updateState(ruby, AssetPackStatus.UNKNOWN, 0)
+
+            assertEquals(ToolchainAction.REMOVE, state.card(ruby).action)
+        }
+
+        @Test
+        fun `a removal confirmed for one toolchain leaves the other card alone`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby", "go"))
+
+            state.setRemoving(ruby)
+
+            assertEquals(ToolchainAction.REMOVE, state.card(go).action)
+        }
+    }
+
+    @Nested
     inner class DownloadsThisScreenWasNotTold {
 
         /**
@@ -320,6 +386,60 @@ class ToolchainCardStateTest {
             assertEquals(ToolchainAction.REMOVE, card.action)
             assertEquals(ToolchainBadge.INSTALLED, card.badge)
             assertNull(card.progressPercent)
+        }
+
+        /**
+         * The Play half of the same question, which does not come through the
+         * seed map at all: `ToolchainActivity.onStart` feeds what Play is
+         * fetching through [ToolchainCardState.updateState], so the cellular
+         * data question can be put rather than drawn. Nothing on that screen
+         * hears such a download end, because `onStop` hands the Play Core
+         * subscription back whenever nothing is outstanding, and the card was
+         * left offering Cancel over an installed toolchain for the life of the
+         * Activity.
+         *
+         * NEGATIVE CONTROL: make [ToolchainCardState.clearSettledDownload]
+         * return -1 without dropping anything, which is what the screen did
+         * before it existed, and this goes red on the Cancel button.
+         */
+        @Test
+        fun `a seeded download Play then says has settled stops being drawn as running`() {
+            val state = manager()
+            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 42)
+            state.setInstalled(listOf("ruby"))
+            assertEquals(
+                ToolchainAction.CANCEL, state.card(ruby).action,
+                "the card this case is about is not the one being drawn",
+            )
+
+            val position = state.clearSettledDownload(ruby)
+
+            assertEquals(state.positionOf(ruby), position, "the card that changed was not named")
+            val card = state.card(ruby)
+            assertEquals(
+                ToolchainAction.REMOVE, card.action,
+                "an installed toolchain went on offering Cancel for a download that ended",
+            )
+            assertNull(card.progressPercent, "the frozen bar is still drawn")
+        }
+
+        /**
+         * NEGATIVE CONTROL: drop the report whatever it says, and this goes red
+         * on both assertions. Play answers terminally for a pack whose download
+         * failed just as it does for one that completed, and this screen's own
+         * FAILED report is the whole of what the Retry button and the badge
+         * beside it rest on.
+         */
+        @Test
+        fun `a failed report is not dropped as a download that settled`() {
+            val state = manager()
+            state.updateState(ruby, AssetPackStatus.FAILED, 0)
+
+            assertEquals(-1, state.clearSettledDownload(ruby), "a failure was dropped")
+
+            val card = state.card(ruby)
+            assertEquals(ToolchainAction.RETRY, card.action)
+            assertEquals(ToolchainBadge.FAILED, card.badge)
         }
 
         @Test
@@ -541,6 +661,64 @@ class ToolchainAdapterBoundaryTest {
             body.contains("AssetPackStatus"),
             "the adapter is reading download statuses again, so what a status means to a card " +
                 "is decided somewhere no unit test can reach it",
+        )
+    }
+}
+
+/**
+ * The last rebind channel into the toolchain cards that still ran the change
+ * animation.
+ *
+ * `updateState` and the picker's selection tap were moved to
+ * `notifyItemChanged(..., PAYLOAD_REBIND)` and `setDownloading` to
+ * `notifyItemRangeChanged(..., PAYLOAD_REBIND)`, because supplying a payload is
+ * what makes RecyclerView skip the animation that swaps the item view and takes
+ * accessibility focus with it. `setInstalled` kept a bare
+ * `notifyDataSetChanged`, and `ToolchainActivity.refreshDownloads` calls it at
+ * the one moment that costs the most: when a pack leaves the download map, which
+ * is when the button under the user's finger stops being Cancel and becomes
+ * Remove.
+ *
+ * Source reading because binding a card needs a RecyclerView and an inflated
+ * layout, and this project has no Robolectric. The other two channels are pinned
+ * the same way in PickerAccessibilityWiringTest, which is where this case
+ * belongs; it is here because the card state it guards is what this file is about.
+ *
+ * NEGATIVE CONTROL: put `notifyDataSetChanged()` back in `setInstalled` and this
+ * goes red on both assertions.
+ */
+class ToolchainInstalledRebindTest {
+
+    @Test
+    fun `the installed-set rebind carries a payload`() {
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/setup/ToolchainPickerAdapter.kt")
+        val body = SourceScan.body(source, "fun setInstalled(")
+
+        // Bounded, because [SourceScan.body] counts every brace it passes,
+        // comments included. A single `{` written into a comment inside the
+        // function stops the depth reaching zero at the real closing brace, and
+        // the body then runs on into the channels below. To repeat it: add one
+        // to a comment in `setInstalled` and drop the payload in the same edit.
+        // The extraction goes from 106 characters to 11577, and the payload
+        // assertion below is answered by `setDownloading`, which carries one,
+        // over a `setInstalled` that no longer does. The bound is what stops
+        // that passing.
+        assertTrue(
+            body.length in 50..400,
+            "extracted ${body.length} characters of setInstalled, which is the " +
+                "extraction being wrong rather than the code",
+        )
+        assertFalse(
+            Regex("""(?m)^\s*notifyDataSetChanged\(""").containsMatchIn(body),
+            "setInstalled rebinds with notifyDataSetChanged, which runs the change " +
+                "animation and takes accessibility focus off the button the user is on " +
+                "at the moment Cancel becomes Remove",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*notifyItemRangeChanged\([^)]*PAYLOAD_[A-Z_]+\)""")
+                .containsMatchIn(body),
+            "setInstalled does not rebind as a payloaded range, so whatever it does " +
+                "instead runs the animation",
         )
     }
 }

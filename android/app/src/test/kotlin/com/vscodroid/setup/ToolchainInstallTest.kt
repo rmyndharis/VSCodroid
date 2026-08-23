@@ -62,6 +62,15 @@ class ToolchainInstallTest {
     /** Written by the caller thread and by ioExecutor, so it has to be synchronized. */
     private val events: MutableList<Triple<String, Int, Int>> =
         Collections.synchronizedList(mutableListOf())
+
+    /**
+     * Every failure reason reported, so a case can assert on WHY and not only
+     * that. The copy cases below are entirely about which of them the user is
+     * shown: the same exception used to arrive as NETWORK on one delivery path
+     * and INTERNAL on the other, and neither remedy was the right one.
+     */
+    private val reasons: MutableList<ToolchainFailure> =
+        Collections.synchronizedList(mutableListOf())
     private val failed = CountDownLatch(1)
 
     @BeforeEach
@@ -97,7 +106,8 @@ class ToolchainInstallTest {
     fun tearDown() = unmockkAll()
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { pack, status, pct, _ ->
+        onStateChange = { pack, status, pct, why ->
+            if (why != null) reasons.add(why)
             events.add(Triple(pack, status, pct))
             if (status == AssetPackStatus.FAILED) failed.countDown()
         }
@@ -132,6 +142,28 @@ class ToolchainInstallTest {
         assertEquals(emptyList<Int>(), statuses(), "the HTTP branch ran on a Play install")
     }
 
+    /**
+     * Play's own legacy package name, which is still the installer of record on
+     * a device whose app was installed by an older Store.
+     *
+     * Recognising only `com.android.vending` sent those devices down the HTTP
+     * route: a Play install fetching native binaries from a GitHub release,
+     * which is the one thing the Play route exists to avoid, on a device Play
+     * would have served the pack to for nothing.
+     *
+     * NEGATIVE CONTROL: take the name out of PLAY_INSTALLERS and this fails on
+     * the fetch, exactly as the sideload case one test below passes.
+     */
+    @Test
+    fun `a Play install recorded under the legacy installer name fetches the pack`() {
+        installedBy("com.google.android.feedback")
+
+        manager().install("toolchain_java")
+
+        verify(exactly = 1) { packManager.fetch(listOf("toolchain_java")) }
+        assertEquals(emptyList<Int>(), statuses(), "the HTTP branch ran on a Play install")
+    }
+
     @Test
     fun `a sideloaded install downloads over HTTP and never asks Play`() {
         installedBy("com.example.sideloader")
@@ -154,10 +186,11 @@ class ToolchainInstallTest {
 
     @Test
     fun `an unreadable install source takes the HTTP route rather than none`() {
-        // The catch in shouldUseHttpFallback returns true on purpose. A device that
-        // will not say who installed the app is far more likely to be a sideload
-        // than a Play install, and guessing Play there leaves the user with a
-        // toolchain that never arrives and no error.
+        // The catch in shouldUseHttpFallback reads an unreadable installer as
+        // not-Play, which is what selects the HTTP route. A device that will not
+        // say who installed the app is far more likely to be a sideload than a
+        // Play install, and guessing Play there leaves the user with a toolchain
+        // that never arrives and no error.
         every { packageManager.getInstallSourceInfo(any()) } throws SecurityException("denied")
 
         manager().install("toolchain_java")
@@ -210,6 +243,101 @@ class ToolchainInstallTest {
         assertEquals(listOf(AssetPackStatus.COMPLETED), statuses())
         val state = File(filesDir, "home/.vscodroid/toolchains.json").readText()
         assertTrue(state.contains("\"java\""), "the install was reported but not recorded: $state")
+    }
+
+    // ── a copy that cannot finish ────────────────────────────────────────
+
+    /**
+     * A pack whose tree cannot be copied whole, however much room there is.
+     *
+     * The obstruction is a regular file where the copy has to create a
+     * directory, which fails with a `FileNotFoundException` -- an `IOException`,
+     * the same type `copyDirectoryTree` throws for a directory it cannot list
+     * and the same one a full disk produces. Arranged this way because the
+     * alternatives are not deterministic: filling a temporary filesystem is not
+     * available here, and a permission trick answers differently depending on
+     * who runs the suite.
+     *
+     * Both files sit under the manifest's `installRoot`, which is what the
+     * reclaim below is asserted against.
+     */
+    private fun packWithBlockedCopy(): File {
+        File(filesDir, "usr/opt/java").mkdirs()
+        // Where a directory has to go.
+        File(filesDir, "usr/opt/java/blocked").writeText("in the way")
+        val pack = File(filesDir, "pack-java").apply { mkdirs() }
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(pack, "usr/opt/java/blocked").mkdirs()
+        File(pack, "usr/opt/java/blocked/inner").writeText("payload")
+        File(pack, "usr/opt/java/ok").writeText("payload")
+        return pack
+    }
+
+    /**
+     * A disk that fills up during the copy is a storage problem on both delivery
+     * paths, and used to be reported as neither.
+     *
+     * The exception unwound out of `installFromDirectory` into whichever catch
+     * the caller had: `catch (e: IOException)` in the HTTP download, which
+     * reports NETWORK -- "Download failed. Check your connection and try again."
+     * for a transfer that had already succeeded -- and `catch (e: Exception)` on
+     * the Play path, which reports INTERNAL and asks the user to read a log.
+     * Neither remedy is the one that works.
+     */
+    @Test
+    fun `a copy that cannot finish is reported as a storage problem`() {
+        installFromDirectory(manager(), "toolchain_java", packWithBlockedCopy())
+
+        assertEquals(listOf(AssetPackStatus.FAILED), statuses(), "expected one failure, got $events")
+        assertEquals(
+            listOf(ToolchainFailure.STORAGE), synchronized(reasons) { reasons.toList() },
+            "a copy that ran out of room told the user to check their connection",
+        )
+        assertFalse(
+            File(filesDir, "home/.vscodroid/toolchains.json").exists(),
+            "a copy that failed partway was recorded as an install",
+        )
+    }
+
+    /**
+     * What a failed copy already wrote is taken back.
+     *
+     * The install record is written last, so a copy that throws leaves up to the
+     * whole unpacked tree -- about 155 MB for Java 17 -- under no manifest at
+     * all: `getInstalledToolchains` does not name it, the Toolchains screen
+     * offers no Remove, the uninstall has no record to work from, and the repair
+     * pass only visits records that exist. Clearing app data was the only way
+     * back, and on the failure this is about, a full disk, those are exactly the
+     * bytes the retry needs.
+     */
+    @Test
+    fun `a copy that cannot finish takes back what it wrote`() {
+        installFromDirectory(manager(), "toolchain_java", packWithBlockedCopy())
+
+        assertFalse(
+            File(filesDir, "usr/opt/java").exists(),
+            "the partial tree is still there, and nothing names it: no card offers to " +
+                "remove it and no uninstall can find it",
+        )
+    }
+
+    /**
+     * The other direction, and the reason the reclaim asks the record first: a
+     * reinstall over a working copy must not delete the working copy when it
+     * fails. Those files belong to the install that succeeded.
+     */
+    @Test
+    fun `a failed reinstall leaves the installed tree it was overwriting`() {
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"java","installRoot":"usr/opt/java"}]"""
+        )
+
+        installFromDirectory(manager(), "toolchain_java", packWithBlockedCopy())
+
+        assertTrue(
+            File(filesDir, "usr/opt/java").exists(),
+            "the failed reinstall deleted the tree of the install that is still recorded",
+        )
     }
 
     /**

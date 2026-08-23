@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import org.json.JSONArray
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -50,5 +51,41 @@ class ToolchainLibsTest {
     @Test
     fun `an empty manifest list removes nothing`() {
         assertTrue(toolchainLibsSafeToRemove(emptyList(), base).isEmpty())
+    }
+
+    /**
+     * The base APK was the only other owner of `usr/lib` this check knew about.
+     * Another installed toolchain owns its libraries on exactly the same terms:
+     * one copy, one shared directory, and whichever uninstall runs first takes
+     * it, leaving the other to fail at its next `dlopen` with an error naming
+     * the library rather than the removal that caused it.
+     */
+    @Test
+    fun `libraries another installed toolchain ships are named`() {
+        val state = JSONArray(
+            """
+            [{"name":"ruby","libs":["libruby.so","libgmp.so"]},
+             {"name":"java","libs":["libgmp.so","libandroid-shmem.so"]}]
+            """.trimIndent()
+        )
+
+        assertEquals(setOf("libgmp.so", "libandroid-shmem.so"), otherToolchainLibs(state, "ruby"))
+    }
+
+    @Test
+    fun `the toolchain being removed does not protect its own libraries`() {
+        // Otherwise nothing could ever be deleted: every entry names its own.
+        val state = JSONArray("""[{"name":"ruby","libs":["libruby.so"]}]""")
+
+        assertTrue(otherToolchainLibs(state, "ruby").isEmpty())
+    }
+
+    @Test
+    fun `an entry with no libs is not an error`() {
+        // The retired Go manifest carried `"libs": []`, and a manifest may leave
+        // the key out entirely.
+        val state = JSONArray("""[{"name":"go"},{"name":"java","libs":[]}]""")
+
+        assertTrue(otherToolchainLibs(state, "ruby").isEmpty())
     }
 }

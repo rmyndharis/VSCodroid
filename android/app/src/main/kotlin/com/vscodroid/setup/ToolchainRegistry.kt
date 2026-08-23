@@ -36,16 +36,21 @@ object ToolchainRegistry {
          * and telling them this number alone overstated every toolchain by
          * roughly three times.
          *
-         * **Understating it is the direction that costs a user something.** Four
-         * readers key off this one number: both install pre-flights
-         * (`packInstallBytes` for Play, `toolchainInstallBytes` for HTTP), the
-         * `foreignBytes` that `FirstRunSetup.sharedTreeCredit` subtracts from
-         * the reusable credit in the setup pre-flight, and the card the user
-         * reads. A figure below the real tree eats the 50 MB buffer the
-         * reservations are built on, and credits occupied `usr/` as reusable,
-         * which admits a device the gate exists to refuse. Measure rather than
-         * estimate: `du -sk android/toolchain_<name>/src/main/assets/usr`, which
-         * is the tree `package-toolchains.sh` archives, and round up.
+         * **Understating it is the direction that costs a user something.**
+         * Both install pre-flights key off this one number (`packInstallBytes`
+         * for Play, `toolchainInstallBytes` for HTTP), and so does every surface
+         * that quotes the figure to the user: the native card
+         * ([ToolchainCardState]) and the JSON `getAvailableToolchains` hands the
+         * web UI. A count is not given here because a count is what rots; the
+         * pre-flights are the readers a wrong figure costs someone something. A
+         * figure below the real tree eats the 50 MB buffer the reservations are
+         * built on, which admits a device the gate exists to refuse and leaves it
+         * out of room partway through the copy. The first-run pre-flight is
+         * deliberately not among them: it reads what is on disk rather than what
+         * a toolchain claims to need, so nothing there consults this. Measure
+         * rather than estimate:
+         * `du -sk android/toolchain_<name>/src/main/assets/usr`, which is the
+         * tree `package-toolchains.sh` archives, and round up.
          */
         val estimatedSize: Long,
         /**
@@ -86,8 +91,8 @@ object ToolchainRegistry {
             displayName = "Ruby",
             shortLabel = "Ruby",
             descriptionRes = R.string.toolchain_ruby_description,
-            // 34,868 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 35.7 MB. 2,276 files, so the block rounding is most of
+            // 34,888 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 35.7 MB. 2,279 files, so the block rounding is most of
             // the gap between that and the 30.0 MB the file contents sum to.
             estimatedSize = 36_000_000,
             downloadSize = 9_900_000,
@@ -98,7 +103,7 @@ object ToolchainRegistry {
             displayName = "Java 17",
             shortLabel = "Java 17",
             descriptionRes = R.string.toolchain_java_description,
-            // 151,812 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // 151,840 KiB measured with `du -sk` over the pack's `usr/` tree,
             // which is 155.5 MB; the file contents sum to 154.8 MB. This read
             // 146,000,000 until the JDK grew past it: `download-java.sh` stopped
             // deleting OpenJDK's `legal/` and began copying with `-RL`, which

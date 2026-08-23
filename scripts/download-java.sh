@@ -22,6 +22,10 @@ REQUIRED_PACKAGES=(
     openjdk-17
     libandroid-shmem
     libandroid-spawn
+    # Not a component that ships: it carries usr/share/LICENSES, the shared
+    # licence text openjdk-17's copyright symlink points at (GPL-2.0). See
+    # termux_copy_notices in scripts/lib/termux-packages.sh.
+    termux-licenses
 )
 
 # Soname mapping for shared libraries
@@ -271,6 +275,15 @@ if [ "$NOTICES_PRESENT" -eq 0 ]; then
 fi
 echo "  $NOTICES_PRESENT notice files present, none a symlink"
 
+# --- Step 5c: Place the upstream notices beside what they describe ---
+#
+# legal/ above is the JDK's own attribution and covers its seventy modules. It
+# says nothing about the two Termux shims this pack also ships, libandroid-shmem
+# and libandroid-spawn, whose notices reached no device; openjdk-17's own
+# package-level copyright is added here too, resolved from the shared GPL-2.0
+# text rather than copied as the dangling symlink Termux ships.
+termux_copy_notices "$PACK_ASSETS/usr" "${REQUIRED_PACKAGES[@]}"
+
 # --- Step 6: Write manifest.json ---
 echo ""
 echo "Writing manifest.json..."
@@ -379,6 +392,24 @@ if [ "$verify_failures" -gt 0 ]; then
     exit 1
 fi
 echo "  $verify_checked binaries verified: architecture, dependencies, 16 KB alignment"
+
+# The whole pack, not just legal/. Step 5b asks this of the notices because that
+# is where the JDK's 208 links are; this asks it of every path, because the two
+# verification loops above are driven by `find -type f`, which steps over a
+# symlink without a word. Neither delivery path can carry one: an asset pack
+# cannot hold a link, and ToolchainManager.extractZip writes every non-directory
+# entry with a FileOutputStream, so a link in the release ZIP lands on a device
+# as a text file holding the target path and fails at first use.
+echo ""
+echo "=== Verifying the pack carries no symbolic link ==="
+link_count=$(find "$PACK_ASSETS" -type l | wc -l | tr -d ' ')
+if [ "$link_count" -ne 0 ]; then
+    echo "  ERROR: $link_count symbolic link(s) in the pack:" >&2
+    find "$PACK_ASSETS" -type l | sed "s|^$PACK_ASSETS/|     |" >&2
+    echo "         Copy with 'cp -RL' so the link's target travels instead." >&2
+    exit 1
+fi
+echo "  none"
 
 # --- Step 8: Size summary ---
 echo ""

@@ -64,6 +64,44 @@ private class LoopbackServer {
     val requested: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
     /**
+     * The `Range` header each of those requests carried, or null, in the same
+     * order as [requested]. A resumed transfer is invisible in the path alone:
+     * it is the same URL asked for a second time.
+     */
+    val requestedRanges: MutableList<String?> = Collections.synchronizedList(mutableListOf())
+
+    /**
+     * Paths whose FIRST response stops after this many bytes, having declared
+     * the whole length, so a test can be a connection that drops mid-transfer
+     * rather than one that never opened.
+     */
+    @Volatile
+    var truncateFirstResponse: Map<String, Int> = emptyMap()
+
+    private val truncationsServed: MutableMap<String, Int> =
+        Collections.synchronizedMap(mutableMapOf())
+
+    /**
+     * Paths answered with no `Content-Length` at all, which is what a chunked
+     * proxy on the path leaves the client with. The download then has no length
+     * to divide by and falls back to a figure the registry carries.
+     */
+    @Volatile
+    var omitContentLength: Set<String> = emptySet()
+
+    /**
+     * Paths that answer 416 to any `Range` request rather than serving the
+     * remainder, which is what an origin says when the offset asked for is past
+     * the end of what it holds: a release asset re-uploaded smaller between two
+     * attempts, or an earlier attempt that wrote more bytes than were declared.
+     *
+     * Answered every time, deliberately. A retry that sends the same offset gets
+     * the same refusal, which is the dead end the recovery has to leave.
+     */
+    @Volatile
+    var refuseRange: Set<String> = emptySet()
+
+    /**
      * Paths that answer 302 with a `Location`, so a test can be a release ALIAS
      * rather than an asset. Checked before [routes], and answered with no body,
      * which is what a `HEAD` gets anyway.
@@ -107,13 +145,20 @@ private class LoopbackServer {
 
         val reader = conn.getInputStream().bufferedReader()
         val requestLine = reader.readLine() ?: return
+        val headers = mutableMapOf<String, String>()
         while (true) {
             val header = reader.readLine() ?: break
             if (header.isEmpty()) break
+            val colon = header.indexOf(':')
+            if (colon > 0) {
+                headers[header.substring(0, colon).trim().lowercase()] =
+                    header.substring(colon + 1).trim()
+            }
         }
 
         val path = requestLine.split(" ").getOrNull(1) ?: "/"
         requested.add(path)
+        requestedRanges.add(headers["range"])
 
         val budget = transientFailures[path] ?: 0
         val alreadyFailed = failuresServed[path] ?: 0
@@ -141,8 +186,33 @@ private class LoopbackServer {
         }
 
         val body = routes[path]
+        val cutAt = truncateFirstResponse[path] ?: 0
+        val from = rangeStart(headers["range"])
         if (body == null) {
             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+        } else if (cutAt in 1 until body.size && (truncationsServed[path] ?: 0) == 0) {
+            // Declares the whole length and sends part of it, which is what a
+            // connection dropping mid-transfer looks like to the client.
+            truncationsServed[path] = 1
+            out.write(
+                "HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray()
+            )
+            out.write(body, 0, cutAt)
+        } else if (from != null && path in refuseRange) {
+            out.write(
+                ("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\n" +
+                    "Connection: close\r\n\r\n").toByteArray()
+            )
+        } else if (from != null && from < body.size) {
+            out.write(
+                ("HTTP/1.1 206 Partial Content\r\nContent-Length: ${body.size - from}\r\n" +
+                    "Content-Range: bytes $from-${body.size - 1}/${body.size}\r\n" +
+                    "Connection: close\r\n\r\n").toByteArray()
+            )
+            out.write(body, from, body.size - from)
+        } else if (path in omitContentLength) {
+            out.write("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".toByteArray())
+            out.write(body)
         } else {
             out.write(
                 "HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray()
@@ -152,6 +222,10 @@ private class LoopbackServer {
         out.flush()
         conn.shutdownOutput()
     }
+
+    /** The first byte a `Range: bytes=N-` header asks for, or null. */
+    private fun rangeStart(header: String?): Int? =
+        header?.substringAfter("bytes=", "")?.substringBefore('-')?.trim()?.toIntOrNull()
 }
 
 /**
@@ -280,7 +354,7 @@ class ToolchainDigestInstallTest {
      * server. A test moves the release when the *shape of the URL* is what it
      * is about.
      */
-    private fun publishFrom(dir: String) {
+    private fun publishFrom(dir: String, unpackedBytes: Long = zipBytes.size.toLong()) {
         releaseDir = dir
         publishManifest(null)
 
@@ -289,11 +363,12 @@ class ToolchainDigestInstallTest {
             displayName = "Test",
             shortLabel = "Test",
             descriptionRes = com.vscodroid.R.string.toolchain_ruby_description,
-            // The fixture serves the ZIP itself, so the two figures coincide
-            // here in a way they never do for a real toolchain: nothing unpacks
-            // it. The space gate reads estimatedSize, which is what this test
-            // drives, and downloadSize only reaches the picker.
-            estimatedSize = zipBytes.size.toLong(),
+            // The fixture serves the ZIP itself, so the two figures coincide by
+            // default in a way they never do for a real toolchain: nothing
+            // unpacks it. The space gate reads estimatedSize; the progress
+            // denominator reads downloadSize, and one case below separates them
+            // because a single number was answering both questions.
+            estimatedSize = unpackedBytes,
             downloadSize = zipBytes.size.toLong(),
             downloadUrl = zipUrl,
         )
@@ -1010,6 +1085,122 @@ class ToolchainDigestInstallTest {
         assertFalse(
             recorded().contains("\"test\""),
             "the toolchain the user cancelled was installed anyway: ${recorded()}",
+        )
+    }
+
+    /**
+     * A dropped transfer costs the bytes it did not get, not the bytes it did.
+     *
+     * Every attempt used to open the destination truncating and ask for the whole
+     * file, so a connection dropping at 50 MB of the 55.4 MB Java ZIP spent those
+     * 50 MB again, and three attempts could spend about 166 MB of a metered
+     * allowance on one toolchain. This is the delivery path every non-Play
+     * install uses, including the APKs the project publishes itself.
+     *
+     * The digest is what makes resuming safe to do at all: an append that lands
+     * at the wrong offset produces an archive the release did not publish, and
+     * the check refuses it. So the two assertions are complementary -- the Range
+     * header says bytes were saved, and COMPLETED says the file assembled from
+     * two responses is byte for byte the published one.
+     *
+     * NEGATIVE CONTROL: the run still ends in COMPLETED without the resume,
+     * because the fixture serves the whole body on the second request. Only the
+     * header assertion goes red.
+     */
+    @Test
+    fun `a transfer that drops picks up where it stopped`() {
+        serveLargePack(300_000)
+        val cut = 120_000
+        server.truncateFirstResponse = mapOf(zipPath to cut)
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "the resumed archive did not match the published digest: $events",
+        )
+        assertEquals(2, timesRequested(zipPath), "expected one dropped attempt and one retry")
+        val ranges = synchronized(server.requestedRanges) {
+            server.requestedRanges.filterNotNull()
+        }
+        assertEquals(1, ranges.size, "expected exactly one resumed request, got $ranges")
+        // Not the exact offset: what survived the drop is however much of the
+        // 120,000 bytes reached the client before the socket closed, and the
+        // resume is right whatever that is. What must be true is that it asked
+        // for a remainder rather than for the file.
+        val resumeFrom = ranges[0].removePrefix("bytes=").removeSuffix("-").toLong()
+        assertTrue(
+            resumeFrom in 1..cut.toLong(),
+            "the retry asked from byte $resumeFrom, which is not where the first attempt stopped",
+        )
+    }
+
+    /**
+     * An origin that refuses the resume offset is recovered from, not asked
+     * again in the same words.
+     *
+     * The `Range` a retry sends is derived from the bytes already on disk, so a
+     * 416 is a refusal every attempt in the loop repeats verbatim: all three
+     * fail identically, minutes apart, and the user is told to check their
+     * connection about an origin that is answering perfectly well. Dropping the
+     * partial file is the only thing that changes what the next attempt asks
+     * for, which is why it happens between attempts rather than inside one.
+     *
+     * NEGATIVE CONTROL: take `zipFile.delete()` out of the RangeRefused branch
+     * and this ends in FAILED, having sent the same refused Range twice.
+     */
+    @Test
+    fun `an origin that refuses the resume offset is asked for the whole file`() {
+        serveLargePack(300_000)
+        // The truncation is what puts bytes on disk for the retry to resume
+        // from; the refusal is what the retry then runs into.
+        server.truncateFirstResponse = mapOf(zipPath to 120_000)
+        server.refuseRange = setOf(zipPath)
+
+        installAndWait()
+
+        assertEquals(
+            AssetPackStatus.COMPLETED, statuses().last(),
+            "a refused resume ended the install instead of starting it again: $events",
+        )
+        val ranges = synchronized(server.requestedRanges) {
+            server.requestedRanges.filterNotNull()
+        }
+        assertEquals(
+            1, ranges.size,
+            "expected one refused resume and then a request for the whole file, got $ranges",
+        )
+    }
+
+    /**
+     * The progress bar divides by what crosses the network, not by what the
+     * toolchain unpacks to.
+     *
+     * `install` handed one figure to the download for two jobs. The space gate
+     * needs the unpacked size, and the bar needs the transfer size, and they
+     * differ by about three times: for Java 17, 156,000,000 against a 55,400,000
+     * byte ZIP. A response with no Content-Length -- a chunked proxy on the path
+     * -- has nothing else to divide by, so the bar topped out near 30% and sat
+     * there for the rest of the transfer.
+     */
+    @Test
+    fun `progress with no declared length divides by the download size`() {
+        zipBytes = packZip(200_000)
+        publishFrom(releaseDir, unpackedBytes = zipBytes.size * 3L)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        server.omitContentLength = setOf(zipPath)
+
+        installAndWait()
+
+        val furthest = synchronized(events) {
+            events.filter { it.second == AssetPackStatus.DOWNLOADING }.maxOf { it.third }
+        }
+        // 85 is where the download's own share of the bar ends; the rest belongs
+        // to the extraction and the copy.
+        assertTrue(
+            furthest >= 80,
+            "the bar stopped at $furthest% for a transfer that finished: the denominator " +
+                "is the unpacked size rather than the download size",
         )
     }
 

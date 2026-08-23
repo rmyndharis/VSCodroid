@@ -125,6 +125,35 @@ class ToolchainUninstallLibsTest {
         assertFalse(File(libDir, ownOnly).exists(), "$ownOnly belongs only to this toolchain and should be gone")
     }
 
+    /**
+     * The base APK is not the only other owner of `usr/lib`.
+     *
+     * A second installed toolchain ships its libraries into the same directory,
+     * and the protected set counted one of the two sharers. Removing Ruby then
+     * took a library Java also ships, and Java failed at its next `dlopen` with
+     * an error naming the library rather than the uninstall that removed it.
+     * No two shipped manifests name the same library today, which is why this is
+     * a floor rather than a repair, and why it needs a fixture to be visible.
+     */
+    @Test
+    fun `a library another installed toolchain also ships survives`() {
+        every { assets.list("usr/lib") } returns emptyArray()
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """
+            [{"name":"ruby","libs":["$shared","$ownOnly"]},
+             {"name":"java","libs":["$shared"]}]
+            """.trimIndent()
+        )
+
+        uninstallSync("ruby")
+
+        assertTrue(
+            File(libDir, shared).exists(),
+            "$shared is named by the Java install too, and removing Ruby deleted it",
+        )
+        assertFalse(File(libDir, ownOnly).exists(), "$ownOnly belongs only to Ruby")
+    }
+
     /** `list` returning null is the same "cannot tell" as throwing, and must be treated alike. */
     @Test
     fun `a null base listing deletes no libraries`() {

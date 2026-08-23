@@ -24,6 +24,10 @@ REQUIRED_PACKAGES=(
     libgmp
     libyaml
     libandroid-execinfo
+    # Not a component that ships: it carries usr/share/LICENSES, the shared
+    # licence texts libgmp's copyright symlink points at (LGPL-3.0). See
+    # termux_copy_notices in scripts/lib/termux-packages.sh.
+    termux-licenses
     # fiddle, Ruby's stdlib FFI, links libffi, which the base runtime already
     # ships for Python's _ctypes in app assets. Not downloaded here: an asset
     # entry the base module and a pack both carry is a conflict bundletool
@@ -100,8 +104,20 @@ for src in "$RUBY_USR/bin"/*; do
 done
 
 # Copy ruby lib directory (stdlib + gems)
+#
+# -RL, not a bare -r, for the reason download-java.sh spells out over its own
+# copy: neither delivery path can carry a symbolic link. An Android asset pack
+# cannot hold one, and ToolchainManager.extractZip writes every non-directory
+# entry with a FileOutputStream, so a link entry in the release ZIP arrives on a
+# device as a text file holding the target path. A bare -r also does different
+# things on the two machines this runs on: BSD cp on a maintainer's macOS
+# dereferences a link in the source tree, GNU cp on the release runner copies it
+# as a link, so the pack built locally and the pack CI ships would differ.
+#
+# The package upstream ships today has no link under lib/ruby, which is why this
+# has cost nothing so far. What it ships next is not this repository's choice.
 if [ -d "$RUBY_USR/lib/ruby" ]; then
-    cp -r "$RUBY_USR/lib/ruby" "$PACK_ASSETS/usr/lib/ruby"
+    cp -RL "$RUBY_USR/lib/ruby" "$PACK_ASSETS/usr/lib/ruby"
     echo "  lib/ruby/"
 fi
 
@@ -183,6 +199,16 @@ python3 "$SCRIPT_DIR/patch-default-shell.py" \
     "$PACK_ASSETS/usr/lib/libruby.so" \
     "$RUBY_LIB/aarch64-linux-android/pty.so" \
     "$RUBY_LIB/mkmf.rb"
+
+# --- Step 5c: Place the upstream notices beside what they describe ---
+#
+# After the strip, because that sweep removes `doc` directories under
+# lib/ruby and this writes into share/doc; before the manifest, so the pack a
+# release attaches always carries them. Ruby's own copyright, libyaml's and
+# libandroid-execinfo's reached no device until now, and GMP is LGPL-3.0: its
+# copyright resolves to the shared LGPL-3.0 text, which the licences dialog also
+# carries in the base APK.
+termux_copy_notices "$PACK_ASSETS/usr" "${REQUIRED_PACKAGES[@]}"
 
 # --- Step 6: Write toolchain_ruby.json ---
 echo ""
@@ -330,6 +356,24 @@ echo "  $verify_checked binaries verified: architecture, dependencies, 16 KB ali
 echo ""
 echo "=== Verifying no file in the pack names a shell it cannot reach ==="
 python3 "$SCRIPT_DIR/patch-default-shell.py" --check "$PACK_ASSETS"
+
+# Asserted where it is relied on. Neither delivery path can carry a symbolic
+# link: an asset pack cannot hold one, and ToolchainManager.extractZip writes
+# every non-directory entry with a FileOutputStream, so a link in the release ZIP
+# lands on a device as a text file holding the target path. The sonames this pack
+# needs are created at install time from the manifest for exactly that reason.
+# Both verification loops above are driven by `find -type f`, which steps over a
+# link without a word, so nothing else here would notice one.
+echo ""
+echo "=== Verifying the pack carries no symbolic link ==="
+link_count=$(find "$PACK_ASSETS" -type l | wc -l | tr -d ' ')
+if [ "$link_count" -ne 0 ]; then
+    echo "  ERROR: $link_count symbolic link(s) in the pack:" >&2
+    find "$PACK_ASSETS" -type l | sed "s|^$PACK_ASSETS/|     |" >&2
+    echo "         Copy with 'cp -RL' so the link's target travels instead." >&2
+    exit 1
+fi
+echo "  none"
 
 # --- Step 8: Size summary ---
 echo ""

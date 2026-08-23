@@ -25,15 +25,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Settings screen for managing on-demand toolchains.
  *
- * Reached from the launcher shortcut published by `publishToolchainShortcut` in
- * [SplashActivity], which is the only route a user has. This activity is not
- * exported and has no launcher entry of its own.
+ * Two routes in, and neither is a launcher entry: this activity is not exported
+ * and has none of its own.
  *
- * [com.vscodroid.bridge.AndroidBridge.openToolchainSettings] can also start it,
- * and nothing calls that: it is dispatched by the `openToolchainSettings` command
- * on the BroadcastChannel relay, which no bundled extension sends. Naming it here
- * as the way in is what this comment used to do, and it sent readers looking for
- * a caller that does not exist.
+ * The launcher shortcut published by `publishToolchainShortcut` in
+ * [SplashActivity] is the one that does not depend on the editor being up, which
+ * is why it is the route the on-device test exercises. The other is
+ * [com.vscodroid.bridge.AndroidBridge.openToolchainSettings], reached by the
+ * `openToolchainSettings` command on the BroadcastChannel relay, which the
+ * bundled SAF-bridge extension now sends behind its `vscodroid.manageToolchains`
+ * command. That sender is recent: the bridge method and its relay branch existed
+ * with no caller at all, so a user who skipped the first-run picker and cleared
+ * the shortcut had no way back.
  */
 class ToolchainActivity : AppCompatActivity() {
     private val tag = "ToolchainActivity"
@@ -357,15 +360,65 @@ class ToolchainActivity : AppCompatActivity() {
         // another manager began the transfer: the cards started empty and offered
         // Install for a pack already downloading, with no progress and no Cancel.
         // Asked again on a timer from here on, because one reading goes stale while
-        // the screen is still looking at it. Play's own downloads are not in this
-        // map, and a Play transfer this screen did not begin therefore draws no
-        // progress until Play reports one. What must not depend on a report is the
-        // COMPLETED that installs a delivered pack, and that no longer does: the
-        // subscription is held until the download settles rather than resting on a
-        // re-emission Play Core promises nowhere. This comment used to assert that
-        // re-delivery as a fact, which is the claim AndroidBridge refuses to build
-        // on and nothing here has measured.
+        // the screen is still looking at it. This snapshot covers the HTTP path
+        // only, and Play is asked separately by the call below rather than left
+        // to report on its own. What must not depend on a report is the COMPLETED
+        // that installs a delivered pack, and that no longer does: the
+        // subscription is held until the download settles rather than resting on
+        // a re-emission Play Core promises nowhere. This comment
+        // used to assert that re-delivery as a fact, which is the claim
+        // AndroidBridge refuses to build on and nothing here has measured.
         refreshDownloads()
+        // The Play half of the same question, asked rather than assumed. A
+        // rotation mid-download rebuilds this screen with no reports at all, and
+        // [refreshDownloads] covers the HTTP path only, so the card fell through
+        // to Install for a pack Play was actively fetching: no progress, and no
+        // Cancel, which is the only control here that stops a metered transfer.
+        // Whether Play would have re-delivered that state to the listener
+        // registered above is exactly the thing nothing here has measured.
+        //
+        // Weakly, for the reason the state callback in onCreate is weak: this
+        // lambda is held by a Play Core task that can outlive the screen. An
+        // earlier draft captured the adapter instead and said that avoided
+        // holding the Activity, which is not true and is worth naming so nobody
+        // reaches for it again: `adapter.onAction` calls this screen's own
+        // members, so the adapter retains it exactly as completely.
+        val screen = WeakReference(this)
+        toolchainManager.readPlayDownloads { packName, status, percent ->
+            // Only what is still moving is taken. A settled status from Play
+            // would otherwise overwrite this screen's own knowledge: COMPLETED
+            // puts a pack in the installed set, and Play reports that for a pack
+            // it has delivered and nothing has copied into `usr/` yet.
+            //
+            // Ended rather than merely dropped, though, because the seed below
+            // goes in as a report and no report ever takes it out: `onStop`
+            // hands the subscription back whenever nothing is outstanding, so a
+            // pack seeded as downloading and finished while the user was in the
+            // editor left this card on a frozen bar offering Cancel over an
+            // installed toolchain until the screen was destroyed. Play's answer
+            // here is the only thing that knows it ended, and the card state
+            // drops nothing but a still-running report on the strength of it.
+            if (isTerminalPackStatus(status)) {
+                screen.get()?.adapter?.clearSettledDownload(packName)
+                return@readPlayDownloads
+            }
+            // Through showPackState rather than into the card directly, because
+            // one of the statuses that is still moving cannot be drawn and left:
+            // REQUIRES_USER_CONFIRMATION is Play waiting on the cellular-data
+            // question, and a pack recovered in it drew a Cancel button while
+            // nobody was ever asked, so it waited for ever. That gate, and the
+            // deferral for a screen that is not started, both live there.
+            //
+            // A screen returning from the background with a deferred question of
+            // its own can be asked twice: `onStart` puts that one before this
+            // answer arrives. Twice is the better failure than never, and no
+            // flag here can order an answer that lands after this method
+            // returns.
+            //
+            // Nulls because Play was asked, not told: there is no failure to
+            // explain, and nothing on this screen requested the pack.
+            screen.get()?.showPackState(packName, status, percent, null, false)
+        }
         grid.postDelayed(pollDownloads, DOWNLOAD_POLL_MS)
         // Put now, because Play asked while there was no started screen to put it
         // and nothing else will ask again. REQUIRES_USER_CONFIRMATION does not
@@ -440,6 +493,14 @@ class ToolchainActivity : AppCompatActivity() {
             .setPositiveButton(getString(R.string.toolchain_remove)) { _, _ ->
                 val shortName = packName.removePrefix("toolchain_")
                 toolchainManager.uninstall(shortName)
+                // The card stops offering anything until the removal reports.
+                // `uninstall` queues onto the same single-thread executor a
+                // download occupies for its whole transfer and copy, so
+                // confirming this while another toolchain is downloading is
+                // answered minutes later; until this line the card went on
+                // saying Remove, and a second tap queued a second removal that
+                // would also do nothing.
+                adapter.setRemoving(packName)
                 Logger.i(tag, "User confirmed removal of $shortName")
             }
             .setNegativeButton(android.R.string.cancel, null)

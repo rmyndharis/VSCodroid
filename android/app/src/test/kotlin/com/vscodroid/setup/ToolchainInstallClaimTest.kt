@@ -174,6 +174,69 @@ class ToolchainInstallClaimTest {
             .apply { isAccessible = true }
             .invoke(m, pack, dir)
 
+    /** Private; `uninstall` hands this to an executor and swallows nothing else. */
+    private fun uninstallSync(m: ToolchainManager, name: String) =
+        ToolchainManager::class.java
+            .getDeclaredMethod("uninstallSync", String::class.java)
+            .apply { isAccessible = true }
+            .invoke(m, name)
+
+    /**
+     * A removal is the same file work in the opposite direction, and nothing put
+     * the two in order.
+     *
+     * The install claims the pack for the length of its copy; the uninstall
+     * claimed nothing and took `stateLock` for the record alone, which the copy
+     * does not hold. Each construction site has its own single-thread executor,
+     * so the pair is reachable across two managers: a removal from the bridge or
+     * from the Toolchains screen against the copy the first-run queue is
+     * performing. What it costs is the files being deleted while they are
+     * written, after which the install writes a record calling the result
+     * complete.
+     *
+     * The record names the toolchain here because that is what makes Remove
+     * reachable at all: a card offers it only for an install the record knows.
+     */
+    @Test
+    fun `a removal is declined while an install of the same pack is copying`() {
+        val dir = packDirectory()
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"java","installRoot":"usr/opt/java"}]"""
+        )
+        val earlier = copiedFile().apply {
+            parentFile?.mkdirs()
+            writeText("payload")
+        }
+        val installEvents = Collections.synchronizedList(mutableListOf<Int>())
+        val removeEvents = Collections.synchronizedList(mutableListOf<Int>())
+
+        val first = startHeldInstall(dir, installEvents)
+        assertTrue(
+            firstIsHolding.await(10, TimeUnit.SECONDS),
+            "the install never reached the copy, so nothing was being raced",
+        )
+
+        uninstallSync(manager(removeEvents), "java")
+
+        assertTrue(
+            earlier.exists(),
+            "the removal deleted the tree an install is copying into right now",
+        )
+        assertTrue(
+            File(filesDir, "home/.vscodroid/toolchains.json").readText().contains("\"java\""),
+            "the removal took the record out from under the install that is still running",
+        )
+        assertEquals(
+            listOf(AssetPackStatus.UNKNOWN), removeEvents,
+            "a declined removal has to say something: the card has taken its Remove " +
+                "button away and needs an answer to put it back",
+        )
+
+        letFirstProceed.countDown()
+        first.join(TimeUnit.SECONDS.toMillis(10))
+        assertFalse(first.isAlive, "the install never finished")
+    }
+
     @Test
     fun `a second install of a pack already being installed copies nothing`() {
         val dir = packDirectory()

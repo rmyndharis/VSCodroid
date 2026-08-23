@@ -78,9 +78,10 @@ class ToolchainRegistryTest {
          * The recorded unpacked size is a floor, measured against the tree the
          * release is built from, not an estimate.
          *
-         * Three readers key off it, and an understatement is the direction that
-         * costs someone something: both install pre-flights shrink toward the
-         * 50 MB buffer they are built on, and the card tells the user a smaller
+         * An understatement is the direction that costs someone something: both
+         * install pre-flights shrink toward the 50 MB buffer they are built on,
+         * and both surfaces that quote it, the native card and the JSON
+         * `getAvailableToolchains` hands the web UI, tell the user a smaller
          * number than the install writes. It went wrong exactly that
          * way once already: `download-java.sh` stopped deleting OpenJDK's
          * `legal/` and began dereferencing symlinks on copy, and the constant
@@ -102,7 +103,14 @@ class ToolchainRegistryTest {
                 val usr = File("../${tc.packName}/src/main/assets/usr")
                 if (!usr.isDirectory) continue
                 measured++
-                val onDisk = usr.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                // Rounded up to 4 KiB blocks, because that is what the constant
+                // records: its KDoc says to measure with `du -sk`. A plain sum of
+                // file lengths is a smaller and different number, by 5.7 MB over
+                // Ruby's 2,279 files, and blocks are what the device spends
+                // anyway. Measured: this reproduces `du -sk` exactly for both
+                // packs that ship.
+                val onDisk = usr.walkTopDown().filter { it.isFile }
+                    .sumOf { (it.length() + 4095) / 4096 * 4096 }
                 assertTrue(
                     tc.estimatedSize >= onDisk,
                     "${tc.packName} records ${tc.estimatedSize} bytes for a tree of $onDisk; " +
@@ -114,6 +122,72 @@ class ToolchainRegistryTest {
                 measured > 0,
                 "no toolchain pack has been built in this checkout, so nothing was measured; " +
                     "run scripts/download-java.sh and scripts/download-ruby.sh to reach this",
+            )
+        }
+
+        /**
+         * The catalog and the bundle have to name the same packs.
+         *
+         * The ZIP direction is gated elsewhere: `release.yml` greps this file for
+         * the ZIP names, fails on an empty match, and refuses a release where a
+         * named ZIP was not packaged or is missing from the digest manifest. What
+         * nothing compared before this test is the catalog against `assetPacks`
+         * in the app's build script, and that list is what decides which asset
+         * packs the AAB carries.
+         *
+         * Adding a toolchain to the catalog and forgetting that line attaches the
+         * ZIP to the release so sideloads install it, and leaves every Play
+         * install calling `assetPackManager.fetch` for a pack the bundle does not
+         * contain: a download that fails with PACK_UNAVAILABLE, and nothing
+         * anywhere saying why.
+         *
+         * `settings.gradle.kts` is checked as the second half of the same claim
+         * rather than as a separate one: an `assetPacks` entry naming a project
+         * that was never `include`d is a Gradle project path resolving to
+         * nothing, and whether that fails the build or is quietly dropped is not
+         * something this suite can find out. Comparing the text is cheap and does
+         * not depend on the answer.
+         *
+         * The build script is declared as an input to this task, so an edit to it
+         * re-runs this rather than answering UP-TO-DATE. ⚠️ `settings.gradle.kts`
+         * is not declared, so an edit to that file alone can leave this task up
+         * to date over the previous run's results. What that leaves uncovered is
+         * narrower than it sounds: the way these lists come apart is a toolchain
+         * added to the catalog, and the catalog is compiled into the classpath
+         * this task already depends on.
+         */
+        @Test
+        fun `every toolchain offered is an asset pack the bundle carries`() {
+            // Unit tests run with the module as the working directory.
+            val buildScript = File("build.gradle.kts")
+            assertTrue(buildScript.isFile, "app/build.gradle.kts was not where tests run")
+            val list = Regex("""(?m)^\s*assetPacks\s*\+=\s*listOf\(([^)]*)\)""")
+                .find(buildScript.readText())?.groupValues?.get(1)
+            assertNotNull(
+                list,
+                "build.gradle.kts no longer names the asset packs it packages, so nothing " +
+                    "here can tell whether the catalog matches them",
+            )
+            val packed = Regex(""""\s*:(toolchain_\w+)\s*"""").findAll(list!!)
+                .map { it.groupValues[1] }.toSet()
+            val offered = ToolchainRegistry.available.map { it.packName }.toSet()
+            assertEquals(
+                offered, packed,
+                "the toolchains this build offers and the asset packs it bundles are not the " +
+                    "same set. A pack in neither list is dead weight; a toolchain offered " +
+                    "without its pack fetches something the AAB does not carry, on every " +
+                    "Play install",
+            )
+            // One level up from the module, beside the pack modules themselves.
+            val settings = File("../settings.gradle.kts")
+            assertTrue(settings.isFile, "android/settings.gradle.kts was not where tests run")
+            val included = Regex("""(?m)^\s*include\("\s*:(toolchain_\w+)\s*"\)""")
+                .findAll(settings.readText()).map { it.groupValues[1] }.toSet()
+            assertEquals(
+                offered, included,
+                "the toolchains this build offers and the pack modules settings.gradle.kts " +
+                    "includes are not the same set; an asset pack that is not a project is " +
+                    "not in the bundle whatever build.gradle.kts lists",
             )
         }
 

@@ -438,6 +438,64 @@ class ToolchainScreenRetentionTest {
     }
 
     /**
+     * The seed a rebuilt screen takes from Play goes through the screen's own
+     * report path, not straight into the card.
+     *
+     * `readPlayDownloads` exists so a rotation mid-download does not leave the
+     * card offering Install with no progress and no Cancel, and it reports every
+     * unsettled state Play holds. One of those cannot be drawn and left:
+     * REQUIRES_USER_CONFIRMATION is Play waiting on the cellular-data question,
+     * and nothing further follows it. Fed to the adapter directly, such a pack
+     * drew a Cancel button while nobody was ever asked, and waited for good.
+     * `showPackState` is where the question is put, and where it is deferred to
+     * the next `onStart` for a screen the user is not looking at.
+     *
+     * The other half is what happens to the settled states in the same answer.
+     * They are not drawn, because Play reports COMPLETED for a pack it has
+     * delivered and nothing has copied into `usr/` yet, but they are the only
+     * report that an earlier seed's download has ended: `onStop` hands the
+     * subscription back whenever nothing is outstanding, so a pack seeded as
+     * downloading and finished while the user was in the editor is heard by
+     * nobody here. Dropped outright, the card kept a frozen bar and a Cancel
+     * button over an installed toolchain for the life of the Activity.
+     *
+     * NEGATIVE CONTROL: replace the call with `adapter.updateState(...)` and the
+     * routing assertion goes red; capture the adapter instead of a weak
+     * reference and the second one does; make the terminal branch a bare
+     * `return@readPlayDownloads`, which is what it was, and the last one does.
+     */
+    @Test
+    fun `what Play is already doing is seeded through the screen's own report path`() {
+        val started = body("override fun onStart()")
+        val call = started.indexOf("readPlayDownloads")
+        assertTrue(
+            call >= 0,
+            "onStart no longer asks Play what it is already fetching, so a screen rebuilt " +
+                "mid-download offers Install for it with no progress and no Cancel: $started",
+        )
+        val callback = started.substring(call)
+        assertTrue(
+            "showPackState(" in callback,
+            "Play's answer is drawn without going through showPackState, so a pack " +
+                "recovered in REQUIRES_USER_CONFIRMATION never has the question put and " +
+                "waits on an answer nobody is asked for: $callback",
+        )
+        assertTrue(
+            "WeakReference(this)" in started,
+            "the callback holds this Activity directly. It is kept by a Play Core task " +
+                "that outlives the screen, and capturing the adapter is not the lighter " +
+                "option it reads as: adapter.onAction calls this screen's own members.",
+        )
+        assertTrue(
+            "clearSettledDownload(" in callback,
+            "a settled state from Play is dropped and nothing else ever ends the seed " +
+                "written for that pack: the card goes on offering Cancel, over a frozen " +
+                "bar, for a toolchain that finished installing while the user was " +
+                "elsewhere: $callback",
+        )
+    }
+
+    /**
      * NEGATIVE CONTROL: drop either `if (outstanding.isEmpty())` guard and this
      * goes red; that is exactly the code that shipped, and it left a Play pack
      * delivered and never installed when the user pressed Home mid-download.

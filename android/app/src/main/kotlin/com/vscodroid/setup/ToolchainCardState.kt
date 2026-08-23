@@ -75,8 +75,32 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * is doing and is replaced wholesale by the next [setDownloading]. Folding a
      * seed into [downloadStatus] would leave a card offering Cancel for a
      * download that finished, since nothing ever reports its end here.
+     *
+     * This is the HTTP half only. What Play is fetching goes through
+     * [updateState] instead, because one of the states a pack can be recovered
+     * in is Play waiting on the cellular-data question, and that has to be put
+     * rather than drawn. The cost of that route is exactly the trap above, a
+     * report whose end no listener on this screen hears, and [clearSettledDownload]
+     * is what ends it the next time Play is asked.
      */
     private val seededDownloads = mutableMapOf<String, Int>()
+
+    /**
+     * Packs the user has confirmed a removal for, until something reports back.
+     *
+     * An uninstall is queued on the same single-thread executor a download
+     * occupies for the whole of a transfer, an extraction and a ~155 MB copy, so
+     * confirming "Remove Ruby?" while Java 17 downloads does nothing for
+     * minutes: the dialog closed, the card went on offering Remove, and tapping
+     * it again queued a second removal that would also do nothing. Taking the
+     * button away is the honest reading of what the user asked for and what has
+     * happened so far, and it is what makes the second tap impossible.
+     *
+     * Cleared by any report about the pack, which every route out of the
+     * uninstall now makes: the removal itself, a record that could not be
+     * written, a record that never named the toolchain, and a decline.
+     */
+    private val removing = mutableSetOf<String>()
 
     /** Position of [packName] among [items], or -1 when no card shows it. */
     fun positionOf(packName: String): Int = items.indexOfFirst { it.packName == packName }
@@ -126,6 +150,9 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
     fun updateState(packName: String, status: Int, percent: Int): Int {
         downloadStatus[packName] = status
         downloadPercent[packName] = percent
+        // Any answer at all ends the wait a confirmed removal put the card in.
+        // Which answer it was decides the card below on its own merits.
+        removing.remove(packName)
 
         if (status == AssetPackStatus.COMPLETED) {
             installed.add(packName)
@@ -134,6 +161,42 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
             installed.remove(packName)
         }
         return positionOf(packName)
+    }
+
+    /**
+     * MANAGER: drops a still-running report for [packName] because the download
+     * it describes has settled, and returns the position whose card it changed,
+     * or -1 when nothing was dropped.
+     *
+     * `ToolchainActivity.onStart` asks Play what it is already fetching and
+     * feeds the unsettled answers through [updateState], which is a report like
+     * any other and stays until the next one replaces it. For a download this
+     * screen did not start, no next one arrives: `onStop` hands the Play Core
+     * subscription back whenever nothing is outstanding, so a pack that
+     * finished while the user was in the editor was heard by nobody here. The
+     * card was left on a frozen percentage offering Cancel, over a toolchain
+     * that is installed, for the life of the Activity. Play's own answer at the
+     * next `onStart` is the report that ends it.
+     *
+     * Only a report that says the download is still going is dropped. FAILED is
+     * settled too and Play answers it for the same pack, but it is this
+     * screen's own word on a download that ended and is the whole of what the
+     * Retry button and the badge beside it rest on.
+     */
+    fun clearSettledDownload(packName: String): Int {
+        val status = downloadStatus[packName]
+        if (status !in IN_FLIGHT) return -1
+        downloadStatus.remove(packName)
+        downloadPercent.remove(packName)
+        return positionOf(packName)
+    }
+
+    /**
+     * MANAGER: records that a removal of [packName] has been asked for and has
+     * not answered yet. See [removing].
+     */
+    fun setRemoving(packName: String) {
+        removing.add(packName)
     }
 
     /** PICKER: ticks [packName] if it is not ticked, unticks it if it is. */
@@ -208,6 +271,12 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
                 progressPercent = seeded,
                 action = ToolchainAction.CANCEL,
             )
+            // Still installed, and no longer offering anything: the files are
+            // there until the removal runs, and the one thing the user could do
+            // about this card they have already done. Below the two download
+            // branches deliberately, so a card that is somehow both would still
+            // show the Cancel that stops a transfer.
+            packName in removing -> ToolchainCard(badge = ToolchainBadge.INSTALLED)
             status == AssetPackStatus.FAILED -> ToolchainCard(
                 badge = ToolchainBadge.FAILED,
                 action = ToolchainAction.RETRY,
