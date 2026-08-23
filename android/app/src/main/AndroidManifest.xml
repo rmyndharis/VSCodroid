@@ -12,6 +12,35 @@
     <!-- Notifications: server status in notification shade -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- largeHeap raises the ART heap CAP for this process and nothing else:
+         it does not reserve memory and no Kotlin here reads it. On an API 33
+         arm64 device with 4 GB of RAM the cap moves from
+         dalvik.vm.heapgrowthlimit=192m to dalvik.vm.heapsize=576m (measured
+         2026-08-23). The app's actual memory story belongs to a different
+         process family, the V8 ceiling ProcessManager.heapCeilingForDevice
+         derives from device RAM, which this attribute does not touch.
+
+         It was carried here with no comment and no measurement. Both readings
+         have now been taken on an API 33 arm64 emulator with 4 GB of RAM.
+         Splash screen, WebView pre-warmed: 8.8 MB of ART heap, 4.4 MB of it
+         allocated, 111 MB PSS. Workbench loaded through SplashActivity with a
+         folder open and a terminal running: 8.5 MB of ART heap, 4.3 MB
+         allocated, 113 MB PSS. The second reading is the one that was expected
+         to move and did not, because the WebView's browser-side allocations
+         are in a different process
+         (com.google.android.webview:sandboxed_process0), not in this one.
+
+         So the attribute is not load-bearing: this process uses about 2% of
+         the 192 MB it would be capped at without it. It stays because removing
+         it trades nothing measurable for an OOM path nobody has exercised, and
+         it is kept honest rather than kept silently. What is still unmeasured
+         is a heavy session (many open editors, several terminals); if that
+         reading also lands near 4 MB, delete the line.
+
+         The reading to take, with the package the build actually installs
+         (debug adds a .debug suffix):
+           adb shell dumpsys meminfo com.vscodroid -d | grep -A4 'App Summary'
+         The renderer is a separate process and is not the subject here. -->
     <application
         android:name=".VSCodroidApp"
         android:allowBackup="true"

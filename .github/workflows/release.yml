@@ -97,9 +97,24 @@ jobs:
           esac
 
           gradle_file=android/app/build.gradle.kts
-          version_name=$(grep -m1 'versionName = ' "$gradle_file" | sed 's/.*"\(.*\)".*/\1/')
-          version_code=$(grep -m1 'versionCode = ' "$gradle_file" | sed 's/[^0-9]*//g')
+          # Anchored to the start of a line. That file is majority comment, and
+          # its comments quote the code they describe -- the lint block, the
+          # BuildConfig block and the setup-staleness invariant all discuss
+          # versionCode and versionName in prose. An unanchored -m1 takes
+          # whichever line comes first, so one explanatory comment written above
+          # the declaration would compare the tag against a number lifted out of
+          # a sentence, and the case this gate exists to catch (a versionCode
+          # that does not increase, so the release's migrations run for nobody)
+          # is exactly the one it would then wave through.
+          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed 's/.*"\(.*\)".*/\1/')
+          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed 's/[^0-9]*//g')
           tag_version=${TAG#v}
+
+          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
+            echo "::error::Could not read versionName/versionCode from $gradle_file." \
+                 "The declaration moved or changed shape; this gate compared nothing."
+            exit 1
+          fi
 
           echo "tag          : $TAG"
           echo "versionName  : $version_name"
@@ -120,7 +135,7 @@ jobs:
           previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$TAG^" 2>/dev/null || echo "")
           if [ -n "$previous" ]; then
             previous_code=$(git show "$previous:$gradle_file" 2>/dev/null \
-              | grep -m1 'versionCode = ' | sed 's/[^0-9]*//g' || echo "")
+              | grep -m1 -E '^[[:space:]]*versionCode = ' | sed 's/[^0-9]*//g' || echo "")
             if [ -n "$previous_code" ] && [ "$version_code" -le "$previous_code" ]; then
               echo "::error::versionCode $version_code is not greater than $previous_code in $previous." \
                    "Migrations threshold on versionCode and would not run."
@@ -271,6 +286,7 @@ jobs:
           node scripts/test-bridge-relay.js
           node scripts/test-download-capture.js
           node scripts/test-serve-network.js
+          node scripts/test-welcome.js
 
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops
@@ -324,10 +340,12 @@ jobs:
         run: bash scripts/fetch-vscode-oss.sh
 
       - name: Copy the server into assets
-        run: |
-          mkdir -p android/app/src/main/assets/
-          rm -rf android/app/src/main/assets/vscode-reh
-          cp -r server/vscode-reh android/app/src/main/assets/vscode-reh
+        # The same copy scripts/package-assets.sh performs, called rather than
+        # restated. Two definitions of "packaging the server" stood here and in
+        # that script with nothing comparing them, while three Gradle failure
+        # messages told their reader to run `fetch-vscode-oss.sh &&
+        # package-assets.sh` as though it were the step CI takes. It is now.
+        run: bash scripts/package-assets.sh
 
       - name: Download Termux tools
         run: bash scripts/download-termux-tools.sh
@@ -408,12 +426,38 @@ jobs:
           echo "=== jniLibs ==="
           ls -la android/app/src/main/jniLibs/arm64-v8a/ || true
           echo ""
-          LIBNODE="android/app/src/main/jniLibs/arm64-v8a/libnode.so"
-          LIBNODE_SIZE="$(wc -c < "$LIBNODE")"
-          if [ "$LIBNODE_SIZE" -lt 1000 ]; then
-            echo "ERROR: libnode.so is too small ($LIBNODE_SIZE bytes). Release build requires a real binary."
+          # Both files, the same pair build.yml weighs. This step checked
+          # libnode.so alone, on the one build that gets published, and the
+          # missing half is the one that matters: the four Gradle packaging
+          # gates that would notice an absent server tree are all armed by
+          # `onlyIf { entryPoint.isFile }` on this very file, so a tree without
+          # it does not fail them, it SKIPS them, and what is left weighs a
+          # runtime.
+          #
+          # The build no longer gets that far: app/build.gradle.kts asks the
+          # same question of any task graph that packages assets, which covers
+          # `./gradlew bundleRelease` and scripts/build-aab.sh as well, neither
+          # of which passes through a workflow. This stays because it answers
+          # here, before the toolchain downloads, the unit tests and lint,
+          # rather than when `assembleRelease` further down is the first
+          # invocation whose task graph packages an asset tree.
+          server=android/app/src/main/assets/vscode-reh/out/server-main.js
+          libnode=android/app/src/main/jniLibs/arm64-v8a/libnode.so
+          for f in "$server" "$libnode"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing; this build would install and open with nothing in it."
+              exit 1
+            fi
+          done
+          # The lint and unit-test jobs write a 64-byte libnode.so so Gradle
+          # will configure. Reaching a packaging job it would mean the real
+          # download never ran.
+          libnode_size="$(wc -c < "$libnode")"
+          if [ "$libnode_size" -lt 1000 ]; then
+            echo "::error::libnode.so is $libnode_size bytes -- that is the stub, not a runtime."
             exit 1
           fi
+          echo "server-main.js present; libnode.so $libnode_size bytes"
 
       # Reads the packaged jniLibs, so it belongs here rather than with the
       # source-only checks: the directory is empty until the download scripts
@@ -429,28 +473,6 @@ jobs:
           python3 scripts/check-langserver-patterns.py \
             android/app/src/main/assets/vscode-reh/extensions
 
-      # The unit suite ran on every pull request and on no tag, which put the
-      # published build on the wrong side of it. Before the signing keystore is
-      # decoded, so a failure here never reaches a step handling a secret.
-      - name: Run unit tests
-        working-directory: android
-        run: ./gradlew testDebugUnitTest
-
-      # Decode signing keystore from base64 secret
-      - name: Decode keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > android/keystore.jks
-
-      - name: Build signed APK
-        working-directory: android
-        env:
-          VSCODROID_KEYSTORE_FILE: ${{ github.workspace }}/android/keystore.jks
-          VSCODROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
-
       # The toolchains are fetched once, here, and feed two outputs that have to
       # agree: download-*.sh fills android/toolchain_*/src/main/assets, which is
       # what bundleRelease packs into the AAB for Play Asset Delivery, and
@@ -463,8 +485,70 @@ jobs:
           bash scripts/download-ruby.sh
           bash scripts/download-java.sh
 
+      # The unit suite ran on every pull request and on no tag, which put the
+      # published build on the wrong side of it. Before the signing keystore is
+      # decoded, so a failure here never reaches a step handling a secret.
+      #
+      # And after the toolchain download, which used to sit below it. One case
+      # in ToolchainRegistryTest measures each pack's real tree against the size
+      # the registry records, because an understated figure admits a device to an
+      # install it cannot finish -- and that has shipped once, when download-java.sh
+      # stopped deleting the JDK's legal/ and the constant stayed where it was.
+      # The pack trees are gitignored, so with the download below this step the
+      # case found nothing and assumed itself out of the run on every job that has
+      # ever executed it. A JUnit skip prints nothing in Gradle's console output,
+      # so the figure that decides the storage pre-flight was measured by nobody.
+      - name: Run unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest
+
+      # The other half of what lint.yml is for. The block above re-runs its
+      # python and node gates on a tag, and stopped short of the task the
+      # workflow is named after: `./gradlew lint` appears in exactly one place,
+      # lint.yml, which fires on pull_request and on push to main and not on a
+      # tag. Fatal-severity issues are covered on this path already, because
+      # lintVital sits in the assembleRelease graph, so what was missing is the
+      # warning-severity half that `abortOnError = true` and the 16-entry
+      # lint-baseline.xml were turned on together to make fail a build. A tag cut
+      # from a hotfix branch that reached neither trigger met none of it.
+      #
+      # Before the keystore, with the rest of the re-run block, so a failure here
+      # never reaches a step handling a secret.
+      - name: Run lint
+        working-directory: android
+        run: ./gradlew lint
+
+      # Decode signing keystore from base64 secret
+      #
+      # The emptiness test is the whole of the addition, and it is not
+      # theoretical: an unset or cleared KEYSTORE_BASE64 makes base64 read empty
+      # input, exit 0, and leave a zero-byte keystore.jks. The first complaint
+      # then comes from validateSigningRelease inside assembleRelease below,
+      # naming a keystore format rather than the secret, an hour into a release.
+      # A malformed secret already fails here: `base64 -d` is the last command
+      # of the pipeline, so its status is the pipeline's.
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/keystore.jks
+          if [ ! -s android/keystore.jks ]; then
+            echo "::error::KEYSTORE_BASE64 decoded to nothing. The repository" \
+                 "secret is unset or empty; the signing key is not in this build."
+            exit 1
+          fi
+
+      - name: Build signed APK
+        working-directory: android
+        env:
+          VSCODROID_KEYSTORE_FILE: ${{ github.workspace }}/android/keystore.jks
+          VSCODROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
       # The same gate as above, and this is the run that can see the toolchains.
-      # Their manifests are written by the step immediately above and are
+      # Their manifests are written by "Download toolchain assets" and are
       # gitignored, so the earlier run reported "0 toolchain libraries" on a tag
       # that was about to attach three packs to the release, and a new
       # transitive dependency in any of them would have shipped unattributed with
@@ -524,6 +608,14 @@ jobs:
       # os.platform() and node-gyp takes its flavour from the host), so an AAB
       # produced on macOS could differ from the APK that passed CI with no step
       # anywhere failing.
+      #
+      # The Play size check runs inside this step, not after it: checkBundleSize
+      # is `finalizedBy` on bundleRelease, and a second whenReady block asserts
+      # that pairing against the live graph, so the gate cannot detach without
+      # failing the build. A duplicate of it stood below the symbol-packaging
+      # step, opening the same 333 MiB zip a second time to reach the same
+      # verdict; the assertion is what makes the duplicate unnecessary rather
+      # than merely redundant.
       - name: Build signed AAB
         working-directory: android
         env:
@@ -532,6 +624,25 @@ jobs:
           VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew bundleRelease
+
+      # The merged half of the permission check, asked of the artefact rather
+      # than of a task name. The step before the downloads runs the same script
+      # on a bare checkout, where only the committed manifest exists; this one
+      # runs after the merger has written the release manifest, and
+      # --require-merged makes an absent one a failure instead of the note it is
+      # everywhere else.
+      #
+      # Not the same redundancy as the duplicate size check that stood below the
+      # symbol-packaging step and was removed. That one re-opened a 333 MiB zip
+      # to repeat a verdict whose gate is attached to `bundleRelease`, a name
+      # this workflow invokes, so a rename of it fails the invocation. The gate
+      # for this check is attached to `processReleaseMainManifest`, which
+      # nothing outside app/build.gradle.kts names: an AGP rename detaches it in
+      # silence and the graph assertion cannot see it, because the producer it
+      # would test for is gone from the graph too. This step costs a fraction of
+      # a second and depends on no task name at all.
+      - name: Check the shipped permissions against the privacy policy
+        run: python3 scripts/check-permission-claims.py --require-merged
 
       # The native debug symbols Play asks for. ndk.debugSymbolLevel stays
       # on in build.gradle.kts and AGP embeds whatever it finds into the
@@ -567,14 +678,6 @@ jobs:
           ( cd symbols && zip -qr "$GITHUB_WORKSPACE/$OUT" arm64-v8a )
           echo "--- standalone:"
           unzip -l "$OUT"
-
-      # Before the release is published, because the alternative is finding out
-      # at Play upload with the GitHub release already public -- one version
-      # shipping through two channels with different contents.
-      - name: Check the bundle against Play's size limits
-        run: |
-          python3 scripts/check-bundle-size.py \
-            android/app/build/outputs/bundle/release/app-release.aab
 
       - name: Package toolchain ZIPs
         run: |
@@ -748,8 +851,17 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
+          # By basename, not by the path inside the artifact. The release
+          # flattens its assets, so a downloader who fetches app-release.apk and
+          # runs `sha256sum -c checksums.sha256` beside it got "No such file or
+          # directory" on every line: each one named
+          # ./android/app/build/outputs/apk/release/app-release.apk. The
+          # toolchain manifest a few steps up is generated from inside its own
+          # directory for exactly this reason, and the reasoning was never
+          # carried across to the file humans use.
           find . -type f \( -name "*.apk" -o -name "*.aab" -o -name "*.zip" \) \
-            -exec sha256sum {} \; > checksums.sha256
+            -exec sh -c 'cd "$(dirname "$1")" && sha256sum "$(basename "$1")"' _ {} \; \
+            > checksums.sha256
           cat checksums.sha256
 
           # find writes an empty file rather than failing when nothing matches, so

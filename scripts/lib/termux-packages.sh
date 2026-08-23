@@ -9,6 +9,7 @@
 #     termux_resolve_packages resolved-go.tsv "${REQUIRED_PACKAGES[@]}"
 #     termux_download_packages "${REQUIRED_PACKAGES[@]}"
 #     termux_extract_packages "${REQUIRED_PACKAGES[@]}"
+#     termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
 #
 # Four scripts source this today: download-java.sh, download-python.sh,
 # download-ruby.sh and download-termux-tools.sh. There were five, and the fifth,
@@ -215,6 +216,99 @@ termux_download_packages() {
         fi
         termux_verify_deb "$WORK_DIR/debs/$debname" "$(termux_pkg_sha256 "$pkg")" || return 1
     done
+}
+
+# Copies each package's upstream notice files into <dest_usr>/share/doc/<pkg>/.
+#
+#     termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
+#
+# MIT, BSD, ISC, NCSA, Apache-2.0 and the ICU licence all require the copyright
+# and permission notice to be included with a binary redistribution, and none of
+# them was: the app carried a table naming each project and linking gnu.org or a
+# homepage, which is not a copy of anything on a device with no network. The
+# three GNU texts were bundled separately for exactly that reason and the same
+# reasoning was never applied to the permissive half.
+#
+# What ships is what upstream ships. A Termux package carries its notice at
+# usr/share/doc/<pkg>/, either as a real file or as a symlink into
+# usr/share/LICENSES/<id>.txt, and that directory lives in the separate
+# termux-licenses package: the per-package .deb does NOT carry the target, so a
+# plain copy of the link would land a dangling symlink on the device. Neither an
+# asset pack nor a release ZIP can carry a symlink at all. So the target is
+# resolved out of the extracted termux-licenses tree and copied as a real file,
+# which is why every caller lists termux-licenses among its packages.
+#
+# Not every package has a doc directory (ncurses-ui-libs has none; ncurses,
+# which it splits from, carries the notice for both). That is reported and not
+# fatal here, because the question is per COMPONENT rather than per package and
+# only scripts/check-library-attribution.py knows the mapping. It fails a build
+# whose shipped component has no notice on the device.
+termux_copy_notices() {
+    termux_require_work_dir || return 1
+    local dest_usr="$1"
+    shift
+
+    local shared="$WORK_DIR/extracted/termux-licenses/data/data/com.termux/files/usr/share/LICENSES"
+    if [ ! -d "$shared" ]; then
+        echo "  ERROR: termux-licenses is not extracted at" >&2
+        echo "         $shared" >&2
+        echo "         Add termux-licenses to REQUIRED_PACKAGES. Most copyleft" >&2
+        echo "         packages point their copyright into that package, so" >&2
+        echo "         without it their licence text reaches no device." >&2
+        return 1
+    fi
+
+    echo ""
+    echo "Copying upstream notices into share/doc..."
+    local pkg src dst file name link target copied total_bytes
+    total_bytes=0
+    for pkg in "$@"; do
+        # It is the source of the shared texts, not a component that ships.
+        [ "$pkg" = "termux-licenses" ] && continue
+        src="$WORK_DIR/extracted/$pkg/data/data/com.termux/files/usr/share/doc/$pkg"
+        if [ ! -d "$src" ]; then
+            echo "  $pkg: no share/doc directory in the package"
+            continue
+        fi
+        dst="$dest_usr/share/doc/$pkg"
+        rm -rf "$dst"
+        copied=0
+        for file in "$src"/*; do
+            [ -e "$file" ] || [ -L "$file" ] || continue
+            name="$(basename "$file")"
+            # The notice files, not the manuals. bash ships 2 MB of HTML beside
+            # its copyright and pcre2 ships a 640 KB man page dump; neither is
+            # what any licence asks to travel with the binary.
+            case "$(printf '%s' "$name" | tr 'A-Z' 'a-z')" in
+                copyright*|copying*|license*|licence*|notice*) ;;
+                *) continue ;;
+            esac
+            mkdir -p "$dst"
+            if [ -L "$file" ]; then
+                link="$(readlink "$file")"
+                target="$shared/$(basename "$link")"
+                if [ ! -f "$target" ]; then
+                    echo "  ERROR: $pkg/$name points at $link, which is not in" >&2
+                    echo "         termux-licenses. Shipping the link would put a" >&2
+                    echo "         dangling symlink where the licence should be." >&2
+                    return 1
+                fi
+                # -L because the shared directory aliases the SPDX suffixes:
+                # GPL-3.0-or-later.txt is itself a symlink to GPL-3.0.txt.
+                cp -L "$target" "$dst/$name"
+            else
+                cp "$file" "$dst/$name"
+            fi
+            copied=$((copied + 1))
+        done
+        if [ "$copied" -eq 0 ]; then
+            echo "  $pkg: share/doc holds no notice file"
+            continue
+        fi
+        total_bytes=$((total_bytes + $(cat "$dst"/* | wc -c | tr -d ' ')))
+        echo "  $pkg: $copied file(s)"
+    done
+    echo "  share/doc total: $((total_bytes / 1024)) KiB"
 }
 
 # Unpacks each package into $WORK_DIR/extracted/<package>, fresh every run.

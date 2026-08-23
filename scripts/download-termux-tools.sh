@@ -62,6 +62,12 @@ REQUIRED_PACKAGES=(
     libicu
     libc++
     libsqlite
+    # Not a component that ships: it carries usr/share/LICENSES, the shared
+    # licence texts most of the packages above point their copyright symlink
+    # at. Without it termux_copy_notices has nothing to resolve those links
+    # against, and the copyleft half of the tree would reach a device with a
+    # dangling link where its licence should be.
+    termux-licenses
 )
 
 # Soname mapping: returns space-separated soname(s) for a package.
@@ -395,6 +401,17 @@ if [ ! -d "$GIT_CORE_SRC" ]; then
     echo "  Found at: $GIT_CORE_SRC"
 fi
 
+# Three consumers, all of them here because git-core mixes text with binaries:
+# the copy loop below tells one from the other with it, the prefix gate after the
+# loop reads only the text, and the ELF verification at the foot of this script
+# reads only the binaries, since verify-android-elf.py rejects a non-ELF file
+# rather than skipping it. The last of those now finds nothing, because the loop
+# stops copying binaries here at all; it stays as the guard for a binary coming
+# back.
+is_elf() {
+    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
 # Identify which git-core files are hardlinks/symlinks to the main git binary.
 # These will be created as symlinks to libgit.so at runtime (saves ~4MB per copy).
 # Compare by file size since inode comparison fails across extraction boundaries.
@@ -407,6 +424,19 @@ SYMLINK_COUNT=0
 for file in "$GIT_CORE_SRC"/*; do
     [ -e "$file" ] || continue
     name="$(basename "$file")"
+
+    # The four remote helpers are not copied at all, and this is the other half
+    # of the jniLibs entry above. They are one binary under four names -- all
+    # four 2010824 bytes with the same sha256, measured -- and the copy that
+    # runs is libgit-remote-curl.so in nativeLibraryDir, because SELinux refuses
+    # execve on anything under filesDir. FirstRunSetup.setupGitCore replaces all
+    # four names with symlinks to it on every launch and does not require the
+    # file to be there first: its loop creates the link when lstat finds
+    # nothing. So copying them shipped 7.67 MiB in the APK, unpacked it on first
+    # run, and then deleted it, four times over.
+    case "$name" in
+        git-remote-http|git-remote-https|git-remote-ftp|git-remote-ftps) continue ;;
+    esac
 
     if [ -L "$file" ]; then
         # Symlink: check if it points to git
@@ -434,7 +464,15 @@ for file in "$GIT_CORE_SRC"/*; do
         real_file="$file"
         [ -L "$file" ] && real_file="$(cd "$(dirname "$file")" && readlink -f "$(basename "$file")" 2>/dev/null || echo "$file")"
 
-        if [ -f "$real_file" ] && head -c 2 "$real_file" 2>/dev/null | grep -q '#!'; then
+        # Anything that is not an ELF object is text this loop has to rewrite,
+        # and that is a wider set than "has a shebang". git-core ships sourced
+        # shell libraries with no shebang of their own -- git-sh-i18n,
+        # git-sh-setup, git-mergetool--lib -- and a shebang test sent them down
+        # the binary branch, so they were copied byte for byte with Termux's
+        # prefix still in them: git-sh-i18n reached the device setting
+        # TEXTDOMAINDIR to /data/data/com.termux/files/usr/share/locale, a path
+        # this app cannot read.
+        if [ -f "$real_file" ] && ! is_elf "$real_file"; then
             # Detect script type by content
             if head -20 "$real_file" | grep -q '^use \|^require '; then
                 # Perl script: Perl is not bundled, remove entirely
@@ -448,6 +486,13 @@ for file in "$GIT_CORE_SRC"/*; do
                 # Needs httpd + perl, neither bundled: remove
                 echo "  Skipping $name (needs httpd + perl)"
                 COPIED=$((COPIED - 1))
+            elif [ "$name" = "git-gui--askyesno" ]; then
+                # Its second line execs Termux's `wish`, so the whole file is a
+                # Tcl/Tk program. Neither Tcl nor Tk is bundled and no sed below
+                # can supply one, which left it as the last file in this tree
+                # still naming Termux's prefix after the rewrite.
+                echo "  Skipping $name (needs Tcl/Tk wish)"
+                COPIED=$((COPIED - 1))
             else
                 # Shell script: fix shebangs and embedded Termux paths
                 sed \
@@ -458,8 +503,38 @@ for file in "$GIT_CORE_SRC"/*; do
                     "$real_file" > "$GIT_CORE_DST/$name"
             fi
         else
-            # Binary: copy as-is
-            cp -L "$file" "$GIT_CORE_DST/$name" 2>/dev/null || cp "$real_file" "$GIT_CORE_DST/$name"
+            # A standalone ELF helper, and one that cannot run here. It would
+            # land under filesDir, where SELinux denies the app
+            # execute_no_trans, and git reaches its helpers by absolute path out
+            # of GIT_EXEC_PATH rather than through PATH, so the exec trampoline
+            # never sees them either. The git-* commands that DO work are the
+            # manifest entries above, which become symlinks into
+            # nativeLibraryDir.
+            #
+            # Measured in the app's own terminal on an API 33 arm64 emulator,
+            # domain u:r:untrusted_app:s0: git-shell and scalar exit 126
+            # "Permission denied", `git submodule` reports `fatal: cannot exec
+            # 'git-submodule'`, and `git --version` succeeds because it resolves
+            # through nativeLibraryDir. Eight files qualified, 15.05 MiB, shipped
+            # in the APK and unpacked on every first run for commands (git
+            # daemon, git http-backend, git imap-send, scalar and the rest) that
+            # fail either way. Only the message changes.
+            #
+            # Size is what makes the rule stop here, not reachability, and the
+            # branch above is not a claim that what it copies works. Everything
+            # git EXECS is equally dead, shell script or ELF: the eleven with a
+            # shebang (git-submodule, git-subtree, git-mergetool,
+            # git-filter-branch and the rest) fail exactly as the measurement
+            # above shows. What survives the same policy is what a shell SOURCES
+            # rather than execs, because sourcing is a read: git-sh-setup,
+            # git-sh-i18n and git-mergetool--lib. Those three are the reason the
+            # text is kept, and the eleven ride along because all fourteen
+            # together are 132 KiB against the 15.05 MiB dropped here. Making
+            # the exec'd ones work is a different change: setupGitCore would
+            # have to symlink each into nativeLibraryDir and libexec-trampoline
+            # would need a row per name.
+            echo "  Skipping unexecutable helper: $name"
+            COPIED=$((COPIED - 1))
         fi
         COPIED=$((COPIED + 1))
     fi
@@ -467,6 +542,29 @@ done
 
 echo "  Copied $COPIED standalone files"
 echo "  Created gitcore-symlinks manifest ($SYMLINK_COUNT entries -> symlinked to libgit.so at runtime)"
+
+# The rewrite above is a list of four sed rules, and a rule can only cover a path
+# someone thought of. This asks the produced tree the question the rules exist to
+# answer, so a fifth Termux path arriving with a git bump is a failed build here
+# rather than a command that fails on a device. Text only: the ELF helpers carry
+# no prefix (measured, all eight at 0 occurrences), and an embedded shell path in
+# a binary is scripts/patch-default-shell.py's subject, not a sed's.
+stale_prefix=""
+for helper in "$GIT_CORE_DST"/*; do
+    [ -f "$helper" ] || continue
+    is_elf "$helper" && continue
+    if LC_ALL=C grep -q '/data/data/com\.termux' "$helper"; then
+        stale_prefix="$stale_prefix $(basename "$helper")"
+    fi
+done
+if [ -n "$stale_prefix" ]; then
+    echo "  ERROR: git-core text still names Termux's prefix:$stale_prefix" >&2
+    echo "         The app cannot read /data/data/com.termux, so whatever that" >&2
+    echo "         path was for fails with ENOENT on every device. Add a sed" >&2
+    echo "         rule above for it, or skip the file if nothing here can" >&2
+    echo "         supply what it wants." >&2
+    exit 1
+fi
 
 # Also copy git templates if they exist
 GIT_TEMPLATES_SRC="extracted/git/data/data/com.termux/files/usr/share/git-core"
@@ -494,6 +592,65 @@ else
     echo "  WARNING: terminfo not found in ncurses package"
 fi
 
+# --- Step 7b: Place the upstream notices beside what they describe ---
+#
+# The whole directory first, for the reason step 5 wipes usr/lib: a package
+# dropped from the list above would otherwise leave its notice behind and go on
+# claiming a component this APK no longer ships. This script runs before every
+# other Termux consumer (build-all.sh, build.yml and release.yml all order it
+# first), so the wipe is safe here and nowhere else -- download-python.sh adds
+# its own packages to the same directory afterwards.
+rm -rf "$ASSETS_DIR/usr/share/doc"
+termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
+
+# ICU is the one package whose notice cannot come from Termux. Measured on
+# libicu 78.3: its .deb carries usr/share/doc/libicu/LICENSE holding the
+# fourteen bytes "404: Not Found", and nothing else in the package is a licence
+# file. Shipping those fourteen bytes would discharge nothing, so the file is
+# replaced with the LICENSE from the upstream release Termux builds, taken
+# verbatim from unicode-org/icu at tag release-78.3 -- the tag its own build.sh
+# names through TERMUX_PKG_SRCURL for TERMUX_PKG_VERSION=78.3.
+#
+# Not verified: WHY Termux ships an error page there. Its build.sh reads
+# TERMUX_PKG_LICENSE_FILE="../LICENSE" under a comment calling that path a hack,
+# which is suggestive and is not a measurement. What matters here is that the
+# file it ships is not a licence.
+#
+# The text is version-specific and the package version is resolved from a live
+# index, so the two are compared rather than left to a comment nobody re-reads.
+# A libicu bump that nobody re-paired would ship 78.3's LICENSE beside a
+# different ICU, which is the one way this notice goes wrong with every step
+# green. Re-take the text from unicode-org/icu at the matching release tag and
+# move the version here.
+#
+# Matched on the upstream version only. A Termux Version field carries a package
+# revision after the upstream version (measured in the live index: python
+# 3.14.6-1, ruby 3.4.1-2, libicu 78.3 with none yet), and a rebuild of the same
+# ICU arrives as 78.3-1. That is the same LICENSE, so an exact string test would
+# fail every build over a repackaging and send the reader to release-78.3-1, a
+# tag unicode-org/icu does not have.
+ICU_NOTICE_VERSION="78.3"
+ICU_INDEX_VERSION="$(termux_pkg_version libicu)"
+case "$ICU_INDEX_VERSION" in
+    "$ICU_NOTICE_VERSION"|"$ICU_NOTICE_VERSION"-*) ;;
+    *)
+        echo "  ERROR: the index carries libicu $ICU_INDEX_VERSION and" >&2
+        echo "         licenses/LICENSE.ICU is ICU $ICU_NOTICE_VERSION's LICENSE." >&2
+        echo "         Take the text from unicode-org/icu at tag" >&2
+        echo "         release-${ICU_INDEX_VERSION%%-*} and update" >&2
+        echo "         ICU_NOTICE_VERSION." >&2
+        exit 1
+        ;;
+esac
+ICU_NOTICE="$ROOT_DIR/licenses/LICENSE.ICU"
+if [ ! -f "$ICU_NOTICE" ]; then
+    echo "  ERROR: $ICU_NOTICE is missing; ICU would ship with no notice." >&2
+    exit 1
+fi
+mkdir -p "$ASSETS_DIR/usr/share/doc/libicu"
+cp "$ICU_NOTICE" "$ASSETS_DIR/usr/share/doc/libicu/LICENSE"
+echo "  libicu: replaced Termux's 404 stub with the ICU $ICU_NOTICE_VERSION LICENSE"
+
 # --- Step 8: Verify everything placed can actually load on Android ---
 echo ""
 echo "=== Verifying placed binaries ==="
@@ -517,12 +674,6 @@ echo "=== Verifying placed binaries ==="
 
 JNILIBS_BINARIES=(libbash.so libgit.so libgit-remote-curl.so libtmux.so libmake.so
                   libssh.so libssh-keygen.so)
-
-# git-core holds shell scripts and a manifest beside its binaries, and the
-# verifier rejects a non-ELF file rather than skipping it.
-is_elf() {
-    [ "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
-}
 
 verify_failures=0
 verify_checked=0

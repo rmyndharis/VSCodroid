@@ -44,6 +44,10 @@ REQUIRED_PACKAGES=(
     # panel layer was the missing half while curses itself worked.
     zstd
     ncurses-ui-libs
+    # Not a component that ships: it carries usr/share/LICENSES, the shared
+    # licence texts gdbm, liblzma and zstd point their copyright symlink at.
+    # See termux_copy_notices in scripts/lib/termux-packages.sh.
+    termux-licenses
 )
 
 # Soname mapping for new shared libraries
@@ -263,6 +267,14 @@ else
     exit 1
 fi
 echo "  $LIBPYTHON_UNVERSIONED ($(du -sh "$LIBPYTHON_DST" | cut -f1))"
+
+# --- Step 7b: Place the upstream notices beside what they describe ---
+#
+# No wipe here. download-termux-tools.sh clears the whole share/doc directory
+# and runs first everywhere (build-all.sh, build.yml, release.yml), so clearing
+# it again would delete the notices for every package that is not in this
+# script's list.
+termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
 
 # --- Step 8: Size summary ---
 echo ""

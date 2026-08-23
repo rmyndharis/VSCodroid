@@ -5,9 +5,9 @@
     verify-android-elf.py --dir DIR [--lib-dir DIR]...
     verify-android-elf.py --tree DIR
 
-Three things, each of which fails the same quiet way at runtime (the file is
-present, the build is green, and the process dies or the addon refuses to load
-with a message nobody sees):
+Three things of one file, named directly or reached by `--dir`, each of which
+fails the same quiet way at runtime (the file is present, the build is green,
+and the process dies or the addon refuses to load with a message nobody sees):
 
   * aarch64, so it matches the only ABI this app ships;
   * every DT_NEEDED library is one Bionic provides or one we bundle, since a
@@ -15,10 +15,13 @@ with a message nobody sees):
   * every LOAD segment aligned to at least 16 KB, which Android 16 requires and
     NDK 27 does not do by default.
 
-`--tree` asks the third question only, of a whole directory tree. What it is
-for is written at [alignment_sweep]; the short version is that the first two
-cannot be asked of a tree this app packages without failing it for files that
-are correct.
+`--tree` asks two questions of a whole directory tree: the third above, and
+PT_INTERP, which no single-file run asks at all. An aarch64 executable naming a
+program interpreter other than Android's came out of a glibc toolchain and
+nothing on the device can start it, so it is the one loadability question a tree
+this app merely packages can still be held to. What tree mode is for is written
+at [alignment_sweep]; the short version is that the first two above cannot be
+asked of such a tree without failing it for files that are correct.
 
 Pure Python on purpose: the NDK's readelf is not available everywhere this runs,
 and having one implementation means the addon build and the runtime download
@@ -39,9 +42,33 @@ EM_AARCH64 = 0xB7
 # alignment of zero. Python's build ships one, usr/lib/python3.x/config-*/
 # python.o, and it is the only one in the packaged tree (measured).
 ET_REL = 1
-PT_LOAD, PT_DYNAMIC = 1, 2
+PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ = 0, 1, 5, 10
 MIN_ALIGN = 16384
+
+# The only program interpreter a binary built for Android names. Any other value
+# in an aarch64 executable says it came out of a foreign toolchain, which is what
+# the sweep below reads it as; a binary naming a glibc loader is unstartable here
+# whichever way something tries, since the path is absent from the device and the
+# loader indirection that does start a payload under filesDir supplies this one.
+ANDROID_INTERP = "/system/bin/linker64"
+
+# The aarch64 executables in the packaged tree that name a glibc loader, kept by
+# path because they ship and cannot run.
+#
+# Both arrive inside @microsoft/mxc-sdk, which the server tree references from
+# out/server-main.js and out/vs/platform/agentHost/node/agentHostMain.js, and
+# both are built for glibc: PT_INTERP is /lib/ld-linux-aarch64.so.1, a path
+# Android does not have. 4.53 MiB that no code path here can start. Nothing in
+# this repository builds that tree -- it is fetched whole from a server-<version>
+# release -- so pruning them belongs to whoever owns the fetch, and until then
+# naming them here is what stops a THIRD one arriving unnoticed on the next VS
+# Code bump. Measured 2026-08-23: 53 aarch64 executables in the packaged trees
+# name /system/bin/linker64 and exactly these two do not.
+FOREIGN_INTERP_ALLOWED = {
+    "vscode-reh/node_modules/@microsoft/mxc-sdk/bin/arm64/lxc-exec",
+    "vscode-reh/node_modules/@microsoft/mxc-sdk/bin/arm64/linux-test-proxy",
+}
 
 # Provided by the system on every supported device, so they never need bundling.
 BIONIC = {
@@ -74,7 +101,7 @@ def read_elf(path: pathlib.Path):
     phoff, = struct.unpack_from("<Q", data, 32)
     phentsize, phnum = struct.unpack_from("<HH", data, 54)
 
-    loads, dynamic = [], None
+    loads, dynamic, interp = [], None, None
     for i in range(phnum):
         off = phoff + i * phentsize
         p_type, = struct.unpack_from("<I", data, off)
@@ -85,6 +112,11 @@ def read_elf(path: pathlib.Path):
             loads.append((p_vaddr, p_offset, p_filesz, p_align))
         elif p_type == PT_DYNAMIC:
             dynamic = (p_offset, p_filesz)
+        elif p_type == PT_INTERP:
+            # A NUL-terminated path. Shared objects have no such segment, so
+            # None here means "not an executable" rather than "unknown".
+            interp = data[p_offset:p_offset + p_filesz].split(b"\0")[0].decode(
+                "ascii", "replace")
 
     def to_offset(vaddr):
         for v, o, sz, _ in loads:
@@ -112,7 +144,7 @@ def read_elf(path: pathlib.Path):
                     end = table.index(b"\0", val)
                     needed.append(table[val:end].decode())
 
-    return machine, e_type, needed, [a for *_, a in loads]
+    return machine, e_type, needed, [a for *_, a in loads], interp
 
 
 def resolvable_names(lib_dirs: list):
@@ -155,7 +187,7 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     # that tells its reader "the FAIL line above names the file" would be lying.
     # Caught per file so the sweep finishes and still fails.
     try:
-        machine, _e_type, needed, aligns = read_elf(path)
+        machine, _e_type, needed, aligns, _interp = read_elf(path)
     # ValueError covers the two that read_elf can raise out of a corrupt dynamic
     # string table: bytes.index() when a DT_NEEDED offset has no NUL after it, and
     # .decode() on a non-UTF-8 name (UnicodeDecodeError is a ValueError). Those
@@ -194,7 +226,8 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
 
 
 def alignment_sweep(root: pathlib.Path) -> int:
-    """Ask one question of every ELF under [root]: is it 16 KB aligned.
+    """Ask two questions of every ELF under [root]: can it be mapped, and can it
+    be started.
 
     The population this exists for is the packaged asset tree, and it was
     covered by nothing. Every download script checks the file it just placed,
@@ -205,22 +238,42 @@ def alignment_sweep(root: pathlib.Path) -> int:
     having asked, and a misaligned addon is a `dlopen` failure on an Android 16
     device with no sign of it at build time.
 
-    Alignment only, and the two questions it drops are dropped for one reason:
-    a tree we package is not a tree we built. It legitimately carries payloads
-    for platforms this app never runs (upstream ships x86_64 copies of ripgrep
-    beside the arm64 ones) and dependencies nothing here ever loads (both copies
-    of `kerberos.node` name `libstdc++.so.6`, measured, and no code path opens
-    them). Asking the full question of that tree would fail a build that is
-    correct. Alignment is different: it is a property of every file that could
-    be mapped, whoever built it, and a wrong answer is only ever a defect.
-    DT_NEEDED for these same trees is asked separately, by
+    Segment alignment and PT_INTERP, and the question it drops is dropped for
+    one reason: a tree we package is not a tree we built. It legitimately
+    carries payloads for platforms this app never runs (upstream ships x86_64
+    copies of ripgrep beside the arm64 ones) and dependencies nothing here ever
+    loads (both copies of `kerberos.node` name `libstdc++.so.6`, measured, and
+    no code path opens them). Asking DT_NEEDED of that tree would fail a build
+    that is correct, and it is asked separately by
     `gen-glibc-forwarders.py --scan`, which knows about the shim.
+
+    The two that are asked are different in kind: each is a property of the file
+    alone, whoever built it, and a wrong answer is only ever a defect. Alignment
+    decides whether the file can be mapped at all on Android 16. PT_INTERP
+    decides whether an aarch64 executable was built for this platform: anything
+    naming a loader other than Android's came out of a glibc toolchain, so
+    nothing in the packaged tree can start it. A shared object has no PT_INTERP
+    and is not the subject.
 
     A tree with no aarch64 ELF in it fails rather than passes, for the reason
     `--dir` refuses an empty directory: "nothing was checked" must not read like
     "everything passed".
+
+    The same reason fails a FOREIGN_INTERP_ALLOWED entry that won for no file.
+    That allowlist names paths in a tree fetched whole from a release, so a VS
+    Code bump can move either one silently, and the entry then waves through
+    whatever later arrives at that path. An entry earns its place by matching a
+    real file or it goes.
     """
-    checked = skipped = failed = 0
+    checked = 0
+    # By path rather than a counter: a file can fail both questions below, and a
+    # counter bumped by each branch reported more rejections than there were
+    # files, on the one line a CI reader scans.
+    rejected = set()
+    skipped = []
+    # Every path that actually turned up naming a foreign loader, so an entry in
+    # FOREIGN_INTERP_ALLOWED that stopped matching can be reported below.
+    foreign_seen = set()
     # os.walk rather than rglob: it does not follow directory symlinks, and the
     # trees this runs over are node_modules, where a symlink pointing at an
     # ancestor is ordinary rather than exotic.
@@ -238,19 +291,20 @@ def alignment_sweep(root: pathlib.Path) -> int:
                         continue
             except OSError as e:
                 print(f"  FAIL   {path}: {e}")
-                failed += 1
+                rejected.add(path)
                 continue
             try:
-                machine, e_type, _needed, aligns = read_elf(path)
+                machine, e_type, _needed, aligns, interp = read_elf(path)
             except (NotAnElf, IndexError, struct.error, OSError, ValueError) as e:
                 # It claimed to be an ELF in its first four bytes and then could
                 # not be read as one, which is a broken file rather than a file
                 # this mode has no opinion about.
                 print(f"  FAIL   {path}: {e}")
-                failed += 1
+                rejected.add(path)
                 continue
             if machine != EM_AARCH64 or e_type == ET_REL:
-                skipped += 1
+                skipped.append((path, "another ABI" if machine != EM_AARCH64
+                                else "relocatable, never mapped"))
                 continue
             checked += 1
             worst = min(aligns, default=0)
@@ -258,14 +312,56 @@ def alignment_sweep(root: pathlib.Path) -> int:
                 print(f"  FAIL   {path}")
                 print(f"         LOAD segments aligned to {worst:#x}; "
                       f"Android 16 needs {MIN_ALIGN:#x}")
-                failed += 1
+                rejected.add(path)
+            # The second question this mode can answer without the false alarms
+            # the docstring above explains. An aarch64 executable naming a
+            # non-Android loader is a glibc build that arrived in a tree meant
+            # for this device: dead weight nothing here can start. Not for the
+            # ENOENT an execve of it would return -- this tree is extracted to
+            # filesDir, where SELinux refuses execve before any interpreter is
+            # consulted, and the loader indirection that does start a payload
+            # there mmaps it under /system/bin/linker64, which cannot satisfy a
+            # glibc binary either.
+            if interp is not None and interp != ANDROID_INTERP:
+                rel = path.relative_to(root).as_posix()
+                foreign_seen.add(rel)
+                if rel not in FOREIGN_INTERP_ALLOWED:
+                    print(f"  FAIL   {path}")
+                    print(f"         PT_INTERP is {interp}: a glibc build, which "
+                          f"nothing on this device can start")
+                    rejected.add(path)
 
     if not checked:
         print(f"  FAIL   no aarch64 ELF under {root}; nothing was examined")
         return 1
-    print(f"  {'FAIL  ' if failed else 'ok    '} {checked} aarch64 binaries under {root}, "
-          f"{failed} misaligned, {skipped} skipped as another ABI or not loadable")
-    return 1 if failed else 0
+    # An allowlist entry has to earn its place by winning for a real file. The
+    # two here are paths inside a tree this repository does not build and fetches
+    # whole, so a VS Code bump can move or drop either one without a word; the
+    # entry then sits there waving through whatever later lands at that exact
+    # path, which is the one thing the sweep is looking for. Reported after the
+    # walk rather than at the entry, because only the whole walk knows what
+    # matched. Kept out of `rejected`: that set is files in the tree, and this is
+    # a line in this file.
+    stale = sorted(FOREIGN_INTERP_ALLOWED - foreign_seen)
+    for rel in stale:
+        print(f"  FAIL   {rel}")
+        print(f"         allowed as a known glibc build and no longer in the "
+              f"tree; drop it from FOREIGN_INTERP_ALLOWED")
+    # The skipped files by name, not by count. A count says four files were not
+    # examined and nothing about what they are, so 11.9 MiB of x86-64 ripgrep and
+    # tgrep sat in an arm64 APK behind a reassuring number for as long as this
+    # mode has existed. Naming them makes a new foreign-ABI payload visible on
+    # the build that first carries it, which is the VS Code bump that fetched it.
+    for path, why in skipped:
+        print(f"  skip   {path} ({why})")
+    stale_note = ""
+    if stale:
+        plural = "y" if len(stale) == 1 else "ies"
+        stale_note = f", {len(stale)} allowlist entr{plural} matching nothing"
+    print(f"  {'FAIL  ' if rejected or stale else 'ok    '} {checked} aarch64 binaries under {root}, "
+          f"{len(rejected)} rejected, {len(skipped)} skipped as another ABI or not loadable"
+          f"{stale_note}")
+    return 1 if rejected or stale else 0
 
 
 def main() -> int:

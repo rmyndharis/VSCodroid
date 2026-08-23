@@ -158,6 +158,27 @@ chmod +x "$JNILIBS_DIR/libnode.so"
 # runtime whose shell nobody has established.
 python3 "$SCRIPT_DIR/patch-default-shell.py" "$JNILIBS_DIR/libnode.so"
 
+# Node's notice, beside the rest of them. MIT requires the copyright and
+# permission notice to travel with a binary redistribution, and this file is
+# also where the notices for everything Node statically bundles live: its own
+# 157 KB copyright covers V8, OpenSSL, zlib, ICU, c-ares and the rest of the
+# deps tree, none of which has a file of its own anywhere.
+#
+# Written into the directory download-termux-tools.sh clears and fills, which is
+# why this script has to run after it -- the same ordering its libraries already
+# depend on. Not routed through termux_copy_notices: this script does its own
+# index handling and does not source scripts/lib/termux-packages.sh.
+node_notice="$extract_dir/data/data/com.termux/files/usr/share/doc/$PACKAGE/copyright"
+if [ ! -f "$node_notice" ]; then
+    echo "  ERROR: no share/doc/$PACKAGE/copyright inside $deb; Node would ship" >&2
+    echo "         with no notice, and so would everything it bundles." >&2
+    exit 1
+fi
+node_doc="$ROOT_DIR/android/app/src/main/assets/usr/share/doc/$PACKAGE"
+mkdir -p "$node_doc"
+cp "$node_notice" "$node_doc/copyright"
+echo "  notice  : usr/share/doc/$PACKAGE/copyright ($(du -h "$node_doc/copyright" | cut -f1))"
+
 # The Termux version string ("24.18.0-1") with the package revision dropped.
 # build-native-addons.sh reads this marker to pair its headers against the
 # runtime actually installed - the binary itself is gitignored, so the marker

@@ -20,14 +20,26 @@ fun signingProp(key: String, envVar: String, fallback: String = "") =
 // carried that offer and shipped nowhere; every device ran the binaries with no
 // notice of any kind on it.
 //
-// Naming a licence is not supplying it, and the three licences/ files are the
-// half that was missing. GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1
-// section 1 each require a copy of the licence itself to accompany the binary;
-// the documents above carried a gnu.org URL instead, which discharges nothing,
-// least of all on the offline device this app is built to be usable on. They are
-// the FSF texts as shipped in Termux's liblzma package, which is one of the
-// packages this APK redistributes, and they are verbatim: NoticesTest pins each
-// one's sha256, because a licence text that has been edited is not the licence.
+// Naming a licence is not supplying it, and the four COPYING files are the
+// half that was missing. GPL-2.0 section 1, GPL-3.0 section 4, LGPL-2.1
+// section 1 and LGPL-3.0 section 4 each require a copy of the licence itself to
+// accompany the binary; the documents above carried a gnu.org URL instead,
+// which discharges nothing, least of all on the offline device this app is
+// built to be usable on. Three of them are the FSF texts as shipped in Termux's
+// liblzma package, which is one of the packages this APK redistributes, and
+// LGPL-3.0 is the FSF publication; all four are verbatim, and NoticesTest pins
+// each one's sha256, because a licence text that has been edited is not the
+// licence.
+//
+// LGPL-3.0 is the one whose subject is not in the base APK. GMP is LGPL-3.0 and
+// ships inside the Ruby toolchain pack, which has no licence screen of its own,
+// so this dialog is the only route to a copy on a device that installed Ruby.
+//
+// Not everything under licenses/ is copied here, and the two that are not are
+// deliberate: LICENSE.ICU and COPYRIGHT.musl are placed beside their binaries
+// under assets/usr/share/doc by the download scripts, because that is where the
+// rest of the per-component notices live and where a reader would look for
+// them. This directory is for the licence TEXTS the dialog offers as a set.
 //
 // Copied from the repository root rather than committed under src/main/assets,
 // because a second copy is a copy that goes stale, and a stale licence notice is
@@ -59,11 +71,12 @@ val bundleNotices = tasks.register<Sync>("bundleNotices") {
     from(File(repoRoot, "licenses/COPYING.GPLv2"))
     from(File(repoRoot, "licenses/COPYING.GPLv3"))
     from(File(repoRoot, "licenses/COPYING.LGPLv2.1"))
+    from(File(repoRoot, "licenses/COPYING.LGPLv3"))
     into(layout.buildDirectory.dir("generated/notices"))
 
     // The names the app opens. Kept beside the copy so a rename here fails the
     // build rather than emptying the dialog on a device: com.vscodroid.util
-    // .Notices lists the same five, and NoticesTest compares the lists.
+    // .Notices lists the same six, and NoticesTest compares the lists.
 }
 
 android {
@@ -115,10 +128,26 @@ android {
         // Jobs that build without a real asset tree (lint, unit tests, R8) get a
         // small number here, which is correct rather than a gap: their APK has no
         // tree to unpack either, so the gate keeps matching what shipped.
+        //
+        // One walk, five figures. Each of the fields below used to call
+        // `fileTree(...).files` itself: the whole 23,494-file tree twice over
+        // (this total and the maximum under it) and each of the three subtrees a
+        // third time. All five run during the configuration phase of every
+        // invocation, `lint`, `testDebugUnitTest` and `assembleDebugAndroidTest`
+        // included, none of which packages an asset. The subtrees are a strict
+        // subset of the first walk, so they are derived from it by path prefix
+        // rather than enumerated and stat'ed again.
+        val assetsDir = file("src/main/assets")
+        val assetSizes = fileTree(assetsDir).files.associate { it.path to it.length() }
+        val assetBytesUnder = { subdir: String ->
+            val prefix = File(assetsDir, subdir).path + File.separator
+            assetSizes.entries.filter { it.key.startsWith(prefix) }.sumOf { it.value }
+        }
+
         buildConfigField(
             "long",
             "EXTRACTED_ASSET_BYTES",
-            "${fileTree("src/main/assets").files.sumOf { it.length() }}L"
+            "${assetSizes.values.sum()}L"
         )
 
         // The biggest single file in that tree, which is what an install that
@@ -132,13 +161,13 @@ android {
         // Code pin, and the largest file has changed identity twice already. A
         // literal would be a figure nobody rechecks.
         //
-        // maxOfOrNull, because the jobs that build without a real asset tree
+        // maxOrNull, because the jobs that build without a real asset tree
         // (lint, unit tests, R8) have nothing to take a maximum of and maxOf
         // throws on an empty tree.
         buildConfigField(
             "long",
             "LARGEST_ASSET_BYTES",
-            "${fileTree("src/main/assets").files.maxOfOrNull { it.length() } ?: 0L}L"
+            "${assetSizes.values.maxOrNull() ?: 0L}L"
         )
 
         // The two subtrees extraction writes into ground it does not own alone.
@@ -157,7 +186,7 @@ android {
         buildConfigField(
             "long",
             "BUNDLED_USR_BYTES",
-            "${fileTree("src/main/assets/usr").files.sumOf { it.length() }}L"
+            "${assetBytesUnder("usr")}L"
         )
         // The server tree on its own, so extraction can report real progress across it
         // rather than sitting at one number for the minutes it takes. It is by far the
@@ -166,12 +195,12 @@ android {
         buildConfigField(
             "long",
             "BUNDLED_SERVER_BYTES",
-            "${fileTree("src/main/assets/vscode-reh").files.sumOf { it.length() }}L"
+            "${assetBytesUnder("vscode-reh")}L"
         )
         buildConfigField(
             "long",
             "BUNDLED_EXTENSION_BYTES",
-            "${fileTree("src/main/assets/extensions").files.sumOf { it.length() }}L"
+            "${assetBytesUnder("extensions")}L"
         )
     }
 
@@ -384,6 +413,19 @@ tasks.withType<Test> {
         .withPropertyName("appBuildScript")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 
+    // The settings script, read by one suite for the other half of the same
+    // question: ToolchainRegistryTest holds the `include(":toolchain_*")` lines
+    // to `ToolchainRegistry.available`, because an asset pack that is not a
+    // Gradle project is not in the bundle whatever `assetPacks` lists. A pack
+    // module removed there and left in the catalog is what that assertion
+    // exists to catch, and it is also the one edit that changes no compiled
+    // input, so undeclared it is the edit the task answers UP-TO-DATE over.
+    // Not measured the way the declarations below were; an input this task did
+    // not have can only cost a re-run, never a wrong answer.
+    inputs.file(rootProject.projectDir.resolve("settings.gradle.kts"))
+        .withPropertyName("settingsScript")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
     // The manifest is read the same way and needs the same declaration. Editing
     // only the manifest changes no compiled input, so without this the run that
     // would catch a bad manifest edit is the one that reports
@@ -429,6 +471,8 @@ tasks.withType<Test> {
     //   licenses/, NOTICE.md  NoticesTest
     //   README.md, docs/*.md  WebViewVersionTest, BridgeApiSpecParityTest,
     //                         NoticesTest
+    //   MILESTONES.md         BundledExtensionVersionTest
+    //   branding/product.json DisplayLanguageTest
     //
     // Sources under src/main/kotlin are read by other suites the same way and are
     // deliberately not listed: they are compiled into the classpath this task
@@ -456,13 +500,31 @@ tasks.withType<Test> {
     // Top-level markdown only. docs/ also carries a site, screenshots and a logo
     // directory, and no test reads any of them; hashing them on every run would
     // buy nothing and 2.6 MB of it is images.
+    //
+    // MILESTONES.md is here for the same reason and was missed because it is the
+    // one reader outside docs/: BundledExtensionVersionTest holds the bundled
+    // extension directories to that file's inventory, so an edit to either side
+    // alone is exactly the mismatch the suite exists to catch, and undeclared it
+    // is also exactly the edit the task answered UP-TO-DATE over. Not measured
+    // the way the rows above were, but the shape is identical, and an input this
+    // task did not have can only cost a re-run, never a wrong answer.
     inputs.files(
         rootProject.projectDir.parentFile.resolve("README.md"),
         rootProject.projectDir.parentFile.resolve("NOTICE.md"),
+        rootProject.projectDir.parentFile.resolve("MILESTONES.md"),
         fileTree(rootProject.projectDir.parentFile.resolve("docs")) { include("*.md") },
     )
         .withPropertyName("statedRequirements")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The branding overlay the server build applies to product.json.
+    // DisplayLanguageTest parses it to check the `set` half still names no
+    // nlsCoreBaseUrl: one there gives the editor an address to fetch translated
+    // interface strings from, which retires the Known Limitations entry the
+    // guide carries. Its other reader, server.js, is already covered by
+    // bootstrapScripts above; this file compiles into nothing here, so without
+    // this line nothing makes the task notice it change.
+    inputs.file(rootProject.projectDir.parentFile.resolve("branding/product.json"))
+        .withPropertyName("brandingOverlay")
 
     // Resources, for the same reason and with one difference that makes them
     // easier to miss than everything above: they DO have a tool standing behind
@@ -496,6 +558,36 @@ tasks.withType<Test> {
     )
         .withPropertyName("readableResources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+/**
+ * Fails the build with [help] when this `Exec` task exits non-zero.
+ *
+ * Eleven verification tasks in this file wrap a `python3 scripts/check-*.py` or
+ * a `verify-*.py`, and each of them repeated the same five lines: turn off
+ * Gradle's own exit handling, capture `executionResult`, and re-raise inside
+ * `doLast` with a paragraph the script has no way to write because it does not
+ * know who called it. Only the help text differs, and only the help text is
+ * worth reading, so that is what stays at each site.
+ *
+ * The capture must sit HERE and not inside `doLast`: the receiver in that block
+ * is `Task`, which has no `executionResult`, and reading it there fails at
+ * configuration time with an error about the receiver rather than about the
+ * property. Exactly one of the eleven copies carried a comment saying so; the
+ * other ten carried the trap with nothing to warn the next person.
+ *
+ * `isIgnoreExitValue` is what makes this necessary at all. Without it Gradle
+ * fails the task itself, with a message naming an exit status and a command
+ * line, which is true and tells a reader nothing about what to do next.
+ */
+fun Exec.failOnExit(help: String) {
+    isIgnoreExitValue = true
+    val result = executionResult
+    doLast {
+        if (result.get().exitValue != 0) {
+            throw GradleException(help)
+        }
+    }
 }
 
 // The server tree in assets/ has to carry this checkout's patches, and nothing
@@ -533,38 +625,30 @@ val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
 
     // The script names which patch is missing; this adds what to do about it,
     // which it has no way to know when it is not the fetcher calling.
-    isIgnoreExitValue = true
-    // Captured here rather than read inside doLast, where the receiver is Task
-    // and this property is not on it.
-    val result = executionResult
-    doLast {
-        if (result.get().exitValue != 0) {
-            throw GradleException(
-                "The server tree in assets/ is missing at least one patch this checkout applies.\n" +
-                    "The line above names which. This tree is older than patches/, and no\n" +
-                    "amount of rebuilding the APK will change that -- the patch is applied\n" +
-                    "when the server is built, not when the app is.\n" +
-                    "\n" +
-                    "Two ways forward:\n" +
-                    "\n" +
-                    "  Published server (normal case). Run the \"Build Code - OSS server\"\n" +
-                    "  workflow so a server-<version> release exists for the version in\n" +
-                    "  VSCODE_VERSION, then refresh the local tree:\n" +
-                    "      rm -f server/vscode-reh-web-linux-arm64-*.tar.gz\n" +
-                    "      ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n" +
-                    "  The cached tarball is only refetched when the digest on the release\n" +
-                    "  changes, so retrying without that rebuild will not reach you.\n" +
-                    "\n" +
-                    "  Locally, in Docker. See the header of scripts/build-vscode-oss.sh for\n" +
-                    "  the invocation, and remove the work volume first -- a reused one can\n" +
-                    "  satisfy a stage the script never ran:\n" +
-                    "      docker volume rm vscodroid-codeoss\n" +
-                    "  Then point the fetcher at what it produced:\n" +
-                    "      VSCODE_OSS_URL=file:///path/to/the.tar.gz ./scripts/fetch-vscode-oss.sh\n" +
-                    "      ./scripts/package-assets.sh"
-            )
-        }
-    }
+    failOnExit(
+        "The server tree in assets/ is missing at least one patch this checkout applies.\n" +
+            "The line above names which. This tree is older than patches/, and no\n" +
+            "amount of rebuilding the APK will change that -- the patch is applied\n" +
+            "when the server is built, not when the app is.\n" +
+            "\n" +
+            "Two ways forward:\n" +
+            "\n" +
+            "  Published server (normal case). Run the \"Build Code - OSS server\"\n" +
+            "  workflow so a server-<version> release exists for the version in\n" +
+            "  VSCODE_VERSION, then refresh the local tree:\n" +
+            "      rm -f server/vscode-reh-web-linux-arm64-*.tar.gz\n" +
+            "      ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n" +
+            "  The cached tarball is only refetched when the digest on the release\n" +
+            "  changes, so retrying without that rebuild will not reach you.\n" +
+            "\n" +
+            "  Locally, in Docker. See the header of scripts/build-vscode-oss.sh for\n" +
+            "  the invocation, and remove the work volume first -- a reused one can\n" +
+            "  satisfy a stage the script never ran:\n" +
+            "      docker volume rm vscodroid-codeoss\n" +
+            "  Then point the fetcher at what it produced:\n" +
+            "      VSCODE_OSS_URL=file:///path/to/the.tar.gz ./scripts/fetch-vscode-oss.sh\n" +
+            "      ./scripts/package-assets.sh"
+    )
 }
 
 // The same script fetch-vscode-oss.sh runs, pointed at the tree that actually
@@ -636,30 +720,25 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
     // downloaded has no addons to judge.
     onlyIf { entryPoint.isFile }
 
-    isIgnoreExitValue = true
-    val addonResult = executionResult
-    doLast {
-        if (addonResult.get().exitValue != 0) {
-            throw GradleException(
-                "The packaged tree carries native addons that cannot load on Android.\n" +
-                    "The ERROR lines above name them and what they need.\n" +
-                    "\n" +
-                    "Two causes, both ordinary:\n" +
-                    "  * scripts/build-native-addons.sh has not run for this tree, or\n" +
-                    "  * package-assets.sh ran after it and copied the upstream tree\n" +
-                    "    back over the overlay. It must run before, not after.\n" +
-                    "\n" +
-                    "scripts/build-all.sh runs them in the order that works. If the\n" +
-                    "missing half is the compatibility shim rather than an addon, that is\n" +
-                    "scripts/build-glibc-shim.sh, which download-termux-tools.sh removes\n" +
-                    "as a side effect of refreshing its own libraries."
-            )
-        }
-    }
+    failOnExit(
+        "The packaged tree carries native addons that cannot load on Android.\n" +
+            "The ERROR lines above name them and what they need.\n" +
+            "\n" +
+            "Two causes, both ordinary:\n" +
+            "  * scripts/build-native-addons.sh has not run for this tree, or\n" +
+            "  * package-assets.sh ran after it and copied the upstream tree\n" +
+            "    back over the overlay. It must run before, not after.\n" +
+            "\n" +
+            "scripts/build-all.sh runs them in the order that works. If the\n" +
+            "missing half is the compatibility shim rather than an addon, that is\n" +
+            "scripts/build-glibc-shim.sh, which download-termux-tools.sh removes\n" +
+            "as a side effect of refreshing its own libraries."
+    )
 }
 
 /**
- * Refuses a packaged asset tree carrying a binary Android 16 will not map.
+ * Refuses a packaged asset tree carrying an aarch64 binary the device cannot
+ * map, or cannot start.
  *
  * The page-size rule is enforced everywhere a binary is produced and nowhere a
  * binary is packaged, for everything except `jniLibs/`. Each download script
@@ -676,23 +755,27 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
  * exists for: the file is present, the build is green, and the feature the addon
  * backs is simply missing on the devices that ship today.
  *
- * Alignment only. The tree is packaged rather than built here, so it
- * legitimately holds payloads for other platforms and dependencies nothing
- * loads, and asking the full question of it would fail a correct build; the
- * script's `alignment_sweep` names both cases and the measurements behind them.
- * The dependency half of the question is already asked of these same
- * directories by `verifyNativeAddons`.
+ * Two of the three questions the script can ask: LOAD alignment, which decides
+ * whether the file maps at all on Android 16, and PT_INTERP, which decides
+ * whether an aarch64 executable came out of a toolchain whose loader exists
+ * here. The third, DT_NEEDED, is deliberately not asked. The tree is packaged
+ * rather than built here, so it legitimately holds payloads for other platforms
+ * and dependencies nothing loads, and asking that question of it would fail a
+ * correct build; the script's `alignment_sweep` names both cases and the
+ * measurements behind them. The dependency half is asked of these same
+ * directories by `verifyNativeAddons`, which knows about the shim.
  *
  * Armed by the same file as its two neighbours, and skipped with them: the lint
  * and unit-test jobs stub an empty assets tree so Gradle will configure, and a
  * tree that was never downloaded has nothing to judge.
  *
- * Measured on the real tree: 158 aarch64 binaries, 4 skipped as another ABI or
- * not loadable, 0.8s.
+ * Measured on the real tree: 146 aarch64 binaries, 4 skipped as another ABI or
+ * not loadable, 0.8s. The count is a snapshot and moves whenever the packaged
+ * tree does; only the shape is durable.
  */
 val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
     group = "verification"
-    description = "Checks every packaged aarch64 binary is 16 KB page aligned."
+    description = "Checks every packaged aarch64 binary can be mapped and started."
 
     val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
 
@@ -704,27 +787,39 @@ val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
 
     onlyIf { entryPoint.isFile }
 
-    isIgnoreExitValue = true
-    val alignResult = executionResult
-    doLast {
-        if (alignResult.get().exitValue != 0) {
-            throw GradleException(
-                "A binary in the packaged asset tree is not 16 KB page aligned.\n" +
-                    "The FAIL line above names the file and the alignment it has.\n" +
-                    "\n" +
-                    "Android 16 refuses to map it, so whatever loads it fails on a\n" +
-                    "current device and works everywhere older. Re-run the script that\n" +
-                    "places the file: scripts/build-native-addons.sh for an addon under\n" +
-                    "vscode-reh/node_modules, scripts/download-termux-tools.sh or\n" +
-                    "download-python.sh for anything under assets/usr, and\n" +
-                    "scripts/fetch-vscode-oss.sh for the server tree itself.\n" +
-                    "\n" +
-                    "A file that arrives misaligned from upstream is not fixable here:\n" +
-                    "it has to be rebuilt with -Wl,-z,max-page-size=16384, which is what\n" +
-                    "build-native-addons.sh already passes."
-            )
-        }
-    }
+    failOnExit(
+        "A binary in the packaged asset tree cannot be used on Android.\n" +
+            "The FAIL line above names the file and which of the two questions\n" +
+            "it failed.\n" +
+            "\n" +
+            "Segment alignment: Android 16 refuses to map anything below 16 KB,\n" +
+            "so whatever loads it fails on a current device and works everywhere\n" +
+            "older.\n" +
+            "\n" +
+            "PT_INTERP: an aarch64 executable naming a program interpreter other\n" +
+            "than /system/bin/linker64 came out of a glibc toolchain, and nothing\n" +
+            "on the device can start it. This tree is extracted to filesDir,\n" +
+            "where SELinux refuses execve outright, and the loader indirection\n" +
+            "that does start a payload there hands it to /system/bin/linker64,\n" +
+            "which cannot satisfy a glibc binary either. The two glibc-built\n" +
+            "helpers inside @microsoft/mxc-sdk are known and allowed by name in\n" +
+            "verify-android-elf.py; a third arriving with a VS Code bump is what\n" +
+            "this catches. That allowlist is checked in the other direction too:\n" +
+            "an entry no file matched fails, because a bump that moves one of the\n" +
+            "two leaves a path waving through whatever lands there next. That FAIL\n" +
+            "names a line in verify-android-elf.py rather than a file, and deleting\n" +
+            "the entry is the whole fix.\n" +
+            "\n" +
+            "Re-run the script that\n" +
+            "places the file: scripts/build-native-addons.sh for an addon under\n" +
+            "vscode-reh/node_modules, scripts/download-termux-tools.sh or\n" +
+            "download-python.sh for anything under assets/usr, and\n" +
+            "scripts/fetch-vscode-oss.sh for the server tree itself.\n" +
+            "\n" +
+            "A file that arrives misaligned from upstream is not fixable here:\n" +
+            "it has to be rebuilt with -Wl,-z,max-page-size=16384, which is what\n" +
+            "build-native-addons.sh already passes."
+    )
 }
 
 val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
@@ -743,29 +838,23 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     // verify. Any tree that can produce a working APK has this file.
     onlyIf { entryPoint.isFile }
 
-    isIgnoreExitValue = true
-    val result = executionResult
-    doLast {
-        if (result.get().exitValue != 0) {
-            throw GradleException(
-                "The server tree in assets/ is not one this app can run.\n" +
-                    "The FAIL line above names which check it did not meet.\n" +
-                    "\n" +
-                    "This tree is a copy of server/vscode-reh, so refresh both:\n" +
-                    "    ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n" +
-                    "\n" +
-                    "Nothing needs deleting by hand first. fetch-vscode-oss.sh asks the\n" +
-                    "server-<version> release what digest it carries now, compares the\n" +
-                    "cached tarball against it, and removes and refetches it when they\n" +
-                    "differ -- which is exactly the case when an earlier build of the same\n" +
-                    "version left this tree behind.\n" +
-                    "\n" +
-                    "If it reports the cached tarball as matching and this still fails, the\n" +
-                    "published server is itself stale: rebuild and republish it by running\n" +
-                    "the \"Build Code - OSS server\" workflow."
-            )
-        }
-    }
+    failOnExit(
+        "The server tree in assets/ is not one this app can run.\n" +
+            "The FAIL line above names which check it did not meet.\n" +
+            "\n" +
+            "This tree is a copy of server/vscode-reh, so refresh both:\n" +
+            "    ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n" +
+            "\n" +
+            "Nothing needs deleting by hand first. fetch-vscode-oss.sh asks the\n" +
+            "server-<version> release what digest it carries now, compares the\n" +
+            "cached tarball against it, and removes and refetches it when they\n" +
+            "differ -- which is exactly the case when an earlier build of the same\n" +
+            "version left this tree behind.\n" +
+            "\n" +
+            "If it reports the cached tarball as matching and this still fails, the\n" +
+            "published server is itself stale: rebuild and republish it by running\n" +
+            "the \"Build Code - OSS server\" workflow."
+    )
 }
 
 // A jniLibs entry smaller than this is the placeholder the lint, unit-test and R8
@@ -854,28 +943,22 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     // legitimately write a placeholder.
     onlyIf { jniLibsHoldsRealBinary() }
 
-    isIgnoreExitValue = true
-    val result = executionResult
-    doLast {
-        if (result.get().exitValue != 0) {
-            throw GradleException(
-                "A bundled binary in jniLibs cannot load on Android.\n" +
-                    "The FAIL line above names the file and the property it fails.\n" +
-                    "\n" +
-                    "These are placed by the download scripts, so re-run the one that\n" +
-                    "owns the file -- scripts/download-node.sh, download-python.sh,\n" +
-                    "download-termux-tools.sh, download-musl-loader.sh, or\n" +
-                    "fetch-vscode-oss.sh for libripgrep.so -- and let it fail there,\n" +
-                    "where the message says which upstream package it came from.\n" +
-                    "\n" +
-                    "In CI a cached jniLibs is restored whole with every download step\n" +
-                    "skipped, so a binary here can be older than the tree. It cannot be\n" +
-                    "older than this checker: scripts/verify-android-elf.py is hashed\n" +
-                    "into all three cache keys, so tightening it misses the cache and\n" +
-                    "refetches. Re-run the owning script above; do not bust a cache."
-            )
-        }
-    }
+    failOnExit(
+        "A bundled binary in jniLibs cannot load on Android.\n" +
+            "The FAIL line above names the file and the property it fails.\n" +
+            "\n" +
+            "These are placed by the download scripts, so re-run the one that\n" +
+            "owns the file -- scripts/download-node.sh, download-python.sh,\n" +
+            "download-termux-tools.sh, download-musl-loader.sh, or\n" +
+            "fetch-vscode-oss.sh for libripgrep.so -- and let it fail there,\n" +
+            "where the message says which upstream package it came from.\n" +
+            "\n" +
+            "In CI a cached jniLibs is restored whole with every download step\n" +
+            "skipped, so a binary here can be older than the tree. It cannot be\n" +
+            "older than this checker: scripts/verify-android-elf.py is hashed\n" +
+            "into all three cache keys, so tightening it misses the cache and\n" +
+            "refetches. Re-run the owning script above; do not bust a cache."
+    )
 }
 
 // The binaries that must BE there, as opposed to the properties the sweeps above
@@ -997,26 +1080,20 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
 
     onlyIf { jniLibsHoldsRealBinary() }
 
-    isIgnoreExitValue = true
-    val result = executionResult
-    doLast {
-        if (result.get().exitValue != 0) {
-            throw GradleException(
-                "A bundled binary names a shell inside Termux's data directory.\n" +
-                    "The FAIL line above names the file. This app cannot read or\n" +
-                    "create that path, so whatever the binary wanted a shell for\n" +
-                    "fails with ENOENT wherever it runs on a device.\n" +
-                    "\n" +
-                    "Re-run the script that places the file --\n" +
-                    "scripts/download-termux-tools.sh, or download-node.sh for\n" +
-                    "libnode.so -- which rewrites the path where it installs it.\n" +
-                    "A binary neither of them places needs a call adding there.\n" +
-                    "\n" +
-                    "In CI this most likely means a cached jniLibs restored a binary\n" +
-                    "placed before that rewrite existed: bust the assets cache."
-            )
-        }
-    }
+    failOnExit(
+        "A bundled binary names a shell inside Termux's data directory.\n" +
+            "The FAIL line above names the file. This app cannot read or\n" +
+            "create that path, so whatever the binary wanted a shell for\n" +
+            "fails with ENOENT wherever it runs on a device.\n" +
+            "\n" +
+            "Re-run the script that places the file --\n" +
+            "scripts/download-termux-tools.sh, or download-node.sh for\n" +
+            "libnode.so -- which rewrites the path where it installs it.\n" +
+            "A binary neither of them places needs a call adding there.\n" +
+            "\n" +
+            "In CI this most likely means a cached jniLibs restored a binary\n" +
+            "placed before that rewrite existed: bust the assets cache."
+    )
 }
 
 // The pack is a directory in the checkout whether or not anything has filled it:
@@ -1057,21 +1134,15 @@ val checkPackOverlap = tasks.register<Exec>("checkPackOverlap") {
     // overlap answers a question nobody asked.
     onlyIf { anyPackHoldsPayload() }
 
-    isIgnoreExitValue = true
-    val overlapResult = executionResult
-    doLast {
-        if (overlapResult.get().exitValue != 0) {
-            throw GradleException(
-                "An asset pack ships a file the base module already ships. The\n" +
-                    "output above names it. Play delivers the pack over the base\n" +
-                    "install, so the duplicate wins on a Play device and loses on a\n" +
-                    "sideloaded one, and the two disagree about which build a library\n" +
-                    "came from.\n" +
-                    "\n" +
-                    "Re-run the download script for the pack it names."
-            )
-        }
-    }
+    failOnExit(
+        "An asset pack ships a file the base module already ships. The\n" +
+            "output above names it. Play delivers the pack over the base\n" +
+            "install, so the duplicate wins on a Play device and loses on a\n" +
+            "sideloaded one, and the two disagree about which build a library\n" +
+            "came from.\n" +
+            "\n" +
+            "Re-run the download script for the pack it names."
+    )
 }
 
 val checkBundleSize = tasks.register<Exec>("checkBundleSize") {
@@ -1092,18 +1163,12 @@ val checkBundleSize = tasks.register<Exec>("checkBundleSize") {
     // else does not fail for a file that was never built.
     onlyIf { aab.get().asFile.isFile }
 
-    isIgnoreExitValue = true
-    val sizeResult = executionResult
-    doLast {
-        if (sizeResult.get().exitValue != 0) {
-            throw GradleException(
-                "The bundle is over a limit Play enforces. The output above names\n" +
-                    "which one and by how much. The base module cap is a compressed\n" +
-                    "download size, so it moves with what compresses, not only with\n" +
-                    "what is added."
-            )
-        }
-    }
+    failOnExit(
+        "The bundle is over a limit Play enforces. The output above names\n" +
+            "which one and by how much. The base module cap is a compressed\n" +
+            "download size, so it moves with what compresses, not only with\n" +
+            "what is added."
+    )
 }
 
 /**
@@ -1137,21 +1202,15 @@ val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
 
     onlyIf { tree != null }
 
-    isIgnoreExitValue = true
-    val pyResult = executionResult
-    doLast {
-        if (pyResult.get().exitValue != 0) {
-            throw GradleException(
-                "The bundled Python extension still answers OSType.Unknown on this\n" +
-                    "platform. Selecting a virtual environment would silently fail to\n" +
-                    "activate it, which is the symptom users report as the interpreter\n" +
-                    "not being found.\n" +
-                    "\n" +
-                    "Re-run scripts/download-extensions.sh, which applies the rewrite\n" +
-                    "after verifying the VSIX against its pinned digest."
-            )
-        }
-    }
+    failOnExit(
+        "The bundled Python extension still answers OSType.Unknown on this\n" +
+            "platform. Selecting a virtual environment would silently fail to\n" +
+            "activate it, which is the symptom users report as the interpreter\n" +
+            "not being found.\n" +
+            "\n" +
+            "Re-run scripts/download-extensions.sh, which applies the rewrite\n" +
+            "after verifying the VSIX against its pinned digest."
+    )
 }
 
 fun rubyPackHoldsPayload(): Boolean =
@@ -1194,23 +1253,17 @@ val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") 
     // sweeping that would report a pack clean on the strength of one JSON file.
     onlyIf { rubyPackHoldsPayload() }
 
-    isIgnoreExitValue = true
-    val result = executionResult
-    doLast {
-        if (result.get().exitValue != 0) {
-            throw GradleException(
-                "The Ruby toolchain pack names a shell inside Termux's data\n" +
-                    "directory. The FAIL line above names the file, relative to the\n" +
-                    "pack's assets. This app cannot read or create that path, so\n" +
-                    "Ruby's system(), its backticks and the Makefiles mkmf writes\n" +
-                    "all fail with ENOENT on a device.\n" +
-                    "\n" +
-                    "Re-run scripts/download-ruby.sh, which rewrites the path in the\n" +
-                    "files it places and sweeps the pack afterwards. A pack left\n" +
-                    "over from a run that predates that rewrite is the likely cause."
-            )
-        }
-    }
+    failOnExit(
+        "The Ruby toolchain pack names a shell inside Termux's data\n" +
+            "directory. The FAIL line above names the file, relative to the\n" +
+            "pack's assets. This app cannot read or create that path, so\n" +
+            "Ruby's system(), its backticks and the Makefiles mkmf writes\n" +
+            "all fail with ENOENT on a device.\n" +
+            "\n" +
+            "Re-run scripts/download-ruby.sh, which rewrites the path in the\n" +
+            "files it places and sweeps the pack afterwards. A pack left\n" +
+            "over from a run that predates that rewrite is the likely cause."
+    )
 }
 
 
@@ -1310,11 +1363,17 @@ gradle.taskGraph.whenReady {
     // project, AGP 9.3.1: mergeDebugAssets is
     // com.android.build.gradle.tasks.MergeSourceSetFolders_Decorated, and the only
     // other task of that type in the graph is mergeDebugJniLibFolders. The two
-    // always travel together, also measured, across four graphs by --dry-run:
+    // always travel together, also measured, across five graphs by --dry-run:
     // assembleDebug 1 and 1, bundleRelease 1 and 1, testDebugUnitTest 0 and 0,
-    // and `optimizeReleaseResources lintVitalRelease` 0 and 0. So the type answers
-    // the same question as the name on every graph this project runs, while
-    // surviving the rename that the name cannot.
+    // `optimizeReleaseResources lintVitalRelease` 0 and 0, and `lint` 0 and 0
+    // (37 tasks, none of them a merge). So the type answers the same question as
+    // the name on every graph this project runs, while surviving the rename that
+    // the name cannot.
+    //
+    // The `lint` figure is what says release.yml's lint step is cheap: it costs
+    // no second asset merge and re-runs none of the ten gates below, which
+    // matters because that job's budget already covers the server fetch, every
+    // download, the addons, the unit tests, assembleRelease and bundleRelease.
     val merging = here.filter { it.javaClass.name.contains("MergeSourceSetFolders") }
     if (packaging.isEmpty() && merging.isNotEmpty()) {
         throw GradleException(
@@ -1358,15 +1417,58 @@ gradle.taskGraph.whenReady {
                 }
         )
     }
+
+    // The last question, and the one none of the ten gates can answer: is there
+    // an editor in this build at all.
+    //
+    // Four of them would notice an absent server tree, and all four are armed by
+    // `onlyIf { entryPoint.isFile }` on that very file, so a tree without it does
+    // not fail them, it SKIPS them. What was then left weighed a runtime and some
+    // binaries, and packaging produced a signed, installable APK and AAB that
+    // open with nothing in them. release.yml refuses that in its own "Verify
+    // assets" step, but `./gradlew bundleRelease` and scripts/build-aab.sh reach
+    // the same packaging without passing through any workflow, and build-aab.sh
+    // builds and signs only.
+    //
+    // Asked here rather than by rearming those four, because "absent is not
+    // stale" is still right for each of them on its own: they judge what a tree
+    // IS, and none is the place to demand that one exists. The graph is, because
+    // the graph is what says an asset tree is about to be packaged.
+    //
+    // Armed by the same answer as verifyBundledBinaries, verifyRequiredBinaries
+    // and verifyBundledShellPaths, which is what keeps it quiet where an absent
+    // server tree is correct: the lint, unit-test and R8 jobs write a 64-byte
+    // placeholder libnode.so and mkdir an empty assets/vscode-reh/out, so both
+    // halves are placeholders together and neither is this check's business.
+    // Real binaries beside no server tree is a half-prepared tree, and that
+    // mixture is what no gate in this file can see.
+    if (jniLibsHoldsRealBinary() &&
+        !file("src/main/assets/vscode-reh/out/server-main.js").isFile
+    ) {
+        throw GradleException(
+            "This build packages an asset tree (${packaging.joinToString(", ")}) " +
+                "with no editor in it, so what it produces would install and open " +
+                "empty.\n\n" +
+                "android/app/src/main/assets/vscode-reh/out/server-main.js is " +
+                "missing while jniLibs holds real binaries, so this is a " +
+                "half-prepared tree rather than the placeholder the lint, " +
+                "unit-test and R8 jobs write.\n\n" +
+                "Restore it:\n" +
+                "    ./scripts/fetch-vscode-oss.sh && ./scripts/package-assets.sh\n\n" +
+                "scripts/build-all.sh runs both before every download, which is the " +
+                "order that works. scripts/build-aab.sh does not: it builds and " +
+                "signs only, and packages whatever the last preparation left behind."
+        )
+    }
 }
 
 // The finished bundle is a Gradle product, so the edge is `finalizedBy` rather
 // than `dependsOn`: the file does not exist until bundleRelease has run. Writing
 // it the other way round would either check a file that is not there yet or, if
 // declared both ways, make a cycle.
-tasks.matching { it.name == "bundleRelease" }.configureEach {
-    finalizedBy(checkBundleSize)
-}
+// Named rather than inlined so that the edge and the assertion at the foot of
+// this file are built from one list; see `finalizedGates` there.
+val bundleSizeProducer = "bundleRelease"
 
 // The privacy policy makes a closed statement about permissions, and the set it
 // has to match is the MERGED one: AGP folds in every library's declarations, and
@@ -1393,24 +1495,83 @@ val checkPermissionClaims = tasks.register<Exec>("checkPermissionClaims") {
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/check-permission-claims.py")
 
-    isIgnoreExitValue = true
-    val result = executionResult
-    doLast {
-        if (result.get().exitValue != 0) {
-            throw GradleException(
-                "The published privacy policy does not describe the permissions " +
-                    "this build ships.\nThe FAIL line above names which way it " +
-                    "disagrees.\n" +
-                    "\n" +
-                    "docs/PRIVACY_POLICY.md is what the Play listing links to, so a " +
-                    "reader comparing\nthe two sees an undisclosed capability rather " +
-                    "than a library dependency.\ndocs/06-SECURITY.md section 4.1 " +
-                    "carries the same two tables and has to move with it."
-            )
-        }
+    failOnExit(
+        "The published privacy policy does not describe the permissions " +
+            "this build ships.\nThe FAIL line above names which way it " +
+            "disagrees.\n" +
+            "\n" +
+            "docs/PRIVACY_POLICY.md is what the Play listing links to, so a " +
+            "reader comparing\nthe two sees an undisclosed capability rather " +
+            "than a library dependency.\ndocs/06-SECURITY.md section 4.1 " +
+            "carries the same two tables and has to move with it."
+    )
+}
+
+val permissionClaimsProducer = "processReleaseMainManifest"
+
+// Both gates are attached by an EXACT task name, which is the wiring the
+// assertion further up deliberately does not trust anywhere else: the ten
+// packaging gates are matched by name SHAPE and then checked against the live
+// graph, because a name that stops matching detaches in silence and takes an
+// unchecked asset tree into an APK with it.
+//
+// The wiring and the check below are built from this one list, so a pair
+// deleted here loses both at once and neither can be left pointing at a name
+// the other does not use.
+//
+// The list names both gates, so it and the wiring under it sit after both
+// `register` calls. Position costs nothing: `tasks.matching` is a live view and
+// `configureEach` reaches tasks AGP has not created yet, which is every task
+// either producer names.
+val finalizedGates = listOf(
+    bundleSizeProducer to checkBundleSize,
+    permissionClaimsProducer to checkPermissionClaims,
+)
+
+finalizedGates.forEach { (producer, gate) ->
+    tasks.matching { it.name == producer }.configureEach {
+        finalizedBy(gate)
     }
 }
 
-tasks.matching { it.name == "processReleaseMainManifest" }.configureEach {
-    finalizedBy(checkPermissionClaims)
+// What this catches, exactly: the producer runs and its gate does not. That is
+// a gate excluded with `-x`, a gate deleted from this file with its producer
+// left behind, and any edit to the `finalizedBy` wiring above that stops the
+// edge being created. Without it the Play size cap and the privacy-policy
+// permission check leave `./gradlew bundleRelease` and `scripts/build-aab.sh`
+// in silence, and the first symptom is a bundle Play rejects at upload, after
+// the GitHub release is already public.
+//
+// What it cannot catch: a producer AGP renames is simply absent from the graph,
+// so the pair never fires. Neither producer is left resting on that.
+// `bundleRelease` is named by release.yml and by scripts/build-aab.sh, and
+// Gradle fails an invocation it cannot resolve, so a rename of that one is loud
+// wherever it matters. `processReleaseMainManifest` is named by nothing but this
+// file, so release.yml asks the artefact instead: it runs
+// `check-permission-claims.py --require-merged` after `bundleRelease`, which
+// fails when no release merged manifest was judged, whatever the reason. A
+// rename therefore costs a local `./gradlew bundleRelease` the merged half of
+// that check, and costs the published build nothing.
+//
+// A second whenReady rather than a branch inside the first: that one is
+// registered further up this file, and a lambda cannot capture a val declared
+// after it. Gradle accepts any number of these listeners.
+gradle.taskGraph.whenReady {
+    val prefix = "${project.path}:"
+    val present = allTasks.filter { it.path.startsWith(prefix) }.map { it.name }.toSet()
+    val detached = finalizedGates
+        .filter { (producer, gate) -> producer in present && gate.name !in present }
+        .map { (producer, gate) -> "  ${gate.name}, which should follow $producer" }
+    if (detached.isNotEmpty()) {
+        throw GradleException(
+            "This build runs a task that a verification gate is attached to, and the " +
+                "gate is not in the graph:\n" +
+                detached.joinToString("\n") +
+                "\n\nThe producer ran, so its name is still current; what is missing is the " +
+                "edge. Excluding the gate with -x produces this and is the usual cause, in " +
+                "which case re-run without the exclusion. Otherwise the `finalizedGates` " +
+                "list near the foot of app/build.gradle.kts, which is what creates the " +
+                "edge, no longer names the pair."
+        )
+    }
 }

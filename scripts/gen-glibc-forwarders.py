@@ -666,7 +666,20 @@ def scan(roots):
     """
     shimmable, blocked = [], []
     for root in roots:
-        for path in sorted(root.rglob("*.node")) if root.is_dir() else [root]:
+        # `*.so` as well as `*.node`, because the question is "can the loader
+        # take this object", and the answer does not depend on the suffix. The
+        # sweep read only `*.node`, which is what a native addon happens to be
+        # called; an extension or a server-tree package shipping a plain
+        # `linux-arm64/*.so` that links a glibc soname would have been generated
+        # no stub and would fail at dlopen on a device with every gate green.
+        # Measured 2026-08-23: the two scanned trees hold no aarch64 `*.so` that
+        # is not a `.node`, so this widens what is asked without changing what is
+        # currently produced.
+        if root.is_dir():
+            candidates = sorted(set(root.rglob("*.node")) | set(root.rglob("*.so")))
+        else:
+            candidates = [root]
+        for path in candidates:
             if not path.is_file() or not needs_glibc(path):
                 continue
             try:

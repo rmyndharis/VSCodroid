@@ -21,6 +21,14 @@ concurrency:
   group: lint-${{ github.ref }}
   cancel-in-progress: true
 
+# Read by default. Nothing here publishes, and nothing here reaches the network
+# except the Gradle and Node toolchain downloads. Without this block the token's
+# scope is whatever the repository's default workflow permissions happen to be,
+# which is a setting outside this file and outside review. release.yml has said
+# this since it was written.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Android Lint
@@ -38,6 +46,10 @@ jobs:
           # pack, measured 2026-08-22, against a release that used to be the
           # first place anybody found out.
           fetch-depth: 0
+          # Nothing here pushes, and reading the local history the line above
+          # fetches needs no credential. A persisted token would be readable by
+          # `./gradlew lint` and every gate below it for the length of the job.
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -235,6 +247,7 @@ jobs:
           node scripts/test-bridge-relay.js
           node scripts/test-download-capture.js
           node scripts/test-serve-network.js
+          node scripts/test-welcome.js
 
       - name: Run lint
         working-directory: android

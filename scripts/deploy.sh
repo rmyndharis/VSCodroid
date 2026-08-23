@@ -41,8 +41,18 @@ echo "  ✓ Installed"
 # Launch
 echo ""
 echo "Launching VSCodroid..."
-adb shell am start -n com.vscodroid/.SplashActivity
-echo "  ✓ Launched"
+# The debug build type sets applicationIdSuffix = ".debug", so the package this
+# script just installed is com.vscodroid.debug. Launching com.vscodroid resolved
+# nothing ("Activity class {com.vscodroid/com.vscodroid.SplashActivity} does not
+# exist") unless a release build happened to be installed beside it, in which
+# case it started that one instead and the install above was wasted.
+#
+# SplashActivity and not MainActivity: MainActivity bypasses first-run setup
+# entirely, so a fresh install launched that way opens against an asset tree
+# that was never extracted.
+PKG="${PKG:-com.vscodroid.debug}"
+adb shell am start -n "$PKG/com.vscodroid.SplashActivity"
+echo "  ✓ Launched $PKG"
 
 echo ""
 echo "=== Deploy complete ==="

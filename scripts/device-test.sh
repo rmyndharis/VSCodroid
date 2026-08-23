@@ -1273,12 +1273,16 @@ printf "\n${BOLD}Phase 6: Toolchains${RESET}\n"
 
 # Test 24: the toolchain screen has a way in.
 #
-# It has exactly one: the dynamic launcher shortcut publishToolchainShortcut()
-# pushes from launchMain(). The activity is not exported and no bundled
-# extension sends openToolchainSettings, so if the push is refused -- rate
-# limiting is the documented case -- the screen becomes unreachable and only a
-# log line says so. Read rather than launched, because the shortcut cannot be
-# started from the shell uid either.
+# It has two, and only one of them is worth measuring here. The dynamic launcher
+# shortcut publishToolchainShortcut() pushes from launchMain() is the route that
+# works with no editor: the activity is not exported, so if the push is refused
+# -- rate limiting is the documented case -- nothing outside the app can reach
+# the screen and only a log line says so. The other route is the bundled
+# saf-bridge extension's vscodroid.manageToolchains command, which sends
+# openToolchainSettings over the bridge; it needs a loaded workbench, an
+# activated extension and a command palette, so it cannot answer the question
+# this test asks and it does not cover for a refused push. Read rather than
+# launched, because the shortcut cannot be started from the shell uid either.
 #
 # The control is the dump having any Package section at all: without one, this
 # cannot tell "no shortcut" from "cannot see shortcuts on this Android version".

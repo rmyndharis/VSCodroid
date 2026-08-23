@@ -205,17 +205,78 @@ check_pair() {
     echo "  pairing: $name JS matches native ($js)"
 }
 
-# fetch <package> <version> -> echoes the unpacked source directory
+# fetch <package> <version> <sha256> <node-addon-api version>
+#   -> echoes the unpacked source directory
+#
+# The three addons here were the only downloads in this repository with no
+# digest this checkout states. Everything else is anchored: the Node headers
+# above, the Node tarball in download-npm.sh, all five VSIXs in
+# download-extensions.sh, and the Termux and Alpine packages through a signed
+# index. Each of those carries the same reasoning, and it applies hardest here:
+# these tarballs are C++ that gets compiled into three `.node` files that ship
+# in every APK, load into the server process, and pass every ELF gate whatever
+# they contain. `npm pack` does check the tarball against the registry's own
+# integrity value, which proves the bytes arrived and nothing about whose bytes
+# they are -- the same "serve and certify" gap the comments above describe.
+#
+# The tarball is kept rather than deleted after unpacking, and re-hashed on
+# every run, so a cached source directory is verified again rather than trusted
+# for having been verified once. That is what termux_download_packages does with
+# a cached .deb, and for the same reason: nothing here can tell a file this
+# script wrote from one left by anything else with write access to .build.
+#
+# node-addon-api is pinned per package because it supplies napi.h and therefore
+# shapes the compiled ABI surface, and each package declares a different caret
+# range: floating inside one meant the addon's ABI could move without any
+# version in this repository changing. The install is fail-closed now; it was
+# `|| true`, which left the compile to fail several lines later on a missing
+# napi.h rather than saying which step went wrong.
 fetch() {
-    local pkg=$1 version=$2
+    local pkg=$1 version=$2 expected=$3 addon_api=$4
     local dir="$WORK_DIR/src/${pkg//\//_}-$version"
-    if [ ! -d "$dir" ]; then
+    local tgz="$dir/source.tgz"
+
+    if [ ! -f "$tgz" ]; then
+        rm -rf "$dir"
         mkdir -p "$dir"
-        ( cd "$dir" && npm pack "$pkg@$version" --quiet >/dev/null \
-            && tar xzf ./*.tgz --strip-components=1 && rm -f ./*.tgz )
-        # node-addon-api supplies napi.h; nothing else is needed to link.
-        ( cd "$dir" && npm install --ignore-scripts --no-audit --no-fund --quiet >/dev/null 2>&1 || true )
+        ( cd "$dir" && npm pack "$pkg@$version" --quiet >/dev/null && mv ./*.tgz source.tgz )
     fi
+
+    local actual
+    actual=$( (sha256sum "$tgz" 2>/dev/null || shasum -a 256 "$tgz") | cut -d' ' -f1)
+    if [ "$actual" != "$expected" ]; then
+        # Removed, so a rerun refetches rather than measuring the same bad file.
+        rm -f "$tgz"
+        echo "ERROR: $pkg@$version does not match the digest this checkout states" >&2
+        echo "  expected: $expected" >&2
+        echo "  got     : $actual" >&2
+        echo "  Either the version constant moved without its digest, or the" >&2
+        echo "  registry is serving different bytes under the same version." >&2
+        return 1
+    fi
+
+    if [ ! -f "$dir/package.json" ]; then
+        ( cd "$dir" && tar xzf source.tgz --strip-components=1 )
+    fi
+
+    # Gated on the header the compile actually includes, not on package.json.
+    # Both steps used to sit behind that one guard, and the tarball is extracted
+    # first, so a failed install left package.json in place: the next run skipped
+    # the install it had never completed and failed several steps later on a
+    # missing napi.h. That is the exact misdiagnosis the fail-closed install
+    # below was added to remove, arriving one run later instead.
+    #
+    # node-addon-api supplies napi.h; nothing else is needed to link. --no-save
+    # so the pin lives here rather than being written back into a package.json
+    # that check_pair reads.
+    if [ ! -f "$dir/node_modules/node-addon-api/napi.h" ]; then
+        if ! ( cd "$dir" && npm install --ignore-scripts --no-audit --no-fund \
+                   --no-save --quiet "node-addon-api@$addon_api" >/dev/null 2>&1 ); then
+            echo "ERROR: could not install node-addon-api@$addon_api for $pkg" >&2
+            return 1
+        fi
+    fi
+
     echo "$dir"
 }
 
@@ -262,7 +323,12 @@ failed=0
 echo ""
 echo "node-pty..."
 PTY_VERSION=1.2.0-beta.15
-PTY_SRC=$(fetch node-pty "$PTY_VERSION")
+# Move this with PTY_VERSION; see fetch() for why the value is stated here
+# rather than read from the registry beside the payload.
+PTY_SHA256=114ac80c3fe075eff76217a4122d135576582695f49c03a5da3835cdfc2f89c5
+# node-pty declares ^7.1.0, so this is the top of that range.
+PTY_ADDON_API=7.1.1
+PTY_SRC=$(fetch node-pty "$PTY_VERSION" "$PTY_SHA256" "$PTY_ADDON_API")
 # Bionic has forkpty() in libc; binding.gyp's -lutil is for glibc only. Compiling
 # directly means simply not passing it, so binding.gyp needs no patching.
 compile "$PTY_SRC" "$OUTPUT_ROOT/node_modules/node-pty/build/Release/pty.node" \
@@ -277,7 +343,10 @@ check_pair node-pty "$PTY_VERSION" "$OUTPUT_ROOT/node_modules/node-pty/package.j
 echo ""
 echo "@parcel/watcher..."
 WATCHER_VERSION=2.5.6
-WATCHER_SRC=$(fetch @parcel/watcher "$WATCHER_VERSION")
+WATCHER_SHA256=8daa7285bee7e10bebce179007afcf07108c1b8ce9dbe5081f3db319d5453648
+# @parcel/watcher declares ^7.0.0.
+WATCHER_ADDON_API=7.1.1
+WATCHER_SRC=$(fetch @parcel/watcher "$WATCHER_VERSION" "$WATCHER_SHA256" "$WATCHER_ADDON_API")
 # binding.gyp holds the sources in TWO arrays and both are needed: the
 # unconditional one at the top of the target, and the OS=="linux" or OS=="android"
 # branch. Taking only the branch, or the top array minus a file, links an addon
@@ -308,7 +377,11 @@ check_pair @parcel/watcher "$WATCHER_VERSION" "$OUTPUT_ROOT/node_modules/@parcel
 echo ""
 echo "@vscode/sqlite3..."
 SQLITE_VERSION=5.1.12-vscode
-SQLITE_SRC=$(fetch @vscode/sqlite3 "$SQLITE_VERSION")
+SQLITE_SHA256=521675e4de9714e91862d1aff6d10cf88351e3c03ad9b699062b7b754ccb9144
+# @vscode/sqlite3 declares ^8.2.0, a different major from the two above, which
+# is why the pin is per package rather than one constant for the file.
+SQLITE_ADDON_API=8.9.2
+SQLITE_SRC=$(fetch @vscode/sqlite3 "$SQLITE_VERSION" "$SQLITE_SHA256" "$SQLITE_ADDON_API")
 SQLITE_AMALGAMATION="$SQLITE_SRC/sqlite-autoconf-3390400"
 if [ ! -d "$SQLITE_AMALGAMATION" ]; then
     tar xzf "$SQLITE_SRC/deps/sqlite-autoconf-3390400.tar.gz" -C "$SQLITE_SRC"

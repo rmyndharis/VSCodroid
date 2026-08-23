@@ -45,7 +45,7 @@ turned out nothing linked it at all, so it was dropped rather than documented;
 but `libgdbm`, `liblzma` and `libzstd` are used, are copyleft, and were missing
 from the source offer for the same reason.
 
-Three checks, in the order a new library trips them:
+Four checks, in the order a new library trips them:
 
   1. Every shipped file maps to a known component. A library nobody has
      classified fails here, which is the moment to look up its licence.
@@ -58,6 +58,12 @@ Three checks, in the order a new library trips them:
      LEGAL_NOTICES.md's source-availability section. Attribution alone does not
      discharge a copyleft obligation. Only that file, because only that file has
      the section; NOTICE.md points at it rather than repeating it.
+  4. Every component from the two flat maps carries its own notice among the
+     bytes that reach the device. The three checks above are about what this
+     repository says; MIT, the BSD family, ISC, NCSA, the ICU licence and
+     Apache-2.0 section 4 are about what the person holding the binary is given,
+     and for everything except the copyleft components they were given a name
+     and a URL. See NOTICE_DIRS.
 
 The map below is the licence record. Its source is Termux's own
 `TERMUX_PKG_LICENSE`, which is what these packages are actually built from.
@@ -174,8 +180,17 @@ LIBRARIES = {
     "libssl.so.3": ("OpenSSL", "Apache-2.0"),
     "libcrypto.so.3": ("OpenSSL", "Apache-2.0"),
     "libz.so.1": ("zlib", "Zlib"),
-    "libbz2.so": ("bzip2", "BSD-4-Clause"),
-    "libbz2.so.1.0": ("bzip2", "BSD-4-Clause"),
+    # bzip2-1.0.6 is the SPDX identifier for bzip2's own licence, not a
+    # placeholder. This said BSD-4-Clause until 2026-08-23, which is the BSD
+    # variant defined by its advertising clause ("All advertising materials
+    # ... must display the following acknowledgement"), and bzip2's LICENSE has
+    # no such clause: its four conditions are retain-notice, do-not-misrepresent
+    # -origin, mark-altered-versions and no-endorsement. Recording the stricter
+    # identifier asserted an obligation in the notices that nothing here
+    # discharged. Termux declares plain "BSD", so check-termux-licenses.py
+    # reports this as a difference either way and correctly does not fail.
+    "libbz2.so": ("bzip2", "bzip2-1.0.6"),
+    "libbz2.so.1.0": ("bzip2", "bzip2-1.0.6"),
     "libexpat.so.1": ("Expat", "MIT"),
     "libffi.so": ("libffi", "MIT"),
     "libpcre2-8.so": ("PCRE2", "BSD-3-Clause"),
@@ -223,6 +238,108 @@ TOOLCHAIN_LIBRARIES = {
     "libffi.so": ("libffi", "MIT"),
 }
 
+# Where each component's own notice reaches the device, as a path under
+# `assets/` or under a toolchain pack's `src/main/assets/`. Both are searched,
+# because a component can ship in either and two of them ship in both.
+#
+# Naming the project and linking its homepage is not the notice. MIT, the BSD
+# family, ISC, NCSA, the ICU licence and Apache-2.0 section 4 all require the
+# copyright and permission text to be included with a binary redistribution, and
+# for a long time none of it was: the APK carried a table of names and URLs,
+# which is not a copy of anything on a device with no network. The three GNU
+# texts were bundled separately for exactly that reason and the same reasoning
+# was never applied to the permissive half.
+#
+# Almost every entry is `usr/share/doc/<termux package>`, which is where
+# `termux_copy_notices` (scripts/lib/termux-packages.sh) places what upstream
+# ships. Two are not, and both are measured rather than assumed:
+#
+#   * ripgrep arrives with the server tree rather than from Termux, and
+#     @vscode/ripgrep-universal already carries its LICENSE inside the package;
+#   * musl's Alpine .apk carries no notice at all (three entries: the loader,
+#     the libc symlink, the metadata), so download-musl-loader.sh places
+#     licenses/COPYRIGHT.musl instead.
+#
+# Keyed by component rather than by file, because that is the unit the two
+# attribution documents and LIBRARIES are written in, and because one package's
+# notice legitimately answers for several sonames: ncurses covers libpanelw,
+# which Termux splits into ncurses-ui-libs with no doc directory of its own.
+NOTICE_DIRS = {
+    # --- copyleft ---
+    "Bash": "usr/share/doc/bash",
+    "Git": "usr/share/doc/git",
+    "GNU Make": "usr/share/doc/make",
+    "readline": "usr/share/doc/readline",
+    "libiconv": "usr/share/doc/libiconv",
+    "gdbm": "usr/share/doc/gdbm",
+    "xz / liblzma": "usr/share/doc/liblzma",
+    "Zstandard": "usr/share/doc/zstd",
+    "GMP": "usr/share/doc/libgmp",
+    # --- permissive ---
+    "Node.js": "usr/share/doc/nodejs-lts",
+    "Python": "usr/share/doc/python",
+    "ripgrep": "vscode-reh/node_modules/@vscode/ripgrep-universal",
+    "tmux": "usr/share/doc/tmux",
+    "OpenSSH": "usr/share/doc/openssh",
+    "musl libc": "usr/share/doc/musl",
+    "libandroid-support": "usr/share/doc/libandroid-support",
+    "libandroid-glob": "usr/share/doc/libandroid-glob",
+    "libandroid-posix-semaphore": "usr/share/doc/libandroid-posix-semaphore",
+    "ncurses": "usr/share/doc/ncurses",
+    "libcurl": "usr/share/doc/libcurl",
+    "OpenSSL": "usr/share/doc/openssl",
+    "zlib": "usr/share/doc/zlib",
+    "bzip2": "usr/share/doc/libbz2",
+    "Expat": "usr/share/doc/libexpat",
+    "libffi": "usr/share/doc/libffi",
+    "PCRE2": "usr/share/doc/pcre2",
+    "nghttp2": "usr/share/doc/libnghttp2",
+    "nghttp3": "usr/share/doc/libnghttp3",
+    "ngtcp2": "usr/share/doc/libngtcp2",
+    "libssh2": "usr/share/doc/libssh2",
+    "libevent": "usr/share/doc/libevent",
+    "libedit": "usr/share/doc/libedit",
+    "libcrypt": "usr/share/doc/libcrypt",
+    "ldns": "usr/share/doc/ldns",
+    "c-ares": "usr/share/doc/c-ares",
+    "SQLite": "usr/share/doc/libsqlite",
+    "libc++": "usr/share/doc/libc++",
+    "ICU": "usr/share/doc/libicu",
+    "libresolv-wrapper": "usr/share/doc/libresolv-wrapper",
+    "Kerberos 5": "usr/share/doc/krb5",
+    "libyaml": "usr/share/doc/libyaml",
+    "libruby": "usr/share/doc/ruby",
+    "libandroid-execinfo": "usr/share/doc/libandroid-execinfo",
+    "libandroid-shmem": "usr/share/doc/libandroid-shmem",
+    "libandroid-spawn": "usr/share/doc/libandroid-spawn",
+}
+
+# The smallest thing that can be a notice, in bytes.
+#
+# A presence test alone is not enough, and the case that proves it is in the
+# tree: Termux's libicu ships usr/share/doc/libicu/LICENSE holding the fourteen
+# bytes "404: Not Found" (measured on libicu 78.3), which passes any test for a
+# file being there and discharges nothing. The floor is set between that and the
+# smallest genuine notice among the components above, tmux's 731-byte copyright.
+# pcre2's 97-byte `copyright` is a pointer at LICENCE.md beside it, so pcre2
+# passes on that file rather than on the pointer, which is why the rule is "at
+# least one file over the floor" rather than "every file".
+MIN_NOTICE_BYTES = 128
+
+# What counts as a notice file, case-folded, matched as a prefix. The same set
+# termux_copy_notices filters a package's share/doc directory down to, and it has
+# to be the same set here or the floor above means different things in different
+# directories.
+#
+# It is what makes the floor mean anything for the one component whose notice
+# does not come from that function: `ripgrep` points at an npm package
+# directory, which holds LICENSE (1113 B) and package.json (541 B). Taking the
+# largest file of any name there, deleting the LICENCE still left package.json
+# clearing the floor, so the single entry the floor was most needed for was the
+# one it could not see disappear.
+NOTICE_NAMES = ("copyright", "copying", "license", "licence", "notice")
+
+
 # Binaries that ship deeper in the asset tree than the two directories above,
 # keyed by a glob over the path relative to `assets/`.
 #
@@ -247,8 +364,13 @@ TOOLCHAIN_LIBRARIES = {
 # a second record.
 NESTED_LIBRARIES = {
     # --- Termux packages, below the top level of usr/lib ---
-    # git's helper executables: `git-http-fetch`, `git-daemon` and the rest.
-    "usr/lib/git-core/*": ("Git", "GPL-2.0"),
+    # No entry for usr/lib/git-core: it holds no binary any more. Its eight
+    # standalone helpers (git-daemon, git-http-fetch and the rest) were
+    # unexecutable on a device -- filesDir denies the app execve, and git reaches
+    # them by absolute path rather than through the exec trampoline -- so
+    # download-termux-tools.sh stopped copying them. What is left there is shell
+    # text plus symlinks into nativeLibraryDir, and Git stays attributed by
+    # libgit.so and libgit-remote-curl.so above.
     # CPython's extension modules and the `python.o` beside its build config.
     # Globbed on the version, never spelled: download-python.sh resolves it from
     # the Termux index at build time, so a literal here goes stale on a rebuild
@@ -374,6 +496,34 @@ def toolchain_libs():
     return sorted(set(libs)), read, unrecorded
 
 
+def toolchain_libs_with_payload():
+    """The manifest-declared libraries whose pack payload is on disk here.
+
+    The notice check reads a FILE out of the pack, so it can only speak for a
+    pack that was actually built on this machine. `toolchain_ruby.json` is
+    tracked in git while every payload is ignored, so a checkout that has not run
+    the download scripts declares Ruby's libraries and ships none of them.
+    Demanding their notices there fails the build over files no step has yet had
+    the chance to place, which is a gate that goes red on a clean clone.
+
+    The attribution and source-offer checks are deliberately NOT gated this way:
+    a manifest entry is a claim about what will ship, and that claim is worth
+    holding to the documents whether or not the bytes are present yet.
+    """
+    libs = []
+    for module in sorted(TOOLCHAINS.glob("toolchain_*")):
+        assets = module / "src/main/assets"
+        if not (assets / "usr").is_dir():
+            continue
+        for manifest in sorted(assets.glob("*.json")):
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"FAIL cannot read {manifest}: {exc}")
+            libs.extend(data.get("libs", []))
+    return sorted(set(libs))
+
+
 def unlisted_toolchain_libs():
     """Loose libraries in a built pack that its manifest does not name.
 
@@ -466,6 +616,57 @@ def toolchain_notices():
         if not found:
             out.append(module.name)
     return out
+
+
+def notice_missing(components):
+    """Components with no upstream notice among the bytes that reach a device.
+
+    The obligation the attribution documents do not discharge. `attributed_in`
+    asks whether this repository names a component; this asks whether the person
+    holding the APK is given the notice its licence says has to travel with the
+    binary. Those were the same question only for the copyleft components, whose
+    licence texts are bundled by the `bundleNotices` task, and for nobody else.
+
+    Answered off the tree rather than off a document, because that is what
+    ships: a row in NOTICE.md is a claim about a file, and the file is what the
+    licence asks for. Both roots are searched, since a component can ship in the
+    base module, in a pack, or in both -- libffi is listed by TOOLCHAIN_LIBRARIES
+    and its notice is the base module's copy.
+
+    A component with no NOTICE_DIRS entry is reported here rather than skipped.
+    The alternative fails open: adding a library to LIBRARIES and forgetting the
+    notice would then be indistinguishable from a component that needs none.
+    """
+    roots = [ASSETS] + [
+        module / "src/main/assets"
+        for module in sorted(TOOLCHAINS.glob("toolchain_*"))
+        if (module / "src/main/assets/usr").is_dir()
+    ]
+    missing = []
+    for component in sorted(components):
+        rel = NOTICE_DIRS.get(component)
+        if rel is None:
+            missing.append(f"{component}: no NOTICE_DIRS entry")
+            continue
+        best = 0
+        for root in roots:
+            directory = root / rel
+            if not directory.is_dir():
+                continue
+            for path in directory.iterdir():
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if not path.name.lower().startswith(NOTICE_NAMES):
+                    continue
+                best = max(best, path.stat().st_size)
+        if best == 0:
+            missing.append(f"{component}: no notice file in {rel}")
+        elif best < MIN_NOTICE_BYTES:
+            missing.append(
+                f"{component}: {rel} holds nothing over {MIN_NOTICE_BYTES} bytes "
+                f"(largest {best})"
+            )
+    return missing
 
 
 def shipped():
@@ -743,6 +944,23 @@ def main():
     for_check = [(n, LIBRARIES.get(n)) for n in names]
     tc, manifests, unrecorded = toolchain_libs()
     for_check += [(n, TOOLCHAIN_LIBRARIES.get(n)) for n in tc]
+    # The components whose notice has to travel as a FILE, which is the two flat
+    # maps above and not `nested`. Everything nested arrives inside its own npm
+    # package or extension directory and carries whatever licence file its
+    # publisher put there; these arrive as a bare `.so` copied out of a .deb,
+    # with the notice left behind in the package unless a download script places
+    # it. Kept as a set here because `for_check` mixes all three sources.
+    #
+    # Restricted to the base tree plus the packs whose payload is on disk. The
+    # notice is a file INSIDE the pack, and a manifest can be present while its
+    # payload is not, so asking a clean checkout for those files fails a build
+    # over bytes no step has placed yet. See toolchain_libs_with_payload.
+    built = set(toolchain_libs_with_payload())
+    native = {
+        entry[0]
+        for n, entry in for_check
+        if entry and entry[0] != "VSCodroid" and (n in names or n in built)
+    }
     # Everything below the top level of those two directories, held to exactly
     # the same three checks. Identified by path, so the three lists cannot
     # collide on a shared file name.
@@ -813,6 +1031,48 @@ def main():
               " and that it copies with -L so none of them arrives as a symlink,"
               " which neither an asset pack nor a release ZIP can carry",
               file=sys.stderr)
+        return 1
+
+    # NOTICE_DIRS is read for the components of the two FLAT maps and nothing
+    # else, so a key naming anything outside them is never looked up: it reads
+    # as coverage and is not. "distlib" sat here exactly that way, a component
+    # of NESTED_LIBRARIES, which `notice_missing` excludes on purpose because a
+    # nested package carries its own LICENSE inside itself.
+    #
+    # Static, so it is asked before the tree checks and answers the same on a
+    # bare checkout: both maps are literals in this file.
+    orphans = sorted(
+        set(NOTICE_DIRS)
+        - {entry[0] for entry in LIBRARIES.values()}
+        - {entry[0] for entry in TOOLCHAIN_LIBRARIES.values()}
+    )
+    if orphans:
+        print(f"FAIL {len(orphans)} NOTICE_DIRS entr(ies) name no shipped component:",
+              file=sys.stderr)
+        for component in orphans:
+            print(f"  {component}", file=sys.stderr)
+        print("  -> nothing reads them, so the directory they point at is never"
+              " checked for a notice. Either the component was renamed in"
+              " LIBRARIES or TOOLCHAIN_LIBRARIES, in which case rename it here"
+              " too, or it is nested and answers for itself, in which case"
+              " delete the entry", file=sys.stderr)
+        return 1
+
+    # After the toolchain checks and before the per-file classification, for the
+    # reason those are ordered: a pack that was never downloaded contributes no
+    # component here, so this asks only about trees that exist.
+    no_notice = notice_missing(native)
+    if no_notice:
+        print(f"FAIL {len(no_notice)} shipped component(s) reach a device with no "
+              "notice of their own:", file=sys.stderr)
+        for entry in no_notice:
+            print(f"  {entry}", file=sys.stderr)
+        print("  -> the licence requires the copyright and permission text to"
+              " accompany the binary, and a row in NOTICE.md is not that text."
+              " termux_copy_notices in scripts/lib/termux-packages.sh places what"
+              " upstream ships into usr/share/doc/<package>; re-run the download"
+              " script for the component named, and add a NOTICE_DIRS entry if it"
+              " is new", file=sys.stderr)
         return 1
 
     for name, entry in for_check:

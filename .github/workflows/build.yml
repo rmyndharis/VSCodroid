@@ -10,6 +10,14 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Read by default. Neither job here publishes anything: the only step that
+# reaches GitHub is the server fetch, which asks the API for a release asset.
+# Without this block the token's scope is whatever the repository's default
+# workflow permissions happen to be, which is a setting outside this file and
+# outside review. release.yml has said this since it was written.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build Debug APK
@@ -19,6 +27,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # These jobs run Gradle plugins, npm postinstalls and the download
+          # scripts, and none of them pushes: the server fetch asks the API with
+          # GH_TOKEN scoped to its own step, and nothing else touches a remote. A
+          # persisted checkout token would be readable by all of that for the
+          # length of the job. Where checkout stores it is deliberately not named:
+          # it has moved between major versions and this setting is right whatever
+          # the location is.
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -97,7 +114,7 @@ jobs:
             android/app/src/main/assets/extensions/
             android/app/src/main/jniLibs/arm64-v8a/
             server/vscode-reh/
-          key: assets-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'scripts/build-exec-trampoline.sh', 'scripts/exec-trampoline.c', 'android/app/src/main/assets/extensions/**', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
+          key: assets-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/package-assets.sh', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'scripts/build-exec-trampoline.sh', 'scripts/exec-trampoline.c', 'android/app/src/main/assets/extensions/**', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
           # The fallback is what let a removed extension come back: it restores
           # any earlier tree, and the run then saves that tree forward under its
           # own key. It stays, because a partial hit still saves most of a build
@@ -147,10 +164,12 @@ jobs:
 
       - name: Copy the server into assets
         if: steps.cache-assets.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p android/app/src/main/assets/
-          rm -rf android/app/src/main/assets/vscode-reh
-          cp -r server/vscode-reh android/app/src/main/assets/vscode-reh
+        # The same copy scripts/package-assets.sh performs, called rather than
+        # restated. Two definitions of "packaging the server" stood here and in
+        # that script with nothing comparing them, while three Gradle failure
+        # messages told their reader to run `fetch-vscode-oss.sh &&
+        # package-assets.sh` as though it were the step CI takes. It is now.
+        run: bash scripts/package-assets.sh
 
       - name: Download Termux tools
         if: steps.cache-assets.outputs.cache-hit != 'true'
@@ -318,6 +337,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this job pushes, and its Gradle run reads only what is
+          # already in the workspace. A persisted checkout token would sit
+          # there readable by the Gradle plugins for the length of the job for
+          # no reason. Where checkout stores it is deliberately not named: it
+          # has moved between major versions and this setting is right
+          # whatever the location is.
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -384,6 +411,16 @@ jobs:
       # What this does catch is the second way they were rotting: nothing
       # compiled them either, so they could drift out of the app's API and stay
       # broken indefinitely. See androidTest/README.md.
+      #
+      # Compiled here, run by a person: `scripts/device-test.sh --instrumented`
+      # is the only thing that executes them, and it needs an arm64 device or
+      # emulator attached. Measured 2026-08-23 against attached arm64 emulators,
+      # so the cost of doing it is on record: 40 tests, all green, 113 s on API
+      # 33 and 97 s on API 37. Cheap enough that skipping it before a tag is a
+      # choice rather than a constraint -- and the one case no other suite can
+      # replace is ExecTrampolineOnDeviceTest's control, which asserts that a
+      # payload under filesDir cannot be executed directly. That is a kernel
+      # policy decision, and the whole toolchain design rests on it.
       - name: Compile the instrumented tests
         working-directory: android
         run: ./gradlew assembleDebugAndroidTest

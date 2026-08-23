@@ -59,6 +59,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes, so the checkout token would only sit in the
+          # workspace for the length of the job, readable by everything it runs.
+          # The rest of the workflows in this directory already say this.
+          persist-credentials: false
 
       - name: Apply patches to upstream
         # Through the environment, never interpolated into the command. A

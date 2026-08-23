@@ -203,6 +203,25 @@ if [ -z "$MUSL_VERSION" ]; then
 fi
 echo "  version   : $MUSL_VERSION"
 
+# The notice this ships is a committed file for one musl release, and the loader
+# it describes is resolved from a live index. Alpine can move musl inside a
+# branch it still supports, and nothing else compares the two: the APK would then
+# carry 1.2.5's COPYRIGHT beside a different libc, which is the one way an MIT
+# notice goes wrong without any step failing. Checked before the download, so a
+# bump costs seconds rather than a full fetch and install.
+case "$MUSL_VERSION" in
+    1.2.5*) ;;
+    *)
+        echo "  ERROR: $ALPINE_BRANCH now carries musl $MUSL_VERSION, and" >&2
+        echo "         licenses/COPYRIGHT.musl is musl 1.2.5's COPYRIGHT." >&2
+        echo "         Re-take the notice from git.musl-libc.org at the matching" >&2
+        echo "         tag and update this check, or pin ALPINE_BRANCH to a" >&2
+        echo "         branch still on 1.2.5. The loader is the libc the Claude" >&2
+        echo "         Code CLI runs against, so a libc bump wants a device." >&2
+        exit 1
+        ;;
+esac
+
 APK="$WORK_DIR/musl-$MUSL_VERSION.apk"
 if [ ! -f "$APK" ]; then
     curl -sL --fail --show-error -o "$APK" "$MIRROR/musl-$MUSL_VERSION.apk"
@@ -289,6 +308,27 @@ chmod 755 "$JNI_DIR/libldmusl.so"
 echo "  installed : jniLibs/arm64-v8a/libldmusl.so ($(du -h "$JNI_DIR/libldmusl.so" | cut -f1))"
 
 python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libldmusl.so"
+
+# musl is MIT, and MIT requires the copyright and permission notice to be
+# included with a binary redistribution. Alpine's musl .apk carries no notice at
+# all -- measured on musl-1.2.5-r3, whose three entries are the loader, the libc
+# symlink and the package metadata -- so the file comes from the repository
+# instead: licenses/COPYRIGHT.musl is musl 1.2.5's own COPYRIGHT, verbatim from
+# git.musl-libc.org at tag v1.2.5, which is the release ALPINE_BRANCH pins.
+#
+# It lands under assets/usr/share/doc beside the Termux notices, which
+# download-termux-tools.sh clears and fills; this script runs after it in
+# build-all.sh and in both workflows, the same ordering everything else in that
+# directory already depends on.
+MUSL_NOTICE="$ROOT_DIR/licenses/COPYRIGHT.musl"
+if [ ! -f "$MUSL_NOTICE" ]; then
+    echo "  ERROR: $MUSL_NOTICE is missing; the loader would ship with no notice." >&2
+    exit 1
+fi
+MUSL_DOC="$ROOT_DIR/android/app/src/main/assets/usr/share/doc/musl"
+mkdir -p "$MUSL_DOC"
+cp "$MUSL_NOTICE" "$MUSL_DOC/COPYRIGHT"
+echo "  notice    : usr/share/doc/musl/COPYRIGHT"
 
 # What shipped, for write-build-manifest.py, the same way each Termux download
 # records itself in a resolved-*.tsv. The version is resolved from a live index

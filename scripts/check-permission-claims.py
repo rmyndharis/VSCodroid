@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hold the published privacy policy to the permissions the app really holds.
 
-    check-permission-claims.py
+    check-permission-claims.py [--require-merged]
 
 `docs/PRIVACY_POLICY.md` is the document a Play reviewer and a suspicious user
 read, and it is the one place in this repository that makes a closed statement
@@ -30,6 +30,15 @@ is not always available:
     had just built it, and told the maintainer to publish a permission the
     shipped app does not hold. Test variants are dropped, release wins over any
     other however fresh, and the verdict names the variant it read.
+
+`--require-merged` turns an absent release manifest from a note into a failure.
+It is for the one caller that knows better than this script does: release.yml
+runs it again after `bundleRelease`, where the artefact that ships has just been
+written, so the merged half being skipped there means something is wrong. That
+is a question the Gradle wiring cannot ask of itself. `checkPermissionClaims` is
+attached to `processReleaseMainManifest` by exact name, and an AGP rename of that
+task takes the merged half out of the build in silence, with every assertion
+about the pairing written in the same name. This one asks the artefact instead.
 
 Names are compared on their last dot-separated segment. That is not laziness
 about `android.permission.` prefixes: the app-defined receiver permission is
@@ -231,7 +240,20 @@ def merged_manifests():
     )
 
 
-def main() -> int:
+REQUIRE_MERGED = "--require-merged"
+
+
+def main(argv=()) -> int:
+    # Unknown arguments are refused rather than ignored. A caller that meant to
+    # demand the merged half and mistyped the flag would otherwise get the
+    # permissive run and the reassuring exit 0 it was passing the flag to rule
+    # out.
+    require_merged = False
+    for arg in argv:
+        if arg != REQUIRE_MERGED:
+            return fail(f"unknown argument {arg!r}; the only one is {REQUIRE_MERGED}")
+        require_merged = True
+
     for label, xml, expected in _CONTROLS:
         if declared_in(xml) != expected:
             return fail(
@@ -307,6 +329,23 @@ def main() -> int:
     print(f"         merged in: {', '.join(sorted(MERGED_IN))}")
 
     merged_paths = merged_manifests()
+    # The demanded half, checked before the file is read so the message is about
+    # what is missing rather than about whatever the debug manifest happens to
+    # say. Absent and wrong-variant are one condition here: the caller passes the
+    # flag having just built the artefact that ships, so anything other than the
+    # release manifest means that build's merged manifest did not reach this.
+    found = variant_of(merged_paths[0]) if merged_paths else "none"
+    if require_merged and found != SHIPPING_VARIANT:
+        return fail(
+            f"no {SHIPPING_VARIANT} merged manifest on disk (found: {found}), so "
+            "the half that sees what the\n         manifest merger adds did not "
+            "run. This was invoked with " + REQUIRE_MERGED + ", so the\n"
+            "         caller has already built the artefact that ships.\n"
+            "         Either that build produced no merged manifest, or the "
+            "Gradle task that\n         normally runs this half is attached to a "
+            "name AGP no longer uses;\n         android/app/build.gradle.kts "
+            "names it in `permissionClaimsProducer`."
+        )
     if not merged_paths:
         # Not a pass for the half that did not run. The source manifest cannot
         # see a library's permissions at all, so saying nothing here would let a
@@ -349,4 +388,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

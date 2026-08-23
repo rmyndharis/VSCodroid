@@ -42,7 +42,28 @@ import pathlib
 import re
 import sys
 
-import yaml
+# PyYAML is a dependency this repository does not install anywhere, and that is
+# a deliberate trade rather than an oversight. The two questions below are
+# structural (jobs -> steps -> the keys of each step), and a hand-rolled reader
+# for them would have to be right about block scalars: every `run: |` body in
+# these workflows contains lines that look like keys, so a line-based parser
+# would read a shell comment as a step. Getting that subtly wrong is worse than
+# a missing module, because the failure is a checker that quietly stops seeing
+# things.
+#
+# What is fixed here is the report. Ubuntu runner images carry python3-yaml
+# (cloud-init depends on it), so this has never failed in CI, and it failed on
+# a developer's machine as a traceback with no line saying what to install --
+# in the one gate that enforces SHA-pinning on every `uses:`, so the gate whose
+# absence is least visible was also the one that explained itself worst.
+try:
+    import yaml
+except ModuleNotFoundError:
+    print("::error::check-workflow-steps.py needs PyYAML, which is not "
+          "installed. `pip install pyyaml`, or `apt-get install python3-yaml` "
+          "on a Debian-family host. Nothing in this repository installs it: CI "
+          "runs on images that already carry it.", file=sys.stderr)
+    sys.exit(1)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
