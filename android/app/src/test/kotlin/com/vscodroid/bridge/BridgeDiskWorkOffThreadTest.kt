@@ -13,6 +13,7 @@ import io.mockk.unmockkAll
 import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -58,8 +59,17 @@ class BridgeDiskWorkOffThreadTest {
      * STRING, and the empty string is what these four return to say the work has
      * STARTED, so an unstubbed mock turns every refusal below into an acceptance
      * and each case then passes by agreeing with itself.
+     *
+     * The catch-all comes first for the same reason, and it is not redundant with
+     * the two named stubs under it. [STORAGE_BUSY] has a resource of its own and
+     * is deliberately not among them: a Context stubbed only by name answers `""`
+     * for whatever it was not given, which is this bridge's word for accepted, so
+     * every post in the queue-bound case below would read as accepted and the case
+     * would fail saying there is no bound over a bound that is intact. Anything
+     * this Context is asked for is a refusal, so it answers like one.
      */
     private val context: Context = mockk(relaxed = true) {
+        every { getString(any<Int>()) } returns REFUSED
         every { getString(STORAGE_STALE_SESSION) } returns STALE
         every { getString(RECLAIM_STALE_SESSION) } returns STALE
     }
@@ -68,12 +78,23 @@ class BridgeDiskWorkOffThreadTest {
         const val REPLY = "reply-1"
         const val HASH = "a1b2c3"
         const val STALE = "stale-session-resource"
+
+        /** Any other refusal sentence, so none of them can come back empty. */
+        const val REFUSED = "refusal-resource"
         const val LISTING = """[{"hash":"a1b2c3","bytes":12}]"""
         const val BREAKDOWN = """{"total":7}"""
         const val FREED = 4096L
 
         /** Long enough that a loaded runner is not the reason a case fails. */
         const val WAIT_SECONDS = 5L
+
+        /**
+         * More outstanding disk walks than any sequence a person drives.
+         *
+         * The cap the bridge applies is its own business and is not asserted; this
+         * is the point past which "there is no cap" is the only explanation left.
+         */
+        const val ABSURD = 64
     }
 
     @BeforeEach
@@ -182,6 +203,100 @@ class BridgeDiskWorkOffThreadTest {
             "the listing has to arrive under the id its caller sent; under any other id no " +
                 "promise is waiting and the caller times out having been answered",
         )
+    }
+
+    /**
+     * The queue behind that hand-off is bounded.
+     *
+     * Handing back at once is what keeps the workbench drawing; it also means the
+     * caller can hand back and post again, and again. The executor is single and
+     * its queue was unbounded, so a caller posting `listSafMirrors` in a loop
+     * queued a walk of every copied device folder per message, `getStorageBreakdown`
+     * a walk of the whole of `filesDir`, and `clearCaches` a fresh deletion pass on
+     * each queued copy. Nothing dropped, nothing deduplicated: the disk and the
+     * battery ran for as long as the caller liked and every legitimate storage call
+     * waited behind it. That caller is not only the bundled extension, since the
+     * relay is shared by everything on the workbench's origin.
+     *
+     * The bound's value is not asserted, only that there is one and that it is
+     * reached long before a number no person produces. What matters at the
+     * boundary is the shape of the refusal: it comes back on the caller's own
+     * thread, like the stale-token refusal, and posts nothing, because a caller
+     * that was refused must not also be left waiting for an answer.
+     */
+    @Test
+    fun `a caller cannot queue disk walks without bound`() {
+        val answers = Answers()
+        val letWalkFinish = CountDownLatch(1)
+        val bridge = bridgeWith(
+            answers,
+            onListMirrors = {
+                assertTrue(
+                    letWalkFinish.await(WAIT_SECONDS, TimeUnit.SECONDS),
+                    "the walk was never released, so the queue could not have filled",
+                )
+                LISTING
+            },
+        )
+        val token = security.getSessionToken()
+
+        // Posted until one is refused. The first occupies the thread and the rest
+        // pile up behind it, exactly as a caller in a loop does; the cap is read
+        // off the behaviour rather than from the constant, which is private to the
+        // bridge and is a number this case has no opinion about.
+        var refusedAt = 0
+        var refusal = ""
+        for (i in 1..ABSURD) {
+            val answer = bridge.listSafMirrors(token, "reply-$i")
+            if (answer != "") {
+                refusedAt = i
+                refusal = answer
+                break
+            }
+        }
+
+        assertTrue(refusedAt != 0) {
+            "$ABSURD disk walks were accepted onto one thread and none was refused. Each " +
+                "walks the whole of filesDir or every copied device folder, so this is " +
+                "the disk and the battery pinned for as long as a caller cares to post."
+        }
+        assertTrue(refusedAt > 1) {
+            "the very first storage command was refused, so the bound is not a bound on " +
+                "a queue, it is the feature switched off"
+        }
+        assertEquals(
+            context.getString(STORAGE_BUSY), refusal,
+            "a full queue is refused with some other sentence. Read from the same " +
+                "constant the bridge reads, so it pins which refusal was given and " +
+                "not its wording, which is the resource's business.",
+        )
+        assertNotEquals(
+            STORAGE_STALE_SESSION, STORAGE_BUSY,
+            "a full queue is refused with the stale-session sentence, which tells the " +
+                "user to reload the window. That does not drain the single disk thread, " +
+                "so they wait exactly as long and lose their editor state on the way.",
+        )
+
+        letWalkFinish.countDown()
+        answers.await()
+        val accepted = refusedAt - 1
+        val deadline = System.currentTimeMillis() + WAIT_SECONDS * 1000
+        while (System.currentTimeMillis() < deadline &&
+            synchronized(answers.posted) { answers.posted.size } < accepted
+        ) {
+            Thread.sleep(10)
+        }
+
+        val posted = synchronized(answers.posted) { answers.posted.toList() }
+        assertEquals(
+            accepted, posted.size,
+            "every command that was accepted has to be answered; a refusal must not cost " +
+                "the ones already queued their answers. Got: $posted",
+        )
+        assertTrue(posted.none { it.replyId == "reply-$refusedAt" }) {
+            "the refused command also posted an answer, so its caller is told twice and " +
+                "the second one arrives against a promise the first already rejected"
+        }
     }
 
     @Test

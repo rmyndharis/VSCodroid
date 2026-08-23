@@ -27,7 +27,7 @@ import java.io.File
  *    `a percent is encoded first, so an escape is not escaped twice`, and the case
  *    above it as well, since a bare `#` then comes out as `%2523`.
  *  - deleting `dataUrlSafe(` from either `loadData` call in MainActivity.kt
- *    reddens `both loading-page loads go through the escape`.
+ *    reddens `every loading-page load goes through the escape`.
  */
 class LoadingPlaceholderTest {
 
@@ -58,10 +58,10 @@ class LoadingPlaceholderTest {
     }
 
     @Test
-    fun `both loading-page loads go through the escape`() {
-        // The setup one is what a launch shows; the retry one is what the Retry
-        // link on the server-gave-up page shows, and that is the copy a user
-        // reaches only after something has already gone wrong.
+    fun `every loading-page load goes through the escape`() {
+        // The setup one is what a launch shows; the retry one is what both error
+        // pages' controls reach, and it is the copy a user sees only after
+        // something has already gone wrong.
         val calls = source.lines().filter { line ->
             val code = line.substringBefore("//")
             code.contains(".loadData(")
@@ -69,9 +69,11 @@ class LoadingPlaceholderTest {
 
         assertEquals(
             2, calls.size,
-            "expected the load in setupWebView and the one in retryServerStart. If a " +
-                "call site was added or removed, update this count and check the new " +
-                "one escapes its content. Found: " + calls.map { it.trim() },
+            "expected the loads in setupWebView and retryServerStart. If a call site was " +
+                "added or removed, update this count and check the new one escapes its " +
+                "content. A third one showing the loading page without also sending a " +
+                "start is the shape that leaves a user on 'starting' with nothing to " +
+                "press. Found: " + calls.map { it.trim() },
         )
         calls.forEach { line ->
             assertTrue(line.contains("dataUrlSafe(")) {

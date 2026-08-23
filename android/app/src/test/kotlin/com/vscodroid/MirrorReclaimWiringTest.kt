@@ -151,13 +151,19 @@ class MirrorReclaimWiringTest {
      * the assertion above while checking nothing. `openSafFolder` is the neighbouring
      * method that writes all four of those fields; its name must not be inside this
      * body.
+     *
+     * The overrun is detected by the next declaration being inside the span, and
+     * not by a character budget. There was one, 4,000 against a body that measured
+     * 3,887, and what it bought was a red build for the next person to add a
+     * sentence of the comment this file's own rules ask for, under a message
+     * blaming a brace overrun that had not happened.
      */
     @Test
     fun `the guard body is bounded to the guard`() {
         val body = methodBody("removeDeviceFolderCopy")
 
-        assertTrue(body.isNotEmpty() && body.length < 4_000) {
-            "the extracted body is ${body.length} characters, which is not one method"
+        assertTrue(body.isNotEmpty()) {
+            "the extracted body is empty, so every assertion above it is reading nothing"
         }
         assertTrue("private fun " !in body) {
             "the brace match ran past the end of the method and into the next one"

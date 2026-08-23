@@ -32,6 +32,10 @@ import android.widget.Toast
 import java.io.File
 import java.io.OutputStream
 import java.lang.ref.WeakReference
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import androidx.activity.OnBackPressedCallback
 import com.vscodroid.util.drawBehindSystemBars
 import com.vscodroid.util.CrashReporter
@@ -55,6 +59,7 @@ import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
+import com.vscodroid.storage.SafFolderInfo
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import com.vscodroid.util.MainThreadWatch
@@ -89,6 +94,21 @@ class MainActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
     private var extraKeyRow: ExtraKeyRow? = null
+
+    /**
+     * The bound service, or null while nothing is bound.
+     *
+     * Volatile for the reason [watchedSafFolder], [syncingFolder] and
+     * [openWorkspaceFolder] are: it is written on the UI thread, in
+     * `onServiceConnected` and `onServiceDisconnected`, and read off the WebView's
+     * resource-interception thread, through the connection-token suppliers
+     * [initBridge] hands to the client and to the service worker.
+     * `shouldInterceptRequest` performs synchronous HTTP, so it cannot be on the
+     * UI thread. A stale null there is a proxied request that goes out without the
+     * connection token, which the server answers 403: a workbench asset that fails
+     * to load with nothing anywhere saying why.
+     */
+    @Volatile
     private var nodeService: NodeService? = null
     private var serviceBindingInitiated = false
     private var serverPort = 0
@@ -139,6 +159,27 @@ class MainActivity : AppCompatActivity() {
      * [receiveCallbackIntent].
      */
     private var workbenchLoaded = false
+
+    /**
+     * When each renderer crash this Activity has handled arrived, oldest first.
+     *
+     * [recreateWebView] answers a dead renderer by rebuilding the view and
+     * loading the workbench into it, and nothing counted how often that had
+     * happened. Loading the workbench is the peak of this app's memory use and a
+     * renderer killed for memory dies doing it, so the answer to the crash
+     * reproduced the crash, for as long as the user left the app open: a page
+     * flashing, a warm device, and nothing on screen ever saying why.
+     *
+     * Kept on the Activity rather than on the client that reports the crash.
+     * `recreateWebView` builds a new WebView and `initBridge` a new
+     * [VSCodroidWebViewClient] on every cycle, so a counter held there is reset by
+     * the very event it counts; and the bootstrap client calls the same method
+     * directly, so both crash paths are only covered here.
+     *
+     * Written and read on the main thread only: both callers of [recreateWebView]
+     * are WebView callbacks, and the control that clears it is a navigation.
+     */
+    private val webViewCrashes = ArrayDeque<Long>()
 
     /**
      * Whether the "the editor restarted" explanation has already been shown.
@@ -511,6 +552,10 @@ class MainActivity : AppCompatActivity() {
         // exactly the part that outlives the screen.
         val appContext = applicationContext
         val toMainThread = Handler(Looper.getMainLooper())
+        // The manager as a local for the same reason: reading the field inside one of
+        // these lambdas is a read of `this`, and captures the Activity exactly as
+        // naming it would. ActivityRetentionTest refuses the field spelling there.
+        val storage = safManager
         // A save that never reached the device folder looks exactly like one that did.
         // The engine has no screen, so the notice is wired here; it is throttled inside
         // the manager, because a provider that starts refusing refuses everything.
@@ -528,12 +573,19 @@ class MainActivity : AppCompatActivity() {
         // that did not arrive whole on the device. One notice per folder, and the cap
         // gets its own wording because it is a limit this app chose rather than the
         // device refusing.
+        //
+        // The name is resolved rather than taken off the File, because the pass that
+        // reports stranded uploads can only hand over the mirror ROOT, whose
+        // directory name is a digest: that notice read "a1b2c3d4e5f6 is too large to
+        // copy out whole", naming nothing the user has ever seen. See
+        // mirrorDisplayName.
         safManager.onUploadIncomplete { dir, lost, capped ->
+            val folder = mirrorDisplayName(storage.getPersistedFolders(), dir)
             val message = if (capped) {
-                appContext.getString(R.string.saf_upload_capped, dir.name)
+                appContext.getString(R.string.saf_upload_capped, folder)
             } else {
                 appContext.resources.getQuantityString(
-                    R.plurals.saf_upload_incomplete, lost, lost, dir.name
+                    R.plurals.saf_upload_incomplete, lost, lost, folder
                 )
             }
             toMainThread.post {
@@ -1022,8 +1074,27 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) { safManager.stopFileWatcher() }
                 watchedSafFolder = null
 
+                // At most one redraw per SYNC_PROGRESS_INTERVAL_MS, plus the last
+                // file whatever the clock says. The engine reports once per file,
+                // and a folder with tens of thousands of them posted that many
+                // getQuantityString lookups and setMessage calls onto the main
+                // looper, each one a measure and layout pass on the thread the
+                // user is waiting on, for text changing far faster than anyone can
+                // read it. The throttle is here rather than in the engine because
+                // the engine has no clock policy and every other consumer of that
+                // callback would inherit this one.
+                //
+                // A plain var needs no synchronisation: `initialSync`'s phase-2
+                // loop is sequential on this one IO thread, so the callback has a
+                // single caller.
+                var lastProgressAt = 0L
                 val mirrorDir = withContext(Dispatchers.IO) {
                     safManager.syncToLocal(uri) { done, total ->
+                        val now = SystemClock.elapsedRealtime()
+                        if (!syncProgressIsDue(done, total, now - lastProgressAt)) {
+                            return@syncToLocal
+                        }
+                        lastProgressAt = now
                         runOnUiThread {
                             dialog.setMessage(
                                 resources.getQuantityString(
@@ -1229,9 +1300,10 @@ class MainActivity : AppCompatActivity() {
      * View call that belongs to the UI thread; that field exists precisely
      * because the resource interceptor has the same problem.
      *
-     * @return the empty string when the copy was removed, and otherwise the
-     *   sentence to show. Success is the falsy value; see
-     *   [com.vscodroid.bridge.AndroidBridge.reclaimSafMirror].
+     * @return the empty string when the copy was removed, and when the user
+     *   declined a forced removal, since there is nothing to tell them about a
+     *   choice they just made. Otherwise the sentence to show. Success is the
+     *   falsy value; see [com.vscodroid.bridge.AndroidBridge.reclaimSafMirror].
      */
     private fun removeDeviceFolderCopy(hash: String, force: Boolean): String {
         val mirrorsRoot = Environment.getSafMirrorsDir(this)
@@ -1249,6 +1321,24 @@ class MainActivity : AppCompatActivity() {
             watchedThisProcess = mirrorsWatchedThisProcess,
         )?.let { getString(it) }
         if (inUse != null) return inUse
+
+        // Asked of the user rather than taken on the caller's word; see
+        // confirmForcedRemoval. A decline is answered with nothing to say, which
+        // is the only honest answer this side has: the bundled extension draws
+        // EVERY non-empty answer as "Could not remove that folder's local copy:
+        // <this>", so any sentence at all reports a cancel the user chose as a
+        // failure of the app's. It went out first as the not-a-copy sentence,
+        // which told someone who had just pressed Cancel that the app had
+        // overruled them to protect their data, and then as the retry sentence
+        // the filesystem-refusal branch below owns, which invited them to press
+        // the button they had just declined.
+        //
+        // The empty string is this method's success value, so a decline is
+        // reported to the caller as ok. Nothing states or implies that anything
+        // was freed on that road: the byte figure is announced from the success
+        // branch below and from nowhere else, and the extension answers an ok by
+        // reopening the folder list, where the copy the user kept is still on it.
+        if (force && !confirmForcedRemoval()) return ""
 
         val freed = safManager.reclaimMirror(hash, force)
         return when (freed) {
@@ -1301,6 +1391,95 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Asks the user, here, before a forced removal deletes files that exist
+     * nowhere else.
+     *
+     * `reclaimSafMirror`'s own documentation says `force` may only be set "after
+     * the user has confirmed a modal that says so". That is a promise the caller
+     * makes and this side cannot check, and the caller is not only the bundled
+     * extension: the relay is shared by every web extension on the workbench's
+     * origin (see [injectBridgeRelay]), so `{cmd:'reclaimSafMirror', force:true}`
+     * from a script the user never looked at satisfied the contract exactly as
+     * well as a person pressing Remove. What `force` skips is the check that every
+     * file in the copy is also on the device, so what it deletes is by definition
+     * work that exists in no other place: anything under `node_modules`, `.git`,
+     * `__pycache__` or `.gradle`, which the sync excludes by construction, and
+     * anything written while no watcher was running.
+     *
+     * So the question is asked by the app, of the person holding the phone, and
+     * the answer is theirs. The wording is the same sentence a refused unforced
+     * removal gives, which is the one that names the stake, and the affirmative
+     * button names the act rather than agreeing with the app: "OK" beside a
+     * warning about files that exist nowhere else leaves a reader who confirms
+     * quickly nothing to read but the sentence they are dismissing.
+     *
+     * This runs on the bridge's own disk-work thread, never the UI thread, which
+     * is what lets it wait: the four storage commands are answered there precisely
+     * so the workbench's own thread is not held. The wait is bounded all the same,
+     * because that thread is single and everything else queued on it waits too.
+     * The bound is well inside the two minutes the bundled extension gives a
+     * storage command, so a question nobody answered is reported as a refusal
+     * rather than as a caller timing out.
+     *
+     * A question that outlives the wait is taken off the screen rather than left
+     * there. Nothing was removed, which is the honest outcome, but a dialog still
+     * offering Remove says the opposite: pressing it would do nothing, and a
+     * second attempt would stack a second dialog on top of the first.
+     */
+    private fun confirmForcedRemoval(): Boolean {
+        // The one thread this cannot be asked from, refused rather than obeyed.
+        // Waiting for a dialog on the thread that has to draw it is a deadlock
+        // until the bound expires, which the platform calls an ANR; answering no
+        // is a removal that did not happen, which the caller already handles.
+        // `BridgeCallbackThreadHopTest` is what keeps the real caller off this
+        // thread, and this is here so a future one cannot make that mistake
+        // silently.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Logger.e(tag, "A forced removal asked for confirmation on the UI thread; refusing")
+            return false
+        }
+        val answered = CountDownLatch(1)
+        val confirmed = AtomicBoolean(false)
+        // The handle the timeout below needs. Written on the UI thread and read on
+        // this one, so it is published rather than a plain field.
+        val shown = AtomicReference<AlertDialog?>(null)
+        runOnUiThread {
+            // A dialog on a window that is going away throws, and this is reached
+            // from a thread that knows nothing about the screen's lifecycle. The
+            // latch is released either way, so a removal is never left waiting out
+            // the whole bound for a dialog that was never drawn.
+            if (isFinishing || isDestroyed) {
+                answered.countDown()
+                return@runOnUiThread
+            }
+            shown.set(
+                AlertDialog.Builder(this)
+                    .setMessage(getString(R.string.saf_mirror_not_a_copy))
+                    .setPositiveButton(R.string.saf_mirror_remove) { _, _ ->
+                        confirmed.set(true)
+                        answered.countDown()
+                    }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> answered.countDown() }
+                    // Back and a tap outside both land here rather than on either
+                    // button, and neither is a yes.
+                    .setOnCancelListener { answered.countDown() }
+                    .show()
+            )
+        }
+        val got = answered.await(FORCED_REMOVAL_CONFIRM_MS, TimeUnit.MILLISECONDS)
+        if (!got) {
+            // Taken down only when nobody answered: a button already dismissed its
+            // own dialog, and dismiss() is not cancel(), so this cannot release the
+            // latch a second time. Guarded like every other dialog call here,
+            // because the window may have gone while the wait ran.
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) shown.get()?.dismiss()
+            }
+        }
+        return confirmed.get()
+    }
+
+    /**
      * Says that a folder did not open, and what that costs the user.
      *
      * The consequence is spelled out rather than left to be discovered. An
@@ -1329,6 +1508,21 @@ class MainActivity : AppCompatActivity() {
     /**
      * Opens a previously selected SAF folder from the recent list.
      * Called from [AndroidBridge.openRecentFolder] via JS bridge.
+     *
+     * A URI this app holds no grant for is refused and nothing else happens. It
+     * used to open the folder picker instead, and that made the system's
+     * document-tree chooser something any caller could put on the user's screen
+     * without ever asking for it: `openRecentFolder` is one of the relay commands,
+     * the URI travels with the call, and the recent list the legitimate caller
+     * chooses from is pruned of revoked grants before it is handed over
+     * (`SafStorageManager.getPersistedFolders`), so a URI arriving here without a
+     * grant is either a lapse in the moment between the listing and the tap or a
+     * URI nobody was ever offered. Neither is a reason to open a chooser, and
+     * picking a folder in one persists a grant and copies the whole tree in.
+     *
+     * The notice stays, because the first of those two really happens and the user
+     * is owed the reason; the instruction in it already points at the command that
+     * opens the picker deliberately.
      */
     fun openRecentSafFolder(uri: Uri) {
         if (!safManager.hasPersistedPermission(uri)) {
@@ -1337,8 +1531,6 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.saf_permission_expired),
                 Toast.LENGTH_LONG
             ).show()
-            // Open the picker as a fallback
-            openFolderPicker()
             return
         }
         handleSafFolderSelected(uri)
@@ -1480,7 +1672,7 @@ class MainActivity : AppCompatActivity() {
      * better to reach for. The shipped workbench carries no class that marks a
      * dialog as the reconnection one: `.monaco-dialog-box` and
      * `.monaco-dialog-modal-block` are the only dialog classes in
-     * `workbench.web.main.internal.css`, and both belong to every modal it can
+     * `out/vs/code/browser/workbench/workbench.css`, and both belong to every modal it can
      * raise. Matching any dialog instead would reload the page over an unanswered
      * "save your changes?", which trades a missed detection for lost work.
      * Wrapping the page's `WebSocket` would be a real signal, but injection here
@@ -1544,20 +1736,50 @@ class MainActivity : AppCompatActivity() {
      */
     private fun bootstrapClient() = object : WebViewClient() {
         /**
-         * The one URL this client acts on, and the reason the error page uses a
-         * link rather than a script.
+         * The two URLs this client acts on, and the reason the pages carrying
+         * them use a link rather than a script.
          *
-         * The page it serves is a `data:` URL with no bridge on it: `initBridge`
-         * runs once per WebView for the editor, and registering a second
-         * JavaScript interface here to carry one button would widen the surface
-         * that the session token exists to gate. A navigation the client
-         * recognises costs nothing and reaches the same place.
+         * Each is a `data:` URL with no bridge on it: `initBridge` runs once per
+         * WebView for the editor, and registering a second JavaScript interface
+         * here to carry one button would widen the surface that the session token
+         * exists to gate. A navigation the client recognises costs nothing and
+         * reaches the same place.
          */
         override fun shouldOverrideUrlLoading(
             view: WebView,
             request: WebResourceRequest,
         ): Boolean {
-            if (request.url.toString() != RETRY_URL) return false
+            val url = request.url.toString()
+            if (url == RELOAD_URL) {
+                // Asking clears the record. The refusal is about a loop nobody
+                // asked for, not about keeping the user out of their editor, so a
+                // deliberate attempt gets the whole budget again.
+                Logger.i(tag, "Loading the editor again after repeated renderer crashes")
+                webViewCrashes.clear()
+                // isServerReady(), not the port alone and never process liveness,
+                // for the reason bindDecision gives: a renderer can die before the
+                // server is answering, and navigating at a port nothing is
+                // listening on replaces this page with a connection-refused one
+                // that nothing clears.
+                if (serverPort > 0 && nodeService?.isServerReady() == true) {
+                    loadVSCode(serverPort)
+                } else {
+                    // Not the loading page on its own, because "not ready" covers
+                    // two states this side cannot tell apart and the page serves
+                    // only one of them. A server still coming up answers this start
+                    // ALREADY_SERVING and nothing changes, while onServerReady
+                    // navigates as soon as it is up; a server that has given up had
+                    // isServiceRunning cleared by NodeService.enterTerminalState, so
+                    // no readiness callback is ever coming and the bare page would
+                    // say "starting" for ever with nothing on it to press. That is
+                    // the state showServerGaveUp exists to prevent, and it was
+                    // reachable here through a crash loop over a server that had
+                    // already stopped.
+                    retryServerStart()
+                }
+                return true
+            }
+            if (url != RETRY_URL) return false
             Logger.i(tag, "Retrying the server from the error page")
             retryServerStart()
             return true
@@ -1615,21 +1837,31 @@ class MainActivity : AppCompatActivity() {
         extraKeyRow?.setupWithRootView(findViewById(R.id.webViewContainer))
     }
 
+    /**
+     * Back sends the app to the background.
+     *
+     * It used to ask the page first, and the answer could only ever be no. The
+     * round trip was Kotlin to JavaScript to `AndroidBridge.onBackPressed` and
+     * back, and that bridge method returns whatever the `onBackPressed`
+     * constructor lambda answers, which [initBridge] passes as `{ false }`.
+     * Nothing else defines it: no patch, no bundled extension and no injected
+     * script installs a page-side handler, so the workbench was never consulted
+     * about anything and every back press paid an `evaluateJavascript` to be told
+     * what was already known.
+     *
+     * Removing it also fixes what the round trip cost when there was no page. The
+     * call was made through `webView?`, and the minimise sat inside its result
+     * callback, so with the WebView gone (between [recreateWebView] tearing one
+     * down and building the next) nothing ran at all and back did nothing.
+     *
+     * Dismissing editor UI with back would be a real improvement and is not this:
+     * it needs something the workbench answers, and the extra key row's Esc key is
+     * what closes a palette today.
+     */
     private fun setupBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                webView?.evaluateJavascript(
-                    // The token is injected into the page once the workbench has loaded.
-                    // Before that it is absent, the call returns false, and the fallback
-                    // below sends the app to the background, which is what pressing back
-                    // on a not-yet-loaded editor should do anyway.
-                    "(function() { var t = (window.__vscodroid || {}).authToken;" +
-                        " return t ? (window.AndroidBridge?.onBackPressed?.(t) || false) : false; })()"
-                ) { result ->
-                    if (result != "true") {
-                        moveTaskToBack(true)
-                    }
-                }
+                moveTaskToBack(true)
             }
         })
     }
@@ -1668,9 +1900,45 @@ class MainActivity : AppCompatActivity() {
         service.refreshNotification()
     }
 
+    /**
+     * Starts the service and binds to it.
+     *
+     * The start is guarded and the bind is not, and that asymmetry is the point.
+     * On Android 12+ `startForegroundService` throws
+     * `ForegroundServiceStartNotAllowedException` at the CALL SITE when the app
+     * may not start one from the background, and an uncaught throw here is a crash
+     * during `onCreate`, which is a crash loop with no screen in front of it.
+     * `NodeService.promoteToForeground` already catches the service side of the
+     * same refusal and stands down with a log; this side had no such guard.
+     *
+     * `bindService` with `BIND_AUTO_CREATE` is outside the try, and it is the
+     * fallback for the BINDING rather than for the server. It creates the service
+     * under no such restriction, so the connection and every callback installed on
+     * it survive the refusal; what it does not do is start anything.
+     * `NodeService.launchServer` is reached only from `onStartCommand`, and a bind
+     * never delivers one, so a swallowed refusal leaves a service that has
+     * constructed its `ProcessManager` and will never spawn Node, while
+     * [setupServiceCallbacks] reads a port of 0 and an unready server and settles
+     * on `BindDecision.Wait`. Nothing else would ever start it, and what the user
+     * is left looking at is the loading page saying the server is starting, for
+     * ever, with no control on it. That is exactly the state [showServerGaveUp]
+     * exists to replace, so the refusal is put on screen here the way
+     * [retryServerStart] puts its own. The WebView is already built when this
+     * runs: `onCreate` calls `setupWebView()` first.
+     *
+     * A refusal over a server that was already serving corrects itself: the bind
+     * lands moments later, [setupServiceCallbacks] reads a bound port and a ready
+     * server, and `BindDecision.Load` navigates over this page. Showing it in that
+     * window is the price of not staying silent in the window that matters.
+     */
     private fun startAndBindService() {
         val serviceIntent = Intent(this, NodeService::class.java)
-        startForegroundService(serviceIntent)
+        try {
+            startForegroundService(serviceIntent)
+        } catch (e: Exception) {
+            Logger.e(tag, "Could not start the server in the foreground: ${e.message}")
+            showServerGaveUp()
+        }
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
         serviceBindingInitiated = true
     }
@@ -1784,12 +2052,48 @@ class MainActivity : AppCompatActivity() {
      * again. The binding is untouched, so readiness arrives through the callbacks
      * already installed.
      */
-    private fun showServerGaveUp() {
+    private fun showServerGaveUp() = showErrorPage(getString(R.string.error_server_gave_up), RETRY_URL)
+
+    /**
+     * Says that the editor kept dying and stops reloading it.
+     *
+     * Its control is [RELOAD_URL] and not [RETRY_URL], because the two states
+     * need opposite things done. The server here is healthy and running, so
+     * `startForegroundService` would be answered with `ALREADY_SERVING` and start
+     * nothing, leaving the loading page up for ever: a control that looks like the
+     * way out and is not. What has to be repeated is the page load.
+     *
+     * The sentence is written here rather than in the resource table, which is
+     * where every other sentence this app shows lives, and that is a real cost
+     * rather than a preference: nothing outside this file can translate it. It is
+     * the same corner [LOADING_PAGE] cuts, and it is worth closing.
+     */
+    private fun showRendererCrashLoop() = showErrorPage(CRASH_LOOP_MESSAGE, RELOAD_URL)
+
+    /**
+     * The page both terminal states put up, with the one control that changes the
+     * state it describes.
+     *
+     * [control] is a URL rather than a script because these pages carry no bridge:
+     * `initBridge` runs once per WebView for the editor, and registering a second
+     * JavaScript interface to carry one button would widen the surface the session
+     * token exists to gate.
+     *
+     * Each page is only ever shown under a client that answers its own control,
+     * and only one of the two controls is answered by both clients. [RETRY_URL]
+     * lives in the webview package and is handled by [bootstrapClient] and by
+     * `VSCodroidWebViewClient`, because the server can give up at any point in the
+     * session; [RELOAD_URL] is private here and is read by [bootstrapClient]
+     * alone, which is sound only because [showRendererCrashLoop] is reached from
+     * [recreateWebView] after `setupWebView` has put that client back. Shown under
+     * the other one the button would be dead, which is the failure RETRY_URL's own
+     * documentation records from when it had a private copy per client.
+     */
+    private fun showErrorPage(message: String, control: String) {
         // The page about to be shown is not the workbench, so nothing arriving
         // afterwards should be told it is. recreateWebView clears this for the
         // same reason when it throws the loaded page away.
         workbenchLoaded = false
-        val message = getString(R.string.error_server_gave_up)
         val retry = getString(R.string.error_server_retry)
         webView?.loadDataWithBaseURL(
             null,
@@ -1799,7 +2103,7 @@ class MainActivity : AppCompatActivity() {
                <div style="text-align:center;max-width:32em;padding:1.5em">
                <h2 style="color:#ccc;margin:0 0 .6em">VSCodroid</h2>
                <p style="color:#aaa;line-height:1.5">${escapeHtml(message)}</p>
-               <p><a href="$RETRY_URL" style="display:inline-block;margin-top:.8em;padding:.6em 1.4em;
+               <p><a href="$control" style="display:inline-block;margin-top:.8em;padding:.6em 1.4em;
                background:#0e639c;color:#fff;text-decoration:none;border-radius:4px">${escapeHtml(retry)}</a></p>
                </div></body></html>""",
             "text/html", "utf-8", null,
@@ -1816,7 +2120,17 @@ class MainActivity : AppCompatActivity() {
      */
     private fun retryServerStart() {
         webView?.loadData(dataUrlSafe(LOADING_PAGE), "text/html", "utf-8")
-        startForegroundService(Intent(this, NodeService::class.java))
+        // Guarded for the reason [startAndBindService] is, and put back rather
+        // than only logged. The loading page is already on screen by the time this
+        // throws, so a swallowed refusal leaves the editor saying "starting" for
+        // ever with no control that can change it, which is exactly the state the
+        // gave-up page exists to replace.
+        try {
+            startForegroundService(Intent(this, NodeService::class.java))
+        } catch (e: Exception) {
+            Logger.e(tag, "The server could not be started again: ${e.message}")
+            showServerGaveUp()
+        }
     }
 
     private fun loadVSCode(port: Int, folderPath: String? = null) {
@@ -1852,15 +2166,31 @@ class MainActivity : AppCompatActivity() {
             // directory this may have to create. Both are here on the cold-start
             // path, on the thread drawing the screen, in the moment before the
             // workbench is put up.
-            val folder = withContext(Dispatchers.IO) {
-                rememberedWorkspaceFolder() ?: FirstRunSetup(this@MainActivity).ensureProjectsDir()
+            //
+            // The connection token rides along, because this is the branch every
+            // cold start takes: `onServerReady` calls this with no folder and the
+            // WebView is still holding the `data:` placeholder, so `known` is
+            // null. `ProcessManager.connectionToken` is `cachedToken ?: readTokenFile()`
+            // and nothing has read it before the first navigation, so resolving it
+            // where [navigateToFolder] used to meant a `stat` and a `readText` on
+            // the main thread on every cold launch, at exactly the moment the
+            // workbench URL is built. `MainThreadWatch` lists that read among the
+            // sites its measured inventory did NOT see, explaining the absence as
+            // needing an interaction a cold launch does not perform; a cold launch
+            // always navigates. Resolving it here costs nothing extra, because the
+            // hop was already being made, and makes that inventory true again.
+            val resolved = withContext(Dispatchers.IO) {
+                val connectionToken = nodeService?.getConnectionToken()
+                val folder = rememberedWorkspaceFolder()
+                    ?: FirstRunSetup(this@MainActivity).ensureProjectsDir()
+                connectionToken to folder
             }
             // Asked again rather than carried across the hop. The URL outranks
             // the remembered folder before the suspension and has to go on
             // outranking it after: a renderer crash recovering into the folder it
             // was showing arrives through this same method, and a remembered
             // folder resolved before it would otherwise land last and win.
-            navigateToFolder(port, folderFromUrl(webView?.url) ?: folder)
+            navigateToFolder(port, folderFromUrl(webView?.url) ?: resolved.second, resolved.first)
         }
     }
 
@@ -2036,7 +2366,15 @@ class MainActivity : AppCompatActivity() {
             // platform guarantees about which thread the callback arrives on.
             onTlsFailure = { failure ->
                 runOnUiThread {
-                    val now = System.currentTimeMillis()
+                    // The monotonic clock, for the reason handoffFailureToAnnounce
+                    // states where it takes the same reading as its default. The
+                    // wall clock steps backwards on an NTP correction or when the
+                    // user sets the device time, and a backward step larger than
+                    // NOTICE_INTERVAL_MS makes the subtraction negative, which
+                    // silences this channel until the clock catches up; a forward
+                    // step releases one notice early. The two channels share one
+                    // rule and had already drifted once over what that rule reads.
+                    val now = SystemClock.elapsedRealtime()
                     tlsFailureToAnnounce(failure, announcedTlsFailures, now, lastTlsNoticeAt)?.let {
                         lastTlsNoticeAt = now
                         reportTlsFailure(it)
@@ -2170,8 +2508,18 @@ class MainActivity : AppCompatActivity() {
     /**
      * Navigates the WebView to a specific folder without re-initializing the bridge.
      * Safe to call multiple times (e.g., when switching SAF folders).
+     *
+     * [token] is the connection token, and it is a parameter so that the caller
+     * which already has a thread to spare can read it there. The default keeps
+     * every other caller as it was: reading it costs a `stat` and a small
+     * `readText` only until `ProcessManager` has cached it, which the first
+     * navigation of the run does. See [loadVSCode] for which caller pays it.
      */
-    private fun navigateToFolder(port: Int, folderPath: String) {
+    private fun navigateToFolder(
+        port: Int,
+        folderPath: String,
+        token: String? = nodeService?.getConnectionToken(),
+    ) {
         val wv = webView ?: return
         // Seeded here and not only from the page-loaded callback. This method is
         // the one that knows the folder before the page exists, and between
@@ -2183,7 +2531,6 @@ class MainActivity : AppCompatActivity() {
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself: the cookie for pages, the
         // query for resource requests, an auth message for the WebSocket.
-        val token = nodeService?.getConnectionToken()
         val url = workbenchUrl(port, folderPath, token)
 
         // Say so when it is missing. Navigating without the token still happens
@@ -2609,6 +2956,48 @@ class MainActivity : AppCompatActivity() {
      * not see objects added to a page with addJavascriptInterface. This relay listens on
      * a BroadcastChannel in the page and forwards calls to AndroidBridge, which is what
      * lets an extension reach it at all.
+     *
+     * ⚠️ **Who can post here is every script on the workbench's origin, not the
+     * bundled extension.** `product.json` carries no `webEndpointUrlTemplate`, and
+     * without one the workbench starts the web extension host in a SAME-ORIGIN
+     * iframe and says so (`console.warn("The web worker extension host is started
+     * in a same-origin iframe!")` in `out/vs/code/browser/workbench/workbench.js`). A
+     * `BroadcastChannel` is scoped by origin, so every web extension the user
+     * installs from Open VSX shares this one. The token read below is no barrier
+     * either: it is read out of `window.__vscodroid` by this script, on that same
+     * origin, so anything that can post can also read it. Answers are posted back
+     * onto the same channel, so every listener sees every reply, including replies
+     * to commands somebody else asked for.
+     *
+     * What that means for what may be dispatched here, worked out per command
+     * rather than assumed:
+     *
+     *  - The caller ALREADY has more than this channel gives it. A web extension
+     *    can open a terminal and run anything as this app's uid, so every reading
+     *    command here (`getRecentFolders`, `getStorageBreakdown`, `listSafMirrors`,
+     *    `getSshPublicKey`, `listSshKeys`, `generateBugReport`) discloses what the
+     *    caller could already read off the filesystem. They stay, and what changes
+     *    instead is that they hand over no more than they must: `listSshKeys` no
+     *    longer reports a key's comment, which is conventionally an email address.
+     *  - Commands that put an Android surface on screen (`openFolderPicker`,
+     *    `openToolchainSettings`, `showAboutDialog`) are visible and dismissible,
+     *    and none of them changes anything on its own. They stay.
+     *  - `generateSshKey` never overwrites a pair, and `clearCaches` deletes only
+     *    regenerable caches. Neither loses the user's own work.
+     *  - `openExternalUrl` is the one command that reaches outside the app at all,
+     *    and it is the one that was narrowed: see `AndroidBridge.openExternalUrl`,
+     *    which now refuses this app's own `vscodroid://callback`.
+     *  - `openRecentFolder` carries the URI with the call, so the folder it opens
+     *    is the caller's choice rather than the user's. What bounds it is the
+     *    grant: the recent list a legitimate caller picks from is pruned of
+     *    revoked grants before it is handed over
+     *    (`SafStorageManager.getPersistedFolders`), and a URI this app holds no
+     *    grant for is now refused with a notice instead of being answered with the
+     *    system folder chooser. See [openRecentSafFolder].
+     *  - `reclaimSafMirror` with `force` is the only command here that destroys
+     *    user data, and its own documentation says the caller must have confirmed
+     *    a modal saying so. A caller is exactly what cannot be asked to promise
+     *    that, so [removeDeviceFolderCopy] now asks the user itself.
      */
     private fun injectBridgeRelay() {
         webView?.evaluateJavascript(
@@ -2709,6 +3098,20 @@ class MainActivity : AppCompatActivity() {
                             result = AndroidBridge.reclaimSafMirror(
                                 token, d.hash, d.force === true, d.id);
                             if (result !== '') ch.postMessage({id: d.id, ok: false, error: result});
+                        } else {
+                            // A command this chain does not know is answered rather
+                            // than dropped. Without this the caller's promise died
+                            // on its own deadline and reported "Bridge timeout: is
+                            // the app running on Android?", accusing the platform
+                            // of not being there, after five seconds or after two
+                            // minutes for a storage command. It is also the exact
+                            // failure of adding a bridge method and forgetting its
+                            // relay branch, which is the moment a clear message is
+                            // worth most.
+                            ch.postMessage({
+                                id: d.id, ok: false,
+                                error: 'VSCodroid does not know the command ' + d.cmd
+                            });
                         }
                     } catch(err) {
                         ch.postMessage({id: d.id, ok: false, error: String(err)});
@@ -2721,9 +3124,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Fix #9: Register a consumer for the onLowMemory JS callback.
-     * MainActivity.onTrimMemory already fires window.__vscodroid?.onLowMemory?.(level),
-     * but no consumer was registered. This method registers one.
+     * Registers the page-side consumer of the memory-pressure callback.
+     *
+     * `onTrimMemory` fires `window.__vscodroid?.onLowMemory?.(level)` and nothing
+     * was listening, so this exists to give that call somewhere to land.
+     *
+     * It records the level and does nothing else, and the two things it used to do
+     * are worth naming so neither comes back. It called `gc()`, which does not
+     * exist in a WebView: the function is behind V8's `--expose-gc` and the branch
+     * was dead on every device. And it walked `performance.getEntries()` and
+     * revoked every entry whose name began with `blob:`, which is a list of blob
+     * resources the page has FETCHED rather than ones this app created: the
+     * shipped workbench keeps its own `_blobUrlCache` and hands the same URL back
+     * on a later load, so revoking them broke the next load of an image, a media
+     * element or a worker built from one. `TRIM_MEMORY_BACKGROUND` maps to
+     * critical, so that fired on ordinary backgroundings whenever the system was
+     * reclaiming, and the damage outlived the pressure. Nothing handed those URLs
+     * over and nothing asked whether they were still in use.
+     *
+     * The one revocation this app does own is in [injectDownloadCapture], which
+     * tracks the URLs it holds and releases them itself.
      */
     private fun injectMemoryPressureHandler() {
         webView?.evaluateJavascript(
@@ -2734,19 +3154,6 @@ class MainActivity : AppCompatActivity() {
                 window.__vscodroid = window.__vscodroid || {};
                 window.__vscodroid.onLowMemory = function(level) {
                     console.warn('[VSCodroid] Memory pressure: level=' + level);
-                    // Hint GC and reduce image cache
-                    try {
-                        if (typeof gc === 'function') gc();
-                    } catch(e) {}
-                    // Clear any cached blob URLs
-                    try {
-                        var perf = performance.getEntries();
-                        perf.forEach(function(e) {
-                            if (e.name && e.name.startsWith('blob:')) {
-                                try { URL.revokeObjectURL(e.name); } catch(x) {}
-                            }
-                        });
-                    } catch(e) {}
                 };
             })();
             """.trimIndent(),
@@ -2871,6 +3278,9 @@ class MainActivity : AppCompatActivity() {
     private fun recreateWebView() {
         Logger.w(tag, "Recreating WebView after crash")
         val wv = webView ?: return
+        // Counted before anything is torn down, so a crash arriving while the
+        // budget is already spent is recorded rather than lost.
+        val looping = crashLoopReached(webViewCrashes, SystemClock.elapsedRealtime())
         // Read the open folder off the dying WebView before it goes away
         val lastUrl = wv.url
         val container = findViewById<android.widget.LinearLayout>(R.id.webViewContainer)
@@ -2913,6 +3323,20 @@ class MainActivity : AppCompatActivity() {
         workbenchLoaded = false
 
         setupWebView()
+        // The view is rebuilt either way. What a spent budget refuses is only the
+        // reload, which is the half that feeds the loop: the crashed WebView is
+        // documented as unusable, [handleResumeFromBackground] calls `reload()` on
+        // whatever this field holds, and leaving it there would turn a loop into
+        // an undefined call.
+        if (looping) {
+            Logger.e(
+                tag,
+                "The editor's renderer has died ${webViewCrashes.size} times in " +
+                    "${CRASH_LOOP_WINDOW_MS / 1000}s; not loading it again unasked",
+            )
+            showRendererCrashLoop()
+            return
+        }
         if (serverPort > 0) {
             // Always via loadVSCode so initBridge re-registers on the new WebView;
             // loading the old URL directly would leave it without the bridge. The
@@ -3130,6 +3554,23 @@ class MainActivity : AppCompatActivity() {
                <p>Starting server...</p></div></body></html>"""
 
         /**
+         * The control on the renderer-crash page, recognised by [bootstrapClient].
+         *
+         * Its own scheme-and-host rather than [RETRY_URL] because the two pages
+         * need opposite work done; see [showRendererCrashLoop]. Handled only by
+         * the bootstrap client, which is the one on the WebView whenever that page
+         * is up: [recreateWebView] clears `bridgeInitialized` and the refusal path
+         * never reaches `loadVSCode`, so the real client is not installed.
+         */
+        private const val RELOAD_URL = "vscodroid://reload-editor"
+
+        /** What the renderer-crash page says. See [showRendererCrashLoop]. */
+        private const val CRASH_LOOP_MESSAGE =
+            "The editor closed unexpectedly several times in a row, so VSCodroid " +
+                "stopped reopening it. Your files and the server are untouched. " +
+                "Closing some other apps first makes this less likely."
+
+        /**
          * Every mirror this process has put a watcher on, whether or not one is
          * on it now.
          *
@@ -3176,6 +3617,19 @@ internal const val HEALTH_CHECK_THRESHOLD_MS = 60_000L   // 1 minute
 
 /** Force page reload if backgrounded longer than this. */
 internal const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
+
+/**
+ * How long a forced device-folder removal waits for the user's answer.
+ *
+ * Not a guess about how long a person takes to read one sentence: it is the point
+ * at which "still deciding" stops being the explanation and "nobody is looking at
+ * this screen" becomes one. The wait is on the bridge's single disk-work thread,
+ * so everything else queued on it waits too, and the bundled extension gives a
+ * storage command two minutes; this side gives up well inside that, so the
+ * failure is reported as a refusal by the layer that knows why rather than as a
+ * caller's deadline expiring. See `MainActivity.confirmForcedRemoval`.
+ */
+private const val FORCED_REMOVAL_CONFIRM_MS = 45_000L
 
 // Severities the process monitor understands. Words rather than numbers so that
 // nothing downstream is tempted to compare them with >=, which is the defect
@@ -3237,12 +3691,24 @@ internal fun memoryPressureOf(level: Int): String = when (level) {
  * Takes the directory rather than reaching for one, so the caller supplies what
  * it already has and a test supplies a temporary one.
  *
+ * Only [PRESSURE_CRITICAL] is recorded, and the milder severity is deliberately
+ * not. The file is a one-shot signal: `process-monitor.js` reads it once per
+ * ten-second scan, unlinks it whatever it says, and acts only on `critical`
+ * (`KILL_ON_PRESSURE`). Nothing there or anywhere else consumes `moderate`, so
+ * writing it achieved nothing and could destroy something: the last writer wins,
+ * so a `TRIM_MEMORY_RUNNING_LOW` arriving after a `TRIM_MEMORY_RUNNING_CRITICAL`
+ * that the monitor had not yet read replaced the signal with a word the monitor
+ * ignores, and that pressure episode reclaimed no idle language server.
+ *
+ * The severity is still returned for both, so the caller's log and the callback
+ * into the workbench are unchanged; only the write is narrowed.
+ *
  * @return the severity, so the caller can log it and notify the workbench,
  *   both of which need the Activity and neither of which decides anything.
  */
 internal fun applyMemoryPressure(tmpDir: File, level: Int): String {
     val pressure = memoryPressureOf(level)
-    if (pressure != PRESSURE_NONE) writeMemoryPressure(tmpDir, pressure)
+    if (pressure == PRESSURE_CRITICAL) writeMemoryPressure(tmpDir, pressure)
     return pressure
 }
 
@@ -3450,6 +3916,92 @@ internal fun bindDecision(notice: StartupNotice?, port: Int, ready: Boolean): Bi
     notice != null -> BindDecision.ShowNotice(notice.message)
     port > 0 && ready -> BindDecision.Load(port)
     else -> BindDecision.Wait
+}
+
+/**
+ * The shortest gap between two redraws of the folder-sync dialog.
+ *
+ * Ten a second is already faster than anyone reads, and the count is what the
+ * number is really about: the engine reports once per file, so a folder of
+ * twenty thousand posted twenty thousand relayouts onto the main looper.
+ */
+internal const val SYNC_PROGRESS_INTERVAL_MS = 100L
+
+/**
+ * Whether the folder-sync dialog should be redrawn for this file.
+ *
+ * The last file always is, whatever the clock says: it is the one reading the
+ * user is owed (the counts have to end matching) and the one a throttle would
+ * otherwise be most likely to swallow, since it arrives right after its
+ * predecessor.
+ */
+internal fun syncProgressIsDue(done: Int, total: Int, sinceLastMs: Long): Boolean =
+    done >= total || sinceLastMs >= SYNC_PROGRESS_INTERVAL_MS
+
+/**
+ * What to call [dir] in a notice about it.
+ *
+ * A mirror root is named after a digest of the tree URI, twelve hex characters,
+ * so a notice printing the directory name says "a1b2c3d4e5f6" where the folder's
+ * own name belongs. The stranded-upload pass is what reaches that: it has the
+ * whole mirror in hand rather than a directory somebody made, and it was the one
+ * notice naming a hash.
+ *
+ * The ROOT only, which is why this is not
+ * [SafStorageManager.folderForOpenedPath]. That one answers for anything inside a
+ * mirror as well, by design, and here it would rename a directory created in the
+ * editor after the device folder containing it: "four files in Documents did not
+ * reach the device" for a shortfall that was entirely inside `src/generated`.
+ * Matched on the directory NAME rather than the whole path, since the name is the
+ * digest and is what the manager itself keys mirrors by.
+ *
+ * [folders] is the recent list, pruned of revoked grants before it is handed
+ * over, so a folder whose grant the user has taken back has no entry and keeps
+ * the directory name. That is the honest answer at that point: the app no longer
+ * knows what the folder was called.
+ *
+ * Top-level and pure for the reason the notices are wired out of locals: anything
+ * they call on the Activity captures it, and the write-back worker they belong to
+ * outlives the screen.
+ */
+internal fun mirrorDisplayName(folders: List<SafFolderInfo>, dir: File): String =
+    folders.firstOrNull { File(it.mirrorPath).name == dir.name }?.displayName ?: dir.name
+
+/**
+ * How long a renderer crash counts towards a loop, and how many are allowed
+ * inside that time.
+ *
+ * A minute and three, which is a loop by any reading: a crashed renderer is
+ * rebuilt and the workbench loaded into it at once, so a fourth crash inside the
+ * minute says the load is what keeps killing it. A slower repeat (a page that
+ * dies when one particular file is opened, an hour apart) falls out of the window
+ * and goes on being recovered from, which is the right treatment for it.
+ */
+internal const val CRASH_LOOP_WINDOW_MS = 60_000L
+internal const val CRASH_LOOP_CRASHES = 3
+
+/**
+ * Records a renderer crash and answers whether recovering from them has become a
+ * loop.
+ *
+ * [times] is the caller's record and is MUTATED: readings older than the window
+ * are dropped and [now] is added, so it stays bounded by the window rather than
+ * growing for the life of the Activity.
+ *
+ * A count with no window would eventually refuse a recovery to a session that had
+ * three unrelated crashes in a day, and a window with no count would never refuse
+ * one at all. See `MainActivity.recreateWebView`, which is the only caller and
+ * which cannot be driven from a JVM test.
+ */
+internal fun crashLoopReached(
+    times: ArrayDeque<Long>,
+    now: Long,
+    windowMs: Long = CRASH_LOOP_WINDOW_MS,
+    limit: Int = CRASH_LOOP_CRASHES,
+): Boolean {
+    while (times.isNotEmpty() && now - times.first() > windowMs) times.removeFirst()
+    times.addLast(now)
+    return times.size > limit
 }
 
 /**

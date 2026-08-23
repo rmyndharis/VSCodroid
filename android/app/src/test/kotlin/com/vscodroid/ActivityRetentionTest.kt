@@ -94,6 +94,15 @@ class ActivityRetentionTest {
                 "$marker posts through the Activity, which captures it for the same reason. " +
                     "A Handler on the main looper does the same job holding nothing."
             }
+            // Reading a field captures the Activity as surely as naming it, and
+            // this is the field nearest to hand: the upload notice needs the
+            // manager to turn a mirror hash back into the folder's own name. The
+            // spelling that holds nothing is a local taken beside appContext.
+            assertTrue(!block.contains("safManager")) {
+                "$marker reaches for the manager through the Activity, so the write-back " +
+                    "worker holds the Activity and its view tree for the length of an " +
+                    "unbounded drain"
+            }
             // Every resource lookup qualified, because an unqualified one is a call
             // on the Activity and captures it exactly as naming it would. Judged a
             // line at a time rather than by a lookbehind, since the qualifier is one

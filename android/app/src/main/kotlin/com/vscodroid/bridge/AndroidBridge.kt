@@ -13,6 +13,7 @@ import androidx.annotation.StringRes
 import androidx.browser.customtabs.CustomTabsIntent
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.R
+import com.vscodroid.isExtensionCallback
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
@@ -154,6 +155,11 @@ internal val OPEN_URL_NO_HANDLER = R.string.open_url_no_handler
  * A format string with the name as its one argument, rather than the prefix this
  * used to be. A sentence assembled by concatenation puts the cause in the same
  * place in every language and no translation can move it.
+ *
+ * One caller substitutes a scheme rather than a class name: the refusal of this
+ * app's own `vscodroid://callback` in [AndroidBridge.openExternalUrl], which
+ * fails before any launch is attempted and so has no exception to name. The
+ * argument is the cause either way, and the scheme is the cause there.
  */
 @StringRes
 internal val OPEN_URL_FAILED = R.string.open_url_failed
@@ -162,10 +168,17 @@ internal val OPEN_URL_FAILED = R.string.open_url_failed
  * Why [AndroidBridge.reclaimSafMirror] did not remove a mirror.
  *
  * The convention is [AndroidBridge.openExternalUrl]'s, and it is worth stating
- * because it reads backwards: the EMPTY STRING means it was removed, and anything
- * else is the sentence to show. A caller testing truthiness reports every refusal
- * as a success, which for this method means telling the user their disk was freed
- * while it was not.
+ * because it reads backwards: the EMPTY STRING means there is nothing to say, and
+ * anything else is the sentence to show. A caller testing truthiness reports every
+ * refusal as a success, which for this method means telling the user their disk
+ * was freed while it was not.
+ *
+ * "Nothing to say" and not "it was removed", which is the narrower reading it had.
+ * The Activity also answers empty when the user declines the confirmation a forced
+ * removal asks for, because every non-empty answer is drawn as "Could not remove
+ * that folder's local copy: <this>" and a cancel the user chose is not a failure
+ * of the app's. Nothing on that road claims any disk was freed: the byte figure is
+ * announced natively, from the branch that actually removed something.
  *
  * That convention is worth one warning for whoever writes the next test here:
  * a relaxed `Context` mock answers `getString` with the empty string, which is
@@ -211,6 +224,39 @@ internal val RECLAIM_UNAVAILABLE = R.string.bridge_reclaim_unavailable
  */
 @StringRes
 internal val STORAGE_STALE_SESSION = R.string.bridge_stale_session
+
+/**
+ * Why a command that answers by reply id refused because too many are already
+ * outstanding.
+ *
+ * The one refusal here with a resource of its own rather than the stale-session
+ * sentence the three above share, because that sentence is only half right for a
+ * full queue. The request was indeed not accepted and trying again is indeed
+ * what the caller should do; the instruction is not. Reloading the window does
+ * not drain the single disk thread, so a user who followed it waited exactly as
+ * long and lost their editor state on the way. This one asks for the wait and
+ * nothing else.
+ */
+@StringRes
+internal val STORAGE_BUSY = R.string.bridge_storage_busy
+
+/**
+ * How many disk-walking commands may be outstanding at once.
+ *
+ * A bound on a queue that had none. All four of these commands are on the relay,
+ * which means any script sharing the workbench's origin can post them, and each
+ * one walks the whole of `filesDir` or every copied device folder before it
+ * answers; the executor below is single and its queue was unbounded, so a caller
+ * posting `listSafMirrors` in a loop pinned the disk, the battery and every
+ * legitimate storage call behind it for as long as it liked, with `clearCaches`
+ * re-running its deletion on each queued copy.
+ *
+ * Four because there are four such commands and a person drives them one at a
+ * time from the command palette, so the running one plus a full set behind it is
+ * already more than any real sequence produces. Past that the refusal is the
+ * honest answer, and it is one the caller can retry.
+ */
+private const val MAX_QUEUED_DISK_COMMANDS = 4
 
 /**
  * The sign-in requests this app launched a browser for, and when.
@@ -413,6 +459,17 @@ class AndroidBridge(
     private val tag = "AndroidBridge"
 
     /**
+     * How many commands are queued on or running against [diskWork].
+     *
+     * Counted here rather than read off the executor because the queue is the
+     * executor's own and a `ThreadPoolExecutor`'s size is not part of the
+     * `Executor` contract this takes. Incremented before the hand-off and given
+     * back in a `finally`, so a command that throws cannot leak a slot and shut
+     * the four commands down for the life of the page.
+     */
+    private val queuedDiskWork = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
      * Runs [work] off the caller's thread and posts what it answers.
      *
      * The caller is the page's own thread. A `@JavascriptInterface` call does
@@ -425,19 +482,35 @@ class AndroidBridge(
      * The Boolean [work] returns decides whether the caller's promise resolves
      * or rejects. It is decided here rather than in the relay because this is
      * the side that knows: for [reclaimSafMirror] the answer is the
-     * empty-string-means-removed convention its own documentation sets out, and
-     * a relay cannot tell that apart from a listing that happens to be empty.
+     * empty-string-means-nothing-to-say convention its own documentation sets
+     * out, and a relay cannot tell that apart from a listing that happens to be
+     * empty.
+     *
+     * @return whether the work was accepted. False when [MAX_QUEUED_DISK_COMMANDS]
+     *   are already outstanding, and then nothing was started and nothing will be
+     *   posted, so the caller has to answer on its own thread instead.
      */
-    private fun answerLater(replyId: String, work: () -> Pair<Boolean, String>) {
-        diskWork.execute {
-            val (ok, payload) = try {
-                work()
-            } catch (e: Exception) {
-                Logger.e(tag, "A bridge command failed off the caller's thread", e)
-                false to (e.message ?: "unknown error")
-            }
-            onAsyncAnswer(replyId, ok, payload)
+    private fun answerLater(replyId: String, work: () -> Pair<Boolean, String>): Boolean {
+        if (queuedDiskWork.incrementAndGet() > MAX_QUEUED_DISK_COMMANDS) {
+            queuedDiskWork.decrementAndGet()
+            Logger.w(tag, "Refusing a storage command: $MAX_QUEUED_DISK_COMMANDS are already " +
+                "queued on the one disk thread")
+            return false
         }
+        diskWork.execute {
+            try {
+                val (ok, payload) = try {
+                    work()
+                } catch (e: Exception) {
+                    Logger.e(tag, "A bridge command failed off the caller's thread", e)
+                    false to (e.message ?: "unknown error")
+                }
+                onAsyncAnswer(replyId, ok, payload)
+            } finally {
+                queuedDiskWork.decrementAndGet()
+            }
+        }
+        return true
     }
 
     @JavascriptInterface
@@ -501,6 +574,30 @@ class AndroidBridge(
         var armed: List<String> = emptyList()
         return try {
             val uri = Uri.parse(url)
+            // The one destination this method judges, and it is refused before
+            // anything is armed rather than merely left unarmed.
+            //
+            // `vscodroid://callback` is this app's own sign-in relay. Its VIEW
+            // filter is exported and BROWSABLE, so handing one to `startActivity`
+            // delivers it straight back into `MainActivity.onNewIntent` -- and the
+            // arming below runs before the scheme is looked at, so the same call
+            // both opened the ten-minute window for the ids in the URL and posted
+            // the callback that window exists to judge. `AuthTabWindow`'s stated
+            // property is that an outside caller cannot supply a sign-in this app
+            // started; a caller that can reach this method could supply exactly
+            // that, and through the relay that is anything sharing the workbench's
+            // origin. Even with the arming moved, the launch alone lets such a
+            // caller deliver a payload of its own for an id a REAL sign-in has in
+            // flight, which is the half not arming would leave open.
+            //
+            // Nothing legitimate is lost. A sign-in returns by the browser firing
+            // this filter, never by the editor asking Android to open its own
+            // scheme, and `injectWindowOpenOverride` only routes http and https
+            // here, so the workbench cannot reach this branch at all.
+            if (isExtensionCallback(uri.scheme, uri.host)) {
+                Logger.w(tag, "Refused to open this app's own sign-in callback")
+                return context.getString(OPEN_URL_FAILED, uri.scheme)
+            }
             val isLocalhost = uri.host == "127.0.0.1" || uri.host == "localhost"
             // Recorded before the launch, not after: both halves below hand off to
             // another process, and a browser that answers instantly would otherwise
@@ -750,7 +847,10 @@ class AndroidBridge(
     @JavascriptInterface
     fun getStorageBreakdown(authToken: String, replyId: String): String {
         if (!security.validateToken(authToken)) return context.getString(STORAGE_STALE_SESSION)
-        answerLater(replyId) { true to StorageManager.getStorageBreakdown(context).toString() }
+        val started = answerLater(replyId) {
+            true to StorageManager.getStorageBreakdown(context).toString()
+        }
+        if (!started) return context.getString(STORAGE_BUSY)
         return ""
     }
 
@@ -767,7 +867,8 @@ class AndroidBridge(
     @JavascriptInterface
     fun clearCaches(authToken: String, replyId: String): String {
         if (!security.validateToken(authToken)) return context.getString(STORAGE_STALE_SESSION)
-        answerLater(replyId) { true to StorageManager.clearCaches(context).toString() }
+        val started = answerLater(replyId) { true to StorageManager.clearCaches(context).toString() }
+        if (!started) return context.getString(STORAGE_BUSY)
         return ""
     }
 
@@ -806,7 +907,8 @@ class AndroidBridge(
     @JavascriptInterface
     fun listSafMirrors(authToken: String, replyId: String): String {
         if (!security.validateToken(authToken)) return context.getString(STORAGE_STALE_SESSION)
-        answerLater(replyId) { true to onListMirrors() }
+        val started = answerLater(replyId) { true to onListMirrors() }
+        if (!started) return context.getString(STORAGE_BUSY)
         return ""
     }
 
@@ -839,10 +941,11 @@ class AndroidBridge(
     @JavascriptInterface
     fun reclaimSafMirror(authToken: String, hash: String, force: Boolean, replyId: String): String {
         if (!security.validateToken(authToken)) return context.getString(RECLAIM_STALE_SESSION)
-        answerLater(replyId) {
+        val started = answerLater(replyId) {
             val answer = onReclaimMirror(hash, force)
             answer.isEmpty() to answer
         }
+        if (!started) return context.getString(STORAGE_BUSY)
         return ""
     }
 
@@ -1116,14 +1219,34 @@ class AndroidBridge(
             val sshDir = File(homeDir, ".ssh")
             sshDir.mkdirs()
             val keyFile = File(sshDir, "id_ed25519")
+            val pubFile = File("${keyFile.absolutePath}.pub")
 
-            // Don't overwrite existing key
-            if (keyFile.exists()) {
-                val pubKey = File("${keyFile.absolutePath}.pub").readText().trim()
+            // Don't overwrite an existing PAIR. Both halves, because half a pair
+            // is a state this method can reach on its own and used to be a dead
+            // end: ssh-keygen writes the private key before the public one, so
+            // the destroyForcibly below, an OOM kill, or the phantom-process
+            // limit can land between the two. The guard tested only the private
+            // key and then read the public one unconditionally, so every later
+            // call took this branch, threw FileNotFoundException, and answered
+            // with the absolute path of a file that was not there. The SSH
+            // feature was then over for that install: nothing in the UI
+            // regenerates, and the only way back was deleting the stranded key
+            // from a terminal.
+            if (keyFile.exists() && pubFile.isFile) {
+                val pubKey = pubFile.readText().trim()
                 result.put("success", true)
                 result.put("publicKey", pubKey)
                 result.put("existed", true)
                 return result.toString()
+            }
+            // A private key with no public half is that interrupted write and
+            // nothing else: ssh-keygen never produces one, and the pair is
+            // generated here only. It cannot be used without its public half and
+            // it is what blocks a fresh generation, so it goes.
+            if (keyFile.exists()) {
+                Logger.w(tag, "Removing a half-written SSH key pair before generating a new one")
+                keyFile.delete()
+                pubFile.delete()
             }
 
             val keyComment = if (comment.isBlank()) "vscodroid@android" else comment
@@ -1175,6 +1298,13 @@ class AndroidBridge(
             if (!process.waitFor(KEYGEN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 Logger.e(tag, "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s; killed")
+                // Whatever it had written goes with it. The kill can land between
+                // the private key and the public one, and a private key left
+                // behind is what the guard above has to clear before this method
+                // can ever succeed again; clearing it here means the next attempt
+                // starts from nothing rather than from a state it has to repair.
+                keyFile.delete()
+                pubFile.delete()
                 result.put("success", false)
                 result.put("error", "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s")
                 return result.toString()
@@ -1187,19 +1317,30 @@ class AndroidBridge(
             drain.join(DRAIN_JOIN_MILLIS)
             val exitCode = process.exitValue()
 
-            if (exitCode == 0 && keyFile.exists()) {
+            // Both halves again, for the reason the guard at the top states: an
+            // exit code of zero over a pair that is not whole would read the
+            // public key that is not there and answer with its path, which is the
+            // dead end this method used to leave behind.
+            if (exitCode == 0 && keyFile.exists() && pubFile.isFile) {
                 // Set correct permissions (600 for private key, 644 for public)
                 try {
                     android.system.Os.chmod(keyFile.absolutePath, 384)  // 0600
-                    android.system.Os.chmod("${keyFile.absolutePath}.pub", 420)  // 0644
+                    android.system.Os.chmod(pubFile.absolutePath, 420)  // 0644
                 } catch (e: Exception) {
                     Logger.d(tag, "Failed to chmod SSH key: ${e.message}")
                 }
 
-                val pubKey = File("${keyFile.absolutePath}.pub").readText().trim()
+                val pubKey = pubFile.readText().trim()
                 result.put("success", true)
                 result.put("publicKey", pubKey)
             } else {
+                // Anything it managed to write goes, so the next attempt starts
+                // from nothing. Deleting a whole pair here would be wrong, but
+                // there is no whole pair in this branch: the guard above returned
+                // for one that already existed, so whatever is on disk was written
+                // by the run that just failed.
+                keyFile.delete()
+                pubFile.delete()
                 result.put("success", false)
                 result.put("error", output.trim().ifEmpty { "ssh-keygen exited with code $exitCode" })
             }
@@ -1224,11 +1365,19 @@ class AndroidBridge(
 
     /**
      * Lists all SSH keys in ~/.ssh/.
-     * Returns JSON array of {name, type, comment} for each key pair.
+     * Returns JSON array of {name, type} for each key pair.
      *
-     * Not a fingerprint, though this said so for a long time: computing one means
-     * hashing the decoded key blob, and nothing here does that. What the third
-     * field carries is the public key line's own comment.
+     * The comment field is deliberately NOT reported, and it used to be. A public
+     * key line's third field is conventionally `user@host` or an email address,
+     * so for any key the user imported rather than generated here it is a personal
+     * identifier; the generated default, `vscodroid@android`, is the only one that
+     * carries nothing. This command is on the BroadcastChannel relay, whose
+     * answers are broadcast to every listener sharing the workbench's origin, and
+     * nothing in the app or in the bundled extensions ever read the field.
+     *
+     * It is also not a fingerprint, though this said so for a long time: computing
+     * one means hashing the decoded key blob, and nothing here does that. The
+     * field that was dropped was the comment, whatever it was called.
      */
     @JavascriptInterface
     fun listSshKeys(authToken: String): String {
@@ -1241,12 +1390,12 @@ class AndroidBridge(
         val pubFiles = allFiles.filter { f -> f.name.endsWith(".pub") }
         for (pubFile in pubFiles) {
             try {
+                // The type only, so the comment that follows it is never read.
                 val content = pubFile.readText().trim()
-                val parts = content.split(" ", limit = 3)
+                val parts = content.split(" ", limit = 2)
                 keys.put(JSONObject().apply {
                     put("name", pubFile.name.removeSuffix(".pub"))
                     put("type", if (parts.isNotEmpty()) parts[0] else "unknown")
-                    put("comment", if (parts.size > 2) parts[2] else "")
                 })
             } catch (e: Exception) {
                 Logger.d(tag, "Failed to read SSH key ${pubFile.name}: ${e.message}")

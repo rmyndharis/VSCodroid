@@ -11,10 +11,13 @@ import javax.xml.parsers.DocumentBuilderFactory
  * What has to hold for the screen that unpacks the app.
  *
  * First-run setup writes out some 810 MB with nothing for the user to touch, and
- * `extractAssetFile` has no skip-if-present branch, so an interruption is not a
- * pause: the next attempt starts from zero. Two things decide whether it is
- * interrupted and what it costs, and neither is visible from the code that does
- * the extracting.
+ * what an interruption costs depends on which run is interrupted.
+ * `extractAssetFile` skips a file it finds at the asset's own length, but only
+ * under `resumeSameBuild`: a retry of this exact build on an install no earlier
+ * build ever completed under. Every other run, an upgrade above all, re-copies
+ * from zero, because equal length is not equal content. Two things decide
+ * whether the extraction is interrupted at all, and neither is visible from the
+ * code that does the extracting.
  *
  * Source and layout reading, which is the weaker layer in this suite. It is what
  * is available: both subjects are an Activity's lifecycle and a resource
@@ -81,7 +84,9 @@ class SplashLifetimeTest {
             "nothing holds the display awake while first-run setup runs. It takes " +
                 "minutes with no reason for the user to touch the screen, so the " +
                 "timeout stops the activity and the extraction becomes a process the " +
-                "system may reclaim mid-write, with no partial progress to resume from."
+                "system may reclaim mid-write. An upgrade then re-copies the whole " +
+                "tree, since the skip on the next attempt is licensed only for a " +
+                "retry of the same build on an install nothing ever completed under."
         }
     }
 
@@ -120,8 +125,9 @@ class SplashLifetimeTest {
         }
         assertTrue(error.any { Regex("""keepScreenOn\s*=\s*true""").containsMatchIn(it) }) {
             "nothing gives the flag back, so tapping Retry restarts an 800 MB " +
-                "extraction that the display timeout may now stop part-way through, " +
-                "with no partial progress to resume from"
+                "extraction with the display free to time out part-way through it " +
+                "again. The skip makes this retry cheaper than the first attempt " +
+                "was; it does not make being stopped free"
         }
     }
 

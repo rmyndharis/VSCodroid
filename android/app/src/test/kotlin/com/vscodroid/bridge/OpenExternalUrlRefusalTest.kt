@@ -114,6 +114,16 @@ class OpenExternalUrlRefusalTest {
 
         const val REMOTE_HTTP_REQUEST_ID = "808"
 
+        /**
+         * The id carried by the app's own callback address below.
+         *
+         * Deliberately not a small integer. The workbench mints ids from one, so
+         * `1` is a value another class in this JVM may legitimately have left in
+         * the window, and the case below asserts that an id is NOT armed; a value
+         * nothing else uses is what keeps that assertion about this call.
+         */
+        const val OWN_CALLBACK_REQUEST_ID = "424242"
+
         /** The secret half of [TOKEN_BEARING], kept apart so the check names it. */
         const val TOKEN_SECRET = "3f9a1c77-not-a-real-token"
 
@@ -133,7 +143,9 @@ class OpenExternalUrlRefusalTest {
      */
     @AfterEach
     fun handBackArmedRequests() {
-        AuthTabWindow.disarm(listOf(REMOTE_REQUEST_ID, REMOTE_HTTP_REQUEST_ID))
+        AuthTabWindow.disarm(
+            listOf(REMOTE_REQUEST_ID, REMOTE_HTTP_REQUEST_ID, OWN_CALLBACK_REQUEST_ID)
+        )
     }
 
     @BeforeEach
@@ -282,6 +294,53 @@ class OpenExternalUrlRefusalTest {
             "a launch that threw left the callback window armed. For the next ten minutes any " +
                 "app on the device can post a vscodroid://callback naming that request and this " +
                 "app will accept it, with no sign-in in flight to justify it.",
+        )
+    }
+
+    /**
+     * The app's own sign-in callback is refused, and refused before anything is
+     * armed.
+     *
+     * `vscodroid://callback` is the address the browser fires to hand a finished
+     * sign-in back, and its VIEW filter is exported and BROWSABLE. Handing one to
+     * this method used to arm every request id in it and then `startActivity` it,
+     * so one call both opened the ten-minute window and delivered the callback
+     * that window exists to judge: `AuthTabWindow`'s stated property, that an
+     * outside caller cannot supply a sign-in this app started, was satisfiable by
+     * anything that could reach this method, which through the relay is any script
+     * on the workbench's origin.
+     *
+     * Refusing the launch rather than only declining to arm is the point. With the
+     * arming skipped a caller could still deliver a payload of its own for an id a
+     * REAL sign-in has in flight, which is armed legitimately; the launch is the
+     * capability, so the launch is what goes.
+     */
+    @Test
+    fun `the app's own sign-in callback is refused, and arms nothing`() {
+        val callback = mockk<Uri>(relaxed = true)
+        every { callback.scheme } returns "vscodroid"
+        every { callback.host } returns "callback"
+        every { Uri.parse(any()) } returns callback
+
+        mockkObject(AuthTabWindow)
+
+        val answer = bridge.openExternalUrl(
+            "vscodroid://callback?vscode-reqid=$OWN_CALLBACK_REQUEST_ID" +
+                "&data=%7B%22id%22%3A%22$OWN_CALLBACK_REQUEST_ID%22%7D",
+            security.getSessionToken(),
+        )
+
+        assertNotEquals(
+            "", answer,
+            "the app's own callback was reported as opened, so the relay resolves the " +
+                "caller's promise for a launch that must not happen",
+        )
+        verify(exactly = 0) { AuthTabWindow.arm(any(), any()) }
+        verify(exactly = 0) { context.startActivity(any()) }
+        assertNull(
+            AuthTabWindow.armedAt(OWN_CALLBACK_REQUEST_ID),
+            "a caller opened the callback window for a request id of its own choosing " +
+                "by asking this app to open its own deep link",
         )
     }
 

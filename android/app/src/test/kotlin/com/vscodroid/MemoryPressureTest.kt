@@ -132,6 +132,34 @@ class MemoryPressureWireTest {
         )
     }
 
+    /**
+     * A mild level is reported and NOT recorded, because recording it destroys a
+     * signal instead of adding one.
+     *
+     * The file is a one-shot: `process-monitor.js` reads it once per ten-second
+     * scan and unlinks it whatever it says, and the only word it acts on is
+     * `critical` (its `KILL_ON_PRESSURE` set). Nothing anywhere consumes
+     * `moderate`. So writing it is at best inert, and at worst the loss of the
+     * signal beside it: Android delivers `TRIM_MEMORY_RUNNING_LOW` freely, and one
+     * arriving after a `TRIM_MEMORY_RUNNING_CRITICAL` the monitor has not yet read
+     * overwrites it, so that pressure episode sheds no idle language server at all.
+     */
+    @Test
+    fun `a mild level cannot overwrite a critical one the monitor has not read`() {
+        assertEquals(PRESSURE_CRITICAL, applyMemoryPressure(tmpDir, TRIM_MEMORY_RUNNING_CRITICAL))
+
+        assertEquals(
+            PRESSURE_MODERATE, applyMemoryPressure(tmpDir, TRIM_MEMORY_RUNNING_LOW),
+            "the severity is still the answer; only the recording is narrowed",
+        )
+        assertEquals(
+            PRESSURE_CRITICAL, file.readText(),
+            "a mild level replaced an unread critical one. The monitor reads this file " +
+                "once per scan and unlinks it whatever it says, and it acts only on " +
+                "'critical', so the reclaim that pressure episode needed never runs.",
+        )
+    }
+
     @Test
     fun `a failed write is swallowed rather than thrown at the caller`() {
         // The destination is a directory, so writeText throws. This runs inside
@@ -295,5 +323,72 @@ class ProcessWideMemoryPressureTest {
             "the application override must record pressure the same way the Activity " +
                 "does; found instead: $body"
         )
+    }
+}
+
+/**
+ * What the page is asked to do when the callback reaches it.
+ *
+ * The handler is JavaScript inside a Kotlin string, evaluated in a WebView, so
+ * there is nothing here that can run it; what this pins is its content. Two
+ * things used to be in it and neither may come back.
+ *
+ * The first is `URL.revokeObjectURL` over every `blob:` name in
+ * `performance.getEntries()`. Resource timing lists what the page has FETCHED,
+ * not what this app created, so that revoked blob URLs belonging to the
+ * workbench: it keeps a `_blobUrlCache` and hands the same URL back on a later
+ * load, so an image re-attached to the DOM, a media element re-buffering or a
+ * worker rebuilt from a cached URL failed afterwards. `TRIM_MEMORY_BACKGROUND`
+ * maps to critical, so it fired on ordinary backgroundings under any system
+ * pressure, and the breakage outlasted the pressure that caused it.
+ *
+ * The second is `gc()`, which is behind V8's `--expose-gc` and does not exist in
+ * a WebView. The branch never ran on any device and reads as a memory measure
+ * that is being taken.
+ */
+class MemoryPressureHandlerScriptTest {
+
+    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+
+    /**
+     * The injected handler with its comments blanked, because the paragraph above
+     * the script names both of the things this refuses and a raw search would find
+     * them there. [SourceScan] owns the extraction and the ceiling it carries.
+     */
+    private val script: String by lazy {
+        SourceScan.withoutComments(
+            SourceScan.body(source, "private fun injectMemoryPressureHandler(")
+        )
+    }
+
+    @Test
+    fun `the handler is still there to be checked`() {
+        assertTrue(script.contains("onLowMemory")) {
+            "the handler no longer registers window.__vscodroid.onLowMemory, so the " +
+                "callback onTrimMemory fires lands nowhere and both cases below pass " +
+                "by looking at nothing"
+        }
+    }
+
+    @Test
+    fun `nothing revokes a blob URL the page still owns`() {
+        assertTrue(!script.contains("revokeObjectURL")) {
+            "the memory-pressure handler revokes blob URLs again. The list it walks is " +
+                "what the page fetched, not what this app made, so this breaks the next " +
+                "load of any blob-backed resource the workbench cached, on every " +
+                "backgrounding under system pressure."
+        }
+        assertTrue(!script.contains("performance.getEntries")) {
+            "the handler is reading resource timing again, which is where the revocation " +
+                "above got its list from"
+        }
+    }
+
+    @Test
+    fun `nothing calls a garbage collector a WebView does not have`() {
+        assertTrue(!script.contains("gc()")) {
+            "gc() is behind V8's --expose-gc and is absent in a WebView, so this branch " +
+                "cannot run and reads as a memory measure that is being taken"
+        }
     }
 }

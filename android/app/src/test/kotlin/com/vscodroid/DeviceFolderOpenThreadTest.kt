@@ -214,6 +214,57 @@ class DeviceFolderOpenThreadTest {
         )
     }
 
+    /**
+     * The fifth read, and the one that fired on every launch rather than only on
+     * a launch that reopens a device folder.
+     *
+     * `ProcessManager.connectionToken` is `cachedToken ?: readTokenFile()`, and
+     * `readTokenFile` stats and reads a file. Nothing touches it before the page
+     * exists: the two other readers are suppliers `initBridge` hands to the
+     * resource interceptor and to the service worker, and neither is called until
+     * the workbench starts fetching. So the first read of every run was the one
+     * that built the navigation URL, on the main thread, at the moment the
+     * workbench URL is assembled. `MainThreadWatch`'s inventory names
+     * `ProcessManager.readTokenFile` among the sites it did NOT see on a measured
+     * launch, and explains their absence as needing "an interaction a cold launch
+     * does not perform"; every successful launch performs this one.
+     *
+     * The cold start is the branch that hops, because `onServerReady` calls
+     * `loadVSCode` with no folder and the WebView is still holding the `data:`
+     * placeholder, so reading the token there costs nothing that was not already
+     * being paid. Every other caller keeps the parameter's default, which by then
+     * reads the cache rather than the disk.
+     */
+    @Test
+    fun `the connection token is read off the main thread on the cold start path`() {
+        val load = code(body("loadVSCode"))
+        val hop = load.indexOfFirst { it.contains("withContext(") && it.contains("Dispatchers.IO") }
+        val read = load.indexOfFirst { it.contains("getConnectionToken()") }
+
+        assertTrue(hop >= 0) { "loadVSCode no longer hops; this case is measuring nothing" }
+        assertTrue(read >= 0) {
+            "loadVSCode no longer resolves the connection token, so the navigation is " +
+                "back to reading it on the main thread wherever it does resolve it"
+        }
+        assertTrue(read > hop) {
+            "the connection token is read before the hop, which is the main thread: a " +
+                "stat and a read of the token file on every cold launch, in the moment " +
+                "the workbench URL is built"
+        }
+
+        // And the site it came from does not read it again. A parameter with a
+        // default that reads the token is what keeps every other caller working,
+        // and it is also how the main-thread read comes back: leaving a read in
+        // the body means the value passed in is computed and then ignored.
+        val navigate = code(body("navigateToFolder"))
+        assertEquals(
+            emptyList<String>(),
+            navigate.filter { it.contains("getConnectionToken()") }.map { it.trim() },
+            "navigateToFolder resolves the token itself again, so the caller that " +
+                "resolved it off the main thread bought nothing",
+        )
+    }
+
     @Test
     fun `a folder already known is navigated to without waiting for a hop`() {
         // Control for the case above, which deleting the fast path would also

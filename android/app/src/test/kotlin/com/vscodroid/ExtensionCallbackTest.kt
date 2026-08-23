@@ -367,6 +367,28 @@ class AuthCallbackCallSiteTest {
     private val bridge = File("src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt")
 
     /** Comments dropped: all of these names are discussed in prose above them. */
+    /**
+     * The lines of one function, from its signature to the brace that closes it.
+     *
+     * Counting braces rather than looking for a line that begins with one: the
+     * cheap form stops at the end of the first nested block, which silently
+     * shrinks the window every one of these call-site tests reads.
+     */
+    private fun methodBody(lines: List<String>, signature: String): List<String> {
+        val start = lines.indexOfFirst { it.contains(signature) }
+        check(start >= 0) { "no declaration matching $signature" }
+        val body = mutableListOf<String>()
+        var depth = 0
+        var opened = false
+        for (line in lines.drop(start)) {
+            body += line
+            depth += line.count { it == '{' } - line.count { it == '}' }
+            if (line.contains('{')) opened = true
+            if (opened && depth <= 0) break
+        }
+        return body
+    }
+
     private fun code(file: File): List<String> =
         file.readLines().filterNot {
             val t = it.trimStart()
@@ -527,17 +549,34 @@ class AuthCallbackCallSiteTest {
         check(bridge.isFile) { "AndroidBridge.kt not found at ${bridge.absolutePath}" }
 
         val lines = code(bridge)
-        val method = lines.dropWhile { !it.contains("fun openExternalUrl") }
-            .takeWhile { !it.trimStart().startsWith("}") }
+        // Sliced by brace depth, not by "the first line that starts with }".
+        // The naive form ended the slice at the close of the FIRST nested block
+        // inside the method, so a guard clause added at the top of
+        // openExternalUrl hid every launch below it and this test went green
+        // reading four lines. Depth starts at 0 on the signature line, rises on
+        // the body's opening brace, and the method ends when it returns to 0.
+        val method = methodBody(lines, "fun openExternalUrl")
         check(method.any { it.contains("launchUrl(") }) { "no browser launch found in openExternalUrl" }
 
-        val launches = method.count { it.contains("launchUrl(") || it.contains("startActivity(") }
-        val arms = method.count { it.contains("AuthTabWindow.arm(") }
+        // Ordering, not a tally. One arm above the branch covers both ways out,
+        // which is what the method actually does: it arms the ids the address
+        // carries once, then hands the URL either to Custom Tabs or to
+        // ACTION_VIEW. Counting the two sides and demanding they match asserted a
+        // shape rather than the property, and it only ever passed because the
+        // window this test read stopped at the first nested block and could see
+        // one launch. What has to hold is that nothing launches a browser before
+        // the window it will be judged against is open.
+        val firstArm = method.indexOfFirst { it.contains("AuthTabWindow.arm(") }
+        val launchLines = method.withIndex()
+            .filter { (_, l) -> l.contains("launchUrl(") || l.contains("startActivity(") }
+            .map { (i, _) -> i }
 
-        assertEquals(
-            launches, arms,
-            "each browser launch must record that it happened, or the callback it " +
-                "returns with is refused",
+        assertTrue(firstArm >= 0, "openExternalUrl arms nothing, so every callback it returns with is refused")
+        assertTrue(launchLines.isNotEmpty(), "openExternalUrl launches nothing")
+        assertTrue(
+            launchLines.all { it > firstArm },
+            "a browser is launched before the window is armed, so the callback it " +
+                "returns with is refused: arm at $firstArm, launches at $launchLines",
         )
     }
 

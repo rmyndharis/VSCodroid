@@ -72,8 +72,9 @@ class BridgeCallbackThreadHopTest {
             "hopping would answer before the answer exists",
         "onReclaimMirror" to
             "called on the bridge's own worker and returns a String the bridge posts back " +
-            "by reply id; the one UI call in its body is a Toast that hops on its own, and " +
-            "the filesystem work it does belongs off the UI thread rather than on it",
+            "by reply id; the UI calls it makes hop on their own (a Toast, and the " +
+            "confirmation dialog a forced removal waits on), and the filesystem work it " +
+            "does belongs off the UI thread rather than on it",
     )
 
     /**
