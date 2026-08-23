@@ -314,7 +314,7 @@ class TlsFailureNoticeTest {
         )
         assertEquals(
             later,
-            tlsFailureToAnnounce(later, said, now = TLS_NOTICE_INTERVAL_MS, lastAnnouncedAt = 0L),
+            tlsFailureToAnnounce(later, said, now = NOTICE_INTERVAL_MS, lastAnnouncedAt = 0L),
             "a fault met after the burst had passed was never explained, because the " +
                 "record had spent its budget on hosts a page chose",
         )
@@ -350,7 +350,7 @@ class TlsFailureNoticeTest {
         val step = 100L
 
         var now = 0L
-        while (now < TLS_NOTICE_INTERVAL_MS * windows) {
+        while (now < NOTICE_INTERVAL_MS * windows) {
             tlsFailureToAnnounce(
                 TlsFailure("host$now.example.com", TlsFailureReason.UNTRUSTED),
                 said, now = now, lastAnnouncedAt = lastAnnouncedAt,

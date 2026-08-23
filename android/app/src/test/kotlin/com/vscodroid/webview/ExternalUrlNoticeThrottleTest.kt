@@ -50,8 +50,9 @@ import java.io.File
  * taps once per link speak once per link; the throttle alone still lets a page
  * spend its first eight silent navigations on eight distinct schemes.
  *
- * The launch is NOT gated, and one case exists to keep it that way. A link in a
- * preview still leaves for a browser exactly as it did.
+ * The launch is gated on the same signal, and two cases hold the boundary: a
+ * script-driven subframe navigation launches nothing, while a link the user
+ * tapped inside a preview still leaves for a browser.
  */
 class ExternalUrlNoticeThrottleTest {
 
@@ -95,6 +96,12 @@ class ExternalUrlNoticeThrottleTest {
     @BeforeEach
     fun setUp() {
         announced.clear()
+        // The one piece of state under test that outlives the case that set it:
+        // the whole suite runs in one JVM and nothing else zeroes it. Every case
+        // here happens to announce before it reaches the cap, so the reading it
+        // leaves behind is harmless today; a case that reached the cap without
+        // announcing would otherwise depend on which cases ran before it.
+        lastHandoffNoticeAt = 0L
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
@@ -159,21 +166,30 @@ class ExternalUrlNoticeThrottleTest {
     }
 
     /**
-     * The launch is not what is gated, and this is the case that says so.
+     * The launch is gated on the same signal as the notice, and this is the case
+     * that says so.
      *
-     * A link in a markdown preview or in the simple browser still leaves for a
-     * browser. Withholding the launch as well would be a destination filter on
-     * frame identity, which is a different decision and not this one;
-     * `ExternalUrlHandoffTest` pins the same property for a sign-in address.
+     * It used to be ungated, and this case asserted that: the reasoning written
+     * here was that withholding the launch would be a destination filter on frame
+     * identity. It is not one. The launch carries `FLAG_ACTIVITY_NEW_TASK` and
+     * asks for no user activation, so a script reassigning a hidden frame's `src`
+     * on a timer would bring an arbitrary installed app to the front over a live
+     * editor, as often as it liked, with the user having touched nothing. Nothing
+     * about that is a destination decision; it is the same "did the user do this"
+     * question the notice already asked, and the answer has to bind the action and
+     * not only the message about it.
+     *
+     * Returning true is still what stops the WebView navigating to a scheme it
+     * cannot load, so the frame is left as it was rather than showing an error.
      */
     @Test
-    fun `a subframe navigation the notice is withheld from still leaves for a browser`() {
+    fun `a subframe navigation the notice is withheld from launches nothing`() {
         val handled = client.shouldOverrideUrlLoading(
             view, request("ssh", "ssh://git@example.com/repo.git", false, withGesture = false)
         )
 
         assertTrue(handled, "the WebView was left to navigate to a scheme it cannot load")
-        verify(exactly = 1) { context.startActivity(any()) }
+        verify(exactly = 0) { context.startActivity(any()) }
         assertTrue(announced.isEmpty(), "the silent case announced $announced")
     }
 
@@ -319,6 +335,70 @@ class ExternalUrlNoticeThrottleTest {
             handoffFailureToAnnounce(first, said),
             "a failure already announced was announced a second time, so the record was " +
                 "forgotten rather than closed",
+        )
+        assertTrue(
+            said.size <= MAX_HANDOFF_FAILURES_ANNOUNCED,
+            "the record grew past the cap on schemes a page chooses: ${said.size}",
+        )
+    }
+
+    /**
+     * The clock the default reading comes off, which is the one the production
+     * caller takes.
+     *
+     * It has to be monotonic. `System.currentTimeMillis()` steps backwards on an
+     * NTP correction or when the user sets the device time, and a backward step
+     * larger than the interval makes `now - lastHandoffNoticeAt` negative, which
+     * silences the channel until the clock catches up. The reading the call
+     * leaves behind is what makes the choice observable: with the wall clock it
+     * is epoch milliseconds, which is nowhere near the stubbed reading.
+     */
+    @Test
+    fun `the default reading is taken off the monotonic clock`() {
+        handoffFailureToAnnounce(HandoffFailure("ssh", "ActivityNotFoundException"), mutableSetOf())
+
+        assertEquals(
+            launchedAt, lastHandoffNoticeAt,
+            "the interval is measured against a clock that can step backwards",
+        )
+    }
+
+    /**
+     * Past the cap the rate is bounded and not the total, the same as the
+     * certificate record.
+     *
+     * It used to be a hard stop: eight distinct scheme-and-exception pairs in one
+     * Activity lifetime and nothing was ever said again. The case this channel
+     * exists for is a sign-in or an `ssh:` clone link that no installed app
+     * answers, and that is exactly the kind of fault a user walks into late in a
+     * session, by which time the tap does nothing and says nothing again.
+     *
+     * The clock is passed rather than read, so the case measures the rule and not
+     * the machine it runs on. The fills before it are what set the reading the
+     * interval is measured from.
+     */
+    @Test
+    fun `past the cap one more failure is announced per interval`() {
+        val said = mutableSetOf<HandoffFailure>()
+        val start = 5_000_000L
+
+        for (i in 0 until MAX_HANDOFF_FAILURES_ANNOUNCED) {
+            handoffFailureToAnnounce(
+                HandoffFailure("scheme$i", "ActivityNotFoundException"), said, now = start,
+            )
+        }
+        val late = HandoffFailure("ssh", "ActivityNotFoundException")
+
+        assertNull(
+            handoffFailureToAnnounce(late, said, now = start + NOTICE_INTERVAL_MS - 1),
+            "a burst that does not stop must still be throttled inside the interval",
+        )
+        assertEquals(
+            late,
+            handoffFailureToAnnounce(late, said, now = start + NOTICE_INTERVAL_MS),
+            "a scheme no app answers, met after a quiet stretch, was never explained: the " +
+                "tap did nothing and said nothing, which is the defect this channel exists " +
+                "to end",
         )
         assertTrue(
             said.size <= MAX_HANDOFF_FAILURES_ANNOUNCED,

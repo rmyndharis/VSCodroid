@@ -28,6 +28,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
+import java.net.URLDecoder
 
 /**
  * The directories this app publishes to content rendered inside the WebView,
@@ -425,21 +426,22 @@ internal fun urlLogLabel(url: String?): String {
 internal const val MAX_TLS_FAILURES_ANNOUNCED = 8
 
 /**
- * How long the record goes on refusing once it is past the cap.
+ * How either notice record goes on refusing once it is past its cap.
  *
  * A hard cap bounds the messages and never lets go, which is the wrong trade for
- * a channel that is only ever advice: the page is refused by `handler.cancel()`
- * before any of this runs, so what a muted notice costs is the explanation, and a
- * session here is a working day rather than a page view. Eight is generous for one
- * burst and mean for a day, so past it the record lets one failure through per
- * interval and no more: a burst that does not stop is throttled to that rate
- * rather than muted, and a fault the user walks into after a quiet stretch is
- * explained the moment it happens. The interval is the one the write-back notice
- * already uses, and for the same reason: it is long enough that a wall of toasts
- * cannot form and short enough that a fault the user has just walked into is still
- * explained.
+ * a channel that is only ever advice: the page is refused before any of this
+ * runs, so what a muted notice costs is the explanation, and a session here is a
+ * working day rather than a page view. Eight is generous for one burst and mean
+ * for a day, so past it the record lets one failure through per interval and no
+ * more: a burst that does not stop is throttled to that rate rather than muted,
+ * and a fault the user walks into after a quiet stretch is explained the moment
+ * it happens. Same shape of interval as the write-back notice
+ * (`SafStorageManager.FAILURE_NOTICE_INTERVAL_MS`) and three times its length,
+ * which is the number to keep in view if either is ever tuned: long enough that a
+ * wall of toasts cannot form, short enough that a fault the user has just walked
+ * into is still explained.
  */
-internal const val TLS_NOTICE_INTERVAL_MS = 30_000L
+internal const val NOTICE_INTERVAL_MS = 30_000L
 
 /**
  * The refusal worth putting on screen, or null when it has been said already.
@@ -457,7 +459,7 @@ internal const val TLS_NOTICE_INTERVAL_MS = 30_000L
  *
  * Past [MAX_TLS_FAILURES_ANNOUNCED] distinct failures the rate is what is bounded
  * rather than the total: one more failure is announced per
- * [TLS_NOTICE_INTERVAL_MS], and the record stays full at the cap. Eight refusals
+ * [NOTICE_INTERVAL_MS], and the record stays full at the cap. Eight refusals
  * is already more than a reader acts on, and the ninth is the point at which the
  * page, not the user, is choosing how long the editor stays covered.
  *
@@ -465,32 +467,55 @@ internal const val TLS_NOTICE_INTERVAL_MS = 30_000L
  * state, and its lifetime falls out of that: it survives a renderer crash, because
  * the certificate has not changed, and it dies with the Activity, so a fresh
  * launch says everything again.
+ *
+ * [now] and [lastAnnouncedAt] must be readings of the monotonic clock, for the
+ * reason [handoffFailureToAnnounce] states in full: a wall clock steps backwards
+ * on an NTP correction or when the user sets the device time, and a backward step
+ * larger than [NOTICE_INTERVAL_MS] silences the channel until it catches up. This
+ * one takes them from the caller rather than defaulting, because the reading it
+ * compares against is a field on the presenter; the caller takes
+ * `SystemClock.elapsedRealtime()`, and `TlsNoticeClockTest` pins that choice at
+ * the call site, which is the only place the wall clock could get back in.
  */
 internal fun tlsFailureToAnnounce(
     failure: TlsFailure,
     alreadySaid: MutableSet<TlsFailure>,
     now: Long,
     lastAnnouncedAt: Long,
-): TlsFailure? {
+): TlsFailure? =
+    failureToAnnounce(failure, alreadySaid, now, lastAnnouncedAt, MAX_TLS_FAILURES_ANNOUNCED)
+
+/**
+ * The rule both notice channels apply, over whatever they key their record on.
+ *
+ * One function rather than one per channel, because the two had drifted: the
+ * certificate record kept explaining a fault met after a quiet stretch while the
+ * hand-off record went permanently silent at its cap, on the same shape of
+ * problem and with a comment on each claiming the same reasoning. Sharing it is
+ * what stops that happening again.
+ *
+ * Nothing is said twice: a failure already in the record is not a new fact. Past
+ * [cap] distinct failures the rate is what is bounded rather than the total, one
+ * more per [NOTICE_INTERVAL_MS], and the eldest entry is evicted so the record
+ * stays full at the cap. Emptying it instead put the set back under the cap, so
+ * a page minting fresh keys was silent for the interval and then given a whole
+ * cap's worth of toasts back to back, about twenty-eight seconds of screen, for
+ * as long as it cared to carry on.
+ *
+ * Eldest first: the callers' sets are `LinkedHashSet`, so the iterator yields
+ * insertion order. A set with another order still evicts and stays bounded; only
+ * which failure becomes sayable again would change.
+ */
+private fun <T> failureToAnnounce(
+    failure: T,
+    alreadySaid: MutableSet<T>,
+    now: Long,
+    lastAnnouncedAt: Long,
+    cap: Int,
+): T? {
     if (failure in alreadySaid) return null
-    if (alreadySaid.size >= MAX_TLS_FAILURES_ANNOUNCED) {
-        // Past the cap, and the two bounds part company here. The record must stay
-        // bounded, because a remote page picks the hostnames that fill it; the
-        // messages must stay bounded, because each one holds the screen. Refusing
-        // until the interval has passed answers both.
-        if (now - lastAnnouncedAt < TLS_NOTICE_INTERVAL_MS) return null
-        // One entry, never the whole record, and that is what keeps the second
-        // bound. Emptying it put the set back under the cap, so the eight failures
-        // after every interval were all announced back to back: a page minting a
-        // fresh hostname every few milliseconds was refused for thirty seconds and
-        // then given eight more toasts, about twenty-eight seconds of screen, for
-        // as long as it cared to carry on. Evicting the eldest leaves the set full,
-        // so a burst that does not stop costs one notice per interval instead of
-        // eight, while a fault met after a quiet period is still explained at once.
-        //
-        // Eldest first: the caller's set is a `LinkedHashSet`, so its iterator
-        // yields insertion order. A set with another order still evicts and stays
-        // bounded; only which host becomes sayable again would change.
+    if (alreadySaid.size >= cap) {
+        if (now - lastAnnouncedAt < NOTICE_INTERVAL_MS) return null
         with(alreadySaid.iterator()) {
             next()
             remove()
@@ -532,6 +557,23 @@ internal data class HandoffFailure(val scheme: String, val failureType: String)
 internal const val MAX_HANDOFF_FAILURES_ANNOUNCED = 8
 
 /**
+ * When [handoffFailureToAnnounce] last let a failure through.
+ *
+ * Module state for the reason that function's comment gives, and benign under a
+ * race for the reason [lastRefusedWorkspace] is: two threads reading the same
+ * stale reading cost one extra notice or one delayed one, which is the failure
+ * this exists to bound rather than one it reintroduces.
+ *
+ * `internal` for one reason only: the whole unit suite runs in one JVM, so this
+ * reading outlives the case that set it. Every case that reaches the cap today
+ * announces at least once first and therefore sets it, which makes them
+ * deterministic by accident of how they were written; `ExternalUrlNoticeThrottleTest`
+ * zeroes it per case so that a later one need not be.
+ */
+@Volatile
+internal var lastHandoffNoticeAt = 0L
+
+/**
  * The hand-off failure worth putting on screen, or null when it has been said
  * already.
  *
@@ -547,20 +589,97 @@ internal const val MAX_HANDOFF_FAILURES_ANNOUNCED = 8
  * mints a fresh key per navigation while producing an identical message, which is
  * a throttle that throttles nothing and a set that grows on strings a page chooses.
  *
- * Past [MAX_HANDOFF_FAILURES_ANNOUNCED] distinct failures nothing more is said,
- * for the reason [tlsFailureToAnnounce] gives: the record is what counts them, so
- * one test bounds the toasts and the set together.
+ * Past [MAX_HANDOFF_FAILURES_ANNOUNCED] distinct failures the rate is bounded and
+ * not the total, which is [failureToAnnounce]'s rule and now literally the same
+ * code. It used to be a hard stop, and the two channels had drifted: a user who
+ * met eight distinct scheme-and-exception pairs in the morning was told nothing
+ * for the rest of the Activity's life, and the case this channel exists for -- a
+ * sign-in or an `ssh:` clone link that no installed app answers -- is exactly the
+ * one that arrives late in a session and looks like a dead link when it is not.
  *
  * [alreadySaid] belongs to the presenter, which keeps this class free of mutable
  * state, and its lifetime falls out of that: it dies with the Activity, so a fresh
  * launch says everything again.
+ *
+ * [lastHandoffNoticeAt] does not, and that asymmetry is deliberate rather than
+ * overlooked. The certificate channel takes its reading from the presenter, which
+ * holds one for its own record; adding a second field there would mean changing
+ * every caller of this function to pass it, for a value that decides nothing until
+ * eight distinct failures have accumulated in a set that is empty at every launch.
+ * A reading left over from a previous Activity can only ever delay one notice by
+ * up to the interval, in a session that has already reached the cap.
+ *
+ * [now] defaults to the monotonic clock and must not be given the wall clock,
+ * which is the rule `SafStorageManager.onWriteBackFailed` states for the notice
+ * this one copies its interval from. `System.currentTimeMillis()` steps
+ * backwards on an NTP correction or when the user sets the device time, and a
+ * backward step larger than the interval makes the subtraction negative and
+ * silences the channel until the clock catches up; a forward step releases one
+ * notice early. The default is what the production caller takes, so the choice
+ * has to be right here rather than at the call site.
  */
 internal fun handoffFailureToAnnounce(
     failure: HandoffFailure,
     alreadySaid: MutableSet<HandoffFailure>,
+    now: Long = SystemClock.elapsedRealtime(),
 ): HandoffFailure? {
-    if (alreadySaid.size >= MAX_HANDOFF_FAILURES_ANNOUNCED) return null
-    return if (alreadySaid.add(failure)) failure else null
+    val announced = failureToAnnounce(
+        failure, alreadySaid, now, lastHandoffNoticeAt, MAX_HANDOFF_FAILURES_ANNOUNCED
+    )
+    if (announced != null) lastHandoffNoticeAt = now
+    return announced
+}
+
+/**
+ * [wrapped], stopped after [remaining] bytes.
+ *
+ * A 206 declares how many bytes it is sending and must send exactly that many.
+ * A `FileInputStream` seeked to the start of a range runs to the end of the
+ * file, so without this the body would be longer than its own `Content-Length`
+ * on every range that is not a suffix.
+ *
+ * `java.io` has no bounded stream and the app carries no library that does, so
+ * this is the whole of it. `close()` is inherited from `FilterInputStream` and
+ * closes the file, which is what the WebView calls when it is done with the
+ * response.
+ */
+internal class BoundedInputStream(wrapped: java.io.InputStream, private var remaining: Long) :
+    FilterInputStream(wrapped) {
+
+    override fun read(): Int {
+        if (remaining <= 0) return -1
+        val byte = super.read()
+        if (byte >= 0) remaining--
+        return byte
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (remaining <= 0) return -1
+        val read = super.read(b, off, minOf(len.toLong(), remaining).toInt())
+        if (read > 0) remaining -= read
+        return read
+    }
+
+    /**
+     * The third way a consumer moves through this stream, and the one that was
+     * left delegating straight to the file.
+     *
+     * `FilterInputStream.skip` forwards to the wrapped `FileInputStream` and
+     * never touches [remaining], so a consumer that skipped slid the window past
+     * the end of the range while this class went on handing out [remaining] more
+     * bytes: the count in `Content-Length` stayed right and the offsets stopped
+     * matching the `Content-Range` beside it. Whether android_webview's stream
+     * loader skips a response this arm has already positioned with
+     * `channel.position` is not measured, which is the same gap the note on the
+     * 206 records; bounding it costs one line either way.
+     */
+    override fun skip(n: Long): Long {
+        val skipped = super.skip(minOf(n, remaining))
+        if (skipped > 0) remaining -= skipped
+        return skipped
+    }
+
+    override fun available(): Int = minOf(super.available().toLong(), remaining).toInt()
 }
 
 class VSCodroidWebViewClient(
@@ -628,6 +747,58 @@ class VSCodroidWebViewClient(
         }
         if (isLocalhost(url) || isCdnRedirect(url)) {
             return false
+        }
+        // Everything below the main frame, and the whole of this block is about
+        // what happens IF such a navigation arrives here. Whether it does is the
+        // one thing in this file nobody has measured, and it is worth stating
+        // rather than assuming in either direction. The platform documents this
+        // callback as one that "may be called for subframes", which is what
+        // `isForMainFrame` is for and what the rest of this class is written
+        // against; against that, DEVICE_TEST_CHECKLIST ED-11 records the bundled
+        // simple browser reaching a bad certificate at `https://10.0.2.2:8443`
+        // and producing `TLS refused` from `onReceivedSslError`, which can only
+        // happen if that iframe's own navigation was performed by this WebView
+        // rather than handed away here.
+        //
+        // Both readings are answered by the same rules, so nothing rests on
+        // settling it: if subframe navigations never arrive, this block never
+        // runs and the behaviour is exactly what ED-11 recorded.
+        if (!request.isForMainFrame) {
+            // Rendered here rather than handed to another app, because that is
+            // what two shipped features need. The bundled simple browser puts the
+            // address the user typed into an `<iframe sandbox=...>` by assigning
+            // its `src` (`extensions/simple-browser/media/index.js`), and a
+            // dev-server preview does the same for a port the user is serving on.
+            // Handing either away leaves the panel blank with the editor covered
+            // by another app, and the port test above cannot rescue them: it
+            // admits the editor's own port and no other, so 5173 is as external
+            // to it as a remote host.
+            //
+            // Only http and https. A subframe naming a scheme this WebView cannot
+            // load falls through to the gesture test below, so the user can still
+            // follow a `mailto:` link inside a preview while a script driving one
+            // gets nothing.
+            val scheme = url.scheme?.lowercase()
+            if (scheme == "http" || scheme == "https") return false
+            // No user gesture behind it, and not our own page: nothing leaves.
+            // The launch below carries FLAG_ACTIVITY_NEW_TASK and asks for no
+            // activation, so a hidden frame reassigning `src` on a timer would
+            // bring an arbitrary installed app to the front over a live editor,
+            // as often as it liked, with the user having touched nothing. The
+            // frames that reach here are the ones this app does not vouch for:
+            // the remote site in the simple browser, previews and notebook output
+            // built from workspace files. `hasGesture()` is the request's own
+            // record of whether a user did this, which is the same signal the
+            // notice below already depends on, so the action and the message
+            // about it now turn on one question rather than two.
+            if (!request.hasGesture()) {
+                Logger.d(
+                    tag,
+                    "Refused an external navigation with no user gesture behind it at " +
+                        urlLogLabel(url.toString())
+                )
+                return true
+            }
         }
         // Empty until this launch arms something, and then the ids to take back
         // if the launch throws. Same shape as `AndroidBridge.openExternalUrl`,
@@ -699,9 +870,10 @@ class VSCodroidWebViewClient(
                 "Could not open an external URL at ${urlLogLabel(url.toString())} " +
                     "(${e.javaClass.simpleName})"
             )
-            // The launch above is attempted for every frame, and that stays true:
-            // a link in a preview or in the simple browser still leaves for a
-            // browser. What is gated here is only the notice.
+            // A link the user taps in a preview or in the simple browser still
+            // leaves for a browser: the gate above lets a subframe navigation
+            // through once a gesture is behind it. What is gated here is only the
+            // notice, and it is gated on the same signal for a second reason.
             //
             // It has to be, because this callback receives subframe navigations
             // and the frames are not all ours. A script can navigate an iframe to
@@ -765,12 +937,16 @@ class VSCodroidWebViewClient(
      * switches folders on its own: it navigates this WebView without going
      * through us, so the URL is the only truthful record of the open workspace.
      *
-     * That this notice is *sufficient* is a property of the shipped bundles, not
-     * an assumption: neither `out/vs/code/browser/workbench/workbench.js` nor
-     * `out/vs/workbench/workbench.web.main.internal.js` contains a single
-     * `pushState` or `replaceState`, so the workbench cannot change its URL
-     * without a real navigation. That is why there is no
-     * `doUpdateVisitedHistory` override here; re-run the grep before adding one.
+     * That this notice is *sufficient* is a property of the shipped bundle, not
+     * an assumption: `out/vs/code/browser/workbench/workbench.js`, the file
+     * `workbench.html` loads, contains no `pushState` and no `replaceState`, so
+     * the workbench cannot change its URL without a real navigation. That is why
+     * there is no `doUpdateVisitedHistory` override here; re-run the grep before
+     * adding one, with a live control such as `addEventListener` beside it.
+     *
+     * `workbench.web.main.internal.js` used to be named here as a second bundle
+     * to grep. It is not one: nothing in the packaged tree loads it, which is why
+     * the build's prune stage deletes it.
      */
     override fun onPageFinished(view: WebView, url: String?) {
         // Redacted for the log only. [onPageLoaded] gets the URL as it arrived,
@@ -888,6 +1064,16 @@ class VSCodroidWebViewClient(
         private const val CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 
         /**
+         * The host suffix a webview resource URL carries, under which the label
+         * encodes the scheme and authority of the resource being asked for.
+         *
+         * One constant rather than a local, because [isOurOrigin] has to refuse an
+         * origin under it and the arm below has to recognise a request for it; two
+         * spellings of the same authority is how the two would drift apart.
+         */
+        private const val RESOURCE_AUTHORITY = "vscode-resource.vscode-cdn.net"
+
+        /**
          * Register a ServiceWorkerClient to intercept service worker script fetches.
          *
          * Android WebView does not route service worker fetches through
@@ -961,6 +1147,50 @@ class VSCodroidWebViewClient(
 
             if (!host.endsWith(".vscode-cdn.net")) return null
 
+            // The one query parameter this app has to read before it proxies
+            // anything, and it is what stops a rendered page from minting an
+            // origin the gate below trusts.
+            //
+            // The host label under `.vscode-cdn.net` is chosen by whoever names
+            // the address, and every arm here answers for any label. The
+            // workbench's own webview documents are loaded from
+            // `https://{{uuid}}.vscode-cdn.net/{quality}/{commit}/out/vs/workbench/
+            // contrib/webview/browser/pre/index.html?parentOrigin=...&origin=<salt>`
+            // and that address is NOT configured: `branding/product.json` lists
+            // `webviewContentExternalBaseUrlTemplate` under `remove`, and
+            // `webviewExternalEndpoint` in the shipped `workbench.js` falls back to
+            // that literal template when the product service carries no key, which
+            // is what runs here. `_initElement` in the same bundle then sets
+            // `parentOrigin` to the window's own origin. That page refuses to
+            // start unless its hostname is the base-32 sha-256 of
+            // `{parentOrigin, salt}` -- and the caller picks both, so a page can
+            // compute a label for an origin of its own and be handed a running
+            // webview host at an origin ending `.vscode-cdn.net`. From there the
+            // resource arm below serves it any file under the published roots.
+            //
+            // Requiring `parentOrigin` to be the workbench itself closes that:
+            // the page then posts its message port to `http://127.0.0.1:<port>`
+            // as the target origin, which a frame at any other origin never
+            // receives, so nothing can drive it. Absent is the ordinary case and
+            // passes untouched -- every asset request carries no `parentOrigin`.
+            //
+            // `encodedQuery` and not `query`, which is the difference between a
+            // gate and the appearance of one. `Uri.getQuery()` is decoded, the
+            // same fact [rewriteCdnUrl] re-encodes around, so an address written
+            // `?foo=a%26parentOrigin%3Dhttp%3A%2F%2F127.0.0.1%3A<port>` reaches
+            // that accessor as `foo=a&parentOrigin=http://127.0.0.1:<port>` and
+            // the split below reads a parameter nobody sent. A real second
+            // `parentOrigin=` after it is then the one `index.html` uses, because
+            // it parses the address it was actually loaded from with
+            // `URLSearchParams`, and this app would have approved a value the page
+            // never sent. Same escape this app already measured on the sign-in
+            // callback, where `state=a%26b%3Dc` arrived as two parameters.
+            val parentOrigin = queryParameter(uri.encodedQuery, "parentOrigin")
+            if (parentOrigin != null && !isWorkbenchOrigin(parentOrigin, port)) {
+                Logger.d(TAG, "CDN request refused, foreign parent origin: $parentOrigin")
+                return notFound("Access denied")
+            }
+
             // main.vscode-cdn.net serves Microsoft-specific resources that don't exist locally.
             if (host == "main.vscode-cdn.net") {
                 Logger.d(TAG, "CDN blocked (Microsoft resource): $host${uri.path}")
@@ -974,17 +1204,17 @@ class VSCodroidWebViewClient(
             // vscode-resource URLs: extension webview resources (images, CSS, JS from extensions).
             // Format: https://SCHEME+AUTHORITY.vscode-resource.vscode-cdn.net/PATH
             // Service workers are disabled; we serve these directly from the filesystem.
-            val resourceAuthority = "vscode-resource.vscode-cdn.net"
-            if (host.endsWith(".$resourceAuthority")) {
+            if (host.endsWith(".$RESOURCE_AUTHORITY")) {
                 // Composed here rather than by each caller, so that neither
                 // entry point can forget to. The supplier is invoked only on
                 // this branch: the other two answer without touching the
                 // filesystem, and every workbench asset takes one of them.
+                val headers = request.requestHeaders
                 return interceptResourceRequest(
-                    uri, host, resourceAuthority, port, token,
+                    uri, host, port,
                     resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder()),
-                    request.requestHeaders?.entries
-                        ?.firstOrNull { it.key.equals("Origin", ignoreCase = true) }?.value,
+                    headerValue(headers, "Origin"),
+                    headerValue(headers, "Range"),
                 )
             }
 
@@ -1002,9 +1232,15 @@ class VSCodroidWebViewClient(
 
             if (localUrl == null) {
                 // The whole URI, so its query comes with it, and the workbench
-                // appends the token to requests of its own. At `Logger.w`, so this
-                // one shipped too.
-                Logger.w(TAG, "CDN URL could not be rewritten: ${redactToken(uri.toString())}")
+                // appends the token to requests of its own: hence [redactToken].
+                //
+                // At `Logger.d` and not `Logger.w`, for the reason the resource
+                // arm's refusals moved: `rewriteCdnUrl` answers null for any
+                // address with fewer than two path segments, so any frame the
+                // editor renders can drive one of these per request by asking for
+                // `https://x.vscode-cdn.net/a`, and every one of them writes a
+                // string of that frame's choosing into a log `READ_LOGS` can read.
+                Logger.d(TAG, "CDN URL could not be rewritten: ${redactToken(uri.toString())}")
                 return notFound("CDN path too short to rewrite")
             }
 
@@ -1028,40 +1264,68 @@ class VSCodroidWebViewClient(
          * all sub-resource requests from webview iframes, making SWs unnecessary.
          */
         private fun interceptResourceRequest(
-            uri: Uri, host: String, resourceAuthority: String, port: Int, token: String?,
-            resourceRoots: List<String>, origin: String?
+            uri: Uri, host: String, port: Int,
+            resourceRoots: List<String>, origin: String?, rangeHeader: String?
         ): WebResourceResponse? {
-            val prefix = host.removeSuffix(".$resourceAuthority")
-            val parts = prefix.split("+", limit = 2)
-            val scheme = parts[0]
-            val authority = if (parts.size > 1) parts[1] else ""
+            // The scheme half of the host label is the whole of what this reads
+            // out of it. The authority half went with the two arms below that
+            // used it, and the connection token went with them too: what is left
+            // answers out of the filesystem and needs no credential.
+            val scheme = host.removeSuffix(".$RESOURCE_AUTHORITY").substringBefore('+')
             val path = uri.path ?: return notFound("No path")
 
             if (scheme == "file" || scheme == "vscode-remote") {
-                // Files served here carry `Access-Control-Allow-Origin: *`, which is what
-                // makes them readable by whatever asked. The published roots decide WHICH
-                // files; this decides WHO may read one, and until it existed the answer
-                // was anybody. A remote page in the bundled Simple Browser could fetch a
-                // workspace file and read the body, with no network involved.
+                // The published roots decide WHICH files are served; this decides WHO
+                // may read one, and until it existed the answer was anybody. A remote
+                // page in the bundled Simple Browser could fetch a workspace file and
+                // read the body, with no network involved. The response below now
+                // names the origin it answers rather than `*`, so the decision is not
+                // written twice with only one of the two enforcing it.
                 //
                 // Measured on an API 37 emulator rather than assumed, because the whole
                 // gate rests on the header being there: of 42 intercepted requests, 29
                 // carried `Origin` and it was always `http://127.0.0.1:<port>`, the
                 // workbench's own. The `.vscode-cdn.net` arm is read from the shipped
-                // bundle instead, where `webviewContentExternalBaseUrlTemplate` resolves
-                // webview documents to `https://{{uuid}}.vscode-cdn.net/...`.
+                // bundle instead, where `webviewExternalEndpoint` resolves webview
+                // documents to its own hardcoded
+                // `https://{{uuid}}.vscode-cdn.net/...` because the key that would
+                // override it is one `branding/product.json` removes.
                 //
                 // A missing header is served, deliberately. The other 13 were no-cors
                 // subresource loads -- `<img>`, `<link>`, `<script src>` -- which send no
                 // `Origin` and cannot read the body anyway, so demanding one would break
                 // every extension webview to close nothing.
                 //
-                // ⚠️ Residual, stated rather than implied: an HTML file our own branch
-                // serves gets an origin ending `.vscode-cdn.net` and passes. Closing that
-                // wants `Sec-Fetch-Dest` gating, which is unverified here and risks
-                // extensions that frame their own local HTML.
+                // What this gate does NOT close, written down because the
+                // difference is easy to overstate. An `.html` file under a
+                // published root, loaded as a document from this authority, runs
+                // its script at an origin ending `.vscode-cdn.net`, and
+                // [isOurOrigin] refusing that authority stops it only from
+                // *asking*: a `fetch` carries an `Origin` and is turned away here.
+                // A navigation carries none, so the same document can frame
+                // another path on the identical origin, be served it by the branch
+                // below, and read it out of `contentDocument` same-origin. That a
+                // frame's own navigation reaches this callback is not a guess:
+                // `pre/index.html` is exactly that, an iframe document the CDN arm
+                // above answers. What it reaches is whatever [MIME_TYPES] renders
+                // as a document -- html, txt, json, svg and the images -- under the
+                // published roots, and only by naming the path, since nothing here
+                // lists a directory.
+                //
+                // Closing it needs a test for what the request is FOR, and the only
+                // candidate is a header nobody has measured this WebView sending
+                // (`Sec-Fetch-Dest`), against a cost that is equally unmeasured: an
+                // extension framing its own local `.html` is a shape this arm has
+                // always served. Left open on purpose, and narrower than what it
+                // replaced, where that same document could `fetch` every root.
+                //
+                // The path a page chooses is not repeated at a shipping level. The
+                // frame asking is a page's to drive and the value is its to
+                // compose, so a `Logger.w` here was an unbounded write into
+                // logcat, once per request, on a channel `READ_LOGS` can read.
+                // `Resource not found` below already made the same trade.
                 if (origin != null && !isOurOrigin(origin, port)) {
-                    Logger.w(TAG, "Resource refused, foreign origin: $origin")
+                    Logger.d(TAG, "Resource refused, foreign origin: $origin")
                     return notFound("Access denied")
                 }
                 // Local file resource: serve directly from filesystem.
@@ -1074,7 +1338,7 @@ class VSCodroidWebViewClient(
                 // refusal to everything that watched this function.
                 val file = when (val outcome = resourceOutcome(path, resourceRoots)) {
                     ResourceOutcome.Refused -> {
-                        Logger.w(TAG, "Resource outside the published roots refused: $path")
+                        Logger.d(TAG, "Resource outside the published roots refused: $path")
                         return notFound("Access denied")
                     }
                     ResourceOutcome.Missing -> {
@@ -1097,10 +1361,18 @@ class VSCodroidWebViewClient(
                 // took the editor down with it. IOException and not Exception:
                 // FileNotFoundException is the whole of what an open reports, and
                 // widening it here would swallow failures that are not this one.
+                // At `Logger.d`, the same trade as the four refusals above and for
+                // the same reason: both interpolated values are read out of the
+                // host label and the path the page composed. Weaker than those,
+                // because it needs a file that exists and still will not open --
+                // one left at mode 000 in the workspace is the ordinary way to get
+                // one -- but given one, a frame can ask for it in a loop and every
+                // request wrote an absolute path into a log `READ_LOGS` can read,
+                // on a level that is not gated on a debuggable build.
                 val stream = try {
                     FileInputStream(file)
                 } catch (e: IOException) {
-                    Logger.w(
+                    Logger.d(
                         TAG,
                         "Resource could not be opened ($scheme): $path (${e.javaClass.simpleName})"
                     )
@@ -1123,11 +1395,99 @@ class VSCodroidWebViewClient(
                 // which appends its own `version=`. The server tree and the extensions
                 // directory do not change within an install, so all they lose is a
                 // warm-start saving on a local file read.
+                //
+                // The length is read off the descriptor that was opened rather
+                // than off the path, and that is the same gap the `try` above
+                // covers: `file.length()` re-stats the name, so a watch build or
+                // a `git checkout` rewriting the file between the open and the
+                // header declared a size the stream does not deliver, which the
+                // WebView reports as a truncated subresource rather than as the
+                // refetch this arm's cache decision was written to allow.
+                val length = try {
+                    stream.channel.size()
+                } catch (e: IOException) {
+                    Logger.d(TAG, "Resource length unavailable ($scheme): $path")
+                    stream.close()
+                    return notFound("Unreadable: $path")
+                }
+
+                // Answered to whoever asked, never `*`. The gate above decides who
+                // may read one of these files; sending `*` meant the answer was
+                // also written on the response itself, so any later widening of
+                // the gate silently widened the read as well. A request that
+                // carried no `Origin` gets no header at all: those are the no-cors
+                // subresource loads -- `<img>`, `<link>`, `<script src>` -- whose
+                // responses are opaque to the page whatever this says.
+                //
+                // ⚠️ Narrowing the echo further, to the workbench origin alone, is
+                // the obvious next move and it breaks the bundled markdown
+                // preview. Measured in the packaged tree:
+                // `extensions/markdown-language-features/markdown-editor-out/editor.js`
+                // is an ES module importing hashed chunks beside it, and the
+                // `editor.css` next to it carries `@font-face` rules for the KaTeX
+                // faces and a codicon `.ttf` in the same directory. A module script
+                // and a font are CORS-mode requests whatever their origin, so both
+                // arrive here carrying the webview's `https://<uuid>.vscode-cdn.net`
+                // and both fail closed without a matching header: math stops
+                // rendering and the icons become boxes.
+                //
+                // So the reader this arm answers is as narrow as it can be made
+                // from here, and what stays open stays open: webview content can
+                // read any file under the published roots, because every webview in
+                // this build shares one origin shape and nothing in a resource
+                // request says which webview asked. The host label encodes a scheme
+                // and an authority and no more. Upstream scopes each webview to its
+                // own `localResourceRoots` inside the service worker, which patch
+                // 0005 disables, so restoring that scoping is a change to the
+                // request shape and to the patch, not to this map.
+                val cors = if (origin == null) emptyMap<String, String>() else mapOf(
+                    "Access-Control-Allow-Origin" to origin,
+                    // Two origins may ask for one path, so the answer is not a
+                    // property of the URL alone and a cache keyed on the URL would
+                    // hand the second asker the first one's header.
+                    "Vary" to "Origin",
+                )
+
+                // Ranges are answered rather than refused, and media is why. The
+                // Chromium media loader asks for one as soon as the user drags a
+                // scrubber, and a response that always says 200 with the whole
+                // body leaves seeking limited to what has already been buffered:
+                // `media-preview` is bundled, so an ordinary `.mp4` in the
+                // workspace reaches this. A malformed or unsatisfiable range falls
+                // back to the whole file, which is what the standard permits and
+                // what keeps a bad header from turning into a failed load.
+                //
+                // ⚠️ Whether the WebView puts `Range` into `getRequestHeaders()`
+                // at all is not measured here. If it does not, [byteRangeOf] sees
+                // null and this answers exactly what it answered before, plus an
+                // `Accept-Ranges` a client that gets a 200 for its range simply
+                // reads as a server that chose not to honour it.
+                val range = byteRangeOf(rangeHeader, length)
+                if (range != null) {
+                    val body = try {
+                        stream.channel.position(range.first)
+                        BoundedInputStream(stream, range.last - range.first + 1)
+                    } catch (e: IOException) {
+                        stream.close()
+                        Logger.d(TAG, "Resource could not be seeked ($scheme): $path")
+                        return notFound("Unreadable: $path")
+                    }
+                    return WebResourceResponse(
+                        mimeType, null, 206, "Partial Content",
+                        cors + mapOf(
+                            "Accept-Ranges" to "bytes",
+                            "Content-Range" to "bytes ${range.first}-${range.last}/$length",
+                            "Content-Length" to (range.last - range.first + 1).toString(),
+                        ),
+                        body
+                    )
+                }
+
                 return WebResourceResponse(
                     mimeType, null, 200, "OK",
-                    mapOf(
-                        "Access-Control-Allow-Origin" to "*",
-                        "Content-Length" to file.length().toString(),
+                    cors + mapOf(
+                        "Accept-Ranges" to "bytes",
+                        "Content-Length" to length.toString(),
                     ),
                     stream
                 )
@@ -1168,7 +1528,13 @@ class VSCodroidWebViewClient(
             // `vscode-remote` into the resource host, and no bundled extension
             // produces the form. The `Unknown resource scheme` line below is the
             // signal if something did: it names the scheme.
-            Logger.w(TAG, "Unknown resource scheme: $scheme (host=$host)")
+            //
+            // At `Logger.d`, which is the same trade the refusals above make and
+            // costs the same thing: the signal is there on a debuggable build and
+            // absent on a user's. Both values in it are read out of a hostname the
+            // page composed, so at a shipping level it was an unbounded write into
+            // logcat, once per request, on a channel `READ_LOGS` can read.
+            Logger.d(TAG, "Unknown resource scheme: $scheme (host=$host)")
             return notFound("Unknown scheme: $scheme")
         }
 
@@ -1183,7 +1549,6 @@ class VSCodroidWebViewClient(
 
                 val responseCode = conn.responseCode
                 val contentType = conn.contentType ?: guessMimeType(url)
-                val encoding = conn.contentEncoding
 
                 // `url` has been through withToken() when it names our own server.
                 // One caller does now, the CDN rewrite; the unknown-scheme fallback
@@ -1223,11 +1588,35 @@ class VSCodroidWebViewClient(
                     headers["Cache-Control"] = CACHE_IMMUTABLE
                 }
 
+                // The second argument is the CHARACTER encoding, and it used to be
+                // handed `conn.contentEncoding`, which is the `Content-Encoding`
+                // header: a content coding, never a charset. Android's
+                // HttpURLConnection strips that header when it gunzips
+                // transparently, so the value was usually null and the fallback hid
+                // it -- but any coding the client did not ask for transparently
+                // would have arrived at the WebView as a charset name, while the
+                // charset the server did send was being thrown away one line above
+                // by the cut at `;`. Both halves are the same mistake, and this
+                // takes the charset out of the one header that carries it.
+                //
+                // A blank reason phrase and a 3xx are both refused by the
+                // `WebResourceResponse` constructor with IllegalArgumentException,
+                // which the catch below would report as `Proxy failed` -- the same
+                // line a connection failure produces, so an unusual status was
+                // indistinguishable from the server not being there. The phrase is
+                // defaulted, and a redirect is answered on its own terms: the
+                // client already follows the ones it can, so what reaches here is
+                // one it would not, and the caller turns null into a 404.
+                if (responseCode in 300..399) {
+                    Logger.d(TAG, "Proxy will not follow a redirect for $logTag ($responseCode)")
+                    wrappedStream.close()
+                    return null
+                }
                 WebResourceResponse(
                     contentType.substringBefore(";").trim(),
-                    encoding ?: "utf-8",
+                    charsetOf(contentType),
                     responseCode,
-                    conn.responseMessage ?: "OK",
+                    conn.responseMessage?.ifBlank { null } ?: "OK",
                     headers,
                     wrappedStream
                 )
@@ -1246,11 +1635,146 @@ class VSCodroidWebViewClient(
             }
         }
 
-        /** Whether [origin] is the workbench itself or one of its webview documents. */
-        private fun isOurOrigin(origin: String, port: Int): Boolean =
-            origin == "http://127.0.0.1:$port" ||
-                origin == "http://localhost:$port" ||
-                (origin.startsWith("https://") && origin.endsWith(".vscode-cdn.net"))
+        /**
+         * Whether [origin] is the page this app serves, and nothing else.
+         *
+         * The workbench is the only document loaded from our own server, so the
+         * two loopback spellings are the whole of it. Kept apart from
+         * [isOurOrigin], which also has to accept a webview document: this is the
+         * test for a claim that must not be satisfiable by anything the workbench
+         * merely renders.
+         */
+        internal fun isWorkbenchOrigin(origin: String, port: Int): Boolean =
+            origin == "http://127.0.0.1:$port" || origin == "http://localhost:$port"
+
+        /**
+         * Whether [origin] is the workbench itself or one of its webview documents.
+         *
+         * The resource authority is excluded, and that exclusion is the gate on a
+         * real escalation rather than tidiness. `guessMimeType` answers `text/html`
+         * for any `.html` under a published root, and a published root is the open
+         * workspace, the projects tree or a SAF mirror -- a checked-out repository,
+         * routinely. A navigation carries no `Origin` header, so a frame pointed at
+         * `https://file+.vscode-resource.vscode-cdn.net/<path to that file>` is
+         * served it as a document and runs its script at that origin. While this
+         * accepted it, that script could then read every other file under every
+         * published root through this same arm. Nothing legitimate ever asks from
+         * there: webview documents come from the `{{uuid}}.vscode-cdn.net` template,
+         * and the resource authority only ever answers subresources.
+         *
+         * It closes the asking rather than the reading, and the caller's comment
+         * records the difference: a navigation reaches this app carrying no
+         * origin at all, so a document served here can still frame another path
+         * on its own origin and read that one back.
+         */
+        internal fun isOurOrigin(origin: String, port: Int): Boolean =
+            isWorkbenchOrigin(origin, port) ||
+                (origin.startsWith("https://") && origin.endsWith(".vscode-cdn.net") &&
+                    !origin.endsWith(".$RESOURCE_AUTHORITY"))
+
+        /**
+         * The value of the [name] request header, whatever case it arrived in.
+         *
+         * HTTP header names are case-insensitive and the WebView does not promise
+         * a spelling, so the lookup is too. One helper rather than a lambda at
+         * each call site: the origin gate and the range answer both read one, and
+         * a gate that missed its header because of a capital letter fails open.
+         */
+        internal fun headerValue(headers: Map<String, String>?, name: String): String? =
+            headers?.entries?.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+        /**
+         * The single byte range [header] asks for out of a [length]-byte file, or
+         * null when the whole file is the right answer.
+         *
+         * Null covers every case a 200 still satisfies: no header, a unit other
+         * than bytes, a multi-range request (which would need a multipart body for
+         * a gain nothing here asks for), a range that does not parse, and one that
+         * starts past the end. RFC 9110 lets a server ignore a Range header it
+         * does not want to honour, so falling back to the whole file is a legal
+         * answer everywhere and keeps a malformed header from turning into a
+         * failed load. A zero-length file is one of those cases: there is no
+         * satisfiable range in it at all.
+         *
+         * Both forms are answered: `bytes=start-end` and `bytes=start-`, plus the
+         * suffix form `bytes=-n`, which the media loader uses to read a trailing
+         * index. The end is clamped to the last byte, because a player routinely
+         * asks for more than the file holds.
+         */
+        internal fun byteRangeOf(header: String?, length: Long): LongRange? {
+            val trimmed = header?.trim() ?: return null
+            if (!trimmed.startsWith("bytes=", ignoreCase = true)) return null
+            if (length <= 0) return null
+            val spec = trimmed.substring("bytes=".length).trim()
+            if (spec.contains(',')) return null
+            // A spec with no dash at all is the same malformed header as an
+            // unreadable end, and it used to read as an open range for the same
+            // reason: `substringBefore('-')` answers the whole string when the
+            // delimiter is missing and `substringAfter('-', "")` answers the
+            // default, so `bytes=100` against a 1000-byte file produced a 206 for
+            // 100..999. RFC 9110 says to ignore a Range that does not parse.
+            if ('-' !in spec) return null
+            val first = spec.substringBefore('-').trim()
+            val last = spec.substringAfter('-', "").trim()
+            val start: Long
+            val end: Long
+            if (first.isEmpty()) {
+                val suffix = last.toLongOrNull() ?: return null
+                if (suffix <= 0) return null
+                start = maxOf(0L, length - suffix)
+                end = length - 1
+            } else {
+                start = first.toLongOrNull() ?: return null
+                if (start >= length) return null
+                // An end that is present and unreadable is the whole header being
+                // malformed, not an open range: `bytes=100-19x` used to answer
+                // 100..last, which is a 206 for something nobody asked for. RFC
+                // 9110 says to ignore a Range that does not parse, and null here
+                // is exactly that.
+                end = (if (last.isEmpty()) length - 1 else last.toLongOrNull() ?: return null)
+                    .coerceAtMost(length - 1)
+            }
+            return if (end < start) null else start..end
+        }
+
+        /**
+         * The value of [name] in a still-encoded query string, decoded, or null.
+         *
+         * [query] is `Uri.getEncodedQuery()`, and it has to be. The decoded
+         * spelling folds a `%26` inside a value into a real `&`, which is a
+         * separator here, so a page could write one parameter that this reads as
+         * two. Splitting first and decoding after is what makes the boundaries the
+         * ones the page actually sent.
+         *
+         * Read out of the query string rather than through `Uri.getQueryParameter`
+         * for the reason [tlsHostLabel] gives about `android.net.Uri`: it is a stub
+         * under the unit-test `android.jar`, so a case written against it would
+         * measure the mock rather than the parse.
+         *
+         * The name is decoded before it is compared, and not only the value. This
+         * has to agree with the `URLSearchParams` in
+         * `contrib/webview/browser/pre/index.html`, which decodes both, so a page
+         * writing `parentOri%67in=` would otherwise hide a parameter from this
+         * while handing that page the value. `+` becoming a space falls out of the
+         * same agreement: `URLDecoder` and `URLSearchParams` both read the query
+         * as form encoding.
+         *
+         * A part that will not decode is answered as it arrived rather than
+         * dropped. This feeds a refusal, and a malformed value has to reach the
+         * comparison and fail it rather than vanish into "no parameter present".
+         */
+        internal fun queryParameter(query: String?, name: String): String? =
+            query?.split("&")
+                ?.map { it.split("=", limit = 2) }
+                ?.firstOrNull { decodeQueryPart(it[0]) == name }
+                ?.let { if (it.size > 1) decodeQueryPart(it[1]) else "" }
+
+        private fun decodeQueryPart(part: String): String =
+            try {
+                URLDecoder.decode(part, "UTF-8")
+            } catch (e: IllegalArgumentException) {
+                part
+            }
 
         private fun notFound(detail: String): WebResourceResponse {
             return WebResourceResponse(
@@ -1301,6 +1825,28 @@ class VSCodroidWebViewClient(
          * Nothing the workbench asks for carries one, so refusing costs nothing, and
          * the caller answers a null here with a 404 of its own rather than handing
          * the address back to the WebView to fetch from the real CDN.
+         *
+         * ⚠️ [query] is `Uri.getQuery()`, the DECODED spelling, and it does not get
+         * the treatment the path gets. `&` and `=` are legal inside a query
+         * component, so the constructor passes them through rather than quoting
+         * them, and a page writing `?a=b%26c=d` therefore issues a request the
+         * server reads as two parameters where the page wrote one. Reasoned from
+         * the constructor's contract, not measured.
+         *
+         * What keeps that harmless is the target rather than the encoding: this
+         * URL names our own `/{quality}-{commit}/static/` route, which reads
+         * nothing out of its query, and the one parameter that decides anything
+         * there is the credential [withToken] appends afterwards, which a page
+         * cannot know. A `tkn=` a page folds in of its own can only make its own
+         * fetch fail.
+         *
+         * So the constraint worth keeping is on the target: aim this at a route
+         * that reads its query and the paragraph above stops being true. Passing
+         * `getEncodedQuery()` is not the fix it looks like, because the
+         * constructor would then quote the `%` in every legitimate escape and
+         * double-encode the workbench's own asset queries. Building the query
+         * outside the constructor is what that would take, and that hands `#`, CR
+         * and LF straight through to `HttpURLConnection`.
          */
         private fun rewriteCdnUrl(path: String, query: String?, port: Int, token: String?): String? {
             val segments = path.removePrefix("/").split("/", limit = 3)
@@ -1370,28 +1916,87 @@ class VSCodroidWebViewClient(
          */
         private fun assetPathOf(pathOrUrl: String): String = pathOrUrl.substringBefore('?')
 
-        internal fun isStaticAsset(pathOrUrl: String): Boolean {
-            val path = assetPathOf(pathOrUrl)
-            return path.endsWith(".js") || path.endsWith(".css") ||
-                    path.endsWith(".woff2") || path.endsWith(".woff") ||
-                    path.endsWith(".ttf") || path.endsWith(".svg") ||
-                    path.endsWith(".png") || path.endsWith(".jpg")
-        }
+        /**
+         * What each file extension this app serves is, by MIME type.
+         *
+         * One table rather than two lists, because the two lists disagreed: `.jpg`
+         * was a static asset and had no MIME type, so a proxied JPEG was answered
+         * `application/octet-stream`.
+         *
+         * The additions past the original eight are not cosmetic. Chromium sniffs
+         * images, so those were rendering anyway, but a module script and
+         * `WebAssembly.instantiateStreaming` both refuse a response whose type is
+         * not right: an extension webview doing `import('./x.mjs')` or
+         * `instantiateStreaming(fetch('./x.wasm'))` through a `vscode-resource` URL
+         * failed on the type alone. No bundled extension does either today (the
+         * `.mjs` and `.wasm` files in the server tree are all node-side), so the
+         * population is what a user installs from Open VSX. Media is here for the
+         * bundled `media-preview`, which is also why the arm serving these answers
+         * range requests.
+         */
+        private val MIME_TYPES = mapOf(
+            "html" to "text/html",
+            "js" to "application/javascript",
+            "mjs" to "text/javascript",
+            "cjs" to "text/javascript",
+            "css" to "text/css",
+            "json" to "application/json",
+            "map" to "application/json",
+            "wasm" to "application/wasm",
+            "txt" to "text/plain",
+            "svg" to "image/svg+xml",
+            "png" to "image/png",
+            "jpg" to "image/jpeg",
+            "jpeg" to "image/jpeg",
+            "gif" to "image/gif",
+            "webp" to "image/webp",
+            "ico" to "image/x-icon",
+            "mp4" to "video/mp4",
+            "webm" to "video/webm",
+            "mp3" to "audio/mpeg",
+            "wav" to "audio/wav",
+            "ogg" to "audio/ogg",
+            "woff2" to "font/woff2",
+            "woff" to "font/woff",
+            "ttf" to "font/ttf",
+        )
 
-        internal fun guessMimeType(pathOrUrl: String): String {
-            val path = assetPathOf(pathOrUrl)
-            return when {
-                path.endsWith(".html") -> "text/html"
-                path.endsWith(".js") -> "application/javascript"
-                path.endsWith(".css") -> "text/css"
-                path.endsWith(".json") -> "application/json"
-                path.endsWith(".svg") -> "image/svg+xml"
-                path.endsWith(".png") -> "image/png"
-                path.endsWith(".woff2") -> "font/woff2"
-                path.endsWith(".woff") -> "font/woff"
-                path.endsWith(".ttf") -> "font/ttf"
-                else -> "application/octet-stream"
-            }
-        }
+        /**
+         * The extensions that may carry an immutable cache header.
+         *
+         * Derived from [MIME_TYPES] rather than written out again, which is what
+         * keeps the two from disagreeing a second time. Everything the proxied
+         * route serves is versioned by the commit hash in its own URL, so the only
+         * exclusions are the two shapes that name a document rather than an asset:
+         * an HTML entry point and a JSON payload, either of which the server may
+         * answer differently within one install.
+         */
+        private val CACHEABLE_ASSETS = MIME_TYPES.keys - setOf("html", "json")
+
+        /** The lowercase extension of [pathOrUrl], with its query taken off. */
+        private fun extensionOf(pathOrUrl: String): String =
+            assetPathOf(pathOrUrl).substringAfterLast('.', "").lowercase()
+
+        internal fun isStaticAsset(pathOrUrl: String): Boolean =
+            extensionOf(pathOrUrl) in CACHEABLE_ASSETS
+
+        internal fun guessMimeType(pathOrUrl: String): String =
+            MIME_TYPES[extensionOf(pathOrUrl)] ?: "application/octet-stream"
+
+        /**
+         * The character set named by a `Content-Type`, or utf-8 when it names none.
+         *
+         * Quotes are stripped because the parameter is allowed to carry them
+         * (`charset="utf-8"`), and a quoted name handed to the WebView as a charset
+         * is not one it can look up.
+         */
+        internal fun charsetOf(contentType: String?): String =
+            contentType?.split(';')
+                ?.map { it.trim() }
+                ?.firstOrNull { it.startsWith("charset=", ignoreCase = true) }
+                ?.substringAfter('=')
+                ?.trim('"', ' ')
+                ?.takeIf { it.isNotEmpty() }
+                ?: "utf-8"
     }
 }

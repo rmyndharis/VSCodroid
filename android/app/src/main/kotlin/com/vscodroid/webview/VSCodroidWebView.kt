@@ -20,11 +20,43 @@ object VSCodroidWebView {
             builtInZoomControls = false
             displayZoomControls = false
             textZoom = 100
+            // Kept, and not because nothing was asked of it. Every webview
+            // document this app renders sits on an https origin, and not because
+            // anything here configures one: `branding/product.json` lists
+            // `webviewContentExternalBaseUrlTemplate` under `remove`, so
+            // `webviewExternalEndpoint` in the shipped `workbench.js` falls back to
+            // its own hardcoded `https://{{uuid}}.vscode-cdn.net/...` template. So
+            // a preview of a dev server the user is running is plain http inside
+            // an https document: mixed content, and blocked under every other
+            // mode. Loopback is exempt from that blocking in Chromium, a LAN
+            // address is not, and a dev server on the LAN is the ordinary thing a
+            // user of this app opens. COMPATIBILITY mode does not help either: an
+            // iframe counts as active mixed content and is blocked there too.
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
-            allowContentAccess = true
+            // Off, so page content cannot spend this app's persisted SAF grants.
+            // The platform default is on, and turning it on explicitly read as a
+            // requirement; nothing here has one. Every SAF folder the user grants
+            // is reconciled into a hash-named mirror under `filesDir` and reaches
+            // the page as a POSIX path, so no `content://` URI is ever loaded by
+            // the workbench, by an injected script or by a bundled extension.
+            allowContentAccess = false
             allowFileAccess = false
-            mediaPlaybackRequiresUserGesture = false
+            // The platform default, restored. Set to false, any frame the editor
+            // renders -- notebook output, an extension webview, a preview -- could
+            // start audio or video with sound at any moment with the user having
+            // touched nothing, which is the same shape as a navigation launching
+            // an app without a gesture. Nothing here autoplays on load: the
+            // bundled media preview ships `mediaPreview.video.autoPlay` false and
+            // the app writes only fontSize, wordWrap and minimap into the default
+            // settings, so a tap is what starts playback, and a tap is a gesture.
+            //
+            // What it costs, stated rather than left to be discovered: a user who
+            // turns that setting ON gets nothing, because this flag is all or
+            // nothing in the WebView and blocks a muted autoplay that Chrome's own
+            // policy would allow. One opt-in setting is the price of closing the
+            // channel for every frame the editor renders.
+            mediaPlaybackRequiresUserGesture = true
             javaScriptCanOpenWindowsAutomatically = true
             setSupportMultipleWindows(false)
         }

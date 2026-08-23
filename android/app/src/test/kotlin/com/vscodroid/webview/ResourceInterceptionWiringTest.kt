@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.net.URLDecoder
 
 /**
  * `WebviewResourceResolutionTest` and `WorkspaceRootTest` pin the decisions.
@@ -33,9 +34,11 @@ import java.io.File
  * - a non-null return means the request reached a branch that builds a
  *   response, which rules out the fixture missing the host test and the whole
  *   thing returning null before it ever looked at a path;
- * - the warning is the app's own account of a refusal, and it is deliberately
- *   the line that carries the path, because it is what a reader has when a
- *   preview comes up blank.
+ * - the log line is the app's own account of a refusal, and it is deliberately
+ *   the one that carries the path, because it is what a reader has when a
+ *   preview comes up blank. It is at `Logger.d` rather than `Logger.w`, so on a
+ *   user's build it is not written at all: the value in it is a page's to
+ *   compose and a page's to repeat.
  *
  * `WebResourceResponse` cannot be constructed under the stub `android.jar`
  * (every branch here would die in its constructor), so the constructor is
@@ -47,7 +50,27 @@ class ResourceInterceptionWiringTest {
     @TempDir
     lateinit var tmp: File
 
-    private val warnings = mutableListOf<String>()
+    /**
+     * Every line the interceptor logged, at whichever level it chose.
+     *
+     * Both levels, because the refusals moved to `Logger.d`: the value they carry
+     * is a path or an origin a page chose, and repeating one per request at a
+     * level that ships was an unbounded write into logcat. What the cases below
+     * read is WHICH line arrived, and that is unchanged by the level it arrived
+     * at; the open failure still names the open and a refusal still names the
+     * roots, which is what tells the two apart.
+     */
+    private val logged = mutableListOf<String>()
+
+    /**
+     * The lines that say something was NOT served.
+     *
+     * The serve line is at the same level as the refusals now, and it names the
+     * path too, so a case asking "was anything refused" has to drop it or it
+     * answers "yes" for every file that loaded correctly. Dropped by what it says
+     * rather than by level, because level is exactly what stopped discriminating.
+     */
+    private val refusals get() = logged.filterNot { it.startsWith("Resource served") }
 
     private val serverTree get() = File(tmp, "server")
     private val extensionAsset get() = File(serverTree, "extensions/md/media/m.css")
@@ -62,7 +85,7 @@ class ResourceInterceptionWiringTest {
 
     @BeforeEach
     fun setUp() {
-        warnings.clear()
+        logged.clear()
 
         listOf(extensionAsset, sshKey, workspaceFile, homeFile).forEach {
             it.parentFile!!.mkdirs()
@@ -70,9 +93,9 @@ class ResourceInterceptionWiringTest {
         }
 
         mockkObject(Logger)
-        every { Logger.w(any(), any()) } answers { warnings += secondArg<String>() }
-        every { Logger.w(any(), any(), any()) } answers { warnings += secondArg<String>() }
-        every { Logger.d(any(), any()) } just Runs
+        every { Logger.w(any(), any()) } answers { logged += secondArg<String>() }
+        every { Logger.w(any(), any(), any()) } answers { logged += secondArg<String>() }
+        every { Logger.d(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.i(any(), any()) } just Runs
 
         mockkConstructor(WebResourceResponse::class)
@@ -89,11 +112,18 @@ class ResourceInterceptionWiringTest {
      * origin gate reads as "no Origin" and serves. Every case here would therefore pass
      * whatever the gate did, which is what the cases below exist to avoid.
      */
-    private fun requestFor(path: String, origin: String? = null): WebResourceRequest {
+    private fun requestFor(
+        path: String, origin: String? = null, query: String? = null
+    ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.host } returns "file+.vscode-resource.vscode-cdn.net"
         every { uri.path } returns path
-        every { uri.query } returns null
+        // Both accessors, answering what the platform answers: `getEncodedQuery`
+        // is the address as written and `getQuery` is it decoded. Stubbing one
+        // string to both is what let the earlier cases here pass against a gate
+        // reading the decoded spelling, which a page can fold a second `&` into.
+        every { uri.encodedQuery } returns query
+        every { uri.query } returns query?.let { URLDecoder.decode(it, "UTF-8") }
         val request = mockk<WebResourceRequest>(relaxed = true)
         every { request.url } returns uri
         every { request.requestHeaders } returns
@@ -126,9 +156,9 @@ class ResourceInterceptionWiringTest {
         )
 
         assertTrue(
-            warnings.any { it.contains("foreign origin") && it.contains("https://evil.example") },
+            logged.any { it.contains("foreign origin") && it.contains("https://evil.example") },
             "the refusal should name the origin it refused. Logged:\n" +
-                warnings.joinToString("\n") { "  $it" },
+                logged.joinToString("\n") { "  $it" },
         )
     }
 
@@ -151,16 +181,17 @@ class ResourceInterceptionWiringTest {
         )
 
         assertTrue(
-            warnings.none { it.contains("foreign origin") },
+            logged.none { it.contains("foreign origin") },
             "the workbench was refused its own file. Logged:\n" +
-                warnings.joinToString("\n") { "  $it" },
+                logged.joinToString("\n") { "  $it" },
         )
     }
 
     /**
-     * And a webview document's origin, which is where extension content lives:
-     * `webviewContentExternalBaseUrlTemplate` in the shipped bundle resolves to
-     * `https://{{uuid}}.vscode-cdn.net/...`.
+     * And a webview document's origin, which is where extension content lives.
+     * `branding/product.json` lists `webviewContentExternalBaseUrlTemplate` under
+     * `remove`, so `webviewExternalEndpoint` in the shipped `workbench.js` falls
+     * back to its own hardcoded `https://{{uuid}}.vscode-cdn.net/...` template.
      */
     @Test
     fun `a webview origin is served`() {
@@ -172,9 +203,133 @@ class ResourceInterceptionWiringTest {
         )
 
         assertTrue(
-            warnings.none { it.contains("foreign origin") },
+            logged.none { it.contains("foreign origin") },
             "an extension webview was refused its own resource. Logged:\n" +
-                warnings.joinToString("\n") { "  $it" },
+                logged.joinToString("\n") { "  $it" },
+        )
+    }
+
+    /**
+     * A document served from the resource authority may not ask for the next file.
+     *
+     * A navigation carries no `Origin` header, so a frame pointed at
+     * `https://file+.vscode-resource.vscode-cdn.net/<path>` is served whatever is
+     * there, and an `.html` under a published root arrives as `text/html` and
+     * runs. A published root is the open workspace, the projects tree or a SAF
+     * mirror, which is to say a checked-out repository in the ordinary case. While
+     * this origin was accepted, that document could `fetch` every other file under
+     * every root back through this same arm. Nothing legitimate asks from there:
+     * webview documents come from the `{{uuid}}.vscode-cdn.net` template and the
+     * resource authority only ever answers subresources.
+     *
+     * The name says `fetch` because that is the whole of what this closes. The
+     * same document can still frame another path on its own origin and read that
+     * one back, since a navigation arrives here with no origin to refuse; the
+     * comment on the gate itself states that residual rather than leaving it to
+     * be discovered.
+     */
+    @Test
+    fun `a document at the resource authority cannot fetch another resource`() {
+        val file = File(workspace, "notes.txt").apply { writeText("secret") }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(
+                file.absolutePath,
+                origin = "https://file+.vscode-resource.vscode-cdn.net",
+            ),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            logged.any { it.contains("foreign origin") },
+            "a document this arm served was trusted to read the rest of the workspace " +
+                "through it. Logged:\n" + logged.joinToString("\n") { "  $it" },
+        )
+    }
+
+    /**
+     * A frame cannot name a parent origin of its own and be handed a webview host.
+     *
+     * The label under `.vscode-cdn.net` is chosen by whoever writes the address,
+     * and `pre/index.html` starts as soon as its hostname is the hash of
+     * `{parentOrigin, salt}` -- both of which the caller picks. That gives a
+     * rendered page script running at an origin ending `.vscode-cdn.net`, which
+     * the resource gate accepts, and from there every file under every published
+     * root is readable. Requiring the parent to be the workbench closes it: the
+     * page then posts its message port to `http://127.0.0.1:<port>` as the target
+     * origin, which a frame at any other origin never receives.
+     */
+    @Test
+    fun `a request naming a foreign parent origin is refused`() {
+        val file = File(workspace, "asset.js").apply { writeText("x") }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(file.absolutePath, query = "parentOrigin=https%3A%2F%2Fevil.example&id=1"),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            logged.any { it.contains("foreign parent origin") },
+            "a page named a parent origin of its own and was answered. Logged:\n" +
+                logged.joinToString("\n") { "  $it" },
+        )
+        assertTrue(
+            refusals.isNotEmpty() && logged.none { it.startsWith("Resource served") },
+            "the file was served anyway: " + logged.joinToString("\n") { "  $it" },
+        )
+    }
+
+    /**
+     * A page cannot smuggle an approved parent origin past the gate.
+     *
+     * `%26` is a `&` once decoded, so the single parameter below becomes two in
+     * `Uri.getQuery()` and the first of the two names the workbench. What
+     * `pre/index.html` reads is the address as written, through
+     * `URLSearchParams`, which gives it the second one; a gate reading the
+     * decoded spelling therefore approves a value the page never sent and hands
+     * that page a running webview host.
+     */
+    @Test
+    fun `a parent origin smuggled through a decoded separator is refused`() {
+        val file = File(workspace, "asset3.js").apply { writeText("x") }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(
+                file.absolutePath,
+                query = "id=1%26parentOrigin%3Dhttp%3A%2F%2F127.0.0.1%3A$PORT" +
+                    "&parentOrigin=https%3A%2F%2Fevil.example",
+            ),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            logged.any { it.contains("foreign parent origin") },
+            "the gate read a parameter the page manufactured by escaping a separator, " +
+                "and the page is handed the origin it actually asked for. Logged:\n" +
+                logged.joinToString("\n") { "  $it" },
+        )
+    }
+
+    /**
+     * The control, without which the case above passes on a gate that refuses
+     * everything carrying a query at all.
+     */
+    @Test
+    fun `the workbench's own parent origin is served`() {
+        val file = File(workspace, "asset2.js").apply { writeText("x") }
+
+        VSCodroidWebViewClient.interceptCdnRequest(
+            requestFor(
+                file.absolutePath,
+                query = "parentOrigin=http%3A%2F%2F127.0.0.1%3A$PORT&id=1",
+            ),
+            PORT, null, published, sensitive, { workspace.absolutePath },
+        )
+
+        assertTrue(
+            logged.none { it.contains("foreign parent origin") },
+            "the workbench was refused its own webview. Logged:\n" +
+                logged.joinToString("\n") { "  $it" },
         )
     }
 
@@ -196,12 +351,16 @@ class ResourceInterceptionWiringTest {
         // Control first. A refusal below proves nothing if the fixture also
         // refuses the resource that is supposed to work.
         intercept(extensionAsset.path, openFolder = null)
-        assertTrue(warnings.isEmpty(), "a legitimate extension resource was refused: $warnings")
+        assertTrue(refusals.isEmpty(), "a legitimate extension resource was refused: $refusals")
 
         intercept(sshKey.path, openFolder = null)
         assertTrue(
-            warnings.any { it.contains(sshKey.path) },
-            "nothing refused the private key, and it exists on disk, so it was served"
+            // The refusal text and not the path alone. The serve line names the
+            // path too, so a resolver replaced by `File(path)` would serve the key
+            // and satisfy an assertion that only looked for the path in the log,
+            // which is the one thing this case exists to catch.
+            logged.any { it.contains("outside the published roots") && it.contains(sshKey.path) },
+            "nothing refused the private key, and it exists on disk, so it was served: $logged"
         )
     }
 
@@ -215,8 +374,8 @@ class ResourceInterceptionWiringTest {
         intercept(workspaceFile.path, openFolder = workspace.path)
 
         assertTrue(
-            warnings.isEmpty(),
-            "a file in the folder the user has open was refused: $warnings"
+            refusals.isEmpty(),
+            "a file in the folder the user has open was refused: $refusals"
         )
     }
 
@@ -230,8 +389,14 @@ class ResourceInterceptionWiringTest {
         intercept(homeFile.path, openFolder = home.path)
 
         assertTrue(
-            warnings.any { it.contains(homeFile.path) },
-            "the home directory was published as a resource root"
+            // Anchored on the refusal text for the reason the private-key case
+            // gives, and this is the half that matters more: `notes.md` exists and
+            // is readable, so composing the home directory in unconditionally
+            // serves it and the serve line carries its path. Only the refusal text
+            // tells the two apart. The workspace warning cannot stand in either:
+            // it names the folder, not this file.
+            logged.any { it.contains("outside the published roots") && it.contains(homeFile.path) },
+            "the home directory was published as a resource root: $logged"
         )
     }
 
@@ -252,8 +417,8 @@ class ResourceInterceptionWiringTest {
         intercept(extensionAsset.path, openFolder = home.path)
 
         assertTrue(
-            warnings.none { it.contains(extensionAsset.path) },
-            "a refused workspace cost the published roots their resources: $warnings"
+            refusals.none { it.contains(extensionAsset.path) },
+            "a refused workspace cost the published roots their resources: $refusals"
         )
     }
 
@@ -290,13 +455,13 @@ class ResourceInterceptionWiringTest {
         intercept(sshKey.path, openFolder = null)
 
         assertTrue(
-            warnings.any { it.contains("outside the published roots") && it.contains(sshKey.path) },
-            "the private key was not refused: $warnings",
+            logged.any { it.contains("outside the published roots") && it.contains(sshKey.path) },
+            "the private key was not refused: $logged",
         )
         assertTrue(
-            warnings.none { it.contains("could not be opened") },
+            logged.none { it.contains("could not be opened") },
             "the interceptor tried to open the private key and only failed because the " +
-                "fixture is unreadable: $warnings",
+                "fixture is unreadable: $logged",
         )
     }
 
@@ -328,8 +493,8 @@ class ResourceInterceptionWiringTest {
         intercept(locked.path, openFolder = null)
 
         assertTrue(
-            warnings.any { it.contains("could not be opened") && it.contains(locked.path) },
-            "the open failure was neither reported nor recognisable in the log: $warnings",
+            logged.any { it.contains("could not be opened") && it.contains(locked.path) },
+            "the open failure was neither reported nor recognisable in the log: $logged",
         )
     }
 

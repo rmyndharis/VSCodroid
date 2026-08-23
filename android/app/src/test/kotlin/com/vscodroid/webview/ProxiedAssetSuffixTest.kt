@@ -88,4 +88,57 @@ class ProxiedAssetSuffixTest {
             VSCodroidWebViewClient.guessMimeType("/data/user/0/projects/app/notes.md"),
         )
     }
+
+    /**
+     * The types a webview resource has to be served as to work at all.
+     *
+     * Images are sniffed by Chromium and were rendering whatever this said, but a
+     * module script and `WebAssembly.instantiateStreaming` are both strict: an
+     * extension webview doing `import('./x.mjs')` or
+     * `instantiateStreaming(fetch('./x.wasm'))` through a `vscode-resource` URL
+     * failed on the MIME type alone. No bundled extension does either today, so
+     * the population is what a user installs from Open VSX. The media types are
+     * for the bundled `media-preview`.
+     */
+    @Test
+    fun `the types an extension webview needs are answered`() {
+        assertEquals("text/javascript", VSCodroidWebViewClient.guessMimeType("/x/m.mjs"))
+        assertEquals("application/wasm", VSCodroidWebViewClient.guessMimeType("/x/m.wasm"))
+        assertEquals("image/jpeg", VSCodroidWebViewClient.guessMimeType("/x/photo.jpg"))
+        assertEquals("image/jpeg", VSCodroidWebViewClient.guessMimeType("/x/photo.jpeg"))
+        assertEquals("image/gif", VSCodroidWebViewClient.guessMimeType("/x/anim.gif"))
+        assertEquals("image/webp", VSCodroidWebViewClient.guessMimeType("/x/pic.webp"))
+        assertEquals("video/mp4", VSCodroidWebViewClient.guessMimeType("/x/clip.MP4"))
+        assertEquals("audio/mpeg", VSCodroidWebViewClient.guessMimeType("/x/track.mp3"))
+    }
+
+    /**
+     * The two lists used to disagree, and `.jpg` is where: it was a static asset
+     * with no MIME type of its own, so a proxied JPEG went out as
+     * `application/octet-stream`. They come off one table now, so a type added to
+     * one is in the other.
+     */
+    @Test
+    fun `an extension in one list is in the other`() {
+        assertTrue(VSCodroidWebViewClient.isStaticAsset("/x/photo.jpg"))
+        assertEquals("image/jpeg", VSCodroidWebViewClient.guessMimeType("/x/photo.jpg"))
+    }
+
+    /**
+     * The charset comes off `Content-Type`, which is the only header carrying
+     * one. `WebResourceResponse` takes it as its second argument and used to be
+     * handed `Content-Encoding` instead -- a content coding, never a charset --
+     * while the charset the server did send was cut off one line above.
+     */
+    @Test
+    fun `the charset is read out of the content type`() {
+        assertEquals("iso-8859-1", VSCodroidWebViewClient.charsetOf("text/html; charset=iso-8859-1"))
+        assertEquals("utf-8", VSCodroidWebViewClient.charsetOf("text/html; charset=\"utf-8\""))
+        assertEquals(
+            "utf-8", VSCodroidWebViewClient.charsetOf("application/javascript"),
+            "a response that names no charset still needs one, and utf-8 is what the " +
+                "server tree is written in",
+        )
+        assertEquals("utf-8", VSCodroidWebViewClient.charsetOf(null))
+    }
 }

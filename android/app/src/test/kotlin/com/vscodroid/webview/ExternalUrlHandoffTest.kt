@@ -129,7 +129,7 @@ class ExternalUrlHandoffTest {
 
     private fun request(
         scheme: String, host: String, port: Int, address: String = "",
-        fromMainFrame: Boolean = true
+        fromMainFrame: Boolean = true, withGesture: Boolean = false
     ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.scheme } returns scheme
@@ -144,6 +144,9 @@ class ExternalUrlHandoffTest {
         // Stated rather than left to the relaxed mock, which would answer false
         // and quietly make every case below a subframe case.
         every { req.isForMainFrame } returns fromMainFrame
+        // Same reason: a relaxed mock answers false, which is the silent case, so
+        // a case about a tap has to say so.
+        every { req.hasGesture() } returns withGesture
         return req
     }
 
@@ -371,8 +374,7 @@ class ExternalUrlHandoffTest {
     }
 
     /**
-     * A frame that is not our own page may leave for a browser, but may not
-     * decide which callbacks come back.
+     * A frame that is not our own page may not decide which callbacks come back.
      *
      * This callback receives subframe navigations as well as top-level ones, and
      * a frame may always navigate itself whatever its sandbox permits. The frames
@@ -392,6 +394,17 @@ class ExternalUrlHandoffTest {
      * keeps the most recent 32 launches, one address can carry many ids, and the
      * oldest goes when it overflows, so a page able to arm at will can push out
      * the sign-in the user has open in the browser right now.
+     *
+     * This case used to assert that the address left for a browser as well, and
+     * that was the wrong half to pin: an https subframe is the shape the bundled
+     * simple browser and every dev-server preview take, and handing one away
+     * leaves the panel blank with another app over the editor. It is rendered
+     * here now, which the case below states on its own.
+     *
+     * Which leaves this one pinning the rendering rather than the frame test,
+     * since https returns before the launch is reached. The frame test itself is
+     * measured by `a tapped subframe link carrying a sign-in arms nothing`, which
+     * is the one shape that gets past both earlier rules.
      */
     @Test
     fun `a sign-in address in a subframe opens no callback window`() {
@@ -399,7 +412,47 @@ class ExternalUrlHandoffTest {
             view, request("https", "github.com", -1, SIGN_IN, fromMainFrame = false)
         )
 
-        assertTrue(handled, "a subframe's external link still leaves for a browser")
+        assertFalse(handled, "the WebView must be left to render an https subframe itself")
+        verify(exactly = 0) { context.startActivity(any()) }
+        assertFalse(
+            callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
+            "a frame this app does not vouch for chose which vscodroid://callback the app " +
+                "will accept. The filter is exported and BROWSABLE, so that is a sign-in " +
+                "the user never started being taken from whatever is on the device.",
+        )
+    }
+
+    /**
+     * The same property as the case above, on the only shape that reaches the
+     * arming site at all, and this is the case that measures the frame test.
+     *
+     * An https subframe is rendered here and returns before the launch, so the
+     * case above pins the rendering and nothing else: the frame test could be
+     * deleted with it still green. What gets past the rendering rule is a scheme
+     * the WebView cannot load, and past the gesture rule is a tap, so a tapped
+     * `myapp:` link inside a preview is a real navigation that reaches the launch
+     * and carries a request id. `authRequestIdsIn` reads the whole address, so the
+     * scheme costs the id nothing.
+     *
+     * The two subframe cases that do reach the launch cannot stand in for this:
+     * `mailto:someone@example.com` and `market://details?id=x` carry no
+     * `vscode-reqid`, so arming them arms nothing whatever the frame test says.
+     *
+     * NEGATIVE CONTROL: remove the main-frame test around the arming call in
+     * `shouldOverrideUrlLoading` and this case goes red on `callbackWouldBeTaken`.
+     */
+    @Test
+    fun `a tapped subframe link carrying a sign-in arms nothing`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request(
+                "myapp", "auth", -1,
+                "myapp://auth?state=" + SIGN_IN.substringAfter("state="),
+                fromMainFrame = false, withGesture = true,
+            ),
+        )
+
+        assertTrue(handled, "the WebView was left to navigate to a scheme it cannot load")
         verify(exactly = 1) { context.startActivity(any()) }
         assertFalse(
             callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
@@ -407,6 +460,103 @@ class ExternalUrlHandoffTest {
                 "will accept. The filter is exported and BROWSABLE, so that is a sign-in " +
                 "the user never started being taken from whatever is on the device.",
         )
+    }
+
+    /**
+     * The bundled simple browser and every in-editor preview, in one case.
+     *
+     * Both put a site in an `<iframe>` by assigning its `src`. Handing that to
+     * the system browser leaves the panel blank while another app covers the
+     * editor, and the localhost test above cannot rescue it either: that admits
+     * the editor's own port and no other, so a dev server on 5173 is as external
+     * to it as a remote host.
+     *
+     * ⚠️ Whether the WebView delivers a script-initiated iframe navigation to
+     * this callback at all is NOT measured anywhere in this repository. The
+     * platform documents it as one that may be called for subframes, and
+     * `isForMainFrame` exists for that; DEVICE_TEST_CHECKLIST ED-11 records the
+     * simple browser reaching a certificate error through this app's own TLS
+     * callback, which implies it does not. The rule is written to be right under
+     * either reading, and these cases pin the rule.
+     */
+    @Test
+    fun `an https subframe is rendered here rather than handed to another app`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("https", "example.com", -1, "https://example.com", fromMainFrame = false)
+        )
+
+        assertFalse(handled, "returning true is what stops the WebView rendering the frame")
+        verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /** And the dev-server preview, which is the same navigation on a different port. */
+    @Test
+    fun `a local dev server in a subframe is rendered here`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request("http", "127.0.0.1", 5173, "http://127.0.0.1:5173/", fromMainFrame = false),
+        )
+
+        assertFalse(handled, "the preview of a dev server was sent to the system browser")
+        verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /**
+     * A scheme the WebView cannot render, driven by a script rather than by a tap.
+     *
+     * The launch carries `FLAG_ACTIVITY_NEW_TASK` and asked for no user
+     * activation, so a hidden frame reassigning `src` on a timer brought an
+     * arbitrary installed app to the front over a live editor as often as it
+     * liked. `market:` is the cheapest demonstration; the same holds for `tel:`,
+     * `sms:` and any exported deep link on the device.
+     */
+    @Test
+    fun `a subframe launches nothing without a user gesture behind it`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request("market", "details", -1, "market://details?id=x", fromMainFrame = false),
+        )
+
+        assertTrue(handled, "the WebView was left to navigate to a scheme it cannot load")
+        verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /**
+     * The other half, and what keeps the case above from being a destination
+     * filter: a link the user genuinely tapped inside a preview still opens.
+     */
+    @Test
+    fun `a subframe link the user tapped is still handed to an activity`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request(
+                "mailto", "", -1, "mailto:someone@example.com",
+                fromMainFrame = false, withGesture = true,
+            ),
+        )
+
+        assertTrue(handled)
+        verify(exactly = 1) { context.startActivity(any()) }
+    }
+
+    /**
+     * The main frame keeps its hand-off with no gesture required, and that is
+     * deliberate rather than an oversight in the gate above.
+     *
+     * It is the workbench, the one document here this app serves, and it is where
+     * both routes this channel backs up navigate: `injectWindowOpenOverride` falls
+     * through to a plain navigation and the workbench's own opener assigns
+     * `location.href`. Whether user activation survives those chains is not
+     * measured, and requiring it would break every sign-in that takes them.
+     */
+    @Test
+    fun `the main frame is handed over without a gesture`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("https", "github.com", -1, SIGN_IN)
+        )
+
+        assertTrue(handled)
+        verify(exactly = 1) { context.startActivity(any()) }
     }
 
     /**
