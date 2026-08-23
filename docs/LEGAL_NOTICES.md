@@ -158,6 +158,20 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **License**: Apache License 2.0. The full text ships at `node_modules/@vscode/sandbox-runtime/LICENSE` and carries no filled-in copyright line.
 - **Ships**: `vendor/seccomp/x64/apply-seccomp`, an x86-64 helper that cannot run on an ARM64 device. It is listed because it is redistributed, not because it is used.
 
+### @vscode/spdlog
+
+The server's file logger, and the one package here whose own code does not run.
+Its `build/Release/spdlog.node` links `libstdc++.so.6`, which Bionic does not
+have, so `scripts/build-native-addons.sh` deletes the addon and overwrites
+`index.js` with a JavaScript stand-in written in this repository and covered by
+the root `LICENSE`. The package directory still ships, so its notice does too.
+
+- **Project**: https://github.com/microsoft/node-spdlog
+- **Version**: whatever the server tree ships (`node_modules/@vscode/spdlog/package.json`)
+- **License**: MIT License. The full text ships as `LICENSE` inside the package.
+- **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
+- **Ships**: no binary, and no upstream JavaScript. `LICENSE`, `package.json` and the package's remaining metadata.
+
 ### kerberos (Node addon)
 
 The npm package, not the MIT Kerberos 5 C libraries listed further down. Different
@@ -347,14 +361,26 @@ musl's loader is an Alpine package (`scripts/download-musl-loader.sh`), and
 entries no Termux package accounts for, so the exception is named by the run and
 not only here.
 
+bzip2 is the one row Termux cannot settle: it declares plain `BSD`, which names
+no variant. This document said `BSD-4-Clause` until 2026-08-23, and that variant
+is defined by an advertising clause ("All advertising materials ... must display
+the following acknowledgement") that bzip2's `LICENSE` does not carry; its four
+conditions are retain-notice, do-not-misrepresent-origin, mark-altered-versions
+and no-endorsement. Recording the stricter identifier asserted an obligation
+downstream that bzip2 never imposed, so the row is now `bzip2-1.0.6`, the SPDX
+identifier for bzip2's own licence. Julian Seward's copyright ships on the device
+at `usr/share/doc/libbz2`.
+
 This is not every binary in the APK. Most of
 them are not below: they live deeper in the asset tree and are attributed by the
-sections above. Git's helper executables under `usr/lib/git-core/`, CPython's
-extension modules under `usr/lib/python*/lib-dynload/`, pip's vendored launchers,
-the server tree's native addons and bundled tools under `assets/vscode-reh/`, the
-WebAssembly its editor services load, and the .NET assemblies its terminal
-integration carries. 195 files against the 53 listed below, measured on the tree
-that built this release, redistributed on identical terms.
+sections above. CPython's extension modules under `usr/lib/python*/lib-dynload/`,
+pip's vendored launchers, the server tree's native addons and bundled tools under
+`assets/vscode-reh/`, the WebAssembly its editor services load, and the .NET
+assemblies its terminal integration carries. 183 files against the 53 listed
+below, measured on the tree that built this release, redistributed on identical
+terms. `usr/lib/git-core/` was in that list until its eight standalone helpers
+stopped being copied; what is left there is shell text and symlinks, and Git is
+attributed by `libgit.so` and `libgit-remote-curl.so` below.
 
 That figure is a measurement rather than a fixed property, and the gate prints it
 on every run: a Python module leaving `lib-dynload` or a package adding a grammar
@@ -363,7 +389,8 @@ somewhere, which is what the gate enforces rather than what this sentence claims
 
 `scripts/check-library-attribution.py` regenerates the basis for this table from the
 files actually present in the build tree and fails when a shipped binary is absent
-from it, or when a copyleft component is missing from the source offer below. It
+from it, when a copyleft component is missing from the source offer below, or when
+a component's own notice is not among the bytes that reach a device. It
 walks the whole asset tree, recognising a binary by its magic number (ELF,
 WebAssembly, PE or Mach-O) or a `.node` extension, and holds every component it
 finds to both this file and `NOTICE.md`. Formats this device cannot execute are
@@ -374,18 +401,50 @@ It runs on every pull request and every push to `main` (`.github/workflows/build
 and twice more at release time, once before the toolchain payloads are downloaded
 and once after (`.github/workflows/release.yml`).
 
+That last check is the one the permissive rows turn on. A name and a URL in a
+table is not the notice: MIT, the BSD family, ISC, NCSA, the ICU licence and
+Apache-2.0 section 4 all require the copyright and permission text to be handed
+over with a binary redistribution, and a link discharges none of it on a device
+with no network. Every component in the table below now ships its own upstream
+notice beside the binaries, almost all of them under
+`usr/share/doc/<termux package>`, placed by `termux_copy_notices` in
+`scripts/lib/termux-packages.sh`. A directory that is absent, or that holds
+nothing over 128 bytes, fails the build. The floor is there because a file being
+present proves nothing: Termux's `libicu` 78.3 ships fourteen bytes reading
+`404: Not Found` where its licence should be.
+
+Four packages are exceptions, each measured rather than assumed:
+
+- **ICU**: those fourteen bytes are replaced with ICU 78.3's own `LICENSE`,
+  kept here as `licenses/LICENSE.ICU` and taken verbatim from `unicode-org/icu`
+  at the tag Termux's own build names. `scripts/download-termux-tools.sh` fails
+  the build when the index moves to an ICU that text no longer describes.
+- **musl**: Alpine's `musl` package carries no notice at all, so
+  `scripts/download-musl-loader.sh` places `licenses/COPYRIGHT.musl`, musl's own
+  `COPYRIGHT` at the tag `ALPINE_BRANCH` pins.
+- **ripgrep**: it arrives with the server tree rather than from Termux, and
+  `@vscode/ripgrep-universal` already carries its `LICENSE` inside the package.
+- **termux-licenses**: downloaded but shipping no component of its own. It
+  carries `usr/share/LICENSES`, the shared texts most Termux packages point their
+  `copyright` symlink at. Neither an asset pack nor a release ZIP can carry a
+  symlink, so the target is resolved out of that package and copied as a real
+  file; without it the copyleft half of the tree would reach a device with a
+  dangling link where its licence should be.
+
 Not listed here, because they are not third-party code: `libglibc-shim.so` and the
 stubs beside it (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`,
 `librt.so.1`, `libutil.so.1`, `libresolv.so.2`, `libcrypt.so.1`, `libgcc_s.so.1`,
 `ld-linux-aarch64.so.1`). They carry glibc's names so a glibc-linked binary can
 resolve against them, but contain none of glibc's code; they are built from
 `scripts/glibc-shim.c` and `scripts/gen-glibc-forwarders.py` in this repository and
-are covered by the root `LICENSE`.
+are covered by the root `LICENSE`. `libexec-trampoline.so` is excluded for the
+same reason: it is built from `scripts/exec-trampoline.c` here, and it is what
+lets a downloaded toolchain command start from a bare name on `PATH`.
 
 | Component | Licence | Copyleft | Files shipped |
 |---|---|---|---|
 | [Bash](https://www.gnu.org/software/bash/) | GPL-3.0 | **yes** | `libbash.so` |
-| [bzip2](https://sourceware.org/bzip2/) | BSD-4-Clause | no | `libbz2.so.1.0` |
+| [bzip2](https://sourceware.org/bzip2/) | bzip2-1.0.6 | no | `libbz2.so.1.0` |
 | [c-ares](https://c-ares.org) | MIT | no | `libcares.so` |
 | [Expat](https://libexpat.github.io) | MIT | no | `libexpat.so.1` |
 | [gdbm](https://www.gnu.org.ua/software/gdbm/) | GPL-3.0 | **yes** | `libgdbm.so`, `libgdbm_compat.so` |
@@ -540,23 +599,24 @@ You may also request a copy of the source code by contacting us (see contact inf
 
 ## GPL and LGPL License Texts
 
-The offer above is one obligation; a copy of the licence itself is the other. GPL-2.0 section 1, GPL-3.0 section 4 and LGPL-2.1 section 1 each require the licence to reach whoever receives the binary, and a link to gnu.org is not a copy of it, least of all on a device with no network. So the texts ship:
+The offer above is one obligation; a copy of the licence itself is the other. GPL-2.0 section 1, GPL-3.0 section 4, LGPL-2.1 section 1 and LGPL-3.0 section 4 each require the licence to reach whoever receives the binary, and a link to gnu.org is not a copy of it, least of all on a device with no network. So the texts ship:
 
 | Licence | Text | Components it covers |
 |---|---|---|
 | GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK) |
 | GPL-3.0 | `licenses/COPYING.GPLv3` | Bash, GNU Make, readline, gdbm, libiconv, xz / liblzma |
 | LGPL-2.1 | `licenses/COPYING.LGPLv2.1` | libiconv, xz / liblzma |
+| LGPL-3.0 | `licenses/COPYING.LGPLv3` | GMP (Ruby toolchain pack) |
 
-These are the Free Software Foundation's texts as shipped in Termux's `liblzma` package, which is one of the packages this app redistributes, and they are verbatim. `NoticesTest` pins the sha256 of each one: a licence text that has been reflowed, re-wrapped or truncated is no longer the licence, so none of them may be edited.
+The first three are the Free Software Foundation's texts as shipped in Termux's `liblzma` package, which is one of the packages this app redistributes. LGPL-3.0 is the FSF's own publication at https://www.gnu.org/licenses/lgpl-3.0.txt, because no package here carries it. All four are verbatim, and `NoticesTest` pins the sha256 of each: a licence text that has been reflowed, re-wrapped or truncated is no longer the licence, so none of them may be edited.
 
-They reach the device through the same `bundleNotices` task as this document, and are read straight out of the APK at **About > Licenses > License Texts**. They sit behind that chooser rather than inside the notices body because 78 KB of licence in front of the attribution and the source offer would bury the part a reader opened that screen for.
+They reach the device through the same `bundleNotices` task as this document, and are read straight out of the APK at **About > Licenses > License Texts**. They sit behind that chooser rather than inside the notices body because 85 KiB of licence in front of the attribution and the source offer would bury the part a reader opened that screen for.
 
-Java is the one component above that arrives in an on-demand pack rather than in the base app, and the text covering it ships in the base app, which every device installing that pack already holds. Its licence is GPL-2.0 with the Classpath Exception, an additional permission that grants rights rather than requiring a copy of anything to travel; the exception is stated at https://openjdk.org/legal/gplv2+ce.html.
+Java arrives in an on-demand pack rather than in the base app, and the text covering it ships in the base app, which every device installing that pack already holds. Its licence is GPL-2.0 with the Classpath Exception, an additional permission that grants rights rather than requiring a copy of anything to travel; the exception is stated at https://openjdk.org/legal/gplv2+ce.html.
 
 OpenJDK's own notice set travels inside the Java pack, at `usr/lib/jvm/java-17-openjdk/legal`, beside the binaries it describes: the GPLv2 text it ships, the Assembly Exception, the Classpath Exception statement, and the third-party notices for the Apache, MPL, W3C, Unicode, ICU, BSD and MIT components inside it. Those components are not listed individually here, for the same reason the toolchain trees are not: the notices upstream wrote are what discharge their terms, and they ship. `scripts/download-java.sh` refuses to build the pack without them, and refuses one in which they arrived as symbolic links, because neither an asset pack nor the release ZIP can carry a link.
 
-GMP, in the Ruby toolchain pack, is LGPL-3.0 and is the one copyleft component with no text here; its licence is named and its source offered above.
+GMP is the other component that arrives in a pack rather than in the base app, and it is why LGPL-3.0 is in the table. LGPL-3.0 is drafted as additional permissions on top of GPL-3.0 and its section 4 asks for both documents, so the GPL-3.0 text already bundled for Bash and Make answers half of it and `COPYING.LGPLv3` answers the rest. The Ruby pack ships GMP's own copy of that text beside the library, at `usr/share/doc/libgmp/copyright`, but the pack has no licences screen: the base app's dialog is the only route a reader has to it.
 
 ---
 
@@ -580,8 +640,15 @@ nothing and report success.
 | libandroid-shmem | BSD-3-Clause | Java | https://github.com/termux/libandroid-shmem |
 | libandroid-spawn | BSD-2-Clause | Java | https://github.com/termux/libandroid-spawn |
 
-GMP is the only copyleft entry here, and its written source offer sits with the
-others under **GPL Source Code Availability** above.
+GMP is the only copyleft entry here. Its written source offer sits with the
+others under **GPL Source Code Availability** above, and the LGPL-3.0 text it
+requires is bundled in the base app under **GPL and LGPL License Texts**.
+
+Every one of these six ships its own upstream notice inside the pack, under
+`usr/share/doc/<termux package>`, on the same terms as the base module's tree.
+`scripts/download-ruby.sh` and `scripts/download-java.sh` refuse a pack holding a
+symbolic link anywhere in it: neither delivery path can carry one, and a dangling
+link where a licence should be is worse than an absent file.
 
 ---
 
@@ -630,4 +697,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on August 22, 2026._
+_This document was last updated on August 23, 2026._

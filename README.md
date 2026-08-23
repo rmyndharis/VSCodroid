@@ -178,7 +178,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 105+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~873 MB free to install            |
+| Storage      | ~865 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -236,15 +236,17 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
 | + Each toolchain (on-demand)           | 10-55 MB per language |
-| Free space required to install         | ~873 MB              |
-| Extracted to internal storage (core)   | ~810 MB              |
-| Extracted, plus both toolchains        | ~990 MB              |
+| Free space required to install         | ~865 MB              |
+| Extracted to internal storage (core)   | ~769 MB              |
+| Extracted, plus both toolchains        | ~952 MB              |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction
-needs room to work: it is the asset tree plus 64 MB of headroom, and it is the number
-the app itself quotes when it refuses to start for lack of space. Freeing only what the
-extracted size suggests is what leaves setup failing partway.
+needs room to work: it is the asset tree plus 96 MB of headroom, which covers the
+filesystem block rounding a tree of 23,000 files costs. The app quotes the figure when
+it refuses to start for lack of space, and on an upgrade it quotes a smaller one,
+because what is already unpacked is credited. Freeing only what the extracted size
+suggests is what leaves setup failing partway.
 
 These move with every VS Code bump. Re-measure rather than trusting them:
 
@@ -253,7 +255,7 @@ These move with every VS Code bump. Re-measure rather than trusting them:
 # python3 rather than stat: `stat -f` is the BSD spelling and `stat -c` the GNU one,
 # and the version that shipped here failed on Linux by printing a plausible 0 MB.
 # This also sums the way the gate itself does, in app/build.gradle.kts.
-python3 -c "import os; t=sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk('android/app/src/main/assets') for f in fs); print(f'{t/1048576:.0f} MB assets, gate demands {t/1048576+64:.0f} MB')"
+python3 -c "import os; t=sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk('android/app/src/main/assets') for f in fs); print(f'{t/1048576:.0f} MB assets, gate demands {t/1048576+96:.0f} MB')"
 ```
 
 ## 🤝 Contributing

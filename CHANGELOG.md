@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bug reports now carry the server's own output. The report always had a section for it, and nothing ever wrote the file it reads, so it was always empty.
 - The gesture trackpad now offers four accessibility actions to move the cursor. A drag was the only way to send an arrow, and a screen reader cannot drag.
 - Long pressing a key through a screen reader now opens its alternate characters. The layer needed a finger held on the key, so `'` and `\` were unreachable.
+- Ctrl+Enter and Alt+Enter now work from the extra key row. The soft keyboard reports Enter as an edit rather than a key, so a latched modifier was spent on a plain newline.
+- A closing parenthesis is reachable by long pressing the `()` key. Nothing else on the row could type one.
+- The Toolchains screen has a Command Palette entry, **VSCodroid: Manage Toolchains**. The launcher icon's shortcut was the only route to it.
+- **VSCodroid: About**, which carries the licence notices and the written offer of source, is now on the remote indicator in the status bar as well as in the Command Palette.
+- Files served to extension webviews answer byte-range requests, which is what seeking in a media preview needs.
 
 ### Changed
 - The toolchain picker is offered until you answer it. An interrupted first run used to skip it permanently, leaving the launcher shortcut as the only way to add a language.
@@ -25,7 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The process counter no longer shows a warning on an untouched install. Its threshold sat exactly on what the app costs when idle, so it was always lit.
 - Download outcome messages and the About dialog's unknown-version wording are now translatable; both were written in code and stayed English in every language.
 - Long-press alternates now carry spoken, translatable names, so a screen reader can tell the apostrophe from the backtick instead of reading the bare glyph.
-- The key row now says which of its five pages is showing, and announces the change on a swipe, instead of leaving five unlabelled indicator dots.
+- The key row now says which page is showing, and which modifier is held, instead of leaving unlabelled indicator dots.
+- The key row splits into more pages on a narrow phone, so no key falls below the 48dp touch target: five pages at 411dp and above, six at 360dp, seven at 320dp.
+- Audio and video in the editor start only on a tap, so nothing can begin playback in a frame you have not touched. `mediaPreview.video.autoPlay` no longer has any effect.
+- Idle language servers are also shed as the app nears Android's process limit, not only when the system reports memory pressure.
+- A toolchain download that drops now resumes, so a lost connection costs the bytes it did not get rather than the ones it did.
+- The onboarding screen, the extension reload prompts and the profile-switch dialog name VSCodroid instead of Visual Studio Code.
+- The sign-in callback page is branded as VSCodroid and no longer carries the VS Code logo.
+- About 4.8 MB comes off the download: the base module shipped a second copy of the workbench bundle that nothing loaded.
 - Toolchain installs record Java 17 at its measured unpacked size, so the storage checks and the card no longer understate it by about 9 MB.
 - Idle toolchain file work threads are released, so repeated launches no longer leave one parked per launch for the life of the process.
 - New installs open with the secondary side bar closed, so a phone-width editor is not half covered by a chat view this build has no provider for.
@@ -61,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A note in the implementation plan rendered as four full-width headings, because its lines began with `#` outside a code block.
 - Five section cross-references pointed at sections that do not exist or do not hold what the pointer promised.
 - The milestone checklist no longer names Python 3.12 or a `vscode-web` asset directory. Neither has been true for a long time; the Python version is resolved at build time.
-- The install figures match what the app computes: the storage gate asks for 873 MB, not 875, and the core download is about 270 MB rather than 135 MB.
+- The install figures match what the app computes: the storage gate quotes its own figure, and the core download is about 270 MB rather than 135 MB.
 - Two passages blamed a `noexec` mount for scripts not running under `filesDir`. It is SELinux, and a `noexec` mount would also block the native addons loaded from there.
 - The first-run extraction row in the device checklist records an elapsed time instead of failing against a 15-second target nobody has ever measured.
 - Two documents said the server build clones VS Code at the tag in `VSCODE_VERSION`. It checks out the commit in `VSCODE_COMMIT`, so a moved tag cannot be followed silently.
@@ -86,9 +98,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 
 ### Fixed
+- Extensions survive a dropped connection. Backgrounding the app for a minute killed the extension host, and the workbench came back looking healthy with nothing loaded.
+- A first run interrupted part-way keeps the files it already unpacked, instead of writing the whole 800 MB tree again on the retry.
+- The storage check reserves enough for the filesystem overhead of an 800 MB tree, so an install can no longer pass it and then meet a full disk part-way through.
+- A latched Ctrl or Alt no longer turns a word committed in one keystroke, from a prediction chip, into one shortcut per letter and no text at all.
+- The key row shows a latched modifier from every page, not only from the page the modifier keys are on.
+- The alternates popup no longer closes the soft keyboard, and it stays on screen at the right-hand edge.
+- Keys on the extra key row and in the alternates popup are announced as buttons by a screen reader.
+- A second finger on the gesture trackpad no longer jumps the caret, and lifting a finger the drag never belonged to no longer ends it.
+- A toolchain install that meets a full disk while copying says so instead of blaming the connection, and takes back the partly copied tree so the retry has the room it needs.
+- Confirming a toolchain removal while another toolchain is downloading now shows that it was accepted, instead of leaving the card offering Remove for minutes.
+- The execute-bit repair reaches the binaries a toolchain keeps outside its own directory, which for Ruby is the interpreter itself.
+- Removing a toolchain no longer deletes a shared library another installed toolchain also ships.
+- A toolchain download whose server declares no length fills its progress bar instead of stopping near a third of the way.
+- A file created in a device folder while the write-back could not run reaches the device the next time that folder is opened, instead of staying inside VSCodroid until the app is uninstalled.
+- An edit that never reached the device folder is kept beside the device's newer copy under a `.local-<time>` name, instead of being overwritten without notice.
+- A device document is no longer copied through a symbolic link out of the folder you granted.
+- A device folder granted without write access is refused when it is opened, rather than opening and then refusing every save.
+- Renaming a folder in the editor no longer leaves a second, partial copy on the device when the provider will not rename a document it has already moved.
+- An adopted session no longer warns that extensions, git and npm have no network. The DNS proxy now runs inside the editor server, so a survivor keeps a working one.
+- Extension webviews get the right content type for ES modules, WebAssembly, JPEG, GIF, WebP and media files, which all arrived as an unknown type and would not load.
+- Link hand-off notices resume after a quiet stretch instead of going silent for the rest of the session once eight have been shown.
 - A comment above settings.json's opening brace is no longer mistaken for the document itself when an upgrade adds a setting, which left the file unparseable and dropped every preference.
 - The setup screen now keeps the display awake while it unpacks the app, so a screen timeout can no longer strand a first run part-way through an 800 MB extraction.
-- Toolchain screen: a download already running is now shown with its progress and a Cancel button instead of an Install button that started nothing.
+- Toolchain screen: a download already running on either delivery path is now shown with its progress and a Cancel button instead of an Install button that started nothing.
 - Clearing caches now frees the toolchain download staging directories it was already counting, leaving alone any directory a running download is still using.
 - Saving a download no longer stops working after the page reloads or the workspace folder changes; the abandoned transfer is released and its part-written file removed.
 - The copied crash report is marked sensitive, so Android no longer draws a preview of the server log and crash text over the editor.
@@ -209,7 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The notice shown when a device folder fails to open comes from a string resource, so it can be translated instead of staying English in every language.
 - The server log no longer rewrites itself on every output line once the lines it keeps are large, which stalled the thread draining the server's output.
 - A delivered toolchain pack the store did not actually delete is reclaimed at the next launch, instead of occupying a toolchain's worth of storage for good.
-- Certificate and link failure notices stop after eight in a session, so a page failing many hosts can no longer bury the editor under them.
+- Certificate and link failure notices are capped at eight distinct failures in a session, so a page failing many hosts can no longer bury the editor under them.
 - The status badge and the action button on a toolchain card no longer draw over each other when a long label makes both wide.
 - Saving a download to a slow storage provider no longer freezes the app. The write held a lock that closing the editor had to wait on.
 - Managing device folder storage no longer freezes the editor while it measures the copies on disk.
@@ -249,6 +282,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The toolchain removal dialog is dismissed on rotation instead of leaking its window.
 
 ### Security
+- A page in the editor can no longer hand a link to another app from a frame you never touched; a navigation with no gesture behind it is refused.
+- Content rendered in the editor can no longer load `content://` addresses, so it cannot spend a device-folder permission you granted the app.
 - Symbolic links inside a device folder's local copy are no longer written out to the device, where they arrived as ordinary files carrying whatever their target held.
 - Opening a device folder no longer writes that folder's path to the system log; the lines identify it by the name of its local copy instead.
 - Toolchain downloads refuse a redirect that leaves HTTPS, so the payload and the digest that vouches for it cannot arrive over cleartext.

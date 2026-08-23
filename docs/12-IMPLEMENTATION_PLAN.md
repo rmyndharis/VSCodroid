@@ -18,7 +18,7 @@
 > gitignored download work dir holding no Dockerfile and no build scripts. Bundled binaries come
 > from Termux packages, via `scripts/download-*.sh`.
 >
-> Two M2/M4 capabilities below are plans the app does not ship, so read them as plan rather
+> Three capabilities below are plans the app does not ship, so read them as plan rather
 > than description:
 >
 > - **"Open with VSCodroid" file-type intent filters** (M2-T6). `AndroidManifest.xml` declares no
@@ -27,6 +27,12 @@
 >   locally, at which point saving writes to a copy and the edits never reach the file that was
 >   opened. Folders open through the SAF picker, which has the sync engine that makes write-back
 >   work.
+> - **A `/healthz` endpoint and a health-check fallback server** (M1 and M3 tasks below). Neither
+>   ships. Readiness is `GET /version`, accepted only on 200 (`ProcessManager`), because `/` answers
+>   403 once the server requires a connection token and a probe that takes anything else calls a
+>   server healthy that serves nothing. `assets/server.js` no longer stands anything up when
+>   `vscode-reh` is missing either: it logs the missing entry point and exits 1, so a broken install
+>   reports a failed start rather than a healthy one.
 > - **A GitHub OAuth flow owned by Kotlin** (`vscodroid://oauth/github`, `startGitHubOAuth`).
 >   No such method exists in the Kotlin. What ships is one opaque relay on `vscodroid://callback`,
 >   gated by whether this app itself opened a browser in the last ten minutes
@@ -2103,11 +2109,11 @@ android/app/src/main/res/layout/
    - Failed packs skip to next; all done → launch `MainActivity`
 
 3. **Day 4**: the Toolchains screen (`ToolchainActivity`). Planned as a Settings page; what shipped
-   is reached from the launcher icon's **Manage toolchains** shortcut instead, and there is no
-   Settings entry anywhere in the app:
+   is reached from the launcher icon's **Manage toolchains** shortcut and from the Command Palette
+   instead, and there is no Settings entry anywhere in the app:
    - `ToolchainPickerAdapter(ToolchainCardMode.MANAGER)`: shows installed/available/downloading state
    - Action buttons: Install, Remove (with confirmation dialog), Cancel, Retry
-   - Opened from the launcher shortcut `SplashActivity.publishToolchainShortcut()` pushes. `AndroidBridge.openToolchainSettings()` can also start it, but no bundled extension sends that relay command
+   - Opened from the launcher shortcut `SplashActivity.publishToolchainShortcut()` pushes, or from the Command Palette: the bundled SAF bridge extension registers **VSCodroid: Manage Toolchains**, which sends `openToolchainSettings` over the relay to `AndroidBridge`
    - Refreshes installed state on `onStart()`
 
 4. **Day 5** (polish):

@@ -61,7 +61,7 @@ Developers increasingly work across multiple devices, yet Android (the world's m
 | G4 | Comfortable mobile coding experience | Extra Key Row for Ctrl/Alt/Esc, touch-optimized |
 | G5 | Zero-setup experience | Download app → open → code. No Termux, no external deps |
 | G6 | Offline-first | Full functionality without internet (except marketplace/git remote) |
-| G7 | Play Store distribution | Published app, passes review, base AAB < 200MB |
+| G7 | Play Store distribution | Published app, passes review, base module inside Play's 500 MB compressed cap. The 200 MB this row asked for is not a cap: it is the size above which a mobile-data user sees a large-download dialog |
 
 ### Non-Goals
 
@@ -227,7 +227,7 @@ flowchart TD
 | .so bundling requirement | All binaries must be packaged as .so in APK |
 | Open VSX only | Some Microsoft-exclusive extensions unavailable |
 | Phantom process limit (32) | Must keep processes under control |
-| AAB base ~150-200MB + on-demand packs | Core download fast; toolchains downloaded per user selection |
+| AAB base module capped at 500 MB compressed, plus on-demand packs | The core download is the base module, last measured at 270.7 MiB and gated by `scripts/check-bundle-size.py`; toolchains are fetched per user selection and draw on Play's separate on-demand budget |
 
 ## 11. Open Questions
 

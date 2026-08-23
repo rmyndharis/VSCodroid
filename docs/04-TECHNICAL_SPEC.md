@@ -118,7 +118,15 @@ for patch in patches/*.patch; do
     git -C "$SRC" apply --verbose "$patch"
 done
 
-# 3. Overlay branding/product.json onto the source product.json.
+# 3. Branding: restore this stage's own targets, then overlay
+#    branding/product.json onto the source product.json and replace the
+#    artwork at seven destinations: the titlebar mark and six letterpress
+#    files, two of them under src/vs/sessions/contrib/chat/browser/media/,
+#    which nothing in the packaged tree renders today and which are replaced
+#    anyway because they are upstream's mark and they travel in the APK.
+#    callback.html is deliberately outside the restore list: patch 0006 and
+#    the callback-page stage both own that file, and checking it out here
+#    would undo the intent:// relay and put the stripped logo back.
 
 # 4. Build.
 npm run gulp core-ci
@@ -134,7 +142,11 @@ tar czf vscode-reh-web-linux-arm64-$VSCODE_VERSION.tar.gz vscode-reh-web-linux-a
 The `reh-web` target carries both halves, so one tree is the server and the web client it serves;
 `scripts/package-assets.sh` copies it to `assets/vscode-reh/` and there is no separate `vscode-web`
 to copy. `verify-server-tree.py` rejects any tree whose `LICENSE.txt` is not the MIT one, or that
-carries `node_modules/vsda`, which only Microsoft's own build has.
+carries `node_modules/vsda`, which only Microsoft's own build has. It also asserts what the
+branding is supposed to have removed: `callback.html` carrying neither a Microsoft product name
+nor an embedded image, and `out/nls.messages.js` carrying none of eight shipped phrases that
+name VS Code. Those nine are skipped, not failed, on a tree with no `vscodroid-patches.json`,
+which is reported as a tree predating the patches rather than as nine regressions.
 
 **Note on ripgrep delivery**: VS Code search requires ripgrep. `scripts/fetch-vscode-oss.sh` takes
 the ARM64 `rg` out of `node_modules/@vscode/ripgrep-universal/bin/linux-arm64/` in the fetched tree,
@@ -379,33 +391,52 @@ The bootstrap script that Node.js executes:
 server.js responsibilities:
 1. Parse command-line arguments (port, host, extensions-dir, etc.)
 2. Set up VS Code product.json overrides
-3. Launch vscode-reh server entry point
-4. Configure Extension Host as worker_thread
-5. Spawn a shell per terminal through node-pty, on a real PTY
-6. Listen on localhost:PORT
-7. Serve vscode-web static files
-8. Handle WebSocket connections for RPC
+3. Preload dns-proxy.js into the editor server it forks
+4. Launch vscode-reh server entry point
+5. Configure Extension Host as worker_thread
+6. Spawn a shell per terminal through node-pty, on a real PTY
+7. Listen on localhost:PORT
+8. Serve vscode-web static files
+9. Handle WebSocket connections for RPC
 ```
 
-Readiness is `GET /version`, and only a `200` counts. There is no `/healthz` on
-the server this app runs: the only thing that has ever served one is the
-fallback stub in `assets/server.js`, which runs *instead of* VS Code when the
-server tree is missing. `/` is not usable as a probe either, because it answers
-`403` once the server requires a connection token.
+Step 3 is a `--require=<path>` on the child's `execArgv`, not a listener in this
+process, and the difference is load-bearing. This bootstrap is SIGKILLed as a
+matter of routine while the child survives holding the port, which is the case
+`ProcessManager` adopts on the next launch; a proxy bound here died with it and
+left that survivor pointing at a closed port for its whole session, with no way
+to change the environment of a running process. The module is `require`d here
+first so that a file that cannot parse costs musl clients their DNS rather than
+costing the app its editor server, and it is passed as one token, because
+`process-monitor.js` names a process by its first non-option argument.
+
+Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
+what used to serve one was a fallback server in `assets/server.js` that bound the
+port when `vscode-reh/out/server-main.js` was missing and answered 200 to every
+path, so a broken install passed the readiness probe and showed the user a page
+of build instructions. A missing entry point is now logged and exits 1. `/` is
+not usable as a probe either, because it answers `403` once the server requires a
+connection token.
 
 ### 3.2 Server Launch Command
 
 ```bash
 $NATIVE_LIB_DIR/libnode.so \
-  --max-old-space-size=512 \
+  --max-old-space-size=$HEAP_MB \
   $FILES_DIR/server/server.js \
   --host=127.0.0.1 \
   --port=$PORT \
   --extensions-dir=$HOME/.vscodroid/extensions \
   --user-data-dir=$HOME/.vscodroid \
   --server-data-dir=$HOME/.vscodroid \
+  --logsPath=$HOME/.vscodroid/data/logs \
   --log=info
 ```
+
+`$HEAP_MB` is not a constant: `ProcessManager.heapCeilingForDevice` derives it from the
+device's total RAM, and it caps each V8 isolate at that number rather than capping the sum
+of them. `$HOME` is `$FILES_DIR/home`. These are `server.js`'s arguments, not the editor
+server's; `05-API_SPEC.md` §3.3 has the four keys it forwards and the flags it adds itself.
 
 ---
 
@@ -419,18 +450,26 @@ webView.settings.apply {
     domStorageEnabled = true
     databaseEnabled = true
     allowFileAccess = false         // the WebView has no business reading files directly
-    allowContentAccess = true
+    allowContentAccess = false      // page content cannot spend the app's SAF grants
     setSupportZoom(false)           // Prevent accidental zoom
     builtInZoomControls = false
     displayZoomControls = false
     textZoom = 100                  // pinned, so the system font scale does NOT reach the editor
     mixedContentMode = MIXED_CONTENT_ALWAYS_ALLOW  // LAN dev servers on plain http
-    mediaPlaybackRequiresUserGesture = false
+    mediaPlaybackRequiresUserGesture = true         // the platform default, restored
     cacheMode = LOAD_DEFAULT
     javaScriptCanOpenWindowsAutomatically = true
     setSupportMultipleWindows(false)
 }
 ```
+
+Two of those are reversals of what this block used to show, and each has a cost worth
+stating. `allowContentAccess = false` closes the one route by which page content could spend the
+app's persisted SAF grants; nothing loses anything, because SAF reaches the page as a POSIX
+path under `filesDir/saf-mirrors` and no `content://` URI is ever loaded. Restoring
+`mediaPlaybackRequiresUserGesture` means no frame the editor renders can start audio or
+video without a tap, and the flag is all or nothing, so a user who turns
+`mediaPreview.video.autoPlay` on gets nothing.
 
 Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not** here:
 
@@ -457,12 +496,25 @@ override fun onRenderProcessGone(
     webView = createAndConfigureWebView()
     webViewContainer.addView(webView)
 
-    // Reload VS Code UI (server should still be running)
+    // Reload VS Code UI (server should still be running), unless the crashes
+    // have become a loop (see below)
     webView.loadUrl("http://localhost:$port/")
 
     return true  // We handled it
 }
 ```
+
+**The reload half is bounded; the rebuild half is not.** `crashLoopReached` keeps the crash
+times in a window (`CRASH_LOOP_WINDOW_MS`, 60 s) and allows `CRASH_LOOP_CRASHES`, 3, inside
+it. A fourth still rebuilds the view, because the crashed one is documented as unusable and
+a resume path calls `reload()` on whatever the field holds, but it does not load the editor
+again: it shows a page saying the editor kept closing, whose only control
+(`vscodroid://reload-editor`) loads it and clears the record, so a deliberate attempt gets
+the whole budget back. The control is not the server retry the give-up page carries: the
+server here is healthy, so a second `startForegroundService` would answer `ALREADY_SERVING`
+and leave the page up for ever. Both counting and the record live on the Activity, since
+`recreateWebView` replaces the WebView and its client on every cycle, and a counter held
+there would be reset by the very event it counts.
 
 ---
 
@@ -470,11 +522,20 @@ override fun onRenderProcessGone(
 
 ### 5.1 Layout
 
-Five swipeable pages, eight items each. Eight is a ceiling rather than a preference: every button
-gets an equal share of the row width, so sixteen on a 360dp portrait row leaves about 18.5dp a key,
-well under the 48dp minimum touch target. Source of truth is `KeyPageConfig.kt`.
+Swipeable pages of at most eight items. Eight is a ceiling rather than a preference: the row
+divides itself exactly between its children, so sixteen on a 360dp portrait row leaves about
+18.5dp a key, well under the 48dp minimum touch target. Source of truth is
+`KeyPageConfig.kt`.
 
-| Page | Contents |
+**How many pages there are depends on the width of the phone.** `KeyPages.defaults` below is
+the layout for a row 411dp wide and up, where page 1's 8.5 shares (the trackpad claims one
+and a half) come to 48.4dp. `KeyPages.forSmallestWidthDp` repacks the same items, in the same
+order, whenever a page's share would put a key under `MIN_TOUCH_TARGET_DP`: five pages at
+411dp, six at 360dp, seven at 320dp. The argument is `smallestScreenWidthDp`, so rotating
+does not repack, but a drop into a narrow split-screen pane does, through
+`ExtraKeyRow.onConfigurationChanged`.
+
+| Page | Contents at 411dp and wider |
 |------|----------|
 | 1 | Tab, Esc, Ctrl, Alt, Shift, the gesture trackpad, `{}`, `()` |
 | 2 | `;` `:` `"` `/` `\|` `` ` `` `&` `_` |
@@ -482,9 +543,16 @@ well under the 48dp minimum touch target. Source of truth is `KeyPageConfig.kt`.
 | 4 | F1 to F8 |
 | 5 | F9 to F12, Home, End, PageUp, PageDown |
 
+On a 360dp phone page 1 ends at `{}` and `()` opens page 2; on a 320dp phone page 1 is the
+five modifiers and the trackpad, with both bracket keys on page 2. The indicator under the
+row is where a user reads the real count, and it speaks the same thing: "Key page 1 of 5",
+with the latched modifier appended while one is held.
+
 Ctrl, Alt and Shift latch rather than repeat. The bracket and parenthesis keys insert only the
 opening character, because Monaco closes the pair and places the caret inside. Several keys carry
-long-press alternates, which `KeyPageConfig.kt` lists beside them.
+long-press alternates, which `KeyPageConfig.kt` lists beside them; `)` is on the `()` key's
+list because no other route on the row reaches it, since `shiftedForm` leaves `(` unchanged
+and `)` sits on a digit key no page carries.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a
@@ -572,6 +640,13 @@ Five of these are load-bearing in ways their titles understate:
   than the Pty Host does, because it is handed the client's socket over IPC and a worker has no
   channel that can carry a handle; it takes the route upstream already uses on Windows, where the
   host connects back over a pipe and the server bridges the two sockets itself.
+  0004 carries a second half for that reason, in `extensionHostProcess.ts` beside the server-side
+  `extensionHostConnection.ts`: upstream ends the host's pipe socket when the client's socket
+  closes and the host treats that as a shutdown, so on this path every dropped WebSocket killed
+  every extension while the workbench still looked healthy, which one to five minutes in the
+  background is enough to produce. The pipe server now keeps listening, the host redials it and
+  redoes the handshake (`beginAcceptReconnection` / `endAcceptReconnection` / `sendResume`), and
+  the accepted socket is paused while no client is attached so nothing is written to nobody.
 - **0009 depends on 0001.** The marketplace target selector tests `isLinux` before it tests Android,
   so without 0001 the CLI-bearing extensions are served the glibc build, which cannot start in an
   app process: glibc's `__tls_init_tp` calls `set_robust_list` and `rseq`, Android's app seccomp
@@ -619,9 +694,21 @@ target's graph, or the build may inline an older copy. Every patch therefore lea
 that survives minification, and `scripts/check-patch-fingerprints.py` searches the packaged tree for
 it against the table in `patches/fingerprints.txt`.
 
+A row answers "did this patch reach the bundle", and by itself it cannot answer "which version
+of it did": editing a patch that already has a row leaves the row matching. That half is
+covered by a manifest rather than by a pattern. `build-vscode-oss.sh` writes
+`vscodroid-patches.json` into the tree it produces, recording the sha256 of each patch's diff,
+and the checker recomputes those hashes from `patches/` and compares before it prints a single
+row. A tarball built from different patch text is refused wherever that check runs, which
+includes the fetch and the Gradle packaging gate. Only the diff is hashed, from the first
+`diff --git` or `---`/`+++` pair down, so a patch's prose header can be rewritten for free;
+a comment inside the added code cannot, and costs a server rebuild. `verify-server-tree.py`
+short-circuits on a tree carrying no manifest at all and reports it as stale.
+
 | Rule | Consequence |
 | ---- | ----------- |
 | The checker walks `patches/`, not the table | A patch added without a row fails, rather than producing a run of "ok" lines |
+| A patch may carry more than one row | 0003 has two, one per bundle: the worker itself lands in `out/server-main.js`, the `process.send` bridge in `out/bootstrap-fork.js`, and a file missing from the target's graph is exactly what a fingerprint is for |
 | A row may declare that no fingerprint is possible, and say how the patch is proven instead | 0007 and 0010 are the two: 0007's added half minifies to `!0`, and 0010 edits `build/.moduleignore`, so its proof is the kept file, which `verify-server-tree.py` requires |
 | Matching tolerates quote style and whitespace | `case"android"` and `case "android"` both count, so a new esbuild version cannot fail a row describing a correct tree |
 | The pattern must appear in what the patch itself adds | A pattern lifted from surrounding code cannot be evidence that the patch arrived |

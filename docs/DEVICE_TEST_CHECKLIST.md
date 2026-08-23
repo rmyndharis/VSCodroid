@@ -47,10 +47,13 @@
 | KB-7 | Extra Key Row: Ctrl+S | Press Ctrl on EKR then S on keyboard | File saves (no error) | | |
 | KB-8 | Extra Key Row: Ctrl+P | Press Ctrl on EKR then P | Quick Open dialog appears | | |
 | KB-9 | Extra Key Row trackpad | Drag on the trackpad: slowly first, then keep going without lifting, then diagonally | Cursor steps character by character at first and speeds up the longer the drag gets; a diagonal drag moves on both axes. There are no arrow buttons to press: the trackpad replaced them, so a drag is the only route for a finger. KB-13 covers the other route, the pad's four accessibility actions | | |
-| KB-10 | Extra Key Row, brackets on the textarea edit path | On a device whose WebView is older than 121, open a file and press {, }, (, ) on the key row. Confirm the path first in remote debugging: `document.querySelectorAll("textarea.inputarea").length` is 1 | Each character is inserted, and Monaco auto-closes the pair | | |
+| KB-10 | Extra Key Row, brackets on the textarea edit path | On a device whose WebView is older than 121, open a file and press { and ( on the key row. Those two are all it types directly: for } latch Shift and press ], and for ) long press the `()` key and pick it out of the popup (KB-14). Which page each key sits on depends on the screen width, so page through rather than counting (KB-16). Confirm the path first in remote debugging: `document.querySelectorAll("textarea.inputarea").length` is 1 | Each character is inserted, and Monaco auto-closes the pair | | |
 | KB-11 | Extra Key Row, brackets on the EditContext edit path | On a device whose WebView is 121 or newer, same presses. Confirm the path first: `document.querySelectorAll("textarea.inputarea").length` is 0 and `document.querySelectorAll("div.native-edit-context").length` is 2 | Each character is inserted. This is the path where anything written to a textarea is inert, so a pass here and a fail on KB-10 means the fix went to the wrong layer | | |
 | KB-12 | Extra Key Row keys under a screen reader | Turn TalkBack on, open a file, swipe to a key on the row until it is announced, then double tap to activate it. **`adb shell input tap` cannot answer this row**: it injects below touch exploration, so a single tap types the character and the run looks like a pass whatever the code does. Drive it by hand, or from a test that performs ACTION_CLICK on the node | The character is inserted, exactly once. A modifier announces and latches, and the next key carries it | | |
 | KB-13 | Trackpad arrows under a screen reader | With TalkBack on, swipe to the trackpad, open its actions menu and choose each of Move cursor left, right, up and down. Same caveat as KB-12: an injected tap or swipe proves nothing here, because a drag is what touch exploration consumes | The caret moves one step in the chosen direction. A drag is the only other route and a screen reader cannot perform one, so a failure here leaves no way to move the caret at all | | |
+| KB-14 | Long-press alternates | With the keyboard up and the caret in a file, touch and hold the `()` key (last on page 1 on a 411dp phone, page 2 on a narrow one) and pick `)` | The popup appears fully on screen, right edge included: it is about two and a half times the width of the key it is centred on, so the edge is where it would run off. The soft keyboard stays up and the key row stays visible throughout, and `)` is inserted. Long press is the only route to that character, so a popup that closes the keyboard costs it entirely | | |
+| KB-15 | Ctrl+Enter from the key row | Put the caret in the MIDDLE of a line, tap Ctrl on the key row, then press Enter on the soft keyboard | A new line opens below and the caret moves to it, leaving the line under the caret unsplit (Insert Line Below). A split line means the latch was spent without being applied: the soft keyboard reports Enter as an edit rather than as a key, so this is a different path from every other row key | | |
+| KB-16 | Narrow phone paging | On a device or emulator whose portrait width is 360dp or less, bring the keyboard up and swipe through every page. `adb shell wm size` and `adb shell wm density` give the width in dp: pixels times 160, divided by density | There are more pages than the five a 411dp phone shows: six at 360dp, seven at 320dp. Every key still fills a comfortable target, no label is clipped, and the keys appear in the same order, only broken across more pages. The dots say how many there are | | |
 
 ## 4. Screen & Orientation
 
@@ -77,7 +80,8 @@
 | ED-8 | Format document | Open JS file, run Format Document (Prettier) | File formatted, no errors | | |
 | ED-9 | Application Menu with the keyboard up | Tap a text field so the keyboard rises, then tap the menubar button. Watch it for a few seconds rather than glancing: the failure this catches lasted about 40ms and left the button looking dead | The menu opens and stays open, listing File, Edit, Selection, View, Go and Run. Tapping outside still closes it, and tapping File still opens its submenu. Do not look for Esc here: the key row that carries it is hidden the moment the keyboard drops, which is the very event under test | | |
 | ED-10 | Application Menu across a rotation | Open the Application Menu, tap File so its submenu opens, then rotate the device | Both menus close. They must not stay open: the submenu would be anchored where it no longer fits and would be clipped off the edge | | |
-| ED-11 | An https preview with a bad certificate | Run `Simple Browser: Show` and enter `https://self-signed.badssl.com/`, then `https://expired.badssl.com/`, then the first one again. Offline variant: a local https server with a self-signed certificate, reached at `https://127.0.0.1:8443` | Each of the first two shows an empty tab plus a toast naming the host, the first saying the certificate is not trusted and the second that it is expired or not yet valid. The third shows no second toast: a repeat of a fact already said is suppressed. No dialog and no way to continue appears at any point | Pass | Verified 2026-08-21 on an API 33 emulator against a local self-signed server reached at `https://10.0.2.2:8443`, which is what the host is called from inside an emulator. Logcat: `TLS refused for 10.0.2.2:8443: UNTRUSTED`. The toast reads `Blocked 10.0.2.2:8443: certificate not trusted. Use http instead.` and renders whole. The pane stays empty, which is the symptom this exists to explain rather than remove |
+| ED-11 | An https preview with a bad certificate | Run `Simple Browser: Show` and enter `https://self-signed.badssl.com/`, then `https://expired.badssl.com/`, then the first one again. Offline variant: a local https server with a self-signed certificate, reached at `https://127.0.0.1:8443` | Each of the first two shows an empty tab plus a toast naming the host, the first saying the certificate is not trusted and the second that it is expired or not yet valid. The third shows no second toast: a repeat of a fact already said is suppressed. No dialog and no way to continue appears at any point | Pass | Verified 2026-08-21 on an API 33 emulator against a local self-signed server reached at `https://10.0.2.2:8443`, which is what the host is called from inside an emulator. Logcat: `TLS refused for 10.0.2.2:8443: UNTRUSTED`. The toast reads `Blocked 10.0.2.2:8443: certificate not trusted. Use http instead.` and renders whole. The pane stays empty, which is the symptom this exists to explain rather than remove. **Re-run: this result predates the subframe navigation rules, which an https preview goes through** |
+| ED-12 | Where a preview's own links go | On a debug build with `adb logcat -s VSCodroid.WebViewClient` running, run `Simple Browser: Show` and enter `https://example.com`, then tap the link on that page | The linked page renders in the preview tab; the device browser does not open. Record whether logcat shows anything from the client for that navigation, because that is what this row exists to settle: the platform documents `shouldOverrideUrlLoading` as one that *may* be called for subframes, and whether it is here decides whether the subframe rules are live behaviour or defence in depth. The refusal line is `Logger.d`, so a release build prints nothing either way | | |
 
 ## 6. Extensions
 
@@ -100,14 +104,19 @@
 | BG-4 | Server process killed | `adb shell kill <node PID>` | Server auto-restarts, notification shows | | |
 | BG-5 | Foreground notification | Check notification shade while app runs | "VSCodroid running" notification visible | | |
 | BG-6 | Return after screen off | Lock screen, wait 2min, unlock | App resumes without crash | | |
-| BG-7 | Adopted session says its network is gone | `adb shell ps -A \| grep libnode` shows two processes; **`kill -9` the parent** (the lower PID, the one the other lists as its PPID), then relaunch the app. It must be SIGKILL: the bootstrap handles SIGTERM and kills its child on the way out, so a plain `kill` leaves nothing to adopt. `ps` shows `libnode` rather than `server.js` because that is argv[0] | Editor loads against the surviving server, and the foreground notification reads "No network for extensions, git or npm". Confirm the claim: the marketplace and `npm view express` both fail in that session, and both work again after a full restart | | |
+| BG-7 | An adopted session keeps its network | `adb shell ps -A \| grep libnode` shows two processes; **`kill -9` the parent** (the lower PID, the one the other lists as its PPID), then relaunch the app. It must be SIGKILL: the bootstrap handles SIGTERM and kills its child on the way out, so a plain `kill` leaves nothing to adopt. `ps` shows `libnode` rather than `server.js` because that is argv[0] | Editor loads against the surviving server, the notification reads "Local development server active" with no warning beside it, and the session reaches the network: the marketplace lists extensions and `npm view express` prints a version | | |
 | BG-8 | A server that will not come back says so | With the editor open, `adb shell kill -9` the `libnode` process repeatedly until the notification reads "Server crashed repeatedly" | The page stops reading "Starting server..." and states that the server could not be restarted, that files are safe, and offers **Try again**. Tapping it returns to the loading page and starts a new attempt; nothing requires force-stopping the app | | |
 
-BG-7 is the one case where the editor being healthy is the problem. An adopted
-server outlived the bootstrap that forked it, and the DNS proxy died with that
-bootstrap while the survivor kept the dead address in its environment. Nothing in
-the editor looks wrong; only the card says so. If the card reads "Local
-development server active" here, the degradation is silent again.
+BG-7 proves where the DNS proxy lives. An adopted server outlived the bootstrap
+that forked it, and the proxy that lets musl-built programs resolve names is
+preloaded into the editor server itself, so it survives with it rather than dying
+with the bootstrap.
+
+A failure here is silent by construction: the editor looks entirely healthy and
+only outbound requests fail, so nothing on screen says why the marketplace is
+empty. Do not try to recover it by relaunching, which adopts the same orphan
+again; tap Stop on the notification, which ends the recorded server, and start it
+fresh.
 
 ## 8. Low Memory & Stress
 
@@ -122,7 +131,7 @@ development server active" here, the degradation is silent again.
 
 | ID | Metric | Steps | Target | Actual | Pass/Fail | Notes |
 |----|--------|-------|--------|--------|-----------|-------|
-| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 810 MiB across 23,494 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
+| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 769 MiB across 23,558 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
 | PF-2 | Cold start (subsequent) | Kill app, re-launch, time to editor | <5s | | | |
 | PF-3 | Warm start | Home → return to app | <2s | | | |
 | PF-4 | Memory (idle) | Open app, check `dumpsys meminfo` | <400MB | | | |
@@ -135,9 +144,11 @@ development server active" here, the degradation is silent again.
 
 ## 10. Toolchains (On-Demand)
 
-There is no Settings entry for this screen. Touch and hold the app icon on the
-home screen and pick **Manage toolchains**; `strings.xml` calls that the only
-entry point there is, and every row below starts from it.
+There is no Settings entry for this screen. Two routes reach it: **VSCodroid:
+Manage Toolchains** from the Command Palette, and touch-and-hold on the app icon
+followed by **Manage toolchains**. The rows below use the second, because it is
+the one that still works when the editor does not. Confirm the first opens the
+same screen once on any run.
 
 Run each command in the app's own terminal. `adb shell run-as` will not answer
 these: it runs in a different SELinux domain, one that is allowed to execute
@@ -171,7 +182,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | TT-3 | git clone | `git clone https://github.com/user/repo` | Clones successfully with SSL | | |
 | TT-4 | python3 | `python3 -c "print('hello')"` | Prints hello | | |
 | TT-5 | npm init + install | `npm init -y && npm install express` | package.json created, express installed | | |
-| TT-6 | SSH key gen | `ssh-keygen -t ed25519` in the terminal | Key pair created at `~/.ssh/id_ed25519` | | |
+| TT-6 | SSH key gen | `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal | Key pair created at `~/.ssh/id_ed25519`. The `-f` is not optional: OpenSSH derives its default key path from the system user database, which an app sandbox does not provide, so the bare command fails with `Saving key "..." failed: No such file or directory`. `AndroidBridge.generateSshKey` passes the same explicit path | | |
 | TT-7 | SSH key read | `cat ~/.ssh/id_ed25519.pub` | Public key printed and selectable | | |
 | TT-8 | tmux | `tmux new-session -d && tmux ls` | Session listed | | |
 | TT-9 | ripgrep | `rg "pattern" .` | Search results shown | | |
@@ -205,6 +216,8 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-6 | Rename a directory | Rename a subdirectory that has files in it, from the editor | Directory appears on the device under the new name **with its contents**. Renames arrive as an unpaired delete-then-create, so an empty new directory here means data loss | | |
 | SF-7 | Device-side deletion sticks | Delete a file from the folder using a device file manager, then reopen the folder in the editor | The file stays deleted; it is not restored from the stale mirror | | |
 | SF-8 | Revoked permission reclaimed | Revoke the folder's access in Android Settings > Apps > VSCodroid, relaunch | The mirror is reclaimed and the device copy is untouched. A folder still granted must **not** be emptied while open | | |
+| SF-9 | A save that did not reach the device | Create a file in the folder, force-stop the app immediately, relaunch and reopen the same folder | The file is present in the device folder, checked from a device file manager. Before, a write the sync never delivered stayed inside VSCodroid until the app was uninstalled, with nothing saying so | | |
+| SF-10 | Conflicting edits | Edit a file in the editor, force-stop the app before the save reaches the device, edit the same file with another app, reopen the folder | The device's version is shown and the editor's version is beside it as `<name>.local-<number>`; neither is lost. Both appear in the device folder as well as in the editor | | |
 
 ---
 
@@ -214,17 +227,17 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 13 | | | |
+| Keyboard Input | 16 | | | |
 | Screen & Orientation | 6 | | | |
-| Editor Operations | 11 | | | |
+| Editor Operations | 12 | | | |
 | Extensions | 6 | | | |
 | Background/Foreground | 8 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
-| SAF & Files | 8 | | | |
-| **Total** | **92** | | | |
+| SAF & Files | 10 | | | |
+| **Total** | **98** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

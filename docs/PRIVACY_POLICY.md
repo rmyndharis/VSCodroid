@@ -1,15 +1,15 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: August 22, 2026**
+**Last Updated: August 23, 2026**
 
 ## Summary
 
 VSCodroid is a code editor that runs entirely on your Android device. **We** do not collect, transmit, or store any personal data, and there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
 
-Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated (see **Network Access**).
+Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, with one thing the editor does on its own: it checks Open VSX for newer versions of your installed extensions and installs them (see **Network Access**).
 
-The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It does nothing until you sign in, and it can be disabled or uninstalled.
+The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though it does load and run in the background from the moment the editor starts, and it can be switched off.
 
 ---
 
@@ -46,9 +46,11 @@ the phone state, or any device identifier.
 
 VSCodroid requires the INTERNET permission for the following purposes only:
 
-### Extension Marketplace (User-Initiated)
+### Extension Marketplace
 
 When you browse, search for, or install extensions, the app connects to **Open VSX** (https://open-vsx.org), an open-source extension registry operated by the Eclipse Foundation. These requests are made by the VS Code Workbench running in the WebView, not by any analytics or tracking code. Open VSX has its own privacy policy at https://open-vsx.org/about.
+
+Not every one of these connections is one you asked for, which is why this section is not headed "user-initiated" like the ones below it. The editor asks Open VSX for newer versions of the extensions you have installed when it starts and every 12 hours after that, whether or not you open the Extensions view, and it installs the updates it finds without asking. Both behaviours come from the editor and are on by default; you can turn them off in its settings, under `extensions.autoCheckUpdates` and `extensions.autoUpdate`. What goes out is the list of extensions to check, never anything from your files.
 
 ### Signing In to a Service From the Editor (User-Initiated)
 
@@ -64,9 +66,11 @@ VSCodroid bundles **GitHub Copilot Chat**, published by GitHub, and the editor i
 
 It has no account to work against until you sign in to GitHub, which happens through the browser flow described above, and its features are unavailable until you do.
 
+That sign-in does not have to be one you made for the chat. A GitHub session created for anything else in the editor, the built-in GitHub features for example, is available to GitHub Copilot Chat without a second prompt: the editor's product configuration lists it as trusted for GitHub accounts, and it appears as trusted, and cannot be unticked, in the editor's list of extensions with access to an account. So "signing in to GitHub" and "giving the chat an account" are the same act here.
+
 Once you are signed in and you use it, **what you send goes to GitHub**. That means the message you type and the material the extension decides to attach as context, which normally includes code from the file you are working in and can include other parts of the project. That exchange is between you and GitHub under GitHub's terms and privacy statement (https://docs.github.com/site-policy). VSCodroid does not proxy it, read it, or keep a copy, and it is the only feature in this app that sends anything you write to a service we did not have to name elsewhere in this policy.
 
-If you would rather it were not there, disable or uninstall **GitHub Copilot Chat** from the Extensions view; the editor works without it.
+If you would rather it were not there, disable **GitHub Copilot Chat** from the Extensions view; the editor works without it. It ships inside the app rather than being downloaded, so the view offers Disable rather than Uninstall, and disabling it is what stops it loading.
 
 ### Git Operations (User-Initiated)
 
@@ -121,7 +125,7 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 
 The following data is stored locally on your device within the app's private sandbox:
 
-- **Your project files**: Stored in the app's internal storage or in locations you grant access to
+- **Your project files**: Stored in the app's own area of device storage (`Android/data/com.vscodroid/files/projects`, which other apps cannot read and which Clear Data wipes), or in a folder you granted access to
 - **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. So a second copy of that folder exists inside the app for as long as it stays open to you, and it is removed when you uninstall or clear app data along with everything else. Nothing about the copy leaves the device (it is excluded from backup), but you should know it is made
 - **Editor settings and preferences**: Stored locally as JSON configuration files
 - **Installed extensions**: Downloaded from Open VSX and stored locally
@@ -135,7 +139,7 @@ All of this data is removed when you uninstall the app or clear the app's data t
 
 VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The third-party services it integrates are:
 
-- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. Unused until you sign in to GitHub; from then on what you ask it and the code it attaches go to GitHub, under GitHub's terms and privacy statement. It can be disabled or uninstalled from the Extensions view.
+- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub, but it is not dormant before that: it starts with the editor and its model backend runs while you are signed out. Whether that backend sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be disabled from the Extensions view, but not uninstalled, because it ships as a built-in.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
 - **GitHub Releases**: Used solely for downloading those same toolchain packs on installs that did not come from the Play Store. Governed by GitHub's privacy policy.
 

@@ -82,13 +82,20 @@
 |-------|--------|--------|
 | 1. Extension Host | Runs as a worker_thread, not a `child_process.fork()` (`patches/0004`) | Costs no phantom process |
 | 2. Terminal | ptyHost as worker_thread; each terminal spawns bash directly on a real PTY | Terminal host costs no phantom process |
-| 3. Language Servers | Lazy start + idle kill after 5 min | Reduce concurrent LSP to 2-3 |
-| 4. Hard cap | Max 2-3 concurrent language servers | Predictable process count |
+| 3. Language Servers | Lazy start. Five minutes without a tick of CPU marks a server idle (`IDLE_KILL_THRESHOLD_MS`), which makes it *eligible* to be shed, not shed | Nothing is killed by the clock alone |
+| 4. Reclaim | Idle servers are SIGTERMed when Android reports critical memory pressure, or when the process count reaches `RECLAIM_BUDGET` (24) against the 32 limit, whichever comes first, and SIGKILLed on the next scan if they survive it. `VSCodroid: Kill Idle Servers` does the same on demand | Bounded process count without waiting for a pressure signal that may never arrive |
 | 5. Foreground Service | specialUse type, protects main process | Main app not killed |
 | 6. Monitoring | Count phantoms, warn user if approaching limit | User can close terminals/extensions |
 | 7. User guidance | In-app tips: "Close unused terminals to save resources" | User awareness |
 
-**Target**: 3-5 phantom processes in typical use (well under 32 limit)
+**Measured**: 5 phantom processes with the app open and nothing happening, on API 33 and API 37
+alike (`IDLE_BASELINE` in `process-monitor.js`, which names them: the bootstrap, the editor server,
+the file watcher, the agent host, and the chat agent's model backend). The thresholds above are set
+against that number, not against a target.
+
+There is **no cap on concurrent language servers**. A "hard cap: max 2-3" was listed here as
+mitigation layer 4 until 2026-08-23; nothing implemented it, and layer 4 now describes the reclaim
+that does exist.
 
 **Contingency**: If worker_thread patch proves too complex, fall back to child_process with aggressive process management (immediate kill of idle processes).
 
@@ -190,7 +197,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | T10 (Python packaging/stdlib gaps) | Take Python from the Termux package index at build time, smoke-test stdlib modules and pip in CI, and check every shared library the interpreter needs is bundled | Stay on the last known-good Termux python package |
 | P02 (future Android binary restrictions) | Track Android previews quarterly, keep alternative architecture spikes (remote execution mode) in backlog | Shift distribution toward sideload/F-Droid while redesigning runtime model |
 | P03 (restriction of .so execution model) | Keep policy documentation and precedent evidence updated, minimize dynamic execution surface, review Play policy each milestone | Prepare fast migration plan to policy-compliant delivery variant |
-| P05 (scoped storage tightening) | Already mitigated by construction: the workspace is app-private and every external folder arrives through SAF. `MANAGE_EXTERNAL_STORAGE` was never declared, so there is nothing to keep optional and nothing to document. What remains open is migration tooling for moved workspaces | Nothing to fall back to: SAF-only is what already ships |
+| P05 (scoped storage tightening) | Already mitigated by construction: the workspace is one of the app's own directories (`getExternalFilesDir(null)/projects`, which needs no permission and which scoped storage does not reach) and every folder outside them arrives through SAF. `MANAGE_EXTERNAL_STORAGE` was never declared, so there is nothing to keep optional and nothing to document. What remains open is migration tooling for moved workspaces | Nothing to fall back to: SAF-only is what already ships |
 | L01 (trademark risk) | Keep Code-OSS attribution + disclaimer visible, prepare backup branding set, run pre-launch legal checklist | Rename app and migrate package/display name with compatibility notes |
 | L02 (Open VSX outage/API change) | Cache extension metadata locally, keep retry + graceful degradation in UI, monitor Open VSX status | Support manual VSIX install for critical workflows |
 | L03 (license compliance drift) | Maintain SBOM/license inventory per release, automate NOTICE generation in CI, review bundled binaries/licenses at tag time | Pull non-compliant artifact from release and republish patched build |
@@ -238,7 +245,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | Indicator | Trigger | Action |
 |-----------|---------|--------|
 | Node.js build time > 2 hours | M0 build stage | Investigate build config, try Termux binary fallback |
-| Phantom process count > 5 | M1 integration test | Review process management, add more aggressive idle-kill |
+| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count and offers the idle-server sweep; five is the idle baseline, so a threshold below eight fires on an app that is doing nothing |
 | Patch apply failure on new VS Code | CI monthly check | Pause upstream sync, fix patches |
 | WebView crash rate > 5% | M2 testing | Profile memory, reduce WebView load |
 | Play Store rejection | M5 submission | Prepare appeal, prepare alternative distribution |

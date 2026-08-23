@@ -36,7 +36,7 @@ wv.addJavascriptInterface(bridge, "AndroidBridge")
 ```
 
 The injected name is `AndroidBridge` and that part was always right. The construction
-was not: `AndroidBridge(this)` does not compile. The real constructor takes fourteen
+was not: `AndroidBridge(this)` does not compile. The real constructor takes sixteen
 parameters, five of them required:
 
 ```kotlin
@@ -48,20 +48,37 @@ AndroidBridge(
     onDownloadNamed = { _, _ -> }, onDownloadChunk = { _, _ -> false },
     onDownloadComplete = { _, _ -> },
     onListMirrors = { "[]" }, onReclaimMirror = { _, _ -> "..." },
+    onAsyncAnswer = { _, _, _ -> },        // posts a late answer by replyId
+    diskWork = <single daemon executor>,   // the one thread the four walks run on
 )
 ```
 
+The last two are what the commands that answer by `replyId` are built on, and they are
+defaulted so that a test can supply its own: `onAsyncAnswer` posts the value back into
+the page under the id the caller sent, and `diskWork` is the single thread every disk
+walk runs on. See §2.4.
+
 And `security` being one of them is the point of the next section rather than a
 detail. A one-argument sketch shows a bridge built without the `SecurityManager` that
-§2.2 describes as the whole access-control mechanism, which is the opposite of what the
+every one of these methods validates against, which is the opposite of what the
 code does.
 
 ### 2.2 Bridge Security Model
 
-Bridge exposure is controlled by a per-session capability token. That is the whole
-mechanism -- there is no origin-based control, and there cannot be one on this transport:
-`@JavascriptInterface` does not carry the caller's origin, so a bridge method has nothing to
-compare.
+Bridge exposure is controlled by a per-session capability token. There is no origin-based
+control, and there cannot be one on this transport: `@JavascriptInterface` does not carry
+the caller's origin, so a bridge method has nothing to compare.
+
+**What the token does not separate is one web extension from another, and it never did.**
+`product.json` carries no `webEndpointUrlTemplate`, so the workbench starts the web
+extension host in a same-origin iframe and logs a warning saying so. The BroadcastChannel
+relay of §2.4 is scoped by origin, so every installed Open VSX web extension shares that
+one channel, and the relay reads the token out of `window.__vscodroid` on the same origin,
+which anything posting to the channel can read too. The token therefore bounds the page
+against other origins, not one caller on the page against another; the relay's KDoc in
+`MainActivity.injectBridgeRelay` works that consequence through command by command, and it
+is why `listSshKeys` no longer answers with a key's comment and why a forced
+`reclaimSafMirror` now asks the user itself.
 
 1. **Per-session token**: `SecurityManager` generates 32 random bytes at construction
    (`SecurityManager.generateToken`, in `bridge/`, not a `security/` package).
@@ -69,7 +86,7 @@ compare.
    after the page loads.
 2. **Every method, not a chosen subset**: all 33 `@JavascriptInterface` methods take the
    token and validate it before doing anything, returning without acting on refusal
-   (§2.4 records the three whose refusal value is not an empty one).
+   (§2.4 records the six whose refusal value is not an empty one).
    `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
    if one is added without the check, and a second test asserts a refused call touches
    nothing -- so the rule holds for the class, not for a list that was correct when it was
@@ -179,9 +196,18 @@ list of **14** command names. Grep `d.cmd ===` in `MainActivity.kt` for the curr
 > `openToolchainSettings`, `reclaimSafMirror`, `showAboutDialog`
 
 A method absent from that list is unreachable from any extension however correctly it is
-registered, which is the whole of why the toolchain management calls have no callers.
+registered, which is why the toolchain install, removal and cancel calls have no callers.
+`openToolchainSettings` is on the list and now has a sender as well: the bundled
+saf-bridge extension contributes **VSCodroid: Manage Toolchains**, so the Toolchains
+screen has a route from inside the editor and the launcher long-press shortcut is one of
+two ways in rather than the only one.
+
 Adding a method to `AndroidBridge` does not publish it; the relay branch is a second,
-separate edit, and nothing fails if you forget it.
+separate edit. Forgetting it is now reported rather than silent: the chain's final branch
+answers an unrecognised command with `ok:false` and the text
+`VSCodroid does not know the command <name>`. Before that, the caller's promise died on
+its own deadline and blamed the platform with "Bridge timeout: is the app running on
+Android?", after five seconds, or after two minutes for a storage command.
 
 **A bridge call blocks the page's main thread for as long as the method runs, so the four
 that run for as long as the disk is big do not answer where the caller waits.** A call
@@ -189,9 +215,11 @@ made through `addJavascriptInterface` does not return to JavaScript until the Ko
 method has finished, and the relay makes its calls from the workbench page's own main
 frame, so the thread it holds is the one the editor renders and takes input on.
 `getStorageBreakdown`, `listSafMirrors`, `reclaimSafMirror` and `clearCaches` all walk
-directory trees before they can answer, and the app's own extracted tree is around 875 MB
-before a project is opened; answered inline they froze the workbench for the length of the
-walk, and no `WebViewRenderProcessClient` is installed anywhere, so nothing detected it.
+directory trees before they can answer, and the app's own extracted tree is around 800 MB
+before a project is opened (`BuildConfig.EXTRACTED_ASSET_BYTES`, computed at build time
+from `assets/`, so measure it rather than quoting this figure); answered inline they froze
+the workbench for the length of the walk, and no `WebViewRenderProcessClient` is installed
+anywhere, so nothing detected it.
 
 **Those four therefore take a `replyId` and answer against it.** Each returns at once,
 and what it returns is not the value asked for: the EMPTY string means the work has
@@ -199,6 +227,12 @@ started and the answer will follow, and anything else is a refusal decided befor
 work began. The value itself is posted later, into the same BroadcastChannel and under
 the id the caller sent, so a caller that routes replies by id (which the relay protocol
 already requires) needs no other change. A caller must not read the return as the answer.
+
+There are two refusals, not one. A stale session token is the first. The second is a full
+queue: all four run on one thread, and at most four may be outstanding at once
+(`MAX_QUEUED_DISK_COMMANDS`), because the relay is shared by every script on the
+workbench's origin and an unbounded queue let one of them pin the disk and the battery for
+as long as it liked. A refused call is one the caller may simply retry.
 
 The deadline a caller puts on the promise is therefore no longer a bound on the walk; it
 bounds a relay that is not there at all. The bundled bridge extension still declares two,
@@ -256,9 +290,15 @@ fun openExternalUrl(url: String, authToken: String): String  // note: token LAST
 
 @JavascriptInterface
 fun onBackPressed(authToken: String): Boolean
-// Called from VS Code when back button override is needed
-// Returns: true if VS Code handled back navigation (closed a panel/dialog)
-//          false if app should handle back (minimize/exit)
+// RESERVED, and it has no caller on either side.
+// It answers whatever the `onBackPressed` constructor lambda answers, which
+// MainActivity passes as `{ false }`, and nothing installs a page-side handler
+// that could answer anything else. Back is decided natively now:
+// setupBackNavigation calls moveTaskToBack(true) directly, so not even the
+// evaluateJavascript round trip that used to reach this method is left.
+// Documented rather than dropped because deleting it is an API break the
+// bridge/spec gate holds both sides to; a page must not read a `false` here as
+// "VS Code declined to handle back".
 
 @JavascriptInterface
 fun minimizeApp(authToken: String)
@@ -356,7 +396,7 @@ fun getStorageBreakdown(authToken: String, replyId: String): String
 //
 // TAKES AS LONG AS THE DISK. Every figure is a directory walk and "total" walks
 // filesDir again on top, so on an install carrying the extracted server tree
-// (~875 MB before a project is opened) this runs for far longer than a relay
+// (~800 MB before a project is opened) this runs for far longer than a relay
 // hop, which is why it does not answer where the caller waits. See the note at
 // the head of this section.
 
@@ -406,8 +446,26 @@ fun reclaimSafMirror(authToken: String, hash: String, force: Boolean, replyId: S
 // a refusal decided before it started, and is the sentence to show.
 //
 // `force` removes a copy whose "reclaimable" is false, which DELETES FILES THAT
-// EXIST NOWHERE ELSE. Only set it after the user has confirmed a modal that says
-// so. It is not a retry flag, and nothing else in this API deletes user data.
+// EXIST NOWHERE ELSE. It is not a retry flag, and nothing else in this API
+// deletes user data.
+//
+// The caller's own modal is no longer what controls it. A promise the caller
+// makes is one this side cannot check, and the relay is shared by every web
+// extension on the workbench's origin, so `force:true` from a script the user
+// never looked at satisfied that contract as well as a person pressing Remove.
+// MainActivity.confirmForcedRemoval now asks on the Activity, before anything
+// is deleted, with the sentence that names the stake. A decline posts the EMPTY
+// string, which is this command's success value, so the caller sees ok. That is
+// deliberate: the bundled extension renders every non-empty answer as "Could not
+// remove that folder's local copy: <reason>", so any sentence at all reports a
+// cancel the user chose as a failure of the app's. Two were tried and dropped,
+// the not-a-copy sentence, which told someone who had just pressed Cancel that
+// the app had overruled them to protect their data, and the retry sentence,
+// which invited them to press the button they had just declined.
+//
+// Nothing states or implies that anything was freed on that road: the byte
+// figure is announced from the success branch alone, and an ok sends the
+// extension back to the folder list, where the copy the user kept is still on it.
 //
 // The answer posted against replyId is the empty string when the copy was
 // removed, and otherwise the reason it was not. CALLERS MUST COMPARE AGAINST THE
@@ -609,6 +667,14 @@ fun generateSshKey(authToken: String, comment: String): String
 // `existed` appears ONLY on the reuse path -- absent, not false, on a fresh
 // generation. It is the only way to tell "a key was made for you, upload it"
 // from "you already had one": publicKey looks identical either way.
+//
+// ANSWERED INLINE, unlike the four disk-walking commands, so it holds the
+// page's main thread until ssh-keygen exits. Bounded rather than open ended:
+// KEYGEN_TIMEOUT_SECONDS is 4 and the stdout drain is joined for one second
+// more, against the five the bundled extension gives a bridge call. Key
+// generation is arithmetic and finishes well inside that; the bound is about
+// when "slow" becomes "never". Moving it onto a replyId is a spec change and a
+// Kotlin change in one commit.
 
 @JavascriptInterface
 fun getSshPublicKey(authToken: String): String
@@ -620,11 +686,15 @@ fun getSshPublicKey(authToken: String): String
 fun listSshKeys(authToken: String): String
 // Every *.pub in ~/.ssh/, as a JSON array. Returns "[]" if the directory
 // does not exist. A key whose file cannot be read is skipped, not reported.
-// Each entry: { name, type, comment }
-//   name:    filename without the .pub suffix
-//   type:    first field of the public key line, e.g. "ssh-ed25519"
-//   comment: third field, "" when absent
-// NOT a fingerprint: nothing here computes one. The KDoc on this method
+// Each entry: { name, type }
+//   name: filename without the .pub suffix
+//   type: first field of the public key line, e.g. "ssh-ed25519"
+// The comment is NOT returned, and it used to be. A public key line's third
+// field is conventionally user@host or an email address, so for any key the
+// user imported rather than generated here it is a personal identifier, and
+// this command answers onto a channel every script on the workbench's origin
+// can read. Nothing in the app or in the bundled extensions ever read it.
+// NOT a fingerprint either: nothing here computes one. The KDoc on this method
 // said "fingerprint" while the code wrote "comment".
 ```
 
@@ -663,8 +733,10 @@ fun cancelToolchainInstall(name: String, authToken: String)  // note: token LAST
 @JavascriptInterface
 fun openToolchainSettings(authToken: String)
 // Starts ToolchainActivity. Reachable over the relay as `openToolchainSettings`,
-// and NO BUNDLED EXTENSION SENDS IT -- the route users actually take to that
-// screen is the launcher shortcut. See SplashActivity's publishToolchainShortcut.
+// and the bundled saf-bridge extension sends it: the command palette entry
+// "VSCodroid: Manage Toolchains". The launcher long-press shortcut that
+// SplashActivity.publishToolchainShortcut publishes is the other route.
+// ToolchainActivity is still not exported, so those two are all of them.
 ```
 
 #### About
@@ -690,11 +762,14 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 | `/version`                | GET    | Answered before the token check, which is what makes it the readiness probe |
 | `/vscode-remote-resource` | GET    | Serve workspace files to web client          |
 
-**There is no `/healthz` on the server this app runs.** This table listed one for a
-long time. The only thing that has ever served it is the fallback stub in
-`assets/server.js`, which runs *instead of* VS Code when `vscode-reh/out/server-main.js`
-is missing: a tree that was never built. On any real install that path is not taken,
-and a probe of `/healthz` gets whatever the REH server does with an unknown route.
+**There is no `/healthz` on any install, and there is no longer a stub that serves one.**
+This table listed the route for a long time. The only thing that ever answered it was a
+fallback server in `assets/server.js`, which bound the port when
+`vscode-reh/out/server-main.js` was missing and answered 200 to every path, `/version`
+included: a broken install reported a healthy start and put a page telling the user to run
+two shell scripts in front of them. The bootstrap now logs the missing entry point and
+exits 1, so the port stays unbound, the readiness poll fails, and the failure is reported
+as one. A probe of `/healthz` gets whatever the REH server does with an unknown route.
 
 ### 3.2 WebSocket Connection
 
@@ -758,8 +833,13 @@ Added by `server.js` itself, not passed from Kotlin:
 - `--accept-server-license-terms`
 - `--disable-workspace-trust`: without it every folder opens in Restricted Mode and
   most extensions never activate. The `security.workspace.trust.enabled` setting
-  cannot substitute: it is APPLICATION-scoped and the remote side contributes only
-  machine/window/resource scopes, so the flag is the only route that works.
+  cannot substitute: it is APPLICATION-scoped, and the WEB CLIENT takes only the
+  remote-machine scopes from the machine settings file, so the flag is the only route
+  that works. The qualification matters, because the same file is read twice. The server
+  builds its own configuration service over it with no scope filter, which is why an
+  APPLICATION-scoped key the server owns, `extensions.verifySignature`, does take effect
+  from it. Only a key that is APPLICATION-scoped *and* read by the workbench cannot be
+  defaulted there. See `Environment.getMachineSettingsPath`.
 
 ⚠️ **An argument that is not in that whitelist is dropped silently.** Adding a flag to
 the Kotlin command line and expecting the editor server to see it is the trap here,
@@ -1069,9 +1149,13 @@ Exit codes:
 > `error_setup_failed`, `status_server_slow_start`, plus log lines. Errors are not
 > classified by code, so nothing can be filed, matched or triaged by one.
 >
-> One row is worth naming because it describes detection that does not exist rather than
-> merely a missing label: **E101 WEBVIEW_CRASH** is detected (`onRenderProcessGone`
-> rebuilds the view) but is never reported to the user in any form.
+> **E101 WEBVIEW_CRASH** is detected (`onRenderProcessGone` rebuilds the view) and a
+> single crash is still recovered from silently. Repeated ones are not: three inside sixty
+> seconds (`CRASH_LOOP_WINDOW_MS`, `CRASH_LOOP_CRASHES`) are recovered as before, and a
+> fourth rebuilds the view without reloading the editor and puts up a page saying so, whose
+> only control (`vscodroid://reload-editor`) loads the editor again and clears the record.
+> The server is untouched throughout, which is why that control is not the retry the
+> server-gave-up page carries.
 >
 > **E102 WEBVIEW_TOO_OLD** describes a condition that is detected.
 > `MainActivity.checkWebViewVersion` reads `WebView.getCurrentWebViewPackage()` and

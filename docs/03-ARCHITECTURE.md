@@ -144,9 +144,17 @@ flowchart TD
 
     EXTHOST --> THREAD["Extension Host Thread<br/>Extension A (active)<br/>Extension B (active)<br/>Extension C (idle)"]
     TERM --> BASH["bash, one per terminal on a real PTY [phantom #2+]"]
-    EXTHOST -. lazy start .-> LS["Language Servers (0-3) [phantom #3+]<br/>tsserver, pylsp (idle-killed after 5 min)"]
+    EXTHOST -. lazy start .-> LS["Language Servers (lazy) [phantom #3+]<br/>tsserver, pylsp (idle after 5 min, shed under pressure or over budget)"]
   end
 ```
+
+**Nothing caps the number of language servers, and idle is not the same as killed.**
+`process-monitor.js` marks a server idle after `IDLE_KILL_THRESHOLD_MS` (5 minutes) without
+a tick of CPU, which only makes it *eligible*. It is actually shed when the app reports
+memory pressure it maps to `critical`, when the process count reaches `RECLAIM_BUDGET` (24)
+against Android's 32-process limit, or when the user runs the bundled
+**VSCodroid: Kill Idle Servers**. The count trigger exists because the phantom-process
+killer fires on the number of processes and reports no memory pressure first.
 
 ---
 
@@ -222,7 +230,7 @@ flowchart TD
 - worker_threads have access to most Node.js APIs, and `bootstrap-fork` installs `process.send` over `parentPort`, so the hosted module still sees the IPC channel it was written against
 - The same file serves both shapes: in a real fork `isMainThread` is true and none of the bridge runs
 
-**Trade-off**: An Extension Host crash can take the server process with it, and a worker cannot be handed a socket over IPC, so `_canSendSocket` is forced off and the host connects back over a named pipe that the server bridges. Reconnecting after a WebView recreation needs a fresh connection rather than a resumed one. Mitigation: the watchdog in `ProcessManager` restarts the server, and readiness is re-probed before the WebView is navigated.
+**Trade-off**: An Extension Host crash can take the server process with it, and a worker cannot be handed a socket over IPC, so `_canSendSocket` is forced off and the host connects back over a named pipe that the server bridges. The pipe path was never written to survive a reconnection, and on this platform it is the only path, so 0004 carries that half too: the host redoes the handshake on a fresh client socket instead of terminating with the old one, and extensions survive a dropped WebSocket. Mitigation for the rest: the watchdog in `ProcessManager` restarts the server, and readiness is re-probed before the WebView is navigated.
 
 **Implementation note**: `patches/0004` is the change itself, and what it does to the socket and the reconnection path is described in [Technical Spec §6.1 The Patch Set](./04-TECHNICAL_SPEC.md#61-the-patch-set) alongside `patches/0003`, which does the same for the Pty Host.
 
@@ -309,16 +317,22 @@ flowchart TD
 **Decision**: Use Play Store on-demand asset packs for toolchain delivery, with a toolchain picker UI during first-run.
 
 **Rationale**:
-- On-demand packs keep base APK small (~150-200MB) for fast initial install
+- On-demand packs keep the base module clear of the toolchains entirely. The constraint it is
+  measured against is Play's 500 MB compressed cap on the base module, checked by
+  `scripts/check-bundle-size.py`; the last measurement was around 270 MiB compressed, and it
+  moves with every VS Code bump, so re-measure from the AAB rather than quoting a figure
 - User selects needed languages during first-run, so only what they ask for is downloaded
 - `android/toolchain_ruby/build.gradle.kts` and `android/toolchain_java/build.gradle.kts` each declare `dynamicDelivery { deliveryType.set("on-demand") }`, and `ToolchainRegistry.available` is the single list the picker and the manage screen read
 - Play Store handles download/install automatically (no manual steps for user)
 - Play Store optimizes delivery per device (only arm64 assets delivered)
 - No custom CDN infrastructure needed for toolchain hosting
 - All binaries delivered via Play Store, simplifying policy compliance
-- Additional languages can be added later by long-pressing the launcher icon and choosing **Manage
-  toolchains**. There is no Settings entry: `ToolchainActivity` is not exported and the launcher
-  shortcut `SplashActivity.publishToolchainShortcut()` pushes is the only route to it
+- Additional languages can be added later by two routes, and there is still no Settings entry:
+  the launcher shortcut `SplashActivity.publishToolchainShortcut()` pushes (long-press the icon,
+  **Manage toolchains**), and the command palette entry **VSCodroid: Manage Toolchains**, which
+  the bundled saf-bridge extension contributes and which reaches `ToolchainActivity` through the
+  `openToolchainSettings` relay command. `ToolchainActivity` is not exported, so those two are
+  all of them
 - Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything other than `com.android.vending` sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`. `ToolchainManager.pinLatest` resolves that URL before the transfer: this build's own `releases/download/v<versionName>/` asset when the release publishes it, otherwise the tag `releases/latest` currently redirects to, and the unpinned `latest` URL if neither can be resolved. Pinning is what keeps a ZIP and the `toolchains.sha256` it is checked against from coming out of two different releases
 
 **Trade-off**: Requires internet for toolchain download after initial install. Core functionality (Node.js, Python, Git) works fully offline.
@@ -350,12 +364,18 @@ sequenceDiagram
   participant K as Kotlin Native Shell
   participant W as WebView
   K->>W: injectBridgeToken() to trusted workbench context
-  K->>W: evaluateJavascript() (inject key events)
+  K->>W: evaluateJavascript() (announce a key chord, memory pressure, a late reply)
   W->>K: @JavascriptInterface: copyToClipboard()
-  W->>K: @JavascriptInterface: openFilePicker()
-  W->>K: @JavascriptInterface: onBackPressed()
-  K-->>W: Result/ack response
+  W->>K: @JavascriptInterface: openFolderPicker()
+  W->>K: @JavascriptInterface: getStorageBreakdown(replyId)
+  K-->>W: Result, or a later answer posted under replyId
 ```
+
+There is no `openFilePicker`: a `content://` URI has no POSIX path and the server only ever
+sees POSIX paths, so a folder is granted through SAF and mirrored. Extensions do not see the
+injected object at all; they reach a fixed list of commands over the BroadcastChannel relay
+`MainActivity.injectBridgeRelay` opens. [API Spec §2](./05-API_SPEC.md) is the contract, and
+`scripts/check-bridge-api-spec.py` holds it to `AndroidBridge.kt` in both directions.
 
 ### 5.3 Kotlin ↔ Node.js
 
@@ -470,19 +490,28 @@ flowchart TD
   B2 --> B2b["lib/ (shared libraries)"]
   B2 --> B2c["lib/python3/ (Python stdlib)"]
   B2 --> B2d["share/ (terminfo, etc.)"]
-  B --> B3["workspace/ (default workspace)"]
   B --> B4["tmp/ (temporary files)"]
   B --> B5["server/ (VS Code extracted)"]
   B5 --> B5a["vscode-reh/ (server plus the web client it serves)"]
   B5 --> B5b["server.js, process-monitor.js, platform-fix.js, dns-proxy.js"]
   B5 --> B5c["editor-server.pid (pid and port of the running server)"]
+  B --> B6["saf-mirrors/ (one hash-named local copy per granted device folder)"]
   A --> C["lib/ (nativeLibraryDir, read-only)"]
   C --> C1["libnode.so"]
   C --> C2["libpython.so"]
   C --> C3["..."]
   A --> D["cache/ (clearable)"]
   D --> D1["webview/"]
+  E["/storage/emulated/0/Android/data/com.vscodroid/files/"] --> E1["projects/ (default workspace)"]
 ```
+
+**The default workspace is not under `/data/data`.** `Environment.getProjectsDir` returns
+`getExternalFilesDir(null)/projects` and falls back to `filesDir/home/projects` only when the
+external volume is unavailable. It is app-specific storage either way, so it needs no
+permission and no other app can browse it (Android 11 closed `Android/data`), but two
+consequences follow from the location: MTP over USB and a few OEM file managers can still
+reach it, and Clear Data wipes it. Work that has to survive either belongs in a folder
+opened through the SAF picker.
 
 ---
 
@@ -493,7 +522,7 @@ flowchart TD
 | Layer | Strategy |
 |-------|----------|
 | Kotlin shell | Try-catch with user-facing error dialogs. Crash reporting. |
-| WebView | onRenderProcessGone → recreate WebView, reload server URL |
+| WebView | onRenderProcessGone → recreate WebView, reload server URL. Bounded: past three crashes in sixty seconds the view is still rebuilt but the editor is not reloaded, and a page offers the reload instead |
 | Node.js server | Process death → Kotlin detects via pid monitor → auto-restart |
 | Extension Host | worker_thread crash → restart thread, reload extensions |
 | Terminal | bash exit or PTY failure → the tab reports it; one session per bash, so a failed one leaves the others running |
@@ -529,7 +558,7 @@ there, Extension Host output included. Nothing writes `exthost.log` under any na
 
 | Config | Location | Format |
 |--------|----------|--------|
-| VS Code settings | ~/.vscodroid/data/Machine/settings.json (the server rewrites `--user-data-dir` to `<server-data-dir>/data`, and only remote-machine scopes are read from it) | JSON |
+| VS Code settings | ~/.vscodroid/data/Machine/settings.json (the server rewrites `--user-data-dir` to `<server-data-dir>/data`. The web client takes only the remote-machine scopes from it; the server reads the same file with no scope filter, which is why an APPLICATION-scoped key it owns, `extensions.verifySignature`, does take effect) | JSON |
 | product.json | `vscode-reh/product.json`, rewritten by `server.js` on every start from its `productOverrides` | JSON |
 | Environment variables | Set by Kotlin ProcessBuilder | Shell |
 | App preferences | Android SharedPreferences | XML |

@@ -92,7 +92,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|----------|-----------|
 | FR-FS-01 | System SHALL provide a file explorer panel showing workspace files | P0 | M1 |
 | FR-FS-02 | System SHALL support create, rename, delete, move operations on files and folders | P0 | M1 |
-| FR-FS-03 | System SHALL use app-private storage as default workspace directory | P0 | M0 |
+| FR-FS-03 | System SHALL default the workspace to `getExternalFilesDir(null)/projects`, app-specific external storage, falling back to `filesDir/home/projects` when no external volume is mounted (`Environment.getProjectsDir`). Both are app-private in the sense that matters here, no storage permission reaches either; both are also wiped by Clear Data, and the external one is reachable over MTP on some devices | P0 | M0 |
 | FR-FS-04 | System SHALL support opening folders as workspace root | P0 | M1 |
 | FR-FS-05 | System SHALL support multi-root workspaces | P2 | M2 |
 | FR-FS-06 | System SHOULD support accessing files from external storage via SAF | P2 | M4 |
@@ -123,7 +123,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-EXT-06 | System SHALL support language extensions (syntax, snippets, LSP) | P0 | M1 |
 | FR-EXT-07 | System SHALL support extension settings and configuration | P1 | M1 |
 | FR-EXT-08 | System SHALL bundle essential extensions for offline use | P2 | M3 |
-| FR-EXT-09 | System SHALL limit concurrent Language Servers to 2-3 | P1 | M4 |
+| FR-EXT-09 | A hard cap on concurrent Language Servers is not implemented, and nothing in the app counts them. What ships instead is reclamation: `assets/process-monitor.js` marks a language server idle after five minutes without a tick of CPU, and sheds the idle ones when Android reports critical memory pressure, when the process count reaches `RECLAIM_BUDGET` (24, against the 32-process phantom limit), or when the user runs **VSCodroid: Kill Idle Servers** | n/a | M4 |
 
 ### 3.5 Source Control (FR-SCM)
 
@@ -139,12 +139,12 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | ID | Requirement | Priority | Milestone |
 |----|------------|----------|-----------|
-| FR-MUX-01 | System SHALL display Extra Key Row above the soft keyboard across five swipeable pages: Tab, Esc, Ctrl, Alt, Shift, a gesture trackpad and `{}` `()` on page 1; symbols on pages 2 and 3; F1 to F12 plus Home, End, PageUp, PageDown on pages 4 and 5. There are **no discrete arrow buttons**: the trackpad emits arrow keys as a finger drags, and carries one accessibility action per direction for an assistive input that cannot drag (`KeyPageConfig.kt`, `TrackpadGesture.accumulate`, `ARROW_ACTIONS`) | P1 | M2 |
+| FR-MUX-01 | System SHALL display Extra Key Row above the soft keyboard, paged so that no key is narrower than the 48dp touch target. The page count is therefore a function of the device: `KeyPages.forSmallestWidthDp` repacks the five default pages against `smallestScreenWidthDp`, giving five pages at 411dp and wider, six at 360dp and seven at 320dp. Order is preserved, so the sequence is always Tab, Esc, Ctrl, Alt, Shift, a gesture trackpad, `{}`, `()`, then the symbols, then F1 to F12 with Home, End, PageUp and PageDown; a narrow phone splits that same sequence over more pages, moving `()` off page 1 at 360dp and both bracket keys off it at 320dp. There are **no discrete arrow buttons**: the trackpad emits arrow keys as a finger drags, and carries one accessibility action per direction for an assistive input that cannot drag (`KeyPageConfig.kt`, `TrackpadGesture.accumulate`, `ARROW_ACTIONS`) | P1 | M2 |
 | FR-MUX-02 | Extra Key Row Ctrl/Alt keys SHALL act as toggles (tap to activate, tap again to deactivate) | P1 | M2 |
 | FR-MUX-03 | System SHALL inject key events from Extra Key Row into WebView | P1 | M2 |
 | FR-MUX-04 | Extra Key Row SHALL show/hide based on soft keyboard visibility | P1 | M2 |
 | FR-MUX-05 | System SHALL bridge Android clipboard to VS Code clipboard service | P1 | M2 |
-| FR-MUX-06 | System SHALL handle Android back button: close panels → close dialogs → minimize app | P1 | M2 |
+| FR-MUX-06 | Android back sends the app to the background, and nothing else. It does not close a panel or a dialog first: `MainActivity.setupBackNavigation` asks the page nothing, because no patch, bundled extension or injected script ever installed a page-side handler to answer. Esc on the extra key row is what dismisses editor UI | P1 | M2 |
 | FR-MUX-07 | System SHALL support portrait and landscape orientations | P1 | M2 |
 | FR-MUX-08 | System SHALL support split-screen / multi-window mode | P2 | M2 |
 | FR-MUX-09 | System SHALL disable WebView zoom (prevent accidental pinch-zoom) | P0 | M2 |
@@ -161,9 +161,9 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-DEV-04a | System SHALL bundle tmux in APK as a standalone tool. The editor's terminals are not wrapped in it: the default profile `FirstRunSetup` writes points at bash, and each terminal spawns bash directly through node-pty on a real PTY. The phantom-process saving comes from running the Extension Host and ptyHost as `worker_thread`s | P1 | M1 |
 | FR-DEV-05 | System SHALL deliver Ruby and Java 17 toolchains as on-demand asset packs. Delivery is not Play-only: `ToolchainManager` reads the installing package name and, for any install that did not come from Play, downloads the same toolchains as ZIPs over HTTPS from this project's GitHub Releases, verified against a published sha256 manifest | P2 | M3 |
 | FR-DEV-06 | A package manager CLI (`vscodroid pkg`) is not built. No such command exists in the app or on the device; additional packages are the user's own business through the terminal. The design it would start from is `docs/04-TECHNICAL_SPEC.md` §8, and it sits on the post-release roadmap | P2 | Post-release |
-| FR-DEV-07 | Prompting for a toolchain by file type is out of scope: nothing watches which files are opened. Discovery is unprompted instead, the welcome walkthrough names the two toolchains and points at the picker, which is also reachable from the app icon's **Manage toolchains** shortcut | P3 | M3 |
+| FR-DEV-07 | Prompting for a toolchain by file type is out of scope: nothing watches which files are opened. Discovery is unprompted instead, the welcome walkthrough names the two toolchains and points at the picker, which is also reachable from the app icon's **Manage toolchains** shortcut and from the **VSCodroid: Manage Toolchains** command | P3 | M3 |
 | FR-DEV-08 | System SHALL provide Language Picker UI during first-run for selecting toolchains to install | P1 | M3 |
-| FR-DEV-09 | System SHALL allow installing additional toolchains later from the app icon's **Manage toolchains** launcher shortcut (`SplashActivity.publishToolchainShortcut`), matching FR-DEV-07 above. There is no Settings entry and `ToolchainActivity` is not exported, so the shortcut is the only route | P2 | M3 |
+| FR-DEV-09 | System SHALL allow installing additional toolchains later from the app icon's **Manage toolchains** launcher shortcut (`SplashActivity.publishToolchainShortcut`), matching FR-DEV-07 above, or from the Command Palette entry **VSCodroid: Manage Toolchains**, which the bundled SAF bridge extension registers and which sends the `openToolchainSettings` bridge command. There is still no Settings entry, and `ToolchainActivity` is not exported | P2 | M3 |
 
 ### 3.8 Application Lifecycle (FR-LIFE)
 
@@ -171,7 +171,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|----------|-----------|
 | FR-LIFE-01 | System SHALL run Node.js server via Foreground Service | P0 | M0 |
 | FR-LIFE-02 | System SHALL auto-restart Node.js if process dies | P0 | M0 |
-| FR-LIFE-03 | System SHALL recover from WebView renderer crash | P1 | M2 |
+| FR-LIFE-03 | System SHALL recover from WebView renderer crash, and SHALL stop recovering when recovery has become a loop: more than three crashes in 60 seconds (`CRASH_LOOP_CRASHES`, `CRASH_LOOP_WINDOW_MS`) rebuilds the WebView but does not reload the editor, showing a page whose control reloads it instead. The server is left running either way | P1 | M2 |
 | FR-LIFE-04 | System SHALL preserve editor state across app restarts | P1 | M2 |
 | FR-LIFE-05 | System SHALL handle low-memory signals from Android | P1 | M4 |
 | FR-LIFE-06 | System SHALL show first-run setup progress | P1 | M3 |
@@ -193,7 +193,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-PERF-04 | File open (< 1MB file) | < 1 second | P0 |
 | NFR-PERF-05 | Extension install + activate | < 30 seconds | P1 |
 | NFR-PERF-06 | Terminal command response | < 100ms input echo | P0 |
-| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 810 MiB across 23,494 files, unpacked one at a time | P1 |
+| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 770 MiB across roughly 23,600 files, unpacked one at a time | P1 |
 
 ### 4.2 Resource Usage (NFR-RES)
 
@@ -201,17 +201,18 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|--------|----------|
 | NFR-RES-01 | RAM usage (typical coding session) | < 700 MB | P1 |
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
-| NFR-RES-03 | Phantom process count | ≤ 5 in typical use | P0 |
-| NFR-RES-04 | AAB base download size | < 200 MB (core); the on-demand toolchain ZIPs are 9.9 MB for Ruby and 55.4 MB for Java 17, per `ToolchainRegistry.available` | P1 |
-| NFR-RES-05 | Runtime storage (core extracted) | ~810 MB; ~990 MB with both toolchains | P1 |
+| NFR-RES-03 | Phantom process count | 5 with nothing open and 8 with a terminal and two language servers, the `IDLE_BASELINE` and `SOFT_BUDGET` of `assets/process-monitor.js`; the monitor calls it a problem at 14 and sheds idle language servers at 24, against Android's 32 | P0 |
+| NFR-RES-04 | AAB base module, compressed download | Under Play's 500 MB cap, which `scripts/check-bundle-size.py` refuses a bundle over. Last measured at 270.7 MiB, before the workbench internal bundles were pruned from the server tree, so re-measure from the AAB rather than quoting this. **200 MB is not a cap**: it is the size above which a mobile-data user sees a large-download dialog. The on-demand toolchain ZIPs are 9.9 MB for Ruby and 55.4 MB for Java 17, per `ToolchainRegistry.available`, and draw on Play's separate on-demand budget rather than this one | P1 |
+| NFR-RES-05 | Runtime storage (core extracted) | About 770 MiB, the asset tree that `BuildConfig.EXTRACTED_ASSET_BYTES` is computed from at build time; about 950 MiB with both toolchains installed | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
 | NFR-RES-07 | V8 heap limit (default) | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
 | NFR-RES-07a | V8 heap limit (user override) | Optional, set as `vscodroid.server.heapCeilingMb`; clamped to `min(RAM / 4, 1536 MB)` and never below 256 MB | P2 |
 
-> NFR-RES-05 and NFR-RES-07 carry measured figures, not targets. Verify them against
+> NFR-RES-03, the second half of NFR-RES-04, NFR-RES-05 and NFR-RES-07 carry measured
+> figures, not targets. Verify them against `assets/process-monitor.js`, the AAB itself,
 > `BuildConfig.EXTRACTED_ASSET_BYTES` and `ProcessManager.heapCeilingForDevice` rather than
-> this table: the extracted tree grows with every VS Code bump, and the heap ceiling is
+> this table: the extracted tree moves with every VS Code bump, and the heap ceiling is
 > derived per device because a flat cap leaves 3-4 GB phones nothing to work with.
 
 > **NFR-RES-07a replaced a guarantee with a user responsibility, and that is the point of
@@ -324,7 +325,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Constraint | Details |
 |-----------|---------|
 | RAM on low-end devices | 4GB devices must work without OOM |
-| Storage on 64GB devices | ~810 MB extracted for core, and ~873 MB free needed to install |
+| Storage on 64GB devices | About 770 MiB extracted for core, and about 865 MiB free to unpack it: the tree plus the 96 MiB of slack `FirstRunSetup.requiredExtractionBytes` adds for per-file block rounding |
 | CPU throttling | Android may throttle background processes |
 | Battery optimization | Doze mode may affect background server |
 
@@ -424,7 +425,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 - [ ] Cold start < 5 seconds on Pixel 7
 - [ ] No crash in 2 hours continuous use
 - [ ] Works on 4GB RAM device
-- [ ] Phantom processes ≤ 5 in typical use
+- [ ] Phantom processes at 5 with nothing open, and under 14 in a working session
 - [ ] Extension Host migrated to worker_thread (reduces phantom count by 1)
 - [ ] Phantom process monitoring UI warns user when approaching limits
 - [ ] GitHub OAuth push/pull works
@@ -434,5 +435,5 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 
 - [ ] Published on Play Store
 - [ ] Passes Play Store policy review
-- [ ] AAB download < 200MB
+- [ ] Base module under Play's 500 MB compressed cap (`scripts/check-bundle-size.py`)
 - [ ] No critical bugs in 48-hour beta

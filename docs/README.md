@@ -74,8 +74,10 @@ which toolchains ship.
 Two things are deliberately kept as dated records under a banner, because a schedule and a pipeline
 sketch have no present-tense reading. 12 is the week-by-week plan as it stood when it was written;
 its banner names the build path it describes and points at `scripts/build-vscode-oss.sh` and
-`patches/` for what happens now. §2 of 10 is the CI/CD sketch, and its banner lists the workflows in
-`.github/workflows/` that really run. The rest of 10 is maintained, §5 in particular being checked
+`patches/` for what happens now. §2 of 10 is the CI/CD sketch; the note at its head points at
+`CONTRIBUTING.md`, which carries the table of steps each workflow runs, and at
+`scripts/check-build-steps.py`, which `lint.yml` and `release.yml` run to fail a build whose
+scripts that table has lost. The rest of 10 is maintained, §5 in particular being checked
 against the manifest and the shipped strings before a submission.
 
 09 is a pointer. It carries no instructions, only a table naming the part of `CONTRIBUTING.md`, or

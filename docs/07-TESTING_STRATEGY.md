@@ -23,7 +23,7 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 ```mermaid
 flowchart TD
   E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>run by hand on a device"]
-  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>8 node:assert scripts for the bundled JavaScript"]
+  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>9 node:assert scripts for the bundled JavaScript"]
 ```
 
 ---
@@ -36,7 +36,7 @@ flowchart TD
 
 | Component | What is covered | Example classes |
 |-----------|-------------|---------|
-| ProcessManager / NodeService | Server lifecycle, readiness, restart budget, port adoption | `ProcessManagerTest`, `ServerReadinessTest`, `RestartBudgetTest`, `AdoptionTest` |
+| ProcessManager / NodeService | Server lifecycle, readiness, restart budget, port adoption | `ProcessManagerTest`, `NodeServiceTest`, `ServerReadinessDecisionTest`, `ServerReadinessCallSiteTest`, `AdoptionNoteWireTest` |
 | Environment | Env variable construction, PATH and shell paths, SAF mirror paths | `EnvironmentTest`, `TerminalShellPathTest`, `EnvironmentSafTest` |
 | PortFinder | Port allocation and reuse across restarts | `PortFinderTest` |
 | ExtraKeyRow / KeyInjector | Key mapping, modifier state, trackpad gestures | `KeyMappingTest`, `ExtraKeyToggleStateTest`, `TrackpadGestureTest` |
@@ -44,7 +44,7 @@ flowchart TD
 | ToolchainManager / ToolchainRegistry | Catalog, download and install state, digests, retirement sweep | `ToolchainRegistryTest`, `ToolchainInstallTest`, `ToolchainDigestTest`, `RetiredToolchainTest` |
 | FirstRunSetup | Asset extraction, symlinks, `settings.json` contents, storage preflight | `SettingsPathsTest`, `StoragePreflightTest`, `SymlinkPredicateTest` |
 | SafSyncEngine | Mirror reconciliation, write-back filtering, rename pairing | `SafSyncEngineTest`, `SafWriteBackFilterTest`, `SafRenamePairingTest` |
-| VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceResolutionTest`, `DownloadCoordinatorTest` |
+| VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceRootsTest`, `WebviewOriginTrustTest`, `DownloadCoordinatorTest` |
 
 The suite is green. Its size is deliberately not written down here: both
 figures, tests and classes, come from the XML a run writes under
@@ -91,8 +91,9 @@ temporary directory, and is executed directly by `node`.
 | Bridge relay | The BroadcastChannel relay injected into the workbench | `scripts/test-bridge-relay.js` |
 | Download capture | The script that makes saving a file out of the Explorer possible at all | `scripts/test-download-capture.js` |
 | Serve on Network | The port scan and its reachable/local split | `scripts/test-serve-network.js` |
+| Welcome | That the walkthrough and side bar markers are written only after the command they record actually ran | `scripts/test-welcome.js` |
 
-**Run**: all eight, one `node` invocation each, in the `Check the bundled
+**Run**: all nine, one `node` invocation each, in the `Check the bundled
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`.
 
 **What is enforced**: the suites themselves. A single failing test fails the job.
@@ -101,7 +102,7 @@ coverage task, no threshold, and nothing in any workflow that reads one.
 
 ### 3.2 Instrumented Tests
 
-Thirty-seven tests across eight classes, in `android/app/src/androidTest/`. They
+Forty-nine tests across eleven classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
 run covers the whole set and none of it is scheduled.
@@ -115,7 +116,10 @@ run covers the whole set and none of it is scheduled.
 | **ToolchainInsetsTest** | With edge-to-edge enforced, the Toolchains screen stays clear of the status and navigation bars | arm64 device |
 | **FileObserverTreeSemanticsTest** | The platform behaviour SAF write-back rests on: a watch covers a directory and not a tree, and an event reports the bare entry name | arm64 device |
 | **SafWatchWiringTest** | That those semantics are wired up: a save two directories down is queued for write-back, a scratch file beside it is not, and a skipped directory is never watched | arm64 device |
-| **KeyRowAccessibilityInstrumentedTest** | The extra key row's screen-reader surface: content descriptions, the state a latched modifier and the alternates layer announce, per-key touch targets, and the trackpad's one action per arrow | arm64 device |
+| **KeyRowAccessibilityInstrumentedTest** | The extra key row's screen-reader surface: content descriptions, the state a latched modifier and the alternates layer announce, that a key and an alternate each call themselves a button, that every key clears 48dp at each width the row is paged for (320, 360, 411 and 448dp), and the trackpad's one action per arrow | arm64 device |
+| **TextEntryInstrumentedTest** | That `virtualKeyboardEvents` types what the row asks it to, against the device's real `KeyCharacterMap`: every typeable key and alternate resolves to presses that produce it, `{` is pressed with Shift held, and every press carries the virtual-keyboard device id and a current timestamp | arm64 device |
+| **GestureTrackpadTouchInstrumentedTest** | Multi-pointer `MotionEvent`s on the trackpad: a second finger taking over does not jump the caret, and an untracked finger lifting does not end the drag | arm64 device |
+| **ExecTrampolineOnDeviceTest** | The kernel policy no JVM test can ask about: a payload under `filesDir` cannot be executed directly, the trampoline runs the same payload by bare name, and an unknown name fails with a reason. The direct-execve control is asserted first, so a device that never denied anything fails loudly rather than passing for the wrong reason | arm64 device |
 
 **Framework**: AndroidJUnit4 + Espresso + UI Automator (JUnit 4, on device)
 
@@ -156,7 +160,7 @@ Manual test scenarios that verify the full user experience:
 | E2E-08 | **Rotation** | Edit code → Rotate to landscape → Rotate back | No data loss, layout adapts |
 | E2E-09 | **Copy/paste** | Copy text in Chrome → Paste in VSCodroid editor | Text pastes correctly |
 | E2E-10 | **Large file** | Open 10,000-line file → Scroll → Search → Edit | No crash, responsive scrolling |
-| E2E-11 | **Phantom process count** | Open editor + 3 terminals + 1 extension with LSP → check `adb shell ps` | Phantom processes ≤ 5 |
+| E2E-11 | **Phantom process count** | Open editor + 3 terminals + 1 extension with LSP → check `adb shell ps` | Nine: the five-process idle baseline plus one per terminal and one language server, well under the 14 at which the monitor calls it a problem |
 | E2E-12 | **Python terminal** | Open terminal → `python3 --version` → `pip install requests` | Correct version, pip works |
 | E2E-13 | **Low-memory handling** | Simulate low-memory via `adb shell am send-trim-memory` | App reduces memory, no crash |
 | E2E-14 | **Package manager** | Terminal → `vscodroid pkg search curl` → `vscodroid pkg install curl` | Package installs successfully (planned Tier 3 package manager) |
@@ -174,7 +178,7 @@ Manual test scenarios that verify the full user experience:
 | Memory usage (active) | RAM during active coding + terminal | < 700 MB | `adb shell dumpsys meminfo` |
 | File open time | Time to open and render file | < 1 sec (1MB file) | Custom instrumentation |
 | Extension install time | Download + extract + activate | < 30 sec | Stopwatch |
-| Phantom process count | Total child processes during use | ≤ 5 | `adb shell ps` |
+| Phantom process count | Total child processes during use | 5 idle, under 14 in use (`IDLE_BASELINE`, `ERROR_BUDGET`) | `adb shell ps` |
 | Battery drain (active) | Battery consumption during coding session | < 15% per hour | `adb shell dumpsys batterystats` |
 | Battery drain (idle) | Battery consumption with app in foreground, no input | < 5% per hour | `adb shell dumpsys batterystats` |
 
@@ -296,7 +300,7 @@ throws it away:
 
 | Fixture | Purpose | Lifetime |
 |---------|---------|------|
-| JUnit `@TempDir` | Every JVM test that needs a filesystem, 72 declarations across the suite | Removed when the test method ends |
+| JUnit `@TempDir` | Every JVM test that needs a filesystem. No count is given: nothing gates one, and the figure that stood here was stale within a release. `grep -rc "@TempDir" android/app/src/test/kotlin` answers it | Removed when the test method ends |
 | `mkdtempSync` under the system temp directory | The `scripts/test-*.js` self-checks, including the fake `/proc` tree the process monitor is pointed at | Removed when the script ends |
 | The app's projects folder on the device | Where a manual pass creates files, opens folders and runs terminals | Kept between passes unless app data is cleared |
 
@@ -345,8 +349,8 @@ Each milestone must pass its test gate before proceeding:
 | Milestone | Required Tests | Pass Criteria |
 |-----------|---------------|---------------|
 | M0 (POC) | Manual E2E-01, E2E-03 (node + git only) | Node.js runs, WebView loads |
-| M1 (Core) | Unit tests, Instrumented (Node, WebView, Extensions, Terminal), E2E 1-6 | All pass on Pixel 8, phantom processes ≤ 5 |
+| M1 (Core) | Unit tests, Instrumented (Node, WebView, Extensions, Terminal), E2E 1-6 | All pass on Pixel 8, phantom processes at the idle baseline of 5 |
 | M2 (Mobile) | + E2E 7-10, Compatibility (2 devices) | All pass on 2 devices |
 | M3 (Dev Env) | + E2E-12, E2E-14, Python/Git tests, Toolchain install, RAM check after Python+toolchains | All pass on 2 devices |
-| M4 (Polish) | Full suite incl. E2E-11/E2E-13, Performance tests, Compatibility (4 devices), Backup & Restore tests, phantom process count gate (≤ 5) | All targets met |
+| M4 (Polish) | Full suite incl. E2E-11/E2E-13, Performance tests, Compatibility (4 devices), Backup & Restore tests, phantom process count gate (5 idle) | All targets met |
 | M5 (Release) | Full suite, Security tests (see 06-SECURITY §7), 48-hour beta soak | Zero S1/S2 bugs, security checklist pass |

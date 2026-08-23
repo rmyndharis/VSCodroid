@@ -352,6 +352,8 @@ M6 (Release)   → Play Store release
    - [x] `vscodroid.vscodroid-process-monitor` extension bundled: provides in-VS Code UI
    - [x] Exit code 137 (SIGKILL) handling in `ProcessManager`: detects OOM/phantom kill
    - [x] Extension Host and ptyHost run as `worker_threads.Worker()` (saves 2 phantom process slots)
+   - [x] Idle language servers are shed under a `critical` memory-pressure signal, and again once the process count reaches `RECLAIM_BUDGET` (24) against Android's 32-process limit
+   - FR-EXT-09, "limit concurrent Language Servers to 2-3", is **not implemented**. Nothing caps how many run at once; shedding idle ones after the fact is a different guarantee, and the M4 success criteria below do not cover it.
 
 5. **Storage management** (`StorageManager.kt`, `AndroidBridge.kt`)
    - [x] `StorageManager.getStorageBreakdown()`: per-component usage tracking
@@ -407,9 +409,10 @@ M6 (Release)   → Play Store release
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
 2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`)
-   - [x] Ruby from Termux `ruby` + libgmp + libyaml (34 MB asset pack)
-   - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn (146 MB asset pack)
+   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 36 MB today
+   - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn. 156 MB unpacked; the registry read 146 until the JDK grew past it
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
+   - [x] Each script fails the build on any symbolic link anywhere in the pack. Neither delivery path can carry one: an asset pack cannot hold a link, and `ToolchainManager.extractZip` writes it as a text file holding the target path
    - Go shipped here and was withdrawn: it ran but could not compile, because Android refuses to execute a file under the app's data directory and `go build` forks its own compiler.
 
 3. **Play Asset Delivery integration** (`ToolchainManager.kt`, `ToolchainRegistry.kt`)

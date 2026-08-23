@@ -26,6 +26,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | @vscode/native-watchdog | MIT | https://github.com/microsoft/node-native-watchdog, bundled by the Code - OSS build |
 | @vscode/deviceid | MIT | https://github.com/microsoft/vscode-deviceid, bundled by the Code - OSS build |
 | @vscode/sandbox-runtime | Apache-2.0 | https://github.com/anthropic-experimental/sandbox-runtime, bundled by the Code - OSS build |
+| @vscode/spdlog | MIT | https://github.com/microsoft/node-spdlog, bundled by the Code - OSS build. Its native addon does not ship: `scripts/build-native-addons.sh` deletes it and replaces `index.js` with a JavaScript logger from this repository |
 | kerberos (Node addon) | Apache-2.0 | https://github.com/mongodb-js/kerberos. The npm addon, not the MIT Kerberos 5 C libraries listed below |
 | @microsoft/mxc-sdk | MIT | https://www.npmjs.com/package/@microsoft/mxc-sdk, bundled by the Code - OSS build |
 | js-debug | MIT | https://github.com/microsoft/vscode-js-debug, the built-in JavaScript debugger produced by the Code - OSS build |
@@ -49,8 +50,9 @@ own package's licence: musl's loader is an Alpine package
 server tree ships, copied into `jniLibs` by `scripts/fetch-vscode-oss.sh`.
 `scripts/check-library-attribution.py` fails the build
 when a shipped binary is attributed nowhere in this file, when it is missing from
-`docs/LEGAL_NOTICES.md`, or when a copyleft component is missing from the source
-offer that file carries. Both documents are read on every run, so a component has
+`docs/LEGAL_NOTICES.md`, when a copyleft component is missing from the source
+offer that file carries, or when a component's own notice is not among the bytes
+that reach a device. Both documents are read on every run, so a component has
 to be named in each.
 
 That the licences here are Termux's own is checked rather than asserted,
@@ -71,18 +73,28 @@ assembly is redistributed inside the APK on its own terms whether or not
 anything here can run it.
 
 Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
-glibc's soname but are built from this repository's own source.
+glibc's soname but are built from this repository's own source, and
+`libexec-trampoline.so`, built from `scripts/exec-trampoline.c` here.
 
-The copyleft rows below need more than a name. GPL-2.0, GPL-3.0 and LGPL-2.1 each
-require a copy of the licence to reach whoever receives the binary, so the three
-texts are in `licenses/` and ship in the app at **About > Licenses > License
-Texts**, verbatim; `docs/LEGAL_NOTICES.md` records which text covers which
-component.
+Naming a project is not the notice. MIT, the BSD family, ISC, NCSA, the ICU
+licence and Apache-2.0 section 4 all ask for the copyright and permission text to
+be handed over with the binary, so every component below ships its own upstream
+notice beside it, almost all of them under `usr/share/doc/<termux package>`.
+Termux's `libicu` and Alpine's `musl` carry no usable notice of their own, so
+`licenses/LICENSE.ICU` and `licenses/COPYRIGHT.musl` are placed in their stead,
+and ripgrep's travels inside the npm package the server tree brings it in.
+`docs/LEGAL_NOTICES.md` records why for each.
+
+The copyleft rows need a licence text as well. GPL-2.0 section 1, GPL-3.0
+section 4, LGPL-2.1 section 1 and LGPL-3.0 section 4 each require a copy of the
+licence to reach whoever receives the binary, so the four texts are in
+`licenses/` and ship in the app at **About > Licenses > License Texts**,
+verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 
 | Component | License | Linked by |
 |---|---|---|
 | Bash | GPL-3.0 | bundled tool in its own right |
-| bzip2 | BSD-4-Clause | Python |
+| bzip2 | bzip2-1.0.6 | Python |
 | c-ares | MIT | Node.js |
 | Expat | MIT | Git, Python |
 | gdbm | GPL-3.0 | Python, gdbm |
@@ -137,7 +149,9 @@ and the base APK for the table above.
 | [libandroid-shmem](https://github.com/termux/libandroid-shmem) | BSD-3-Clause | Java |
 | [libandroid-spawn](https://github.com/termux/libandroid-spawn) | BSD-2-Clause | Java |
 
-GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest.
+GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest,
+and the LGPL-3.0 text it requires ships in the base app, which is the only
+licences screen a device installing the Ruby pack has.
 
 ## On-Demand Toolchains
 

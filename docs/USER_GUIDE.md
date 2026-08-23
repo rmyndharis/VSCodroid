@@ -23,8 +23,8 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 ### What Happens on First Open
 
-1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 873 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 810 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~873 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 177 MB rather than 873 MB), but it does re-copy the files and it does take minutes.
+1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 865 MB free for the extraction that follows.
+2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 770 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~865 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 210 MB rather than 865 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -81,9 +81,16 @@ To edit settings as JSON, use the Command Palette: `Preferences: Open User Setti
 
 ### Extra Key Row
 
-When the soft keyboard is visible, a row of extra keys appears above it. The row
-holds five pages. Swipe it left or right to change page; the dots underneath show
-which page you are on.
+When the soft keyboard is visible, a row of extra keys appears above it. Swipe it
+left or right to change page; the dots underneath show how many pages there are
+and which one you are on.
+
+How many there are depends on how wide your phone is. The row divides its width
+evenly among the keys on a page, so on a narrower screen it carries fewer keys per
+page and spreads them over more: five pages on a 411dp phone and wider, six at
+360dp, seven at 320dp. The keys and their order never change, only where the page
+breaks fall. The tables below are the five-page layout; on a narrower phone read
+them as one list that is cut in more places.
 
 **Page 1, essential coding keys:**
 
@@ -110,12 +117,9 @@ you and leaves the cursor between the two.
 **Page 5, the rest of the function keys and navigation:** `F9` through `F12`,
 `Home`, `End`, `PgUp`, `PgDn`
 
-Pages 4 and 5 are the only place a touch user can reach any of those keys: no
+The last two pages are the only place a touch user can reach any of those keys: no
 other page carries a function key, and the trackpad sends arrows only. Any
-shortcut the editor or an extension binds to one is now a tap away. They are
-split over two pages rather than crowded onto one because the row divides its
-width evenly among whatever a page holds, and sixteen keys on one page would put
-every one of them below the size a finger can reliably hit.
+shortcut the editor or an extension binds to one is a tap away.
 
 #### The trackpad
 
@@ -137,10 +141,16 @@ Touch and hold a key that has alternates and a small popup offers them:
 | Key | Alternates |
 |-----|------------|
 | `{}` | `[` and `<` |
-| `()` | `]` and `>` |
+| `()` | `)`, `]` and `>` |
 | `"` | `'` and `` ` `` |
 | `/` | `\` |
 | `` ` `` | `~` |
+
+Long press is the only route to `)`, `'` and `\`: no page carries them, and a
+latched Shift does not reach them either. The closing parenthesis matters most,
+because auto-closing brackets usually supply it and leave you with no way to type
+one when they do not. `~` is in the popup too, but it is not stranded there: the
+row carries `` ` `` as a key of its own, and a latched Shift over it types `~`.
 
 Every other key, Tab, Esc and the three modifiers included, sends one press on a
 long hold, the same press a tap sends. Nothing on this row repeats.
@@ -155,6 +165,16 @@ the cursor once. All three clear by themselves when the soft keyboard hides. And
 Shift on its own is not applied to what you type on the soft keyboard, so for a
 capital letter hold the soft keyboard's own Shift; latch Ctrl or Alt as well and
 the row's Shift is carried into that chord, which is how Ctrl+Shift+P is typed.
+
+Enter, Backspace and Delete take a latched modifier as well, even though the soft
+keyboard reports all three as an edit rather than as a key. So Ctrl+Enter and
+Ctrl+Backspace arrive as chords: Ctrl+Enter opens a line below without splitting
+the one you are on, rather than typing a plain newline.
+
+Under a screen reader, the dots below the row are one item that reads "Key page 1
+of 5", with any latched modifier named after it ("Key page 1 of 5, Ctrl+Shift
+held"). It is spoken again each time you swipe to another page, which is the only
+announcement that the keys under your finger have changed.
 
 The keys on each page are defined in
 `android/app/src/main/kotlin/com/vscodroid/keyboard/KeyPageConfig.kt`, and the
@@ -482,8 +502,8 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Ruby 3.4 | ~10 MB | ~34 MB | ruby, gem, irb, bundler, rake |
-| Java 17 (OpenJDK) | ~55 MB | ~146 MB | java, javac, jar, jshell |
+| Ruby 3.4 | ~10 MB | ~36 MB | ruby, gem, irb, bundler, rake |
+| Java 17 (OpenJDK) | ~55 MB | ~156 MB | java, javac, jar, jshell |
 
 ### Installing During First Run
 
@@ -497,14 +517,15 @@ Either way they land in the app's own storage and survive app updates.
 
 ### Installing After Setup
 
-The Language Picker is shown only once, but the screen it offers stays reachable.
-**Touch and hold the VSCodroid icon** (on the home screen or in the app drawer) and
-choose **Manage toolchains**. Installing and removing work exactly as they do during
-setup, so a language you skipped is not lost.
+The Language Picker is shown only once, but the screen it offers stays reachable, by
+two routes. From the editor, run **VSCodroid: Manage Toolchains** from the Command
+Palette (**Ctrl+Shift+P**). From outside it, **touch and hold the VSCodroid icon** (on
+the home screen or in the app drawer) and choose **Manage toolchains**. Both open the
+same screen, and installing and removing work exactly as they do during setup, so a
+language you skipped is not lost.
 
-The shortcut deliberately does not go through the editor. Reaching this screen matters
-most when the editor is the part that will not start, so the way in does not depend on
-it.
+The launcher shortcut is there because reaching this screen matters most when the
+editor is the part that will not start, so at least one way in does not depend on it.
 
 ### Using Installed Toolchains
 
@@ -524,8 +545,8 @@ java Main
 
 ### Removing Toolchains
 
-Removing an installed toolchain is not reachable from the editor yet; see
-[Installing After Setup](#installing-after-setup).
+Open the Toolchains screen by either route in [Installing After
+Setup](#installing-after-setup) and remove it there.
 
 ---
 
@@ -551,8 +572,8 @@ Note: tmux is a standalone tool, not integrated with VS Code's terminal tabs.
 The status bar shows a phantom process count. This tells you how many background processes VSCodroid is using.
 
 - Click the process count to see a detailed process tree in the Output panel.
-- Typical count: 2 (server + file watcher), plus 1 per open terminal tab.
-- If the count gets high (8+), close unused terminals and the monitor will warn you.
+- An idle session costs 5, before you open anything. Add 1 per terminal tab and 1 per running language server.
+- At 8 the monitor warns you, at 14 it reports an error, and both offer **Kill Idle Servers**.
 
 ### Quick File Navigation
 
@@ -573,7 +594,7 @@ The status bar shows a phantom process count. This tells you how many background
 ### Saving Battery
 
 - Close terminals you are not using. Each open terminal is a separate bash process.
-- Language servers auto-kill after 5 minutes of idle time.
+- An idle language server is not killed on a timer. Run **VSCodroid: Kill Idle Servers** from the Command Palette to shed them yourself.
 - Avoid leaving dev servers running in the background when not in use.
 
 ### Keyboard Tips for Touch
@@ -590,29 +611,26 @@ The status bar shows a phantom process count. This tells you how many background
 
 Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because there is no C compiler on the device. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
 
-### Toolchains Run Only Through bash
+### Toolchains Must Be Started by Name
 
-Android refuses to execute any file inside an app's data directory, which is
-where installed toolchains live. VSCodroid works around this by defining a shell
-function for each toolchain binary that hands the file to the system loader, so
-typing `ruby` or `javac` in a terminal works.
+Android refuses to execute any file inside an app's data directory, which is where
+installed toolchains live. VSCodroid works around it by handing the file to the
+system loader instead, and it does that two ways: a bash function per command, and
+a small program on `PATH` that every other kind of start finds.
 
-The same definitions reach bash when it is not your terminal, so a VS Code task,
-an npm lifecycle script and `bash -c "..."` find them too. `npm` and `npx` are
-the same kind of function and are reached the same way.
+So a toolchain command works when it is started by its bare name, whoever starts
+it: typing `ruby` in a terminal, `bash -c`, `sh -c`, a `make` recipe, an npm
+lifecycle script, a VS Code task of either kind, and a process an extension or a
+language server starts directly.
 
-What a function cannot reach is anything that never gets to bash. Those starts
-receive the file rather than the function, and Android refuses it:
+What still fails is a start that names a path instead of a command:
 
-- `make`, whose recipes run under `/system/bin/sh` rather than the bash VSCodroid sets up
-- processes an extension starts, including language servers
-- a compiler that starts its own sub-tools
-- a script run by its own path instead of through bash
+- an absolute path such as `$JAVA_HOME/bin/java`, which is not a `PATH` lookup at all
+- a toolchain that forks its own helper by absolute path, which is what the JDK's `lib/jspawnhelper` does
+- a script under the app's storage run by its own path: Android refuses the script file itself, before its `#!` line is ever read. Run it as `ruby script.rb` instead
 
-Ruby and Java are reached the same way and hit the same wall whenever something
-starts them without a shell, an extension or a Makefile recipe for example.
-Typing `ruby` or `javac`, or running either from a task, goes through the shell
-function and works.
+`npm` and `npx` are bash functions and nothing else, so those two are still
+reachable only from bash. `sh -c 'npm -v'` fails where `bash -c 'npm -v'` works.
 
 ### Android Phantom Process Limit
 
@@ -620,14 +638,20 @@ Android 12 and later enforce a system-wide limit of 32 phantom processes (backgr
 
 | Component | Phantom Processes |
 |-----------|-------------------|
+| Bootstrap | 1 |
 | Node.js server | 1 |
 | File watcher | 1 |
+| Chat agent host and its model backend | 2 |
 | Extension Host | 0 (runs as worker thread) |
 | ptyHost | 0 (runs as worker thread) |
 | Each terminal tab | 1 (bash) |
-| Each language server | 1 (idle-killed after 5 min) |
+| Each language server | 1 |
 
-Typical usage: 2-3 phantom processes. If you hit the limit (other apps compete for the same 32 slots), close unused terminals and check the process monitor.
+That is 5 on a cold start with nothing open, which is what the status bar shows
+before you do anything. Idle language servers are shed automatically when the count
+reaches 24, and under critical memory pressure; below that they stay. If you hit
+the limit (other apps compete for the same 32 slots), close unused terminals and
+run **VSCodroid: Kill Idle Servers**.
 
 ### Memory Usage
 
@@ -635,7 +659,7 @@ VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you ma
 
 - Close browser tabs and other apps to free RAM.
 - Limit concurrent terminals to 1-2.
-- Language servers are the biggest memory consumers and are killed when idle.
+- Language servers are the biggest memory consumers. Idle ones are shed when Android reports critical memory pressure, or on demand through **VSCodroid: Kill Idle Servers**.
 
 ### os.cpus() Returns Empty
 
@@ -721,7 +745,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 810 MB to internal storage. With both toolchains installed, expect around 990 MB. Setup needs about 873 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 770 MB to internal storage. With both toolchains installed, expect around 960 MB. Setup needs about 865 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 
@@ -796,7 +820,7 @@ If `npm install` fails with errors:
 
 ### Git Push/Pull Fails
 
-- **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519` in the terminal and add it to your GitHub/GitLab account.
+- **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
 - **SSL certificate error** -- the CA bundle git uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. So a private or corporate CA does work for git, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: npm, which has its own trust store, and pages loaded inside the editor, which use the system roots only.
 
 ### App Uses Too Much Storage
@@ -818,8 +842,8 @@ du -sh ~/projects/*
 du -sh ~/.vscodroid/extensions/*
 ```
 
-To remove an installed toolchain, touch and hold the app icon and choose
-**Manage toolchains**. It is not reachable from inside the editor, deliberately;
+To remove an installed toolchain, run **VSCodroid: Manage Toolchains** from the
+Command Palette, or touch and hold the app icon and choose **Manage toolchains**;
 see [Installing After Setup](#installing-after-setup).
 
 ### App Crashes or Restarts Unexpectedly
@@ -846,7 +870,9 @@ If the preview tab or the device browser opens but the page does not load:
 
 ### WebView Crash Recovery
 
-If the editor UI crashes but the app stays open, VSCodroid automatically recovers the WebView and reconnects to the running server. Your terminal sessions and unsaved work in the editor state are preserved. If auto-recovery fails, force-close and reopen the app.
+If the editor UI crashes but the app stays open, VSCodroid automatically recovers the WebView and reconnects to the running server. Your terminal sessions and unsaved work in the editor state are preserved.
+
+Recovery is bounded, because reloading a page that is itself the cause only repeats the crash. Three crashes inside a minute are recovered from as normal; a fourth stops the automatic reload and puts up a page saying so, with a **Try again** button that reloads the editor when you are ready. The server keeps running behind it either way, so nothing needs force-closing.
 
 ---
 
