@@ -80,7 +80,14 @@ function activate(context) {
     // Command to open the walkthrough manually (from Command Palette)
     context.subscriptions.push(
         vscode.commands.registerCommand('vscodroid.welcome.open', () => {
-            vscode.commands.executeCommand(
+            // Returned rather than dropped. The other three executeCommand calls
+            // in this file are fire-and-forget and each carries its own rejection
+            // handler, because nobody asked for them; this one is a palette entry
+            // the user chose, so the failure belongs to whoever ran it. Handing
+            // the thenable back makes the workbench the handler: it reports a
+            // contributed command that failed, where a swallowed rejection left
+            // the user tapping a menu item that did nothing at all.
+            return vscode.commands.executeCommand(
                 'workbench.action.openWalkthrough',
                 WALKTHROUGH_ID,
                 false
@@ -103,19 +110,44 @@ function activate(context) {
 
     // Auto-open walkthrough on first activation only
     if (!fs.existsSync(markerFile)) {
-        try { fs.writeFileSync(markerFile, '1'); } catch (_) {}
         // onStartupFinished already means the workbench is ready,
         // but a short delay avoids racing with layout restoration.
-        setTimeout(async () => {
-            await vscode.commands.executeCommand(
-                'workbench.action.openWalkthrough',
-                WALKTHROUGH_ID,
-                false
+        setTimeout(() => {
+            // The marker records that the walkthrough has been SHOWN, so it is
+            // written in the command's success continuation and nowhere else --
+            // the same shape, and for the same reason, as alignSecondarySideBar
+            // above. Written first, a command that rejected or an extension host
+            // torn down inside this delay left the marker behind and the
+            // walkthrough never opened again for that installation, reachable
+            // only from the palette, and the rejection surfaced as an unhandled
+            // one in the host rather than as anything actionable.
+            Promise.resolve(
+                vscode.commands.executeCommand(
+                    'workbench.action.openWalkthrough',
+                    WALKTHROUGH_ID,
+                    false
+                )
+            ).then(
+                () => {
+                    try { fs.writeFileSync(markerFile, '1'); } catch (_) {}
+                    // Close sidebar AFTER walkthrough is shown: on mobile the
+                    // Explorer panel eats ~40% of the screen. Closing after
+                    // ensures the walkthrough command doesn't re-trigger the
+                    // sidebar.
+                    //
+                    // Its own handler, and not covered by the one on the call
+                    // above: this runs in that call's success continuation, so a
+                    // rejection here starts a fresh chain that nothing is
+                    // listening to. Nothing is retried, because the marker is
+                    // already written and the walkthrough is already open; the
+                    // cost of the close failing is a sidebar the user can close
+                    // themselves, not an unhandled rejection in the host.
+                    Promise.resolve(
+                        vscode.commands.executeCommand('workbench.action.closeSidebar')
+                    ).catch(() => {});
+                },
+                () => {}
             );
-            // Close sidebar AFTER walkthrough is shown: on mobile the
-            // Explorer panel eats ~40% of the screen. Closing after ensures
-            // the walkthrough command doesn't re-trigger the sidebar.
-            vscode.commands.executeCommand('workbench.action.closeSidebar');
         }, 500);
     }
 }

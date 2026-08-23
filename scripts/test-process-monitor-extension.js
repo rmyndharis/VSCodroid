@@ -39,6 +39,10 @@ const shown = [];
 // command does when a user runs it. The callback was thrown away here, so the
 // only command that sends signals had no cover at all.
 const commands = new Map();
+// Collected rather than discarded, for the same reason the callbacks are: the
+// details view is a user-facing render with branches of its own, and a stub that
+// throws its lines away certified every one of them.
+const printed = [];
 const vscodeStub = {
     StatusBarAlignment: { Left: 1, Right: 2 },
     ThemeColor: class { constructor(id) { this.id = id; } },
@@ -47,7 +51,15 @@ const vscodeStub = {
     },
     window: {
         createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
-        createOutputChannel: () => ({ appendLine() {}, clear() {}, show() {}, dispose() {} }),
+        createOutputChannel: () => ({
+            // clear() empties it, exactly as the real channel does, so each
+            // render below is read on its own rather than on everything the file
+            // has printed so far.
+            appendLine: (line) => { printed.push(line); },
+            clear() { printed.length = 0; },
+            show() {},
+            dispose() {},
+        }),
         showWarningMessage: (message) => { shown.push({ level: 'warning', message }); return Promise.resolve(undefined); },
         showErrorMessage: (message) => { shown.push({ level: 'error', message }); return Promise.resolve(undefined); },
         showInformationMessage: (message) => { shown.push({ level: 'info', message }); return Promise.resolve(undefined); },
@@ -90,6 +102,10 @@ function notificationFor(snapshot) {
  * the tiers are read off it: a fixture that omits one is exercising whatever
  * literal the extension falls back to, which is the thing the block at the
  * bottom of this file exists to catch.
+ *
+ * Stamped with the current time, because the extension now refuses to act on a
+ * snapshot older than a few poll intervals. A fixture frozen at zero is a
+ * snapshot from 1970 and would exercise that refusal in every check here.
  */
 function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, error: 14 }) {
     const tree = [];
@@ -98,7 +114,7 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
         tree.push({ pid: 1000 + i, ppid: 1, type, cmd: `proc-${i}` });
     }
     return {
-        timestamp: 0, total,
+        timestamp: Date.now(), total,
         budget: { current: total, hard: 32, ...budget },
         tree, warnings: [],
     };
@@ -368,7 +384,7 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     process.kill = (pid, signal) => { signalled.push([pid, signal]); };
     try {
         notificationFor({
-            timestamp: 0, total: 3,
+            timestamp: Date.now(), total: 3,
             budget: { current: 3, idle: 5, soft: 8, error: 14, hard: 32 },
             tree, warnings: [],
         });
@@ -385,8 +401,186 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     );
 }
 
+// And nothing at all off a snapshot nobody is refreshing.
+//
+// poll() swallows every read and parse failure and keeps the last snapshot, so a
+// writer that has stopped is indistinguishable from a count that is simply
+// steady -- and it does stop: process-monitor.js runs inside the bootstrap, and
+// a bootstrap SIGKILLed while the editor server it forked keeps running leaves
+// this extension reading a file nobody writes for the rest of the session. The
+// pids in that file are this app's uid, so the kernel delivers whatever it is
+// told, against a process tree that has moved on.
+//
+// And nothing is composed from it either, which is the half that has to be
+// decided before the status bar is painted rather than after. updateStatusBar
+// latches the tiered notifications, so a stale snapshot at or above the error
+// budget used to raise 'The live count is in the status bar' and then have the
+// status bar blanked to '--' underneath it, latched until the count next fell
+// below the soft budget. The count is 20 on purpose: at anything under the soft
+// budget the notification arms would be silent whatever the timestamp, and the
+// assertion would pass without testing anything.
+//
+// Same tree and same idle row as the check above, so the only difference between
+// signalling and not is the age of the snapshot.
+{
+    const stale = snapshot(20, 9, 6);
+    stale.timestamp = Date.now() - 10 * 60 * 1000;
+    // One row the command is entitled to act on, so the refusal below is the
+    // only thing standing between it and a SIGTERM.
+    stale.tree.find((p) => p.type === 'langserver').idle = true;
+    const idlePid = stale.tree.find((p) => p.idle).pid;
+
+    const run = (snap) => {
+        const signalled = [];
+        const realKill = process.kill;
+        process.kill = (pid, signal) => { signalled.push([pid, signal]); };
+        try {
+            const raised = notificationFor(snap);
+            commands.get('vscodroid.killIdleServers')();
+            return { raised, signalled };
+        } finally {
+            process.kill = realKill;
+        }
+    };
+
+    // POSITIVE CONTROL, on the identical tree: current, it warns and it signals.
+    // Without it both assertions below are satisfied by a fixture that could
+    // never have produced either.
+    const live = run({ ...stale, timestamp: Date.now() });
+    assert.strictEqual(
+        live.raised.length, 1,
+        `a current snapshot of 20 raised ${live.raised.length} notifications, so the stale case ` +
+            'below is not measuring the guard',
+    );
+    assert.deepStrictEqual(
+        live.signalled, [[idlePid, 'SIGTERM']],
+        `a current snapshot did not reach the idle server: ${JSON.stringify(live.signalled)}`,
+    );
+
+    const old = run(stale);
+    assert.deepStrictEqual(
+        old.signalled, [],
+        'Kill Idle Servers signalled pids read out of a ten-minute-old snapshot: ' +
+            JSON.stringify(old.signalled),
+    );
+    assert.deepStrictEqual(
+        old.raised, [],
+        'a snapshot nobody is refreshing raised a notification, and it was composed before the ' +
+            'status bar it points at was blanked: ' + JSON.stringify(old.raised),
+    );
+}
+
+// A snapshot with no timestamp at all is stale, not current.
+//
+// The direct test is `now - timestamp > STALE_AFTER_MS`, which is NaN > N and so
+// false, so a file carrying no time was the one thing treated as fresher than a
+// file written a second ago. Reached by a snapshot written before the field
+// existed, or by a truncated one that still parses.
+{
+    const undated = snapshot(20, 9, 6);
+    delete undated.timestamp;
+    undated.tree.find((p) => p.type === 'langserver').idle = true;
+    const signalled = [];
+    const realKill = process.kill;
+    process.kill = (pid, signal) => { signalled.push([pid, signal]); };
+    let raised;
+    try {
+        raised = notificationFor(undated);
+        commands.get('vscodroid.killIdleServers')();
+    } finally {
+        process.kill = realKill;
+    }
+    assert.deepStrictEqual(
+        raised, [],
+        `a snapshot with no timestamp was rendered as current: ${JSON.stringify(raised)}`,
+    );
+    assert.deepStrictEqual(
+        signalled, [],
+        'Kill Idle Servers signalled pids read out of a snapshot with no timestamp: ' +
+            JSON.stringify(signalled),
+    );
+}
+
+// The details view names the number that acts on its own, and only when the
+// snapshot carries it.
+//
+// The reclaim budget is the one figure here that makes something happen without
+// a user: at or above it process-monitor.js sheds idle language servers whether
+// or not Android ever reports memory pressure. It was published in the snapshot
+// and rendered nowhere, so the only automatic action this app takes was visible
+// solely in the warning left behind afterwards. Both renders are read, because
+// each has a fallback for a snapshot written before the field existed and a
+// fallback that fires when it should not is the same bug with a different shape.
+{
+    notificationFor(snapshot(20, 9, 6, { idle: 5, soft: 8, error: 14, reclaim: 24 }));
+    commands.get('vscodroid.showProcesses')();
+    const named = printed.join('\n');
+    assert.match(
+        named, /^Budget: 20\/8 soft, 24 reclaim, 32 hard limit$/m,
+        `the budget line does not name the reclaim threshold:\n${named}`,
+    );
+    assert.match(
+        named, /once the count reaches 24/,
+        `the language-server advice names memory pressure as the only trigger:\n${named}`,
+    );
+
+    // The control, on the same counts: without the field neither number is
+    // guessed, and both lines are still rendered.
+    notificationFor(snapshot(20, 9, 6));
+    commands.get('vscodroid.showProcesses')();
+    const silent = printed.join('\n');
+    assert.ok(
+        !/reclaim|once the count reaches/.test(silent),
+        `a snapshot with no reclaim budget had one rendered anyway:\n${silent}`,
+    );
+    assert.match(
+        silent, /^Budget: 20\/8 soft, 32 hard limit$/m,
+        `the budget line itself went missing with the field:\n${silent}`,
+    );
+}
+
+// And the view says what the status bar already says about a stopped writer.
+//
+// It is the command the status bar item runs, so the blanked '$(pulse) --' and
+// its tooltip lead here: the user read that the count is no longer live, tapped
+// it, and was shown a full tree, a budget and recommendations with nothing
+// marking them as the last ones written. The rows stay, because they are still
+// the best answer available; what changes is that the view no longer presents
+// them as now.
+{
+    const stale = snapshot(20, 9, 6, { idle: 5, soft: 8, error: 14, reclaim: 24 });
+    stale.timestamp = Date.now() - 10 * 60 * 1000;
+    notificationFor(stale);
+    commands.get('vscodroid.showProcesses')();
+    assert.match(
+        printed[0] || '', /^No process data for the last \d+ s/,
+        `a snapshot nobody is refreshing was rendered as current:\n${printed.join('\n')}`,
+    );
+    assert.match(
+        printed.join('\n'), /^Total phantom processes: 20$/m,
+        'the rows were dropped rather than marked; they are still the last answer there is',
+    );
+
+    // A snapshot with no timestamp is one of those, and it used to head the
+    // view with `new Date(undefined)`, which renders as 'Invalid Date'.
+    const undated = snapshot(20, 9, 6);
+    delete undated.timestamp;
+    notificationFor(undated);
+    commands.get('vscodroid.showProcesses')();
+    const text = printed.join('\n');
+    assert.ok(
+        !text.includes('Invalid Date'),
+        `a snapshot with no timestamp was headed with an unparsed date:\n${text}`,
+    );
+    assert.match(
+        text, /^No process data for the last \d+ s/,
+        `a snapshot with no timestamp was rendered as current:\n${text}`,
+    );
+}
+
 console.log(
     'ok -- both notification tiers say the same thing whatever the counts, stay quiet below ' +
-    'them, come from the snapshot rather than from literals, and Kill Idle Servers signals ' +
-    'only the idle ones',
+    'them, come from the snapshot rather than from literals, Kill Idle Servers signals ' +
+    'only the idle ones and nothing at all when the snapshot has stopped moving, and the ' +
+    'details view names the reclaim threshold and marks a snapshot nobody is refreshing',
 );

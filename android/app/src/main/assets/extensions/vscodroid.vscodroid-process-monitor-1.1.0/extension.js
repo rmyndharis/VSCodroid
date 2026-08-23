@@ -7,6 +7,38 @@ const path = require('path');
 
 const POLL_INTERVAL_MS = 10_000;
 
+// How old a snapshot may be before what it says is no longer about now.
+//
+// The cadence that decides it is the writer's, process-monitor.js's
+// SCAN_INTERVAL_MS, and not the POLL_INTERVAL_MS above, which only happens to
+// equal it: a monitor slowed to save battery would make every snapshot this
+// extension ever reads stale, and the status item would then read '--' forever
+// with nothing here to say why. Written from the reader's constant because that
+// is the one in this file, and pinned against the writer's in
+// scripts/test-process-monitor.js at two of its beats of slack. Three missed
+// writes is a writer that has stopped rather than one that is a beat behind. It
+// does stop:
+// process-monitor.js lives inside the bootstrap, and a bootstrap that is
+// SIGKILLed while the editor server it forked keeps running leaves this
+// extension polling a file nobody writes for the rest of the session. Nothing
+// here could tell that from a count that was simply steady, because poll()
+// swallows every read and parse failure and keeps the last snapshot.
+const STALE_AFTER_MS = 3 * POLL_INTERVAL_MS;
+
+/**
+ * Whether a snapshot is too old for anything to be decided from it.
+ *
+ * Written as the negation of "fresh enough" rather than as "older than", so a
+ * snapshot carrying no timestamp comes out stale. The direct form is
+ * `Date.now() - undefined > STALE_AFTER_MS`, which is NaN > N and therefore
+ * false, so a file with no time in it was treated as current by both readers of
+ * this answer. An absent field takes the safe answer here for the same reason
+ * `budget.soft || 8` and `p.idle === true` do below.
+ */
+function isStale(snapshot) {
+    return !(Date.now() - snapshot.timestamp <= STALE_AFTER_MS);
+}
+
 let statusBarItem;
 let outputChannel;
 let pollTimer;
@@ -41,14 +73,39 @@ function activate(context) {
 
     // Poll the JSON snapshot file
     function poll() {
+        let fresh = null;
         try {
-            const raw = fs.readFileSync(snapshotPath, 'utf8');
-            const snapshot = JSON.parse(raw);
-            lastSnapshot = snapshot;
-            updateStatusBar(snapshot);
+            fresh = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
         } catch {
             // File not yet written or parse error: keep last state
         }
+        if (fresh) lastSnapshot = fresh;
+
+        // A frozen count reads exactly like a steady one, and this is the only
+        // place a reader could be told otherwise. Read outside the catch above,
+        // because a snapshot that keeps parsing and keeps its old timestamp is
+        // the same failure: what matters is whether anyone is still writing. A
+        // snapshot that has never been read at all keeps the loading text, which
+        // already says what it is.
+        //
+        // Decided BEFORE anything is rendered from it, which is the order that
+        // matters rather than a tidier shape. updateStatusBar composes and
+        // latches the tiered notifications, so painting first meant a stale
+        // snapshot at or above the error budget raised 'The live count is in the
+        // status bar' and then the status bar was blanked to '--' underneath it,
+        // latched, until the count next fell below the soft budget. The session
+        // this guard exists for is exactly the one that reaches it: an adopted
+        // server runs no monitor, and TMPDIR is never cleared, so the first poll
+        // can read a previous boot's file at any count at all.
+        if (lastSnapshot && isStale(lastSnapshot)) {
+            statusBarItem.text = '$(pulse) --';
+            statusBarItem.backgroundColor = undefined;
+            statusBarItem.tooltip =
+                `VSCodroid Process Monitor: no process data for ${STALE_AFTER_MS / 1000} s, ` +
+                'so the count is no longer live.';
+            return;
+        }
+        if (fresh) updateStatusBar(fresh);
     }
 
     poll();
@@ -207,6 +264,18 @@ function killIdleLanguageServers() {
         return;
     }
 
+    // Nothing is signalled off a snapshot nobody is refreshing. The pids in it
+    // belong to this app's uid, so the kernel delivers whatever it is told, and
+    // the one state where the writer has stopped is exactly the one where those
+    // pids describe a process tree that has moved on.
+    if (isStale(lastSnapshot)) {
+        vscode.window.showInformationMessage(
+            'Process data is out of date, so nothing was signalled. Restart the app if the ' +
+                'count in the status bar has stopped moving.',
+        );
+        return;
+    }
+
     // Idle, not merely present. This filtered on the type alone and SIGTERMed
     // every language server the snapshot listed, which is not what the command
     // is called and not what a user pressing it under memory pressure is
@@ -227,7 +296,8 @@ function killIdleLanguageServers() {
     if (idle.length === 0) {
         vscode.window.showInformationMessage(
             `${langservers.length} language server${langservers.length !== 1 ? 's' : ''} ` +
-                'running, none idle. Idle ones are freed automatically under memory pressure.'
+                'running, none idle. Idle ones are freed automatically under memory pressure, ' +
+                'or once the process count runs away.'
         );
         return;
     }
@@ -292,13 +362,43 @@ function showProcessTree() {
     }
 
     const s = lastSnapshot;
-    const time = new Date(s.timestamp).toLocaleTimeString();
+
+    // The third reader of that answer, and the one a user reaches deliberately.
+    // poll() blanks the status item to '--' for a snapshot nobody is refreshing
+    // and killIdleLanguageServers() refuses to signal off one, but this view is
+    // what that blanked item's command opens: the user read a tooltip saying the
+    // count is no longer live, tapped it, and was shown a whole tree, a budget
+    // line and recommendations with nothing marking them as the last ones
+    // written. Said here rather than instead of rendering them, because the rows
+    // are still the best available answer and the pids in them are what the
+    // command below refuses to signal.
+    if (isStale(s)) {
+        outputChannel.appendLine(
+            `No process data for the last ${STALE_AFTER_MS / 1000} s, so the rows below are ` +
+                'the last ones written rather than what is running now.'
+        );
+    }
+
+    // A snapshot with no timestamp is one of the stale cases above, and it
+    // reaches here: `new Date(undefined)` renders as 'Invalid Date', which reads
+    // as a broken extension rather than as a missing field.
+    const time = Number.isFinite(s.timestamp)
+        ? new Date(s.timestamp).toLocaleTimeString()
+        : 'time not recorded';
 
     outputChannel.appendLine(`VSCodroid Process Tree (${time})`);
     outputChannel.appendLine(`Total phantom processes: ${s.total}`);
     if (s.budget) {
+        // The reclaim threshold is named alongside the other two because it is
+        // the only number here that makes something happen on its own: at or
+        // above it the monitor signals idle language servers whether or not the
+        // device ever reports memory pressure. It was published in the snapshot
+        // and rendered nowhere, so the one automatic action this app takes was
+        // visible only in the warning it leaves behind afterwards. Omitted
+        // rather than guessed for a snapshot written before the field existed.
+        const reclaim = s.budget.reclaim ? `, ${s.budget.reclaim} reclaim` : '';
         outputChannel.appendLine(
-            `Budget: ${s.budget.current}/${s.budget.soft} soft, ${s.budget.hard} hard limit`
+            `Budget: ${s.budget.current}/${s.budget.soft} soft${reclaim}, ${s.budget.hard} hard limit`
         );
     }
 
@@ -344,7 +444,17 @@ function showProcessTree() {
             outputChannel.appendLine(`  • Close ${terminals.length - 1} terminals (${terminals.length} open, 1-2 recommended)`);
         }
         if (langservers.length > 1) {
-            outputChannel.appendLine(`  • ${langservers.length} language servers active: idle ones auto-kill after 5 min under memory pressure`);
+            // Both triggers, because memory pressure stopped being the only one.
+            // A count at or above the reclaim budget sheds idle servers by
+            // itself, which is the case a user on a device with free memory
+            // actually meets: Android's phantom-process killer fires on the
+            // number of processes and reports no pressure first. Left out rather
+            // than guessed when the snapshot predates the field, the same way the
+            // budget line above handles it.
+            const reclaim = s.budget && s.budget.reclaim
+                ? `, or once the count reaches ${s.budget.reclaim}`
+                : '';
+            outputChannel.appendLine(`  • ${langservers.length} language servers active: idle ones are freed after 5 min under memory pressure${reclaim}`);
             outputChannel.appendLine(`  • Run "VSCodroid: Kill Idle Servers" to free them now`);
         }
     }
@@ -355,5 +465,7 @@ function deactivate() {
 }
 
 // TYPE_LABELS is exported for scripts/test-process-monitor.js, which pairs it
-// against the types a real scan produces. Nothing in the workbench reads it.
-module.exports = { activate, deactivate, TYPE_LABELS };
+// against the types a real scan produces; STALE_AFTER_MS for the same file,
+// which holds it against the monitor's own scan cadence. Neither is read by the
+// workbench.
+module.exports = { activate, deactivate, TYPE_LABELS, STALE_AFTER_MS };

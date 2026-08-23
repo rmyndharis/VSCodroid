@@ -55,6 +55,10 @@ const PY = '/data/user/0/com.vscodroid/files/usr/bin/python3';
 // anchor had moved away from it. Which directory this is does not matter to any
 // case below; that they are the SAME directory is the whole of it.
 const REH = monitor.REH_ROOT;
+// Where assets/server.js and assets/dns-proxy.js sit on device, taken from the
+// monitor for the same reason REH is: the two are siblings, and the monitor
+// derives its own anchor from where it was unpacked.
+const SRV = path.dirname(REH);
 // Marketplace and bundled-by-us extensions are extracted here, which is a
 // different tree from the editor's own extensions under REH.
 const EXT = '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions';
@@ -95,9 +99,44 @@ Module._resolveFilename = function (request, ...rest) {
     return request === 'vscode' ? 'vscode' : resolveFilename.call(this, request, ...rest);
 };
 require.cache.vscode = { id: 'vscode', filename: 'vscode', loaded: true, exports: {} };
-const { TYPE_LABELS } = require(path.join(
+const { TYPE_LABELS, STALE_AFTER_MS } = require(path.join(
     newestExtensionDir('vscodroid.vscodroid-process-monitor-'), 'extension.js',
 ));
+
+/**
+ * The reader's staleness bound still covers the writer's cadence.
+ *
+ * The extension decides a snapshot is no longer about now once it is
+ * STALE_AFTER_MS old, and derives that from its own polling interval; this
+ * module writes snapshots every SCAN_INTERVAL_MS. Two constants in two files
+ * that are equal today by coincidence, with nothing between them: slow the scan
+ * for battery and every snapshot the extension ever reads is already stale, so
+ * the status item is '$(pulse) --' forever, "Kill Idle Servers" refuses to
+ * signal anything, and the process tree opens with a line saying there is no
+ * data. No count moves and nothing here would have gone red.
+ *
+ * Two beats of slack rather than exact equality: the reader is on its own timer,
+ * so it always looks a fraction of a beat after the write it wants, and one
+ * missed scan must not blank a working session.
+ *
+ * NEGATIVE CONTROL: raise SCAN_INTERVAL_MS to 30_000, the plausible battery
+ * change, and this fails at 30000 against a required 60000.
+ */
+function checkStalenessBoundCoversScanCadence() {
+    assert.ok(
+        Number.isFinite(STALE_AFTER_MS) && Number.isFinite(monitor.SCAN_INTERVAL_MS),
+        'one of the two constants is no longer exported, so this check is comparing nothing: ' +
+        `STALE_AFTER_MS=${STALE_AFTER_MS}, SCAN_INTERVAL_MS=${monitor.SCAN_INTERVAL_MS}`,
+    );
+    assert.ok(
+        STALE_AFTER_MS >= 2 * monitor.SCAN_INTERVAL_MS,
+        `the monitor writes a snapshot every ${monitor.SCAN_INTERVAL_MS} ms and the status bar ` +
+        `extension calls one stale after ${STALE_AFTER_MS} ms, which is under two writes. Every ` +
+        'snapshot it reads is stale on arrival: the count blanks, the idle kill refuses, and the ' +
+        'process tree says there is no data, all with the monitor running normally.',
+    );
+    return monitor.SCAN_INTERVAL_MS;
+}
 
 /**
  * Every type the monitor really emitted has a word a person can read.
@@ -392,7 +431,7 @@ function checkRehAnchorFollowsTheTree(baseTmp) {
     const out = path.join(moved, 'tmp');
     fs.mkdirSync(out);
     process.env.TMPDIR = out;
-    relocated.start(2001, { procRoot: proc });
+    relocated.start({ procRoot: proc });
     relocated.stop();
 
     const snapshot = JSON.parse(fs.readFileSync(path.join(out, 'vscodroid-processes.json'), 'utf8'));
@@ -433,7 +472,7 @@ function checkSnapshotSurvivesReclaim(baseTmp, proc) {
     process.env.TMPDIR = out;
     const snapshotPath = path.join(out, 'vscodroid-processes.json');
 
-    monitor.start(1001, { procRoot: proc });
+    monitor.start({ procRoot: proc });
     monitor.stop();
     assert.ok(fs.existsSync(snapshotPath), 'the monitor wrote no snapshot at all, so this ' +
         'check cannot tell a recreated directory from one that was never used');
@@ -442,13 +481,88 @@ function checkSnapshotSurvivesReclaim(baseTmp, proc) {
     assert.ok(!fs.existsSync(snapshotPath), 'the fixture directory did not go, so the write ' +
         'below is not being asked the question this exists to ask');
 
-    monitor.start(1001, { procRoot: proc });
+    monitor.start({ procRoot: proc });
     monitor.stop();
     assert.ok(
         fs.existsSync(snapshotPath),
         'the snapshot was never written again after the directory holding it was reclaimed, ' +
             'so the status bar counter, its tooltip and the process tree render the last one ' +
             'for the life of the server and Kill Idle Servers signals pids out of it',
+    );
+}
+
+/**
+ * The snapshot is replaced whole or not at all.
+ *
+ * The reader is a different process on a timer of the same period as the
+ * writer's, so once the two phase-align a readFileSync lands inside the write.
+ * A bare writeFileSync truncates the file first, so what the reader gets back is
+ * JSON that does not parse -- which the extension answers by keeping its previous
+ * state, exactly what it does when the monitor has stopped writing altogether,
+ * leaving the two indistinguishable from the side that sends signals off the
+ * result.
+ *
+ * Driven by interrupting the write rather than by racing a reader, which would
+ * only fail some of the time: fs.writeFileSync is replaced with one that writes
+ * the first fragment of the payload and then throws, which is what a kill landing
+ * mid-write leaves behind.
+ *
+ * NEGATIVE CONTROL: write straight to outputPath again and the file left behind
+ * is the fragment, so both assertions below go red.
+ */
+function checkSnapshotIsReplacedWhole(baseTmp) {
+    const out = fs.mkdtempSync(path.join(baseTmp, 'atomic-'));
+    const proc = path.join(out, 'proc');
+    writeProc(proc, 3001, [NODE, `${REH}/out/server-main.js`, '--host', '127.0.0.1']);
+    writeProc(proc, 3002, ['/data/data/com.vscodroid/lib/arm64/libbash.so', '-l']);
+    process.env.TMPDIR = out;
+    const snapshotPath = path.join(out, 'vscodroid-processes.json');
+
+    monitor.start({ procRoot: proc });
+    monitor.stop();
+    const whole = fs.readFileSync(snapshotPath, 'utf8');
+    JSON.parse(whole);
+
+    const realWrite = fs.writeFileSync;
+    fs.writeFileSync = (file, data, options) => {
+        realWrite(file, String(data).slice(0, 30), options);
+        throw new Error('interrupted');
+    };
+    try {
+        monitor.start({ procRoot: proc });
+        monitor.stop();
+    } finally {
+        fs.writeFileSync = realWrite;
+    }
+
+    assert.strictEqual(
+        fs.readFileSync(snapshotPath, 'utf8'), whole,
+        'a write that could not finish left a truncated snapshot where the previous one was, so ' +
+            'the next reader gets JSON that does not parse and cannot tell that from a monitor ' +
+            'that has stopped writing',
+    );
+    assert.deepStrictEqual(
+        fs.readdirSync(out).filter((name) => name !== 'proc'),
+        ['vscodroid-processes.json'],
+        `the failed write left files beside the snapshot: ${fs.readdirSync(out).join(', ')}`,
+    );
+
+    // A temporary file from a previous boot is reused, not joined.
+    //
+    // The failure the rename above cannot catch is a kill landing between the
+    // write and the rename: the temporary file survives, and nothing sweeps
+    // TMPDIR. This runs every ten seconds in a process the platform SIGKILLs as
+    // a matter of routine, so a name carrying the pid makes each of those a new
+    // file that stays for the life of the install. One fixed name means the next
+    // scan writes over it.
+    fs.writeFileSync(`${snapshotPath}.tmp`, 'left behind by a kill');
+    monitor.start({ procRoot: proc });
+    monitor.stop();
+    assert.deepStrictEqual(
+        fs.readdirSync(out).filter((name) => name !== 'proc'),
+        ['vscodroid-processes.json'],
+        'a temporary file left behind by an interrupted write is still there after a completed ' +
+            `scan, so one accumulates per kill: ${fs.readdirSync(out).join(', ')}`,
     );
 }
 
@@ -476,8 +590,8 @@ function checkSnapshotSurvivesReclaim(baseTmp, proc) {
  *   - rebuild the entry in trackLangServer as `{ cpuTime, lastActive: now }`
  *     instead of spreading `prev`: the pending signal is dropped the moment the
  *     process burns a tick, same two failures.
- *   - drop the `tracked.termSentAt` short-circuit from isIdle: the pending
- *     signal is kept and then not read, same two failures.
+ *   - drop the `tracked.termSentAt` arm from killIdleLangServers' eligibility
+ *     test: the pending signal is kept and then not read, same two failures.
  *   - send 'SIGTERM' instead of 'SIGKILL' on the second pass: the escalation
  *     assertion goes red.
  *   - drop `|| cpuTime < prev.cpuTime` from trackLangServer: a recycled pid
@@ -516,7 +630,7 @@ function checkSurvivingServerStaysReclaimable(baseTmp, critical) {
             }
             Date.now = () => realNow() + offsetMs;
             try {
-                monitor.start(VICTIM, { procRoot: proc });
+                monitor.start({ procRoot: proc });
                 monitor.stop();
             } finally {
                 Date.now = realNow;
@@ -551,13 +665,21 @@ function checkSurvivingServerStaysReclaimable(baseTmp, critical) {
 
         // The server is still there, and running its handler cost it a tick.
         // That is the reading that used to hand it another five minutes.
+        //
+        // The row published for the user says what was MEASURED: this process
+        // moved its CPU counter between the two scans, so it is not idle, and
+        // 'Kill Idle Servers' must not offer it. The pending signal is a reason
+        // for the escalation below and not a claim about what the process is
+        // doing; publishing it as `idle` advertised a server that trapped a
+        // SIGTERM and kept working as idle for the rest of its life, which is
+        // exactly the server a user pressing that button is not agreeing to kill.
         setCpu(11, 5);
         const after = scanAt(IDLE, false);
         assert.strictEqual(
-            after.idle, true,
-            'a language server that outlived the SIGTERM sent to it is reported not idle again, ' +
-                'so the pressure kill leaves it alone for another five minutes and Kill Idle ' +
-                'Servers says none are idle, while the warning already told the user it was killed',
+            after.idle, false,
+            'a language server that used CPU between two scans is published as idle because it ' +
+                'is carrying an unanswered SIGTERM, so Kill Idle Servers offers the user a ' +
+                'server that is working',
         );
 
         // The next pressure event, which must not be a repeat of a signal this
@@ -593,13 +715,41 @@ function main() {
     const proc = path.join(tmp, 'proc');
     process.env.TMPDIR = tmp;
 
+    // Nothing on the machine running this is ever signalled. The fixture below
+    // is deliberately larger than RECLAIM_BUDGET, so the count-triggered reclaim
+    // really runs, and its pids are small numbers that belong to whatever the
+    // host started at boot. What is asserted is which pid the monitor chose and
+    // which signal it chose for it.
+    const signals = [];
+    const realKill = process.kill;
+    process.kill = (pid, signal) => { signals.push([pid, signal]); };
+    try {
+        run(tmp, proc, signals);
+    } finally {
+        process.kill = realKill;
+    }
+}
+
+/**
+ * The body of main(), split out only so the kill stub above wraps all of it.
+ */
+function run(tmp, proc, signals) {
     // The monitor runs inside this very process, so its own pid has to be one
     // of the fixture entries for the count to mean anything.
     writeProc(proc, process.pid, [NODE, '--max-old-space-size=512', '/data/user/0/com.vscodroid/files/server/server.js', '--host=127.0.0.1']);
 
     const cases = [
         // pid, argv, the type the snapshot must carry
-        [1001, [NODE, `${REH}/out/server-main.js`, '--host', '127.0.0.1'], 'server'],
+        // The command line assets/server.js really forks, preload and heap
+        // ceiling included. It used to be the entry point and its host alone,
+        // which resembles nothing the app launches and let the preload's spelling
+        // decide what this row is called: `--require` and the path as two tokens
+        // makes the path the first non-option argument, so scriptArgument() picks
+        // it up and checkCommandNames() below reads `libnode.so dns-proxy.js` for
+        // the editor server. The type is unaffected either way, which is why only
+        // a fixture carrying the option can hold the naming.
+        [1001, [NODE, HEAP, `--require=${SRV}/dns-proxy.js`,
+            `${REH}/out/server-main.js`, '--host', '127.0.0.1'], 'server'],
         [1002, [NODE, `${REH}/extensions/css-language-features/server/dist/node/cssServerMain.js`, '--node-ipc'], 'langserver'],
         [1003, [NODE, `${REH}/extensions/json-language-features/server/dist/node/jsonServerMain.js`, '--node-ipc'], 'langserver'],
         [1004, ['/data/data/com.vscodroid/lib/arm64/libbash.so', '-l'], 'terminal'],
@@ -649,6 +799,16 @@ function main() {
         // only has to spare run-eslint.js is satisfied by matching nothing.
         [1013, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/run-eslint.js'],
             'unknown'],
+        // The ESLint command-line tool, which is how ESLint is run from a
+        // terminal or a task here: SELinux refuses to execve the .bin shim under
+        // filesDir, so it is reached as a script path through the bundled Node.
+        // A bare 'eslint' pattern accepted exactly this basename -- the whole
+        // name plus a Node extension -- and classified the user's own lint run as
+        // a language server, tracked it, and made it eligible for SIGTERM. The
+        // server that pattern looked like it covered has always had its own
+        // entry, eslintServer, exercised at 1017.
+        [1036, [NODE, '/data/user/0/com.vscodroid/files/home/projects/site/node_modules/eslint/bin/eslint.js',
+            '.'], 'unknown'],
         // The pattern reaches this one through a flag's value, not through the
         // script being run: every argument is tested, and the basename of
         // --out=/tmp/tsserver-log.js is tsserver-log.js.
@@ -744,6 +904,17 @@ function main() {
         // session provider can: same tree, deeper path.
         [1033, [NODE, `${REH}/extensions/copilot/node_modules/@github/copilot-android-arm64/index.js`,
             '--stdio'], 'langserver'],
+        // The two rules that were still matched against the whole command line
+        // after everything else had moved to argument basenames, read in the
+        // direction that costs something. A directory of the user's own was
+        // enough to claim a process for one of them, and both return before
+        // LANG_SERVER_PATTERNS: a language server run from inside either path was
+        // outside lsCpuTracker, outside the pressure kill and outside 'Kill Idle
+        // Servers' while it went on holding one of the 32 phantom slots.
+        [1037, [NODE, '/data/user/0/com.vscodroid/files/home/projects/server-main.js-notes/index.js'],
+            'unknown'],
+        [1038, [NODE, '/data/user/0/com.vscodroid/files/home/projects/bootstrap-forklift/build.js'],
+            'unknown'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
@@ -754,7 +925,7 @@ function main() {
     // Another app's process, same device, different uid.
     writeProc(proc, 1200, [NODE, `${REH}/out/server-main.js`], { uid: UID + 1 });
 
-    monitor.start(1001, { procRoot: proc });
+    monitor.start({ procRoot: proc });
     monitor.stop();
 
     const snapshot = JSON.parse(fs.readFileSync(path.join(tmp, 'vscodroid-processes.json'), 'utf8'));
@@ -768,6 +939,20 @@ function main() {
 
     assert.ok(!byPid.has(1100), 'the main Android process was counted as a phantom');
     assert.ok(!byPid.has(1200), "another uid's process was counted against our budget");
+
+    // Over the reclaim budget on the very first scan, and nothing is signalled:
+    // a language server seen once has no CPU history, so it is not idle and is
+    // not eligible however many processes there are.
+    assert.ok(
+        snapshot.total >= snapshot.budget.reclaim,
+        `this fixture holds ${snapshot.total} processes, under the reclaim budget of ` +
+            `${snapshot.budget.reclaim}, so the count-triggered reclaim below is never reached`,
+    );
+    assert.deepStrictEqual(
+        signals, [],
+        `the first scan signalled ${JSON.stringify(signals)}: a count over budget sheds servers ` +
+            'that have never been seen to sit still',
+    );
 
     // Android's phantom accounting is per-UID and counts the process this code
     // runs inside, which ProcessBuilder launched like any other. Skipping it
@@ -783,7 +968,7 @@ function main() {
     // its own warning already lit and nothing open. An always-on warning is one
     // nobody reads, so this pins the relation rather than the numbers.
     const budget = snapshot.budget;
-    for (const key of ['idle', 'soft', 'error', 'hard']) {
+    for (const key of ['idle', 'soft', 'error', 'reclaim', 'hard']) {
         assert.ok(
             Number.isInteger(budget[key]),
             `budget.${key} is missing, so the status bar has nothing to colour against ` +
@@ -796,9 +981,9 @@ function main() {
         'so an untouched install shows a warning it can do nothing about',
     );
     assert.ok(
-        budget.error > budget.soft && budget.hard > budget.error,
+        budget.error > budget.soft && budget.reclaim > budget.error && budget.hard > budget.reclaim,
         `thresholds out of order: idle ${budget.idle}, soft ${budget.soft}, ` +
-        `error ${budget.error}, hard ${budget.hard}`,
+        `error ${budget.error}, reclaim ${budget.reclaim}, hard ${budget.hard}`,
     );
     assert.strictEqual(snapshot.total, cases.length + 1, 'the count moved');
 
@@ -850,7 +1035,7 @@ function main() {
     const realNow = Date.now;
     Date.now = () => realNow() + 6 * 60 * 1000;
     try {
-        monitor.start(1001, { procRoot: proc });
+        monitor.start({ procRoot: proc });
         monitor.stop();
     } finally {
         Date.now = realNow;
@@ -872,7 +1057,38 @@ function main() {
             'that sheds idle servers would SIGTERM a server that is working',
     );
 
+    // The reclaim on count, which is what that scan also had to do. No pressure
+    // file was written, and there is not always one to wait for: Android's
+    // phantom-process killer fires on the NUMBER of processes and reports no
+    // memory pressure first, so the budgets this module publishes were read by
+    // nothing that sheds a process and the app's headline risk had no automatic
+    // mitigation on the metric that measures it. When the limit is reached the
+    // system chooses instead, and it takes a bash terminal holding unsaved work
+    // as readily as a language server that has done nothing for five minutes.
+    //
+    // Idle and only idle, which is the other half: the busy server above and
+    // every terminal, file watcher and system process in the fixture must be
+    // untouched.
+    const byNumber = (a, b) => a - b;
+    const shed = signals
+        .filter(([, signal]) => signal === 'SIGTERM')
+        .map(([pid]) => pid)
+        .sort(byNumber);
+    const idleServers = later.tree
+        .filter((e) => e.type === 'langserver' && e.idle === true)
+        .map((e) => e.pid)
+        .sort(byNumber);
+    assert.ok(idleServers.length > 1, `only ${idleServers.length} idle server(s) to shed`);
+    assert.deepStrictEqual(
+        shed, idleServers,
+        `a scan at ${later.total} processes, over the reclaim budget of ${later.budget.reclaim}, ` +
+            `signalled ${JSON.stringify(signals)} where the idle language servers are ` +
+            `${JSON.stringify(idleServers)}. Either nothing is shed until a memory-pressure ` +
+            'signal that may never arrive, or something the user is running was shed with it.',
+    );
+
     const contract = checkPressureContract(tmp);
+    const cadence = checkStalenessBoundCoversScanCadence();
     const labelled = checkLabelCoverage(snapshot);
     const named = checkCommandNames(snapshot, byPid);
 
@@ -882,6 +1098,7 @@ function main() {
     // procRoot holds one process, which is what keeps the signals it counts
     // attributable to its own fixture.
     checkSnapshotSurvivesReclaim(tmp, proc);
+    checkSnapshotIsReplacedWhole(tmp);
     const escalated = checkSurvivingServerStaysReclaimable(tmp, contract.critical);
     const moved = checkRehAnchorFollowsTheTree(tmp);
 
@@ -889,9 +1106,10 @@ function main() {
     console.log(
         `ok -- ${snapshot.total} processes counted, ${cases.length} classifications checked, ` +
         `${labelled.length} types all labelled by the status bar extension, ` +
+        `a ${cadence} ms scan inside the extension's ${STALE_AFTER_MS} ms staleness bound, ` +
         `${named} rows named after the program they run, ` +
         `pressure contract agrees on ${JSON.stringify(contract.critical)} in ${contract.filename}, ` +
-        `snapshot rewritten after its directory was reclaimed, ` +
+        `snapshot rewritten after its directory was reclaimed and replaced whole or not at all, ` +
         `a server that outlived its SIGTERM took ${escalated} signals and no more, ` +
         `chat backend still found under a tree moved to ${path.basename(path.dirname(moved))}`,
     );

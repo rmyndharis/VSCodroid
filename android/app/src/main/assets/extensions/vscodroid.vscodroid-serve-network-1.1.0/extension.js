@@ -73,34 +73,52 @@ function canConnect(host, port, timeoutMs = PROBE_TIMEOUT_MS) {
 }
 
 /**
- * Which of [ports] are listening, and which of those answer the network.
+ * Which of [ports] are listening, and from which of this device's addresses each
+ * of them answers.
  *
  * Two probes, because one cannot tell the difference and the difference is the
- * point of the command. Loopback finds the server; the device's own LAN address
- * decides whether anyone else can reach it. A server bound to 127.0.0.1 answers
+ * point of the command. Loopback finds the server; the device's own addresses
+ * decide whether anyone else can reach it. A server bound to 127.0.0.1 answers
  * the first and refuses the second, which is exactly the distinction reading
  * /proc used to give for free.
  *
- * The LAN probe dials this device's own address, so it never leaves the machine
- * and needs no network permission. It does traverse the non-loopback interface,
+ * Every address, not the first one. A phone routinely has more than one: a VPN
+ * puts up tun0 and mobile data puts up rmnet beside wlan0, and this probed
+ * whichever `os.networkInterfaces()` happened to enumerate first and then
+ * attached that one verdict to every address it listed. A server bound to one
+ * interface -- `vite --host 192.168.1.5`, which is advice this command itself
+ * gives -- failed a probe of the other one and was filed under "this device
+ * only", telling the user to do again the thing they had already done.
+ *
+ * The probes dial this device's own addresses, so nothing leaves the machine and
+ * no network permission is needed. They do traverse the non-loopback interface,
  * which is what makes the answer meaningful.
  *
- * Returns a Map of port to boolean: true when reachable from other devices.
+ * Returns a Map of port to the addresses that answered, which is empty for a
+ * port only loopback reaches.
  */
-async function scanPorts(ports, lanAddress, connect = canConnect) {
+async function scanPorts(ports, lanAddresses, connect = canConnect) {
+    const addresses = lanAddresses || [];
     const results = await Promise.all(
         ports.map(async (port) => {
             if (!(await connect('127.0.0.1', port))) return null;
-            // No LAN address means the caller already decided there is nothing to
-            // be reachable from; report it as local-only rather than guessing.
-            const reachable = lanAddress ? await connect(lanAddress, port) : false;
-            return [port, reachable];
+            const answered = await Promise.all(
+                addresses.map(async (address) => ((await connect(address, port)) ? address : null)),
+            );
+            return [port, answered.filter(Boolean)];
         }),
     );
     return new Map(results.filter(Boolean));
 }
 
-/** The addresses another device on this network could dial. */
+/**
+ * The addresses another device on this network could dial.
+ *
+ * Wi-Fi first, because "this network" is what the command is called and what the
+ * other device is on. The enumeration order is the kernel's, so without this the
+ * address offered first, and the one the manual path copies, is whichever
+ * interface came up first -- a VPN's or mobile data's as readily as Wi-Fi's.
+ */
 function networkAddresses() {
     const addresses = [];
     for (const [name, entries] of Object.entries(os.networkInterfaces())) {
@@ -109,7 +127,7 @@ function networkAddresses() {
             addresses.push({ name, address: entry.address });
         }
     }
-    return addresses;
+    return addresses.sort((a, b) => Number(b.name.startsWith('wlan')) - Number(a.name.startsWith('wlan')));
 }
 
 /** Ports to probe: the common list, plus anything the user has asked about before. */
@@ -156,27 +174,36 @@ function activate(context) {
         // failure than hiding a real one, so nothing is filtered in that case.
         const editorPort = parseInt(process.env.VSCODROID_PORT || '', 10);
 
+        const addressList = addresses.map((entry) => entry.address);
+        const interfaceOf = new Map(addresses.map((entry) => [entry.address, entry.name]));
+
         const found = await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Window, title: 'Looking for dev servers…' },
-            () => scanPorts(candidatePorts(remembered), addresses[0].address),
+            () => scanPorts(candidatePorts(remembered), addressList),
         );
 
         const reachable = [];
         const localOnly = [];
-        for (const [port, isReachable] of found) {
+        for (const [port, answeredFrom] of found) {
             if (port === editorPort) continue;
-            (isReachable ? reachable : localOnly).push(port);
+            if (answeredFrom.length > 0) reachable.push([port, answeredFrom]);
+            else localOnly.push(port);
         }
-        reachable.sort((a, b) => a - b);
+        reachable.sort(([a], [b]) => a - b);
         localOnly.sort((a, b) => a - b);
 
         const items = [];
-        for (const port of reachable) {
-            for (const { address, name } of addresses) {
+        // One entry per address that actually answered, rather than one per
+        // address this device happens to have. Loopback is not per-app isolated
+        // on Android, so a listening port is not provably the user's own server
+        // either; the wording states what was measured and leaves the ownership
+        // to them.
+        for (const [port, answeredFrom] of reachable) {
+            for (const address of answeredFrom) {
                 items.push({
                     label: `$(globe) http://${address}:${port}`,
-                    description: name,
-                    detail: 'Reachable from other devices on this network, select to copy',
+                    description: interfaceOf.get(address),
+                    detail: 'Answers from other devices on this network, select to copy',
                     url: `http://${address}:${port}`,
                 });
             }
@@ -185,9 +212,10 @@ function activate(context) {
             items.push({
                 label: `$(circle-slash) port ${port}, this device only`,
                 detail:
-                    'Listening on localhost, so other devices cannot reach it. Restart the server ' +
-                    'bound to every interface: Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, ' +
-                    'Node `server.listen(port, "0.0.0.0")`, Python `--bind 0.0.0.0`.',
+                    'Answers on localhost alone, so other devices cannot reach it. If this is ' +
+                    'your server, restart it bound to every interface: Vite `--host 0.0.0.0`, ' +
+                    'Next.js `-H 0.0.0.0`, Node `server.listen(port, "0.0.0.0")`, ' +
+                    'Python `--bind 0.0.0.0`.',
                 url: null,
             });
         }
@@ -219,20 +247,25 @@ function activate(context) {
             const port = await askForPort();
             if (port === null) return;
             remembered.add(port);
-            if (!(await canConnect('127.0.0.1', port))) {
+            // The same scan, not a second copy of the same probes against one
+            // address: this path had the identical single-address defect, and a
+            // port typed in by hand is exactly where a selectively bound server
+            // turns up.
+            const typed = await scanPorts([port], addressList);
+            if (!typed.has(port)) {
                 vscode.window.showInformationMessage(
                     `Nothing is listening on port ${port}. Start the server, then run this again.`,
                 );
                 return;
             }
-            const reachableNow = await canConnect(addresses[0].address, port);
-            if (!reachableNow) {
+            const answeredFrom = typed.get(port);
+            if (answeredFrom.length === 0) {
                 vscode.window.showInformationMessage(
                     `Port ${port} answers this device only. Restart the server bound to 0.0.0.0 and run this again.`,
                 );
                 return;
             }
-            const url = `http://${addresses[0].address}:${port}`;
+            const url = `http://${answeredFrom[0]}:${port}`;
             await vscode.env.clipboard.writeText(url);
             vscode.window.showInformationMessage(`Copied ${url}, open it on the other device.`);
             return;
@@ -257,5 +290,7 @@ function deactivate() {}
 // scanPorts takes its connector so a test can drive it without opening sockets.
 // The classification is the part that can be wrong in a way nobody would notice:
 // calling a loopback-only server "reachable from other devices" sends someone to
-// an address that refuses them, and the opposite hides a server that works.
+// an address that refuses them, and the opposite hides a server that works. Which
+// of this device's addresses answered is the same question one interface further
+// on, and has the same property.
 module.exports = { activate, deactivate, scanPorts, candidatePorts, COMMON_DEV_PORTS };

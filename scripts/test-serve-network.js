@@ -69,32 +69,61 @@ function fakeConnector(open) {
 }
 
 const LAN = '192.168.1.50';
+// The second address a phone routinely has: a VPN's tun0, or mobile data's
+// rmnet, up at the same time as Wi-Fi.
+const VPN = '10.8.0.2';
 
 async function reachableWhenBothAnswer() {
     const { connect } = fakeConnector(new Set(['127.0.0.1:3000', `${LAN}:3000`]));
-    const found = await ext.scanPorts([3000], LAN, connect);
-    assert.deepStrictEqual([...found], [[3000, true]], 'a port both probes reach is reachable');
+    const found = await ext.scanPorts([3000], [LAN], connect);
+    assert.deepStrictEqual([...found], [[3000, [LAN]]], 'a port both probes reach is reachable');
 }
 
 async function localOnlyWhenLanRefuses() {
     const { connect } = fakeConnector(new Set(['127.0.0.1:3000']));
-    const found = await ext.scanPorts([3000], LAN, connect);
+    const found = await ext.scanPorts([3000], [LAN], connect);
     assert.deepStrictEqual(
         [...found],
-        [[3000, false]],
+        [[3000, []]],
         'a port only loopback reaches is local-only, not reachable',
+    );
+}
+
+/**
+ * A server bound to ONE interface answers on that address and nowhere else, and
+ * the verdict has to be per address.
+ *
+ * This is where probing a single address cost something. One probe was run
+ * against whichever address os.networkInterfaces() enumerated first, and its
+ * answer was then attached to every address in the list: with the VPN first, a
+ * server started as `vite --host 192.168.1.50` failed the tun0 probe and the
+ * port was filed under "this device only", advising the user to rebind a server
+ * they had already bound correctly. With Wi-Fi first, the tun0 address was
+ * offered as reachable on the strength of a probe of a different interface.
+ */
+async function eachAddressGetsItsOwnVerdict() {
+    const { connect, dialled } = fakeConnector(new Set(['127.0.0.1:3000', `${LAN}:3000`]));
+    const found = await ext.scanPorts([3000], [VPN, LAN], connect);
+    assert.deepStrictEqual(
+        [...found],
+        [[3000, [LAN]]],
+        'the address that answered is the only one reported, whatever the enumeration order',
+    );
+    assert.ok(
+        dialled.includes(`${VPN}:3000`) && dialled.includes(`${LAN}:3000`),
+        `both addresses have to be probed, only these were: ${dialled.join(', ')}`,
     );
 }
 
 async function closedPortIsAbsent() {
     const { connect } = fakeConnector(new Set());
-    const found = await ext.scanPorts([3000, 5173], LAN, connect);
+    const found = await ext.scanPorts([3000, 5173], [LAN], connect);
     assert.strictEqual(found.size, 0, 'ports nothing answers are not reported at all');
 }
 
 async function lanProbeSkippedWhenNothingListens() {
     const { connect, dialled } = fakeConnector(new Set());
-    await ext.scanPorts([3000], LAN, connect);
+    await ext.scanPorts([3000], [LAN], connect);
     assert.deepStrictEqual(
         dialled,
         ['127.0.0.1:3000'],
@@ -105,7 +134,7 @@ async function lanProbeSkippedWhenNothingListens() {
 async function noLanAddressMeansLocalOnly() {
     const { connect, dialled } = fakeConnector(new Set(['127.0.0.1:8080']));
     const found = await ext.scanPorts([8080], null, connect);
-    assert.deepStrictEqual([...found], [[8080, false]], 'without a LAN address nothing is reachable');
+    assert.deepStrictEqual([...found], [[8080, []]], 'without a LAN address nothing is reachable');
     assert.deepStrictEqual(dialled, ['127.0.0.1:8080'], 'and no second probe is attempted');
 }
 
@@ -138,6 +167,7 @@ function defaultsAreSane() {
 async function main() {
     await reachableWhenBothAnswer();
     await localOnlyWhenLanRefuses();
+    await eachAddressGetsItsOwnVerdict();
     await closedPortIsAbsent();
     await lanProbeSkippedWhenNothingListens();
     await noLanAddressMeansLocalOnly();
@@ -146,7 +176,8 @@ async function main() {
 
     say(
         `  ok     reachable/local-only split holds over ${ext.COMMON_DEV_PORTS.length} default ports, ` +
-            'and the LAN probe is skipped when loopback refuses\n',
+            'each address is judged on its own probe, and the LAN probe is skipped when ' +
+            'loopback refuses\n',
     );
 }
 

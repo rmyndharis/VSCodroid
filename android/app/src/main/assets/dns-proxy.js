@@ -22,6 +22,25 @@
  * modules ignore these variables, so extension code written against them is
  * unaffected either way.
  *
+ * The listener lives inside the editor server, not inside the bootstrap that
+ * forks it, and that is a correctness requirement rather than a preference. The
+ * bootstrap is SIGKILLed as a matter of routine here -- the OOM killer and
+ * Android's phantom-process limit both do it, which is what ProcessManager's
+ * watchdog exists for -- while the server it forked keeps running and keeps the
+ * port, and the next launch adopts that survivor rather than losing the user's
+ * session. A proxy bound in the bootstrap died with it and left the survivor
+ * pointing HTTPS_PROXY at a port nothing was listening on for the whole of that
+ * session: the Open VSX gallery, extension installs, the agent host, the CLI,
+ * and git, npm and curl in every terminal, since terminals inherit the same
+ * environment, all failed to reach the network while the workbench itself
+ * looked healthy because it is reached by address through NO_PROXY. A running
+ * process's environment cannot be changed from outside, so the address had to
+ * become one the process can keep answering. `server.js` therefore preloads this
+ * file into the child it forks (`--require`) and the child binds its own proxy
+ * and sets its own environment, which costs no extra process against the
+ * 32-process budget and gives the listener exactly the lifetime of the server
+ * that uses it.
+ *
  * Binding to 127.0.0.1 is not access control on Android. Loopback is not
  * per-app isolated -- any installed app can connect to another app's loopback
  * port -- so an unauthenticated forwarder here is reachable by every app on the
@@ -36,6 +55,55 @@ const http = require('http');
 const net = require('net');
 const crypto = require('crypto');
 const { URL } = require('url');
+
+/**
+ * How long an origin has to answer before its leg is dropped.
+ *
+ * It bounds the setup only, and is cleared the moment a response starts or a
+ * tunnel is spliced, so a long-lived stream with quiet stretches is never cut by
+ * it. Without it an origin that accepts a connection and then says nothing --
+ * routine on a mobile network -- pinned a descriptor at each end until TCP
+ * keepalive gave up, in the same process that serves the workbench.
+ */
+const UPSTREAM_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a connection may hold a descriptor without finishing its request
+ * headers, and how often the server sweeps for the ones that have not.
+ *
+ * Both, because the sweep granularity is the other half of the bound: Node
+ * destroys an overrun connection on the next tick of `connectionsCheckingInterval`,
+ * so a peer is reclaimed somewhere between one and two of these. One number for
+ * both keeps that window plainly five to ten seconds instead of hiding it in the
+ * gap between two knobs.
+ *
+ * Five seconds because every legitimate client of this proxy is inside this app,
+ * on loopback, and sends its headers in one packet; nothing here is a slow
+ * network peer. What it bounds is the other traffic loopback carries on Android,
+ * where any installed app can reach this port: Node's own defaults let a peer
+ * that connects and then says nothing hold its slot for up to 90 s (60 s
+ * headersTimeout collected on a 30 s sweep, both read back from a default
+ * server on v20.19.5, v22.23.2 and v24.18.0), and maxConnections turns that from
+ * a descriptor leak into a lockout, since 128 such sockets are the whole cap and
+ * git, npm, the gallery and the CLI are then refused at accept time until it
+ * expires.
+ */
+const HEADER_PHASE_MS = 5_000;
+
+/**
+ * Headers that address this proxy and must not travel on to the origin.
+ *
+ * `proxy-authorization` carries the token minted for this boot, so forwarding it
+ * hands this device's credential to every host a client dials. `proxy-connection`
+ * is the non-standard hop-by-hop cousin of `connection` that older clients still
+ * send; past this hop it means nothing, and all it does at the origin is announce
+ * that a proxy is in the path.
+ *
+ * One list rather than a test on each leg. Two legs forward headers, the plain
+ * one and the upgrade one, and a per-leg copy of the rule is how they came to
+ * strip different things while carrying the same paragraph of reasoning.
+ */
+const HOP_BY_HOP_HEADERS = ['proxy-authorization', 'proxy-connection'];
 
 /**
  * The address a socket call wants, from the hostname a URL parser gives.
@@ -83,6 +151,14 @@ function start(log) {
     // "failed: ". Widening the window costs nothing when the first address
     // answers promptly. Process-wide on purpose: the plain-HTTP path here and
     // every other outbound connect in this process share the exposure.
+    //
+    // Which process that is has changed, and the blast radius with it. This is
+    // preloaded into the editor server rather than run in the bootstrap, so the
+    // setting now also governs the gallery query, extension downloads and the
+    // agent host: on a host whose AAAA record resolves to a route that hangs
+    // rather than refusing, each of those waits a second before trying IPv4
+    // instead of a quarter of one. Measured here the IPv6 route is simply absent
+    // and fails immediately, which is why the window is worth widening at all.
     net.setDefaultAutoSelectFamilyAttemptTimeout(1000);
 
     // Minted per boot and never persisted: a token that outlived the process
@@ -166,7 +242,14 @@ function start(log) {
             }
         };
 
-        const server = http.createServer((req, res) => {
+        // Passed here and not assigned to the server afterwards: the sweep that
+        // enforces the header bound is a constructor option too, and setting one
+        // without the other leaves the bound at the sweep's 30 s granularity.
+        // See HEADER_PHASE_MS and the paragraph above maxConnections.
+        const server = http.createServer({
+            connectionsCheckingInterval: HEADER_PHASE_MS,
+            headersTimeout: HEADER_PHASE_MS,
+        }, (req, res) => {
             if (!authorized(req)) {
                 // No upstream leg exists yet, so there is nothing to tear down
                 // -- but an unhandled 'error' on either stream is still fatal,
@@ -177,10 +260,8 @@ function start(log) {
                 res.writeHead(407, { 'Proxy-Authenticate': CHALLENGE }).end();
                 return;
             }
-            // Hop-by-hop by definition: the credential authenticates the client
-            // to this proxy and means nothing to the origin server. Forwarding
-            // it would hand this device's token to every host the CLI dials.
-            delete req.headers['proxy-authorization'];
+            // Addressed to this proxy, so they stop here. See HOP_BY_HOP_HEADERS.
+            for (const name of HOP_BY_HOP_HEADERS) delete req.headers[name];
 
             // Plain HTTP: the request line carries an absolute URI.
             let target;
@@ -203,16 +284,23 @@ function start(log) {
                     headers: req.headers,
                 },
                 (upstreamRes) => {
+                    // The origin has answered, so the setup bound below is done
+                    // its job. Cleared rather than left running, or a response
+                    // body that streams with quiet stretches would be cut in the
+                    // middle by a timer meant for one that never started.
+                    upstream.setTimeout(0);
                     res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
                     upstreamRes.pipe(res);
                 },
             );
+            upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () =>
+                upstream.destroy(new Error(`no response within ${UPSTREAM_TIMEOUT_MS} ms`)));
             upstream.on('error', (err) => {
                 log('warn', `dns-proxy: ${target.hostname} failed: ${reason(err)}`);
                 // An upstream that dies mid-response has already had its status
                 // relayed; writeHead would then throw ERR_HTTP_HEADERS_SENT,
-                // and an uncaught throw here takes the whole bootstrap down and
-                // orphans the forked server on its port.
+                // and an uncaught throw here takes this process down, and this
+                // process is now the editor server.
                 if (!res.headersSent) {
                     res.writeHead(502);
                 }
@@ -237,7 +325,8 @@ function start(log) {
         server.on('connect', (req, clientSocket, head) => {
             // Registered before the first thing that can fail: a 407 written to
             // a client that has already walked away emits EPIPE here, and an
-            // uncaught 'error' on a socket takes the whole bootstrap down.
+            // uncaught 'error' on a socket takes this process down, and this
+            // process is now the editor server.
             let upstream = null;
             clientSocket.on('error', () => upstream && upstream.destroy());
             // Same reason as the plain-HTTP leg: an abrupt client is a 'close'
@@ -274,9 +363,10 @@ function start(log) {
             // so the old form dialled a host named "[". The WHATWG parser gets
             // this right and rejects a malformed authority outright, which also
             // closes a second hole -- "host:99999999" used to reach net.connect
-            // and throw ERR_SOCKET_BAD_PORT synchronously, taking the bootstrap
-            // down with it. It keeps the brackets on an IPv6 hostname; net.connect
-            // wants the bare address.
+            // and throw ERR_SOCKET_BAD_PORT synchronously, taking down whichever
+            // process holds the listener, which is now the editor server rather
+            // than the bootstrap it was when that hole existed. It keeps the
+            // brackets on an IPv6 hostname; net.connect wants the bare address.
             let host;
             let port;
             try {
@@ -314,6 +404,10 @@ function start(log) {
             let established = false;
             upstream = net.connect(port, host, () => {
                 established = true;
+                // Same bound as the plain-HTTP leg, and cleared at the same
+                // point: a tunnel is expected to sit idle for minutes at a time,
+                // so only the dial is timed.
+                upstream.setTimeout(0);
                 clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
                 if (head && head.length) {
                     upstream.write(head);
@@ -321,6 +415,8 @@ function start(log) {
                 upstream.pipe(clientSocket);
                 clientSocket.pipe(upstream);
             });
+            upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () =>
+                upstream.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS} ms`)));
             upstream.on('error', (err) => {
                 if (established) {
                     // Nothing but tunnel bytes may follow a 2xx to CONNECT
@@ -340,6 +436,139 @@ function start(log) {
                 closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
             });
         });
+
+        // An upgrade request -- a plain ws:// dialled through this proxy -- arrives
+        // on this event and nowhere else, and Node closes the connection outright
+        // when nothing is listening for it. So such a client was dropped with no
+        // status at all, while wss:// worked because it goes through CONNECT
+        // above. HTTP_PROXY reaches the whole editor server and every terminal,
+        // so that was ordinary tools rather than only the one CLI this file
+        // exists for.
+        //
+        // Forwarded rather than refused: the request is re-sent in origin-form to
+        // the host it names and the sockets are spliced once the origin answers,
+        // so the 101 and everything after it are the origin's own bytes. Nothing
+        // is read after the splice, for the same reason the CONNECT tunnel stays
+        // out of its stream.
+        server.on('upgrade', (req, clientSocket, head) => {
+            // Registered before the first thing that can fail, exactly as on the
+            // CONNECT leg: an uncaught 'error' on a socket takes this process
+            // down, and this process is now the editor server.
+            let upstream = null;
+            let established = false;
+            clientSocket.on('error', () => upstream && upstream.destroy());
+            clientSocket.on('close', () => upstream && upstream.destroy());
+
+            if (!authorized(req)) {
+                closeWith(
+                    clientSocket,
+                    `HTTP/1.1 407 Proxy Authentication Required\r\n` +
+                        `Proxy-Authenticate: ${CHALLENGE}\r\n` +
+                        `Connection: close\r\n\r\n`,
+                );
+                return;
+            }
+
+            let target;
+            try {
+                target = new URL(req.url);
+            } catch {
+                closeWith(clientSocket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+                return;
+            }
+            const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
+            upstream = net.connect(port, bareHost(target.hostname), () => {
+                const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`];
+                for (let i = 0; i < req.rawHeaders.length; i += 2) {
+                    // The same list the plain-HTTP leg deletes from, read from
+                    // the same place: see HOP_BY_HOP_HEADERS.
+                    if (HOP_BY_HOP_HEADERS.includes(req.rawHeaders[i].toLowerCase())) continue;
+                    lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+                }
+                upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+                if (head && head.length) {
+                    upstream.write(head);
+                }
+                // The origin's first byte, not the TCP connect, is what ends
+                // setup here. CONNECT can release the bound at connect because
+                // that is where its own 200 goes out; this leg has promised the
+                // client nothing until the origin's 101 arrives, so releasing
+                // at connect reopened exactly the hole UPSTREAM_TIMEOUT_MS
+                // exists to close. Measured against a copy of this file with
+                // that constant rewritten to 600 ms, dialling an origin that
+                // accepts TCP and then says nothing: the plain-HTTP leg
+                // answered 502 and logged the bound, while the identical ws://
+                // upgrade was still open six seconds later with no byte written
+                // to the client and nothing logged -- a descriptor pinned at
+                // each end plus one of the maxConnections slots, for the life
+                // of the process.
+                //
+                // Attached before the pipes so no byte can slip between the
+                // two: a 'data' listener resumes the stream on the next tick
+                // and both are registered in this same turn.
+                upstream.once('data', () => {
+                    upstream.setTimeout(0);
+                    established = true;
+                });
+                upstream.pipe(clientSocket);
+                clientSocket.pipe(upstream);
+            });
+            upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () =>
+                upstream.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS} ms`)));
+            upstream.on('error', (err) => {
+                if (established) {
+                    // Past the splice nothing but the origin's bytes may follow,
+                    // for the reason the CONNECT handler above spells out.
+                    log('warn', `dns-proxy: upgrade ${target.host} broke: ${reason(err)}`);
+                    clientSocket.destroy();
+                    return;
+                }
+                log('warn', `dns-proxy: upgrade ${target.host} failed: ${reason(err)}`);
+                closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+            });
+        });
+
+        // A bound on a listener every app on the device can reach. The Basic
+        // token defends what this proxy will DO and defended nothing about the
+        // socket itself: every unauthenticated connection is a descriptor in the
+        // process that also serves the workbench, and nothing else here limits
+        // how many of them one peer may hold. Every legitimate client is inside
+        // this app and its headers arrive in one packet, so the ceiling is far
+        // above anything an npm install or a git fetch opens at once and far
+        // below what a flood needs to hurt.
+        //
+        // It changes the shape of the failure rather than removing it, and the
+        // cheaper shape is the point. Node closes connections past the cap at
+        // accept time and cannot tell this app's clients from anyone else's, so
+        // a local app that opens 128 sockets denies the proxy to git, npm and
+        // the CLI. Without the cap the same app needed roughly 32k of them and
+        // took the descriptors of the process serving the workbench with it.
+        //
+        // A cap alone would make that lockout permanent, which is what the
+        // header-phase bound passed to createServer above is for: sockets that
+        // hold a slot without ever completing a request are swept, so the peer
+        // has to keep re-dialling to keep the proxy denied rather than
+        // connecting once and walking away. Both values have to be given at
+        // construction to get that: a bound enforced by a sweep is only as sharp
+        // as the sweep, and assigning server.headersTimeout afterwards leaves
+        // connectionsCheckingInterval at its 30 s default. Measured on node
+        // v22.23.2, a peer held at headersTimeout = 1000 assigned that way died
+        // at 30.0 s -- a number that reads as one second and never is.
+        //
+        // What the pair does, measured on node v20.19.5, v22.23.2 and v24.18.0
+        // (the bundled runtime), with the two options at 1000 ms and 500 ms so
+        // the timings are readable: a peer that sends nothing, and one that
+        // sends a request line and stops, are both answered 408 and closed
+        // between one and two sweeps later (1.5 s on v20, 1.0 s on the other
+        // two), while an established CONNECT tunnel and an established upgrade
+        // sit silent for 3 s and still carry a byte afterwards on all three --
+        // Node stops tracking a connection once its parser is detached, which is
+        // what either handshake does. A keep-alive connection idle for 2.5 s
+        // between two requests is untouched, and server.unref() below still lets
+        // the process exit immediately, because Node unrefs the sweep timer.
+        // Reproduce by passing the two options to any http.createServer and
+        // dialling it with a raw socket.
+        server.maxConnections = 128;
 
         server.on('error', (err) => {
             log('warn', `dns-proxy: not started (${err.message}); musl clients will not resolve names`);
@@ -373,3 +602,64 @@ function start(log) {
 }
 
 module.exports = { start };
+
+// Self-start, when `server.js` preloads this file into the editor server it
+// forks. See the top of this file for why the listener has to live in that
+// process rather than in the bootstrap.
+//
+// The `--require` and the flag are both taken out of this process's own state
+// before anything else runs, and both halves matter. `fork` passes the parent's
+// execArgv on by default and the editor server hands it to `new Worker` as well,
+// so left in place the option that brought this file here would ride into every
+// helper the editor server starts: the file watcher, the agent host, the
+// extension host and the pty host would each load this module, and each bind a
+// proxy of its own and point its own environment at it -- several listeners where
+// one was asked for, on a port every app on the device can reach. Removing the
+// option means they are never asked to load it; clearing the flag means that
+// loading it would still do nothing.
+//
+// Nothing here may throw. A `--require` module that throws stops the process
+// loading its main script at all, and that process is the editor server, so a
+// failure to bind must cost musl clients their DNS and nothing else -- the
+// contract [start] already documents, made mechanical.
+//
+// The variables land one turn late, and it is what the server does with them
+// that makes that safe. [start] resolves in its listen callback, so process.env
+// carries no proxy variables for the whole synchronous load of
+// vscode-reh/out/server-main.js that follows this preload. The shipped bundle
+// reads them per request: its proxy lookup takes an environment as a parameter
+// and the request service builds that from process.env on every call, so a
+// request made after the listener is up finds them. A bundle that instead
+// snapshotted process.env at import would silently have no proxy, which is why
+// this is written down rather than left to be rediscovered.
+if (process.env.VSCODROID_DNS_PROXY === '1') {
+    delete process.env.VSCODROID_DNS_PROXY;
+    // By trailing path segment rather than by comparing the whole path with
+    // __filename: the module loader hands a module its resolved real path, and a
+    // checkout behind a symlink (macOS puts its temporary directories behind one)
+    // spells the same file two ways.
+    //
+    // Both spellings of the option, because the option is spelled by another
+    // file. `server.js` passes `--require=<path>` as one token on purpose -- a
+    // path standing on its own is the first non-option argument, which is what
+    // process-monitor.js names a process by, so the editor server's row would
+    // read `libnode.so dns-proxy.js` -- and the two-token form is still taken out
+    // here so that a preload either side spells differently is never one this
+    // process cannot take back out.
+    const isProxyPath = (arg) => String(arg || '').endsWith('/dns-proxy.js');
+    process.execArgv = process.execArgv.filter((arg, i, all) => {
+        if (arg === '--require' && isProxyPath(all[i + 1])) return false;
+        if (all[i - 1] === '--require' && isProxyPath(arg)) return false;
+        return !(String(arg).startsWith('--require=') && isProxyPath(arg));
+    });
+    const log = (level, message) =>
+        console.log(`[${new Date().toISOString()}] [${level}] ${message}`);
+    try {
+        start(log).then(
+            (env) => Object.assign(process.env, env),
+            (e) => log('warn', `dns-proxy did not start: ${e.message}`),
+        );
+    } catch (e) {
+        log('warn', `dns-proxy did not start: ${e.message}`);
+    }
+}
