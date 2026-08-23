@@ -111,8 +111,8 @@ class ExecTrampolineOnDeviceTest {
      */
     @Test
     fun `the trampoline runs the same payload by bare name`() {
-        val result = run(
-            listOf("make", "--version"),
+        val result = runByName(
+            "make --version",
             mapOf(
                 "PATH" to tcBin.absolutePath,
                 "VSCODROID_EXEC_TABLE" to table.absolutePath,
@@ -136,14 +136,17 @@ class ExecTrampolineOnDeviceTest {
             arrayOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "nosuch").absolutePath)
         ).waitFor()
 
-        val result = run(
-            listOf("nosuch"),
+        val result = runByName(
+            "nosuch",
             mapOf(
                 "PATH" to tcBin.absolutePath,
                 "VSCODROID_EXEC_TABLE" to table.absolutePath,
             ),
         )
 
+        // A shell answers 127 for a name it cannot find at all, which is the same
+        // status the trampoline answers with. The message below is what tells the
+        // two apart, so it is not decoration.
         assertEquals("an unlisted name did not report command-not-found: ${result.second}",
             127, result.first)
         assertTrue(
@@ -151,6 +154,27 @@ class ExecTrampolineOnDeviceTest {
             result.second.contains("no toolchain entry"),
         )
     }
+
+    /**
+     * Runs [command] the way a `make` recipe or an editor task does: as a bare
+     * name, left to a shell to resolve against the PATH it was handed.
+     *
+     * The shell has to be the one doing that lookup, because ProcessBuilder does
+     * not do it. Java resolves a bare program name against the PARENT process's
+     * PATH, not against the one placed in `builder.environment()`, so passing
+     * `listOf("make", ...)` never reached the trampoline directory at all: it
+     * failed with ENOENT, which [run]'s catch reports as 126, and the two tests
+     * above then read that as a refused execve rather than as a lookup that never
+     * happened. Both were failing for this reason and neither could ever pass,
+     * which nothing noticed because no workflow runs this suite (see the README
+     * beside this file). The trampoline itself was measured working at the same
+     * time, by hand, with the same table and the same PATH.
+     *
+     * The shell is named by absolute path so Java's own resolution is not involved
+     * in reaching it either.
+     */
+    private fun runByName(command: String, env: Map<String, String>): Pair<Int, String> =
+        run(listOf("/system/bin/sh", "-c", command), env)
 
     /** Exit status and merged output of one command, run with exactly [env] added. */
     private fun run(command: List<String>, env: Map<String, String>): Pair<Int, String> {
