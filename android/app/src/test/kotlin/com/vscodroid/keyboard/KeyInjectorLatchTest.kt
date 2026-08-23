@@ -11,18 +11,17 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * What a latched Ctrl or Alt does when the page reports input this listener has
- * no chord for.
+ * What a latched Ctrl or Alt does with each kind of input the page reports.
  *
- * The interceptor acts on two kinds of `beforeinput`: an `insertText`, which it
- * turns into a chord, and the two deletes, which become Ctrl+Backspace and its
- * neighbours. Both spend the latch on the way out. Everything else a soft
- * keyboard produces, a paste, an IME composition update, an autocorrect
- * replacement, a word delete, used to leave it standing, and a modifier left
- * standing is not a modifier that did nothing: the next ordinary character is
- * cancelled and dispatched as a chord in its place, so typing `a` after a paste
- * selects the document instead of inserting a letter and the keystroke after
- * that replaces the selection.
+ * The interceptor acts on two kinds of `beforeinput`: a single-character
+ * `insertText`, which it turns into a chord, and the edits that stand for a key,
+ * which become Ctrl+Backspace, Ctrl+Delete and Ctrl+Enter. Both spend the latch
+ * on the way out. Everything else a soft keyboard produces, a paste, an IME
+ * composition update, an autocorrect replacement, a word delete, used to leave it
+ * standing, and a modifier left standing is not a modifier that did nothing: the
+ * next ordinary character is cancelled and dispatched as a chord in its place, so
+ * typing `a` after a paste selects the document instead of inserting a letter and
+ * the keystroke after that replaces the selection.
  *
  * [KeyInjectorShiftTest] holds the same rule for a lone Shift, which was already
  * spent on every event. These hold the branch the other two modifiers reach.
@@ -56,14 +55,22 @@ class KeyInjectorLatchTest {
         unmockkAll()
     }
 
+    private fun installedListener(): String {
+        KeyInjector(webView).setupModifierInterceptor()
+        return script.captured
+    }
+
     /**
-     * The branch a `beforeinput` takes when Ctrl or Alt is held and the input is
-     * neither an insertText nor one of the two deletes.
+     * The branch a `beforeinput` takes when Ctrl or Alt is held and there is no
+     * single keystroke to send in place of what the page was going to insert.
+     *
+     * The slice starts at the guard rather than after it, because the condition
+     * itself is half of what this branch decides: a word committed in one event
+     * belongs here and reached the chord loop instead.
      */
     private fun unhandledInputBranch(): String {
-        KeyInjector(webView).setupModifierInterceptor()
-        val installed = script.captured
-        val guard = "if (e.inputType !== 'insertText' || !e.data) {"
+        val installed = installedListener()
+        val guard = "if (e.inputType !== 'insertText'"
         val start = installed.indexOf(guard)
         assertTrue(
             start >= 0,
@@ -74,6 +81,27 @@ class KeyInjectorLatchTest {
         val end = installed.indexOf("}", start + guard.length)
         assertTrue(end > start, "the branch's block is never closed")
         return installed.substring(start, end + 1)
+    }
+
+    /**
+     * The branch that turns an edit the page reports into one keystroke.
+     *
+     * Delimited by the guard and the `return;` that closes it: the block holds a
+     * nested object literal, so counting to the next `}` would stop inside the
+     * event init rather than at the end of the arm.
+     */
+    private fun commandBranch(): String {
+        val installed = installedListener()
+        val guard = "if (command) {"
+        val start = installed.indexOf(guard)
+        assertTrue(
+            start >= 0,
+            "the listener no longer answers an edit with a keystroke, so Backspace, " +
+                "Delete and Enter carry no modifier at all. It reads:\n$installed"
+        )
+        val end = installed.indexOf("return;", start)
+        assertTrue(end > start, "the branch never returns, so it falls into the one below")
+        return installed.substring(start, end + "return;".length)
     }
 
     @Test
@@ -96,6 +124,78 @@ class KeyInjectorLatchTest {
             "a Shift held together with Ctrl or Alt skips the lone-Shift branch above, " +
                 "so this is the only place that spends it, and a surviving one decides " +
                 "WHICH character the next row key types. It reads: $branch"
+        )
+    }
+
+    @Test
+    fun `a word committed in one event is left to the page, not spelled out as chords`() {
+        // An Android IME commits a whole word in a single insertText when the
+        // user taps a next-word prediction chip: one beforeinput, several
+        // characters, no composition (a composition arrives as
+        // insertCompositionText, which this branch already covers). The listener
+        // cancelled the insertion and then dispatched one chord per character, so
+        // the word never arrived and N unrelated commands ran: `hello` with Ctrl
+        // latched fired Replace, Ctrl+E, Ctrl+L twice and Open File.
+        //
+        // NEGATIVE CONTROL: drop `|| e.data.length !== 1` from the guard and this
+        // goes red.
+        assertTrue(
+            unhandledInputBranch().contains("e.data.length !== 1"),
+            "a multi-character insertText is still cancelled and replaced by one chord " +
+                "per character, so a predicted word types nothing and runs a command for " +
+                "each of its letters. It reads: ${unhandledInputBranch()}"
+        )
+    }
+
+    @Test
+    fun `Enter is answered with a keystroke, so a latched Ctrl can ride on it`() {
+        // Enter never reaches the page as a key press: a soft keyboard reports it
+        // as an edit, insertLineBreak on the textarea edit path and
+        // insertParagraph on the EditContext one, and no page of the key row
+        // carries an Enter key for injectKey to send instead. Both inputTypes used
+        // to fall into the branch above, which spends the latch and leaves the page
+        // to insert a plain newline, so Ctrl+Enter could not be produced at all.
+        val table = installedListener()
+        for (inputType in listOf("insertParagraph", "insertLineBreak")) {
+            assertTrue(
+                table.contains("$inputType: ['Enter', 13]"),
+                "$inputType is not answered with an Enter keystroke, so Ctrl+Enter is " +
+                    "unreachable from this row on that edit path"
+            )
+        }
+        for (pair in listOf("deleteContentBackward: ['Backspace', 8]", "deleteContentForward: ['Delete', 46]")) {
+            assertTrue(
+                table.contains(pair),
+                "the delete keystrokes went with the rewrite: $pair is gone"
+            )
+        }
+    }
+
+    @Test
+    fun `the keystroke sent for an edit carries the latch and cancels the edit`() {
+        val branch = commandBranch()
+
+        assertTrue(
+            branch.contains("e.preventDefault();"),
+            "the page performs the edit as well as receiving the chord, so Ctrl+Enter " +
+                "inserts a newline and opens to the side. It reads: $branch"
+        )
+        assertTrue(
+            branch.contains("ctrlKey: !!mod.ctrl") && branch.contains("altKey: !!mod.alt"),
+            "the keystroke goes out without the modifier that was latched, which is the " +
+                "whole reason this branch exists. It reads: $branch"
+        )
+        assertTrue(
+            branch.contains("new KeyboardEvent('keydown', init)"),
+            "nothing is dispatched, so the edit is cancelled and replaced by nothing. " +
+                "It reads: $branch"
+        )
+        assertTrue(
+            branch.contains("mod.ctrl = false;") &&
+                branch.contains("mod.alt = false;") &&
+                branch.contains("mod.shift = false;"),
+            "the latch outlives the keystroke it was spent on, so the next character " +
+                "typed is cancelled and sent as a chord too. It reads: $branch"
         )
     }
 

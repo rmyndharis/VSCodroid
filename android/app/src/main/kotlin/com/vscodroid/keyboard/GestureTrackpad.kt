@@ -32,7 +32,7 @@ class GestureTrackpad @JvmOverloads constructor(
     var onDragEnd: (() -> Unit)? = null
 
     private val crosshairPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF888888.toInt()
+        color = context.getColor(R.color.colorGestureTrackpadCrosshair)
         strokeWidth = dpToPx(1.5f)
         style = Paint.Style.STROKE
     }
@@ -45,6 +45,17 @@ class GestureTrackpad @JvmOverloads constructor(
     private val gesture = TrackpadGesture()
 
     private var tracking = false
+
+    /**
+     * The pointer id the drag belongs to, or [MotionEvent.INVALID_POINTER_ID].
+     *
+     * An id, not an index. Indices renumber as fingers come and go: this view
+     * used to read `event.x`, which is index 0, so resting a second finger and
+     * then lifting the first made index 0 become the second finger. The next
+     * MOVE then reported the distance between two fingers as one delta, and the
+     * accumulator paid that out as a burst of arrows in a single frame.
+     */
+    private var pointerId = MotionEvent.INVALID_POINTER_ID
     private var lastX = 0f
     private var lastY = 0f
     private var touchOffsetX = 0f
@@ -55,7 +66,7 @@ class GestureTrackpad @JvmOverloads constructor(
         background = GradientDrawable().apply {
             setColor(context.getColor(R.color.colorGestureTrackpadBg))
             cornerRadius = dpToPx(6f)
-            setStroke(dpToPx(1f).toInt(), 0xFF555555.toInt())
+            setStroke(dpToPx(1f).toInt(), context.getColor(R.color.colorGestureTrackpadBorder))
         }
         contentDescription = context.getString(R.string.trackpad_description)
 
@@ -110,11 +121,41 @@ class GestureTrackpad @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Ends the drag, whichever way it ended, and reports that it did.
+     *
+     * Reached from ACTION_UP, ACTION_CANCEL and from the tracked finger lifting
+     * while another stays down. The [onDragEnd] call is what clears a latched
+     * modifier, so a path that ends tracking without coming through here leaves
+     * a Ctrl on the row that the next key would carry.
+     *
+     * Called more than once per gesture, which is why the body is guarded rather
+     * than the callers: the tracked finger lifting ends the drag from
+     * ACTION_POINTER_UP, and the finger that outlived it delivers ACTION_UP a
+     * moment later, which reaches here again for a drag that is already over.
+     * Both calls reported an end, so one gesture paid out two [onDragEnd]s and
+     * two `requestDisallowInterceptTouchEvent(false)`.
+     */
+    private fun endDrag() {
+        if (!tracking) return
+        tracking = false
+        pointerId = MotionEvent.INVALID_POINTER_ID
+        touchOffsetX = 0f
+        touchOffsetY = 0f
+        parent.requestDisallowInterceptTouchEvent(false)
+        onDragEnd?.invoke()
+        invalidate()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        when (event.action) {
+        // actionMasked, not action: ACTION_POINTER_DOWN and ACTION_POINTER_UP
+        // carry the pointer index in the high byte, so the raw value matched no
+        // branch and a second finger's down and up fell through to super.
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 tracking = true
+                pointerId = event.getPointerId(0)
                 lastX = event.x
                 lastY = event.y
                 gesture.reset()
@@ -127,13 +168,19 @@ class GestureTrackpad @JvmOverloads constructor(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!tracking) return false
-                val dx = event.x - lastX
-                val dy = event.y - lastY
-                lastX = event.x
-                lastY = event.y
+                // Found by id. A second finger renumbers the indices, and index
+                // 0 is whichever pointer happens to be first in this event.
+                val index = event.findPointerIndex(pointerId)
+                if (index < 0) return true
+                val x = event.getX(index)
+                val y = event.getY(index)
+                val dx = x - lastX
+                val dy = y - lastY
+                lastX = x
+                lastY = y
 
-                touchOffsetX = event.x - width / 2f
-                touchOffsetY = event.y - height / 2f
+                touchOffsetX = x - width / 2f
+                touchOffsetY = y - height / 2f
 
                 val directions =
                     gesture.accumulate(dx, dy, resources.displayMetrics.density)
@@ -144,13 +191,16 @@ class GestureTrackpad @JvmOverloads constructor(
                 invalidate()
                 return true
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // Only when the finger that lifted is the one being tracked. Any
+                // other finger leaving is not this drag's business, and handing
+                // the drag over to a surviving finger would resume it from a
+                // position tens of dp away, which is the burst this fixes.
+                if (event.getPointerId(event.actionIndex) == pointerId) endDrag()
+                return true
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                tracking = false
-                touchOffsetX = 0f
-                touchOffsetY = 0f
-                parent.requestDisallowInterceptTouchEvent(false)
-                onDragEnd?.invoke()
-                invalidate()
+                endDrag()
                 return true
             }
         }

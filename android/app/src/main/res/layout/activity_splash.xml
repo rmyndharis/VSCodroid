@@ -4,8 +4,10 @@
      touch, so the display times out partway through every time. What that costs
      is not the drawing: the window stops being visible, the activity is stopped,
      and a process holding nothing but a stopped activity is what the system
-     reclaims first, in the middle of a write that has no skip-if-present branch
-     to make the next attempt cheaper.
+     reclaims first, in the middle of writing out 810 MB. A retry of the same
+     build now skips the files it already wrote at the right length, so the cost
+     is no longer the whole unpack; it is still the rest of it, and the process
+     still holds no component while it runs.
 
      On the root view rather than as a window flag, so it lasts exactly as long as
      this screen does. setContentView swaps in the picker next, which waits on a

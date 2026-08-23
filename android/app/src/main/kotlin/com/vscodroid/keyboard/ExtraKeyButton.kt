@@ -168,6 +168,19 @@ class ExtraKeyButton @JvmOverloads constructor(
         return true
     }
 
+    /**
+     * What a screen reader calls this view.
+     *
+     * A `TextView` that behaves as a button has to say so: the spoken role comes
+     * from the node's class name, and `TextView`'s own override put "TextView"
+     * there, so every key was announced as its description alone. The key is
+     * clickable, offers ACTION_CLICK and ACTION_LONG_CLICK and honours both, so
+     * the node described a button in every respect except the one a reader reads
+     * the role from.
+     */
+    override fun getAccessibilityClassName(): CharSequence =
+        android.widget.Button::class.java.name
+
     init {
         gravity = Gravity.CENTER
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)

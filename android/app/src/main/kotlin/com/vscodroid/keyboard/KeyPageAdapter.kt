@@ -138,10 +138,15 @@ class KeyPageAdapter(
  * margin.
  *
  * Named rather than inline so a test can measure the real thing.
+ *
+ * The weight comes from [KEY_WEIGHT_TENTHS] rather than a literal `1f`, because
+ * [KeyPages.forSmallestWidthDp] divides its pages by the same share and had a
+ * second copy of it. Two copies of one number, in two files, one of which
+ * decides how many keys fit on a page.
  */
 internal fun keyLayoutParams(): LinearLayout.LayoutParams =
-    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, KEY_WEIGHT_TENTHS / 10f)
 
 /** The trackpad's share, one and a half keys wide, for the same reason. */
 internal fun padLayoutParams(): LinearLayout.LayoutParams =
-    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.5f)
+    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, PAD_WEIGHT_TENTHS / 10f)

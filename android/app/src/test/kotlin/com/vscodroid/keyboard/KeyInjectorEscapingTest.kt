@@ -147,8 +147,35 @@ class KeyInjectorEscapingTest {
      */
     @Test
     fun `jsQuote emits a literal that reads back as its input`() {
-        for (s in listOf("\\", "\"", "'", "a", "Backslash", "\\\\", "\"\\\"", "")) {
+        // The line terminators are latent rather than live: no key or alternate
+        // carries one today. They are here because the doc on the injector calls
+        // this "the only one in this package that is correct", so the next key
+        // added is trusted to it, and a raw newline inside a double-quoted
+        // literal is the same SyntaxError that made the backslash key do nothing
+        // and say nothing. U+2028 and U+2029 need no escape: they have been
+        // legal inside a string literal since ES2019.
+        val cases = listOf(
+            "\\", "\"", "'", "a", "Backslash", "\\\\", "\"\\\"", "",
+            "\n", "\r", "\r\n", "a\nb", "\u2028", "\u2029",
+        )
+        for (s in cases) {
             assertEquals(s, parseLiteral(KeyMapping.jsQuote(s)), "jsQuote mangled ${s.length} chars")
+        }
+    }
+
+    @Test
+    fun `a literal never carries a raw line terminator`() {
+        // The half the round trip above cannot see: org.json accepts a raw
+        // newline inside a string where a JavaScript engine does not, so a
+        // quoter that passed one through would still read back intact here and
+        // still fail to parse in the page.
+        for (s in listOf("\n", "\r", "a\nb")) {
+            val quoted = KeyMapping.jsQuote(s)
+            assertFalse(
+                quoted.contains('\n') || quoted.contains('\r'),
+                "jsQuote emitted $quoted, which ends the string literal early and makes " +
+                    "the whole injected script a SyntaxError reported to nobody",
+            )
         }
     }
 }

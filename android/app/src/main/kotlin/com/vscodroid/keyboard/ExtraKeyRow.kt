@@ -1,17 +1,29 @@
 package com.vscodroid.keyboard
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.viewpager2.widget.ViewPager2
 import com.vscodroid.R
 import com.vscodroid.util.Logger
+
+/**
+ * Diameter of one page dot, and the floor the page-indicator band reserves so a
+ * latched-modifier badge appearing beside the dots cannot change the height of
+ * the row. Named rather than repeated: the two sites have to agree or the band
+ * moves the moment a modifier is latched.
+ */
+private const val DOT_SIZE_DP = 8
 
 class ExtraKeyRow @JvmOverloads constructor(
     context: Context,
@@ -31,19 +43,71 @@ class ExtraKeyRow @JvmOverloads constructor(
     // row believing Ctrl was held while the map it paints from said otherwise.
     private var ctrlActive: Boolean
         get() = adapter.isToggleActive("Ctrl")
-        set(value) { adapter.setToggleState("Ctrl", value) }
+        set(value) { adapter.setToggleState("Ctrl", value); updateModifierBadge() }
 
     private var altActive: Boolean
         get() = adapter.isToggleActive("Alt")
-        set(value) { adapter.setToggleState("Alt", value) }
+        set(value) { adapter.setToggleState("Alt", value); updateModifierBadge() }
 
     private var shiftActive: Boolean
         get() = adapter.isToggleActive("Shift")
-        set(value) { adapter.setToggleState("Shift", value) }
+        set(value) { adapter.setToggleState("Shift", value); updateModifierBadge() }
+
+    /**
+     * The pages this row shows, sized for the window it is in.
+     *
+     * A var, because `smallestScreenWidthDp` tracks the ACTIVITY's window and
+     * not the device: dropping a full-screen session into a narrow split-screen
+     * pane lowers it, `MainActivity` declares `smallestScreenSize` in its
+     * `configChanges` so the activity survives that resize, and a row that kept
+     * the page set it was built with went on dividing a much narrower window by
+     * it, putting every key back under [MIN_TOUCH_TARGET_DP] until the activity
+     * was next created. [onConfigurationChanged] repacks it. Rotation does not
+     * reach that, because the smallest side of a screen does not change when it
+     * turns.
+     */
+    private var pages: List<KeyPage> =
+        KeyPages.forSmallestWidthDp(resources.configuration.smallestScreenWidthDp)
 
     private val viewPager: ViewPager2
     private val dotContainer: LinearLayout
     private val dots = mutableListOf<ImageView>()
+
+    /**
+     * What is latched, for a user who has swiped away from the modifiers.
+     *
+     * Ctrl, Alt and Shift live on page 1 only, and a latch deliberately survives
+     * a page swipe: Ctrl+F5 is not reachable any other way, since the function
+     * keys are on a later page. That left the latch reported by the button's own
+     * background and by nothing else, and that button is off screen from every
+     * page but the first, so swiping to F5 with a forgotten Ctrl ran Ctrl+F5 with
+     * no cue anywhere. The dots beside it report the page and nothing more.
+     */
+    private val modifierBadge = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        setTextColor(context.getColor(R.color.colorExtraKeyActive))
+        // Off, so the height this reports is its line height and nothing else.
+        // The container below reserves exactly that, and a font-padding band
+        // that varies by typeface would make the reservation wrong.
+        includeFontPadding = false
+        // One line, whatever the font scale. This sits in a horizontal
+        // LinearLayout with WRAP_CONTENT width, so it is measured against
+        // whatever the dots left over: on a 320dp phone that is 7 dots plus an
+        // 8dp margin against "Ctrl+Alt+Shift" at the largest accessibility font
+        // scale, and a second line would take the band past the floor reserved
+        // for it and resize the WebView on every latch again. Ellipsized rather
+        // than clipped so the cut is legible as a cut.
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
+        visibility = View.GONE
+        // Drawn only. What it means is published on `dotContainer` instead, by
+        // [pageIndicatorText]. That container carries a description of its own,
+        // and a ViewGroup that speaks is where a reader stops: a description on
+        // a non-actionable child inside it is collapsed into the parent's and
+        // read by nobody. The dots beside it are excluded for the same reason.
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
     private lateinit var adapter: KeyPageAdapter
 
     /** The alternates window, while one is open. See [showLongPressPopup]. */
@@ -196,6 +260,28 @@ class ExtraKeyRow @JvmOverloads constructor(
         dotContainer = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER
+            // A floor, so latching a modifier cannot change the height of the
+            // row. The badge is GONE until something is latched, and with a
+            // plain WRAP_CONTENT container the tallest child was an 8dp dot one
+            // moment and an 11sp text line the next. Measured before this floor
+            // existed, by reading the view bounds out of `dumpsys activity top`
+            // on an API 37 emulator at density 2.625: the row went 184px to 202px
+            // the moment Ctrl was latched and the WebView beside it 1215px to
+            // 1197px. With the floor the row is 202px in both states there, and
+            // 269px in both at density 3.5. Without it the workbench relaid out on
+            // Ctrl press and an open terminal took a PTY resize with it.
+            //
+            // Derived from the badge's own paint rather than written in dp,
+            // because the badge grows with the user's font scale and a literal
+            // would start clipping it at the first step above the default.
+            //
+            // descent-ascent, not bottom-top: the badge sets includeFontPadding
+            // false and is held to one line, and that is the pair a single-line
+            // TextView measures itself with. top and bottom are the font's
+            // padded extents, so reserving those would leave a band taller than
+            // any badge that fills it, by a margin that varies by typeface.
+            val badgeMetrics = modifierBadge.paint.fontMetricsInt
+            minimumHeight = maxOf(dpToPx(DOT_SIZE_DP), badgeMetrics.descent - badgeMetrics.ascent)
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dpToPx(2)
                 bottomMargin = dpToPx(4)
@@ -239,7 +325,7 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     private fun setupAdapter() {
         adapter = KeyPageAdapter(
-            pages = KeyPages.defaults,
+            pages = pages,
             onKeyAction = { key, isActive, button -> handleKeyAction(key, isActive, button) },
             onArrowKey = { direction ->
                 // Don't reset modifiers here: trackpad fires many arrows per drag.
@@ -255,12 +341,12 @@ class ExtraKeyRow @JvmOverloads constructor(
     }
 
     private fun setupDots() {
-        val pageCount = KeyPages.defaults.size
+        val pageCount = pages.size
         dotContainer.removeAllViews()
         dots.clear()
 
         for (i in 0 until pageCount) {
-            val size = dpToPx(8)
+            val size = dpToPx(DOT_SIZE_DP)
             val dot = ImageView(context).apply {
                 val drawable = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
@@ -271,22 +357,28 @@ class ExtraKeyRow @JvmOverloads constructor(
                     marginStart = dpToPx(4)
                     marginEnd = dpToPx(4)
                 }
-                // Five 8dp circles that say which page is showing in colour and
-                // in nothing else. A screen reader stopped on each of them in
-                // turn and had nothing to read out, so the row ended in five
-                // silent stops. The page they encode is published once, on the
-                // container, by [updateDots].
+                // One 8dp circle a page, saying which one is showing in colour
+                // and in nothing else. A screen reader stopped on each of them
+                // in turn and had nothing to read out, so the row ended in a
+                // silent stop per page. The page they encode is published once,
+                // on the container, by [updateDots].
                 importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             dots.add(dot)
             dotContainer.addView(dot)
         }
+        dotContainer.addView(
+            modifierBadge,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dpToPx(8)
+            },
+        )
         updateDots(0)
     }
 
     private fun updateDots(selectedPosition: Int) {
         val activeColor = context.getColor(R.color.colorExtraKeyActive)
-        val inactiveColor = 0x55FFFFFF
+        val inactiveColor = context.getColor(R.color.colorExtraKeyPageDotIdle)
         for ((i, dot) in dots.withIndex()) {
             (dot.drawable as? GradientDrawable)?.setColor(
                 if (i == selectedPosition) activeColor else inactiveColor
@@ -295,9 +387,22 @@ class ExtraKeyRow @JvmOverloads constructor(
         dotContainer.contentDescription = pageIndicatorText(selectedPosition)
     }
 
-    /** How many pages the row has and which one it is showing, as a sentence. */
-    private fun pageIndicatorText(position: Int): String =
-        context.getString(R.string.key_page_indicator, position + 1, dots.size)
+    /**
+     * How many pages the row has, which one it is showing, and what is latched
+     * while it is, as one sentence.
+     *
+     * The latch belongs in here rather than on [modifierBadge] because the band
+     * is one accessibility node: `dotContainer` carries this description, and a
+     * description on a child inside a speaking ViewGroup is collapsed into the
+     * parent's and never read. So the badge draws the cue, this says it, and the
+     * two places that can change either, [updateDots] and [updateModifierBadge],
+     * both write it.
+     */
+    private fun pageIndicatorText(position: Int): String {
+        val held = latchedModifierLabel(ctrlActive, altActive, shiftActive)
+            ?: return context.getString(R.string.key_page_indicator, position + 1, dots.size)
+        return context.getString(R.string.key_page_indicator_held, position + 1, dots.size, held)
+    }
 
     private fun setupPageChangeCallback() {
         viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
@@ -355,6 +460,52 @@ class ExtraKeyRow @JvmOverloads constructor(
         }.also { it.show(button) }
     }
 
+    /**
+     * Repacks the row when a resize changes how many keys fit on a page.
+     *
+     * `MainActivity` handles `smallestScreenSize` itself, so a split-screen
+     * resize does not recreate it and nothing else rebuilds this row. See
+     * [pages] for what that cost: keys sized for a full-screen window dividing
+     * a pane half that wide, under the touch target the packer exists to hold.
+     *
+     * Decided on the packing rather than on the width. Every change in that
+     * `configChanges` list arrives here, rotation and `uiMode` among them, and a
+     * rebuild is not free: it resets the pager to page 1, which a user reading
+     * the function keys would pay for turning the phone over or switching to
+     * dark mode. Comparing the packed pages returns from all of those, since the
+     * packer is a pure function of the width and its result is value-comparable.
+     * A font-scale change is not on the list at all and recreates the activity.
+     *
+     * When it does rebuild, the latched modifiers have to be carried across by
+     * hand: the toggle map lives on [KeyPageAdapter] and the replacement starts
+     * empty, so they are read off the outgoing adapter before it is replaced and
+     * written back afterwards. Without that, a resize leaves the row painted
+     * idle while [KeyInjector] still holds the modifier that was pushed at the
+     * page, and the next key goes out as a chord nobody asked for. Written
+     * unconditionally so the badge and the band's spoken description are
+     * repainted from the new page count either way.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val repacked = KeyPages.forSmallestWidthDp(newConfig.smallestScreenWidthDp)
+        if (repacked == pages) return
+        // The popup is a window anchored to a key that is about to be destroyed
+        // with the page holding it, and nothing tears it down with that key: the
+        // same reason [onDetachedFromWindow] dismisses it.
+        longPressPopup?.dismiss()
+        longPressPopup = null
+        val ctrl = ctrlActive
+        val alt = altActive
+        val shift = shiftActive
+        pages = repacked
+        setupAdapter()
+        setupDots()
+        ctrlActive = ctrl
+        altActive = alt
+        shiftActive = shift
+        Logger.d(tag, "Repacked into ${pages.size} pages for ${newConfig.smallestScreenWidthDp}dp")
+    }
+
     override fun onDetachedFromWindow() {
         longPressPopup?.dismiss()
         longPressPopup = null
@@ -383,15 +534,61 @@ class ExtraKeyRow @JvmOverloads constructor(
         // Guarded rather than assigned unconditionally: a write repaints the
         // button, and this runs after every ordinary key press, so clearing three
         // already-idle modifiers would rebuild three backgrounds per keystroke.
+        val latched = ctrlActive || altActive || shiftActive
         if (ctrlActive) ctrlActive = false
         if (altActive) altActive = false
         if (shiftActive) shiftActive = false
-        syncModifierState()
+        // The push is guarded on the same grounds the writes above are, and was
+        // not. It runs after every ordinary key press, after every trackpad drag
+        // and tap, after every long-press alternate, and from the insets listener
+        // on every dispatch where the IME is hidden, which includes attach,
+        // rotation and each bar change: with nothing latched, each of those was
+        // an evaluateJavascript writing the three flags the values they already
+        // held. Cancelling the poll stays unconditional, because it is cheap and
+        // it is the one call here that is not decided by state this row can see.
+        if (latched) syncModifierState()
         removeCallbacks(modifierSyncRunnable)
+    }
+
+    /**
+     * Repaints the latch cue beside the page dots. See [modifierBadge].
+     *
+     * Called from the three modifier setters, which is every write there is: the
+     * row keeps no modifier state of its own, so those setters are the single
+     * funnel and no caller has to remember a second call.
+     */
+    private fun updateModifierBadge() {
+        val label = latchedModifierLabel(ctrlActive, altActive, shiftActive)
+        modifierBadge.text = label.orEmpty()
+        modifierBadge.visibility = if (label == null) View.GONE else View.VISIBLE
+        // The spoken half of the same cue, and the reason the badge carries no
+        // description of its own: see [pageIndicatorText].
+        dotContainer.contentDescription = pageIndicatorText(viewPager.currentItem)
     }
 
     private fun dpToPx(dp: Int): Int =
         (dp * resources.displayMetrics.density + 0.5f).toInt()
+}
+
+/**
+ * The modifiers latched right now, drawn as one label, or null for none.
+ *
+ * The names are key labels rather than language, on the same terms as
+ * [KeyItem.Button.label]: "Ctrl" is what is written on the key the user pressed,
+ * and a translated badge would name a key the row does not have. The sentence a
+ * screen reader hears is the one resource this needs, and the caller resolves it.
+ *
+ * Split out of [ExtraKeyRow] for the reason [pressedState] is split out of
+ * [ExtraKeyButton]: the row is a `View` whose initialiser reaches resources on
+ * its first line, so this is the half a JVM test can run.
+ */
+internal fun latchedModifierLabel(ctrl: Boolean, alt: Boolean, shift: Boolean): String? {
+    val held = buildList {
+        if (ctrl) add("Ctrl")
+        if (alt) add("Alt")
+        if (shift) add("Shift")
+    }
+    return if (held.isEmpty()) null else held.joinToString("+")
 }
 
 /**

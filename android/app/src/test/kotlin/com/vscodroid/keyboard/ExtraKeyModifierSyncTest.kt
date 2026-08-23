@@ -165,6 +165,44 @@ class ExtraKeyModifierSyncTest {
         )
     }
 
+    /**
+     * The three latch writes above it were already guarded on this ground; the
+     * push below them was not.
+     *
+     * `resetModifiersIfNeeded` runs after every ordinary key press, after every
+     * trackpad drag and every trackpad tap, after every long-press alternate, and
+     * from the insets listener on every dispatch where the IME is hidden, which
+     * includes attach, rotation and each bar change. With nothing latched, every
+     * one of those was an `evaluateJavascript` writing the three flags the values
+     * they already held, and each one also bumped `modifierPushCount`.
+     *
+     * NEGATIVE CONTROL: drop the `if (latched)` and this goes red.
+     */
+    @Test
+    fun `a reset with nothing latched tells the page nothing`() {
+        val lines = code()
+        val start = lines.indexOfFirst { it.contains("private fun resetModifiersIfNeeded()") }
+        assertTrue(start >= 0, "resetModifiersIfNeeded is no longer where this test looks")
+        val body = lines.drop(start).takeWhile { !it.contains("private fun updateModifierBadge(") }
+
+        assertTrue(
+            body.any { it.contains("if (ctrlActive) ctrlActive = false") },
+            "the window found is not the reset, so its verdict below is worth nothing. " +
+                "It reads:\n${body.joinToString("\n")}",
+        )
+        assertTrue(
+            body.any { it.contains("if (latched) syncModifierState()") },
+            "the push is unconditional again, so an evaluateJavascript is issued on " +
+                "every plain keystroke and on every inset dispatch with nothing to say. " +
+                "It reads:\n${body.joinToString("\n")}",
+        )
+        assertTrue(
+            body.any { it.trim() == "removeCallbacks(modifierSyncRunnable)" },
+            "the poll is no longer cancelled here, and this is the call that ends the " +
+                "chain on the branch with no injector. It reads:\n${body.joinToString("\n")}",
+        )
+    }
+
     @Test
     fun `the poll stops by cancelling rather than by declining to continue`() {
         val body = pollBody()

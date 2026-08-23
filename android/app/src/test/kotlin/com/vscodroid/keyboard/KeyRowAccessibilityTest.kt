@@ -273,7 +273,7 @@ class KeyRowAccessibilityTest {
         @Test
         fun `the popup puts that name on the entry it builds`() {
             val lines = code("LongPressPopup.kt")
-            val entry = lines.indexOfFirst { it.contains("TextView(context).apply {") }
+            val entry = lines.indexOfFirst { it.contains("AlternateKeyView(context).apply {") }
             assertTrue(
                 entry >= 0,
                 "the popup no longer builds its entries where this test looks, so nothing " +
@@ -379,6 +379,152 @@ class KeyRowAccessibilityTest {
                 declared!!.contains("%1\$d") && declared.contains("%2\$d"),
                 "the indicator reads \"$declared\", which does not take both the page and " +
                     "the count; a user is told one number and cannot place it",
+            )
+        }
+    }
+
+    /**
+     * That a latch is reported from the pages that cannot show it.
+     *
+     * Ctrl, Alt and Shift are on page 1 only, and a latch survives a page swipe
+     * on purpose: the function keys are on a later page, so Ctrl+F5 is reachable
+     * no other way. That left the latch carried by the modifier button's own
+     * background, which is off screen from every page but the first. Swipe to the
+     * function keys with a Ctrl the user has forgotten and F5 runs as Ctrl+F5
+     * with nothing on screen saying why: the dots beside the keys report the page
+     * and nothing else.
+     */
+    @Nested
+    inner class LatchCue {
+
+        @Test
+        fun `nothing latched says nothing`() {
+            assertNull(
+                latchedModifierLabel(ctrl = false, alt = false, shift = false),
+                "an idle row would carry a cue for a modifier nobody pressed",
+            )
+        }
+
+        @Test
+        fun `every latched modifier is named, in the order the keys sit in`() {
+            assertEquals("Ctrl", latchedModifierLabel(ctrl = true, alt = false, shift = false))
+            assertEquals("Alt", latchedModifierLabel(ctrl = false, alt = true, shift = false))
+            assertEquals("Shift", latchedModifierLabel(ctrl = false, alt = false, shift = true))
+            assertEquals(
+                "Ctrl+Alt+Shift",
+                latchedModifierLabel(ctrl = true, alt = true, shift = true),
+                "the cue has to name all of them: Ctrl+Shift+P and Ctrl+P are different " +
+                    "commands, and the row can hold both modifiers at once",
+            )
+            assertEquals(
+                "Ctrl+Shift",
+                latchedModifierLabel(ctrl = true, alt = false, shift = true),
+                "the order follows the keys on page 1, so the cue reads the way the row " +
+                    "does rather than the way the arguments happen to be listed",
+            )
+        }
+
+        @Test
+        fun `the cue is published wherever a modifier is written`() {
+            val lines = code("ExtraKeyRow.kt")
+
+            // Scoped to the three property setters, which are the only writes
+            // there are: the row keeps no modifier state of its own and reads the
+            // adapter's toggle map instead. A whole-file search would be
+            // satisfied by the declaration of the helper.
+            for (modifier in listOf("Ctrl", "Alt", "Shift")) {
+                val setter = lines.firstOrNull {
+                    it.contains("adapter.setToggleState(\"$modifier\"")
+                }
+                assertNotNull(
+                    setter,
+                    "the $modifier setter is no longer where this test looks, so its " +
+                        "verdict is worth nothing",
+                )
+                assertTrue(
+                    setter!!.contains("updateModifierBadge()"),
+                    "writing $modifier no longer repaints the cue, so a latch made or " +
+                        "spent from any page but the first goes unreported. It reads: $setter",
+                )
+            }
+        }
+
+        /**
+         * The cue must not cost the row its height.
+         *
+         * The band the badge appears in is WRAP_CONTENT, so before it was given
+         * a floor its tallest child was an 8dp dot one moment and an 11sp text
+         * line the next, which grew the band and the row with it. The figures
+         * behind that are in [ExtraKeyRow]'s own comment, where the floor is; a
+         * JVM case cannot measure a view and should not restate one, so the
+         * workbench relaid out and an open terminal took a PTY resize on the
+         * app's hottest interaction. The measure pass that proves it is next
+         * door in the instrumented suite, which CI compiles and has no emulator
+         * to run; deleting either half of the floor left the whole JVM suite
+         * green. This is the half that can go red here.
+         *
+         * Both halves, because the floor is only a bound while the badge stays
+         * one line: it is a WRAP_CONTENT child measured against whatever the
+         * dots leave, and a narrow phone gets the most dots and the longest
+         * label at once.
+         */
+        @Test
+        fun `the band the cue draws in reserves the badge's own height, for one line`() {
+            val lines = code("ExtraKeyRow.kt")
+
+            val bandStart = lines.indexOfFirst {
+                it.contains("dotContainer = LinearLayout(context).apply {")
+            }
+            assertTrue(
+                bandStart >= 0,
+                "the page-indicator band is no longer built where this test looks, so " +
+                    "its verdict is worth nothing",
+            )
+            val band = lines.drop(bandStart)
+                .takeWhile { !it.contains("addView(dotContainer)") }
+                .joinToString("\n")
+            assertTrue(
+                band.contains("minimumHeight") &&
+                    band.contains("modifierBadge.paint.fontMetricsInt"),
+                "the band no longer reserves the badge's height, so latching a modifier " +
+                    "grows the row and resizes the WebView under it. It reads:\n$band",
+            )
+            // Which pair of metrics, not merely that some pair is read. The
+            // badge measures itself descent-to-ascent -- includeFontPadding is
+            // off and it is held to one line -- so bottom-to-top reserves the
+            // font's padded extents on top of that and leaves a band taller
+            // than any badge can fill, by a margin that varies by typeface. The
+            // check above is satisfied by either pair, which left the one
+            // mismatch that matters invisible while the comment beside the code
+            // went on insisting on it.
+            assertTrue(
+                band.contains("descent - badgeMetrics.ascent"),
+                "the band reserves a height the badge cannot fill: it is no longer the " +
+                    "descent-to-ascent pair a single-line TextView with no font padding " +
+                    "measures itself with. It reads:\n$band",
+            )
+
+            val badgeStart = lines.indexOfFirst {
+                it.contains("modifierBadge = TextView(context).apply {")
+            }
+            assertTrue(
+                badgeStart >= 0,
+                "the badge is no longer built where this test looks, so its verdict is " +
+                    "worth nothing",
+            )
+            val badge = lines.drop(badgeStart)
+                .takeWhile { !it.contains("private lateinit var adapter") }
+                .joinToString("\n")
+            assertTrue(
+                badge.contains("maxLines = 1"),
+                "the badge can wrap again, so at a large font scale on a narrow row it " +
+                    "measures taller than the band reserved for it and the floor above " +
+                    "stops being a bound. It reads:\n$badge",
+            )
+            assertTrue(
+                badge.contains("includeFontPadding = false"),
+                "the badge measures with font padding again, which is the band the floor " +
+                    "above deliberately does not reserve. It reads:\n$badge",
             )
         }
     }

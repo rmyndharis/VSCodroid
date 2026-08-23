@@ -5,14 +5,16 @@
     <string name="notification_channel_description">Keeps the local development server running</string>
     <string name="notification_title">VSCodroid is running</string>
     <string name="notification_text">Local development server active</string>
-    <!-- Replaces the line above when the server was adopted rather than started.
-         An adopted server outlived the bootstrap that forked it, and the DNS
-         proxy died with that bootstrap while the survivor kept the dead address
-         in its environment. Everything honouring HTTPS_PROXY then fails for the
-         rest of the session: the extension marketplace, the agent host, and git,
-         npm and curl in every terminal, which inherit it. The editor looks
-         healthy throughout, so this card is the only thing a user can see. -->
-    <string name="notification_text_adopted">No network for extensions, git or npm. Restart the app to fix it.</string>
+    <!-- There was a second line here, shown when the server was adopted rather
+         than started, telling the user the session had no network and to tap
+         Stop. It was true while `assets/server.js` bound the DNS proxy inside
+         the bootstrap: an adopted server is by construction one whose bootstrap
+         is gone, so it went on pointing HTTPS_PROXY at a closed port and every
+         terminal, git and npm inherited the dead address. The proxy is now
+         preloaded into the child that bootstrap forks and lives exactly as long
+         as it does, so an adopted server carries a working one and there is
+         nothing left to say. Read those two files before adding a line back;
+         `NodeService.degradableNotificationText` names the same check. -->
     <string name="action_stop">Stop Server</string>
 
     <!-- Shown once the automatic restart budget is spent. Replaces the two
@@ -231,6 +233,11 @@
     <!-- Said after a removal, on the Android side rather than in the editor, because
          the recursive delete outlives the call the editor is waiting on. -->
     <string name="saf_mirror_removed">Removed a device folder\'s local copy, freeing %1$s.</string>
+    <!-- The affirmative button on that confirmation. Not android.R.string.ok: the delete
+         is recursive and irreversible, and "OK" beside a warning about files that exist
+         nowhere else names no action, so a reader confirming quickly has nothing to read
+         but the sentence they are dismissing. -->
+    <string name="saf_mirror_remove">Remove</string>
 
     <!-- The refusals the removal guard raises before anything is deleted. They travel
          back across the bridge and the bundled extension shows them verbatim, so they
@@ -252,6 +259,12 @@
          the folder-removal calls; one string because it is one situation and one
          instruction. -->
     <string name="bridge_stale_session">VSCodroid did not accept the request. Reload the window and try again.</string>
+    <!-- Too many storage commands already outstanding. The four that walk the disk share
+         one thread with a bounded queue, so this is a wait and not a fault, and it needs
+         its own sentence: bridge_stale_session above tells the reader to reload the
+         window, which does not drain that thread and costs them their editor state on the
+         way to waiting exactly as long. Named by AndroidBridge.STORAGE_BUSY. -->
+    <string name="bridge_storage_busy">VSCodroid is busy with another storage request. Try again in a moment.</string>
     <!-- No Activity wired the removal callback, so nothing could have been removed.
          Distinct from a refusal with a reason: this is a mistake in the app rather
          than a state the user can act on, and saying "that folder is in use" would
@@ -327,9 +340,11 @@
         <item quantity="other">Syncing \"%1$s\"\n%2$d / %3$d files…</item>
     </plurals>
 
-    <!-- A folder whose SAF grant no longer holds. The picker opens straight
-         after this, so the message says what happened rather than what to do
-         next; the next step is already on screen. -->
+    <!-- A folder whose SAF grant no longer holds. Nothing opens after this any
+         more: the recent-folder path used to summon the system picker on a
+         grant it could not use, which let a caller put the chooser in front of
+         the user without asking for it, so the sentence has to carry the next
+         step itself. -->
     <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
 
     <!-- A device folder that did not open. Said as one sentence per case, with the
@@ -414,7 +429,20 @@
     <string name="key_desc_escape">Escape key</string>
     <string name="key_desc_ctrl">Control modifier</string>
     <string name="key_desc_alt">Alt modifier</string>
-    <string name="key_desc_shift">Shift modifier</string>
+    <!-- Shift is named for what it does rather than by analogy with the other
+         two, because it does something different. Ctrl and Alt turn the next
+         character typed on the soft keyboard into a chord; Shift ALONE cannot,
+         since cancelling that insertion in favour of a synthetic keystroke would
+         type nothing at all, so it is spent and the soft keyboard's own
+         character is inserted unchanged. Two things it does do, and the
+         description names both: it decides which character the next key on THIS
+         row types (Shift then / gives ?), and held together with Ctrl or Alt it
+         reaches the chord after all. The interceptor in KeyInjector returns
+         early only when neither of those is set, and both branches that survive
+         carry shiftKey through, which is what makes Ctrl+Shift+P typable from
+         the soft keyboard. The button looked and sounded identical to the two
+         that work. -->
+    <string name="key_desc_shift">Shift modifier, for this row\'s keys and for Control or Alt chords</string>
     <string name="key_desc_curly_braces">Curly braces</string>
     <string name="key_desc_parentheses">Parentheses</string>
     <string name="key_desc_semicolon">Semicolon</string>
@@ -450,17 +478,35 @@
     <string name="key_desc_page_up">Page up</string>
     <string name="key_desc_page_down">Page down</string>
 
-    <!-- The three characters that exist only as long-press alternates. Every
+    <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
-         the popup and the row say the same thing about the same character. -->
+         the popup and the row say the same thing about the same character.
+
+         The closing parenthesis is the newest of them and the reason it is here
+         at all: the `()` key sends the opening one, Shift over it cannot produce
+         the closing one, and no page carries a digit row for Shift to work from,
+         so the long press was the only place left to put it. -->
     <string name="key_desc_apostrophe">Apostrophe</string>
     <string name="key_desc_backslash">Backslash</string>
     <string name="key_desc_tilde">Tilde</string>
+    <string name="key_desc_closing_parenthesis">Closing parenthesis</string>
 
     <!-- Which of the key row's pages is showing. The dots below the keys carry
          this in colour alone, which leaves a screen reader nothing to read and
          a swipe with nothing to announce. -->
     <string name="key_page_indicator">Key page %1$d of %2$d</string>
+
+    <!-- The same indicator while a modifier is latched, said as one sentence
+         rather than as a second description on the badge that draws the cue:
+         the dots and the badge share one container, that container is the node
+         a screen reader stops on, and a description on a child inside it is
+         collapsed into the parent's and never read.
+
+         The modifiers live on page 1 only and a latch survives a swipe on
+         purpose, so from page 2 onwards this is the only thing that reports one.
+         The last placeholder is the key names as they are written on the keys,
+         which are not translated. -->
+    <string name="key_page_indicator_held">Key page %1$d of %2$d, %3$s held</string>
 
     <!-- What a screen reader says after the name of a latched modifier. Kept to
          one word each because the platform reads them straight after the key's

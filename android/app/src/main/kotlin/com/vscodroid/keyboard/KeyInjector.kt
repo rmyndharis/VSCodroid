@@ -1,6 +1,7 @@
 package com.vscodroid.keyboard
 
 import android.view.KeyEvent
+import android.webkit.ValueCallback
 import android.webkit.WebView
 import com.vscodroid.util.Logger
 
@@ -125,16 +126,38 @@ class KeyInjector(
             })();
         """.trimIndent()
 
-        webView.evaluateJavascript(js) { target ->
-            // What this can honestly report is where the event went, not what
-            // the page did with it: a synthetic KeyboardEvent runs the
-            // workbench's bindings and performs no default action, so "it was
-            // delivered" and "something happened" are different claims and only
-            // the first is observable from here. The line this replaced said
-            // "Injected key={" for a press that inserted nothing, on every tap,
-            // for as long as that key had been broken.
-            Logger.d(tag, "sent key=$key to $target ctrl=$ctrlKey alt=$altKey shift=$effectiveShift")
+        // The callback is attached only where something reads it. Passing one
+        // makes the renderer serialize the script's return value back across
+        // the process boundary, and the body below is `Logger.d`, which does
+        // nothing on a build that is not debuggable. The trackpad is what makes
+        // that matter: an arrow is not text entry, so every one comes through
+        // here, and one MOVE delta in the fast gear pays out several arrows,
+        // each of which was buying a round trip to discard the answer.
+        //
+        // The script itself is still one per arrow, and knowingly so. The
+        // trackpad invokes its callback once per direction, so a MOVE that pays
+        // out three builds and posts three of these. Collapsing them needs a
+        // second entry point taking a list and an IIFE that loops, which is a
+        // shape the text-entry routing above does not generalise to, and the
+        // remaining cost is a one-way post with no reply to wait for. It is
+        // worth doing when a fast flick is measured and this is what it costs,
+        // not before.
+        val report = if (Logger.debugEnabled) {
+            ValueCallback<String> { target ->
+                // What this can honestly report is where the event went, not
+                // what the page did with it: a synthetic KeyboardEvent runs the
+                // workbench's bindings and performs no default action, so "it
+                // was delivered" and "something happened" are different claims
+                // and only the first is observable from here. The line this
+                // replaced said "Injected key={" for a press that inserted
+                // nothing, on every tap, for as long as that key had been
+                // broken.
+                Logger.d(tag, "sent key=$key to $target ctrl=$ctrlKey alt=$altKey shift=$effectiveShift")
+            }
+        } else {
+            null
         }
+        webView.evaluateJavascript(js, report)
     }
 
 
@@ -155,6 +178,17 @@ class KeyInjector(
      * input this listener has no chord for, a paste or an IME composition, is spent
      * the same way and for the same reason.
      *
+     * Backspace, Delete and Enter reach the page from here rather than from the key
+     * row, because a soft keyboard reports all three as an edit and not as a key,
+     * and no page of the row carries one. They are listed in `COMMANDS` below.
+     *
+     * This is live on both edit paths, not only the legacy one. The workbench uses
+     * `NativeEditContext` wherever `globalThis.EditContext` exists, and an element
+     * with an `EditContext` attached still receives every `beforeinput` except
+     * `insertCompositionText`; only the `input` event is withheld. The workbench's
+     * own `NativeEditContext` reads `beforeinput` for `insertParagraph` for exactly
+     * that reason.
+     *
      * Call once after the page finishes loading.
      */
     fun setupModifierInterceptor() {
@@ -169,6 +203,27 @@ class KeyInjector(
                 window.__vscodroid.shift = false;
 
                 var KEYS = $keyLookup;
+
+                // The edits a soft keyboard reports instead of a key, and the
+                // key each one stands for. Built once rather than per event.
+                //
+                // Enter is here because the editor never sees it as a key press
+                // on either edit path: the textarea path reports it as
+                // insertLineBreak and the EditContext path as insertParagraph,
+                // which is the event the workbench's own NativeEditContext
+                // listener reads to type the newline. Both used to fall into the
+                // catch-all below, which spends the latch and leaves the page to
+                // insert a plain newline, so Ctrl+Enter could not be produced
+                // from this row by any route: no page carries an Enter key
+                // either, and shiftedForm cannot manufacture one. It is a real
+                // binding here, for open-to-the-side and for submitting in the
+                // chat view of the extension that ships in the APK.
+                var COMMANDS = {
+                    deleteContentBackward: ['Backspace', 8],
+                    deleteContentForward: ['Delete', 46],
+                    insertParagraph: ['Enter', 13],
+                    insertLineBreak: ['Enter', 13]
+                };
 
                 document.addEventListener('beforeinput', function(e) {
                     var mod = window.__vscodroid;
@@ -199,16 +254,23 @@ class KeyInjector(
                     var target = document.activeElement || document.body;
                     var init;
 
-                    // Handle delete operations (Ctrl+Backspace = delete word, etc.)
-                    if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteContentForward') {
+                    // The edits that stand for a key: a delete becomes
+                    // Ctrl+Backspace and its neighbours, and Enter becomes the
+                    // key press the editor otherwise never sees. See COMMANDS.
+                    //
+                    // hasOwnProperty rather than a bare lookup: e.inputType is
+                    // an arbitrary string from the page, and a plain index would
+                    // answer with an inherited member for one that happens to
+                    // name it.
+                    var command = COMMANDS.hasOwnProperty(e.inputType) ? COMMANDS[e.inputType] : null;
+                    if (command) {
                         e.preventDefault();
                         e.stopImmediatePropagation();
-                        var isForward = e.inputType === 'deleteContentForward';
                         init = {
-                            key: isForward ? 'Delete' : 'Backspace',
-                            code: isForward ? 'Delete' : 'Backspace',
-                            keyCode: isForward ? 46 : 8,
-                            which: isForward ? 46 : 8,
+                            key: command[0],
+                            code: command[0],
+                            keyCode: command[1],
+                            which: command[1],
                             ctrlKey: !!mod.ctrl,
                             altKey: !!mod.alt,
                             shiftKey: !!mod.shift,
@@ -231,13 +293,22 @@ class KeyInjector(
                     // it would leave the tap producing nothing, so it is left to
                     // the page exactly as a lone Shift is.
                     //
+                    // A multi-character insertText belongs here for the same
+                    // reason, and used to be the one case that did not get it. A
+                    // next-word prediction chip commits a whole word in one
+                    // event, and there is one chord per character and none for a
+                    // word: the insertion was cancelled and a chord ran for
+                    // every letter in its place, so a Ctrl held over `hello` fired
+                    // Replace, Ctrl+E, Ctrl+L twice and Open File, and typed
+                    // nothing.
+                    //
                     // The latch is still spent. A Ctrl that survives here does
                     // not stay harmless: it attaches to whichever character is
                     // typed next, and that character is then CANCELLED in favour
                     // of a chord the user never asked for, so typing `a` after a
                     // paste selects the document instead of inserting a letter,
                     // and the keystroke after that replaces the selection.
-                    if (e.inputType !== 'insertText' || !e.data) {
+                    if (e.inputType !== 'insertText' || !e.data || e.data.length !== 1) {
                         mod.ctrl = false;
                         mod.alt = false;
                         mod.shift = false;
@@ -247,40 +318,37 @@ class KeyInjector(
                     e.preventDefault();
                     e.stopImmediatePropagation();
 
-                    var chars = e.data;
-                    for (var i = 0; i < chars.length; i++) {
-                        var ch = chars[i];
-                        var def = KEYS[ch];
-                        var code, keyCode, shiftKey = !!mod.shift;
-                        if (def) {
-                            code = def[0];
-                            keyCode = def[1];
-                            // The character carries Shift on a US layout, so the event
-                            // has to as well or VS Code sees a different chord.
-                            if (def[2]) shiftKey = true;
-                        } else {
-                            var upper = ch.toUpperCase();
-                            code = /[a-zA-Z]/.test(ch) ? 'Key' + upper :
-                                   /[0-9]/.test(ch) ? 'Digit' + ch : '';
-                            keyCode = upper.charCodeAt(0);
-                        }
-
-                        init = {
-                            key: ch,
-                            code: code,
-                            keyCode: keyCode,
-                            which: keyCode,
-                            ctrlKey: !!mod.ctrl,
-                            altKey: !!mod.alt,
-                            shiftKey: shiftKey,
-                            metaKey: false,
-                            bubbles: true,
-                            cancelable: true,
-                            composed: true
-                        };
-                        target.dispatchEvent(new KeyboardEvent('keydown', init));
-                        target.dispatchEvent(new KeyboardEvent('keyup', init));
+                    var ch = e.data;
+                    var def = KEYS[ch];
+                    var code, keyCode, shiftKey = !!mod.shift;
+                    if (def) {
+                        code = def[0];
+                        keyCode = def[1];
+                        // The character carries Shift on a US layout, so the event
+                        // has to as well or VS Code sees a different chord.
+                        if (def[2]) shiftKey = true;
+                    } else {
+                        var upper = ch.toUpperCase();
+                        code = /[a-zA-Z]/.test(ch) ? 'Key' + upper :
+                               /[0-9]/.test(ch) ? 'Digit' + ch : '';
+                        keyCode = upper.charCodeAt(0);
                     }
+
+                    init = {
+                        key: ch,
+                        code: code,
+                        keyCode: keyCode,
+                        which: keyCode,
+                        ctrlKey: !!mod.ctrl,
+                        altKey: !!mod.alt,
+                        shiftKey: shiftKey,
+                        metaKey: false,
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true
+                    };
+                    target.dispatchEvent(new KeyboardEvent('keydown', init));
+                    target.dispatchEvent(new KeyboardEvent('keyup', init));
 
                     mod.ctrl = false;
                     mod.alt = false;

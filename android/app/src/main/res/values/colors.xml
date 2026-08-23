@@ -21,8 +21,18 @@
     <color name="colorExtraKeyText">#CCCCCC</color>
     <color name="colorExtraKeyActive">#007ACC</color>
 
-    <!-- Gesture trackpad -->
+    <!-- Gesture trackpad. The crosshair and the border were literal ints in
+         GestureTrackpad.kt and the idle page dot one in ExtraKeyRow.kt, which
+         put three of this subsystem's colours somewhere no palette change and no
+         values-night qualifier could reach. -->
     <color name="colorGestureTrackpadBg">#383838</color>
+    <color name="colorGestureTrackpadCrosshair">#888888</color>
+    <color name="colorGestureTrackpadBorder">#555555</color>
+
+    <!-- The page dots below the keys: the page showing uses
+         colorExtraKeyActive, the rest this. Deliberately translucent, so it
+         reads as an unfilled dot on whatever the row is drawn over. -->
+    <color name="colorExtraKeyPageDotIdle">#55FFFFFF</color>
 
     <!-- Long-press popup -->
     <color name="colorPopupBg">#3C3C3C</color>

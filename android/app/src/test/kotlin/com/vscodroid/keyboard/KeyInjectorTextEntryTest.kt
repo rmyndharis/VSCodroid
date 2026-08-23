@@ -142,6 +142,22 @@ class KeyInjectorTextEntryTest {
     }
 
     @Test
+    fun `an announced keystroke asks for no answer on a build that logs nothing`() {
+        // A callback makes the renderer serialize the script's return value back
+        // across the process boundary, and the only thing that reads it is
+        // Logger.d, which is gated on a debuggable build. Every trackpad arrow
+        // takes this path, and one touch delta in the fast gear pays out several,
+        // so on the row's one continuous control the round trip was bought
+        // dozens of times a second to discard the answer.
+        //
+        // Logger.debugEnabled is false here because Logger.init is never called
+        // off a device, which is also what a release APK reports.
+        injector().injectKey("Tab")
+
+        verify(exactly = 1) { webView.evaluateJavascript(any(), isNull()) }
+    }
+
+    @Test
     fun `every key on the row is routed by whether it is a character`() {
         // Driven from the row itself, so a key added to KeyPages later is
         // covered without anyone remembering this file. The three modifiers

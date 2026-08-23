@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import android.content.res.Configuration
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
@@ -314,23 +315,257 @@ class KeyRowAccessibilityInstrumentedTest {
     }
 
     @Test
-    fun keysClearFortyEightDpOnAMainstreamPhone() {
-        // 411dp is this emulator and the common Pixel width. Narrower phones do
-        // not clear the guideline on width even with the whole row shared out,
-        // and that needs a different decision: fewer keys per page, which means
-        // more pages. This case pins what the fix does reach, so a regression
-        // that puts the gap back is caught by a number rather than by a shape.
-        val page1 = keyWidthsDp(411, keys = 7, withPad = true)
-        val others = keyWidthsDp(411, keys = 8, withPad = false)
+    fun keysClearFortyEightDpOnEveryWidthTheRowIsPagedFor() {
+        // The measured half of KeyPageConfigTest's arithmetic: real
+        // LinearLayout, real weights, real remeasure. Narrower phones used to be
+        // out of scope here, and the note that said so was the whole record of
+        // the gap: at 360dp page 1 gave 42.4dp a key and the other pages 45.0dp,
+        // on every key, on one of the most common portrait widths there is.
+        // KeyPages.forSmallestWidthDp splits the pages instead, and this walks
+        // whatever it hands back rather than a count written here.
+        val density = context.resources.displayMetrics.density
+        // One pixel of slack. LinearLayout shares a weighted row out in integer
+        // pixels and gives the remainder to the last child, so a page that
+        // divides exactly in dp can still come back a pixel short of it.
+        val floor = 48f - 1f / density
+        for (widthDp in listOf(320, 360, 411, 448)) {
+            val pages = KeyPages.forSmallestWidthDp(widthDp)
+            // The control. An empty or shortened list walks fewer pages and
+            // reports every key wide enough, which reads exactly like a row that
+            // fits at every width.
+            assertTrue(
+                "at ${widthDp}dp the row was paged into ${pages.size} pages, fewer than the " +
+                    "${KeyPages.defaults.size} KeyPageConfig writes out, so keys have gone " +
+                    "missing and the widths below are measured on what is left",
+                pages.size >= KeyPages.defaults.size,
+            )
+            for ((index, page) in pages.withIndex()) {
+                val keys = page.items.count { it is KeyItem.Button }
+                val withPad = page.items.any { it is KeyItem.GesturePad }
+                val widths = keyWidthsDp(widthDp, keys = keys, withPad = withPad)
+                assertEquals("expected $keys keys on page ${index + 1}", keys, widths.size)
+                assertTrue(
+                    "at ${widthDp}dp, page ${index + 1} measures ${widths.min()}dp a key, " +
+                        "under the 48dp target",
+                    widths.min() >= floor,
+                )
+            }
+        }
+    }
 
-        assertTrue(
-            "page 1 keys are ${page1.min()}dp beside the trackpad, under the 48dp target",
-            page1.min() >= 48f,
+    @Test
+    fun aKeyCallsItselfAButton() {
+        // TalkBack derives the spoken role from the node's class name, and
+        // ExtraKeyButton extends AppCompatTextView, so every key was announced as
+        // its description alone: "Curly braces", with nothing saying it can be
+        // activated. The node was a button in every other respect, offering
+        // ACTION_CLICK and ACTION_LONG_CLICK and honouring both.
+        inWindow({ ctx ->
+            ExtraKeyButton(ctx).apply {
+                keyValue = "Tab"
+                contentDescription = "Tab key"
+            }
+        }) { _, node ->
+            assertEquals(
+                "control: without a description the view is not in a window",
+                "Tab key",
+                node().contentDescription?.toString(),
+            )
+            assertEquals(
+                "the key reports itself as a plain text view, so a screen reader names " +
+                    "it without saying it is a button",
+                android.widget.Button::class.java.name,
+                node().className?.toString(),
+            )
+        }
+    }
+
+    @Test
+    fun anAlternateCallsItselfAButton() {
+        // The same gap, one layer down, and the layer that matters more: the
+        // long-press popup is the only route to `'`, `\`, `~` and `)`, so an
+        // entry announced as a text view is the only way those characters are
+        // offered to a screen reader at all.
+        inWindow({ ctx ->
+            AlternateKeyView(ctx).apply {
+                text = "\\"
+                contentDescription = "Backslash"
+            }
+        }) { _, node ->
+            assertEquals(
+                "control: without a description the view is not in a window",
+                "Backslash",
+                node().contentDescription?.toString(),
+            )
+            assertEquals(
+                "an alternate reports itself as a plain text view, so a screen reader " +
+                    "names the character without saying it can be activated",
+                android.widget.Button::class.java.name,
+                node().className?.toString(),
+            )
+        }
+    }
+
+    /** The first key under [root] that types [keyValue], or null. */
+    private fun findKey(root: android.view.View, keyValue: String): ExtraKeyButton? = when {
+        root is ExtraKeyButton -> root.takeIf { it.keyValue == keyValue }
+        root is ViewGroup -> (0 until root.childCount)
+            .firstNotNullOfOrNull { findKey(root.getChildAt(it), keyValue) }
+        else -> null
+    }
+
+    /** The page-indicator band: the row's only child that says anything. */
+    private fun indicator(row: ExtraKeyRow): android.view.View? =
+        (0 until row.childCount)
+            .map { row.getChildAt(it) }
+            .firstOrNull { it is android.widget.LinearLayout && it.contentDescription != null }
+
+    @Test
+    fun latchingAModifierDoesNotChangeTheHeightOfTheRow() {
+        // Measured on an API 37 device before the band was given a floor: the row
+        // went from 184px to 202px the moment Ctrl was latched, and the WebView
+        // beside it from 1215px to 1197px. activity_main.xml gives the row
+        // wrap_content above a WebView that is 0dp with a weight, so those
+        // pixels come off the editor and go back on every latch and again on
+        // every key that spends one: a Chromium viewport resize and a full
+        // workbench relayout on the app's hottest interaction.
+        //
+        // Off the JVM because it is a measure pass on real views, which is the
+        // one thing the unit suite next door cannot see.
+        val density = context.resources.displayMetrics.density
+        val widthPx = (411 * density).toInt()
+        fun heightOf(row: ExtraKeyRow): Int {
+            row.measure(
+                android.view.View.MeasureSpec.makeMeasureSpec(widthPx, android.view.View.MeasureSpec.EXACTLY),
+                android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED),
+            )
+            return row.measuredHeight
+        }
+
+        var idle = 0
+        var latched = 0
+        var ctrl: ExtraKeyButton? = null
+        onMain {
+            val row = ExtraKeyRow(context)
+            idle = heightOf(row)
+            row.layout(0, 0, widthPx, idle)
+            ctrl = findKey(row, "Ctrl")
+            ctrl?.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
+            latched = heightOf(row)
+        }
+
+        assertTrue("control: the row measured to nothing at all", idle > 0)
+        assertNotNull(
+            "control: the row never bound its first page, so nothing here latched anything",
+            ctrl,
         )
-        assertTrue(
-            "pages 2 to 5 keys are ${others.min()}dp, under the 48dp target",
-            others.min() >= 48f,
+        assertTrue("control: activating Ctrl did not latch it", ctrl!!.isToggleActive)
+        assertEquals(
+            "latching a modifier took the row from ${idle}px to ${latched}px, so the " +
+                "WebView above it is resized every time one is pressed or spent",
+            idle,
+            latched,
         )
+    }
+
+    @Test
+    fun aLatchedModifierIsSaidByTheNodeThatSpeaks() {
+        // The badge beside the dots draws the latch and says nothing: it sits
+        // inside the band, the band carries a description of its own, and a
+        // description on a non-actionable child of a speaking ViewGroup is
+        // collapsed into the parent's and never read. So the one node reports
+        // both, and this reads it the way a screen reader would.
+        inWindow({ ctx -> ExtraKeyRow(ctx) }) { row, _ ->
+            val band = indicator(row)
+            assertNotNull("the row publishes no page indicator at all", band)
+            // Read off the row's own configuration, which is what it paged
+            // itself for: a wide device gets five pages and a narrow one more.
+            val pageCount = KeyPages
+                .forSmallestWidthDp(row.resources.configuration.smallestScreenWidthDp).size
+
+            var idle: String? = null
+            onMain {
+                idle = band!!.createAccessibilityNodeInfo()?.contentDescription?.toString()
+            }
+            assertEquals(
+                "control: the band does not name the page it is showing, so the assertion " +
+                    "below is not reading the indicator",
+                context.getString(R.string.key_page_indicator, 1, pageCount),
+                idle,
+            )
+
+            val ctrl = findKey(row, "Ctrl")
+            assertNotNull("the row never bound its first page, so nothing can be latched", ctrl)
+            var held: String? = null
+            onMain {
+                ctrl!!.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
+                held = band!!.createAccessibilityNodeInfo()?.contentDescription?.toString()
+            }
+            assertEquals(
+                "a latched Ctrl reaches no node a screen reader stops on, so a user who " +
+                    "has swiped away from page 1 is told the page and not the modifier",
+                context.getString(R.string.key_page_indicator_held, 1, pageCount, "Ctrl"),
+                held,
+            )
+        }
+    }
+
+    @Test
+    fun aResizeRepacksTheRowWithoutSpendingALatchedModifier() {
+        // MainActivity handles smallestScreenSize itself, so dropping a session
+        // into a split-screen pane resizes the window without recreating the
+        // activity, and nothing else rebuilds this row. Until it repacked, keys
+        // sized for a full-screen window went on dividing a pane half that wide,
+        // which is the touch target KeyPages.forSmallestWidthDp exists to hold.
+        //
+        // Off the JVM for the reason the whole file is: the row's initialiser
+        // reaches resources on its first line, and this drives a real adapter
+        // swap through a real ViewPager2.
+        inWindow({ ctx -> ExtraKeyRow(ctx) }) { row, _ ->
+            val band = indicator(row)
+            assertNotNull("the row publishes no page indicator at all", band)
+
+            val before = KeyPages
+                .forSmallestWidthDp(row.resources.configuration.smallestScreenWidthDp)
+            // Whichever of the two packings this device is not already showing,
+            // so the resize below has something to rebuild whatever it runs on.
+            val targetDp = if (before.size == KeyPages.defaults.size) 320 else 600
+            val after = KeyPages.forSmallestWidthDp(targetDp)
+            assertTrue(
+                "control: ${targetDp}dp packs into ${after.size} pages exactly like this " +
+                    "device does, so nothing below exercises a rebuild",
+                after.size != before.size,
+            )
+
+            val ctrl = findKey(row, "Ctrl")
+            assertNotNull("the row never bound its first page, so nothing can be latched", ctrl)
+            onMain { ctrl!!.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
+
+            val resized = Configuration(row.resources.configuration).apply {
+                smallestScreenWidthDp = targetDp
+            }
+            onMain { row.dispatchConfigurationChanged(resized) }
+            // The adapter swap requests a layout; the pages are bound on the
+            // traversal that follows, not inside the call above.
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+
+            var held: String? = null
+            onMain { held = band!!.createAccessibilityNodeInfo()?.contentDescription?.toString() }
+            assertEquals(
+                "the resized row still reports the page count it was built with, so every " +
+                    "key on it is dividing a window it was not sized for",
+                context.getString(R.string.key_page_indicator_held, 1, after.size, "Ctrl"),
+                held,
+            )
+
+            val latched = findKey(row, "Ctrl")
+            assertNotNull("the rebuilt row never bound its first page", latched)
+            assertTrue(
+                "the rebuild dropped the toggle map, so the row paints Ctrl idle while " +
+                    "KeyInjector still holds it and the next key goes out as a chord",
+                latched!!.isToggleActive,
+            )
+        }
     }
 
     @Test

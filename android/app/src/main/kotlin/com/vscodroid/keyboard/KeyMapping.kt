@@ -144,12 +144,24 @@ object KeyMapping {
      * Quotes a string as a JS double-quoted literal. The table holds both `"` and `\`
      * as keys, so escaping is load-bearing rather than defensive: without it the
      * generated object is a syntax error and the whole interceptor fails to install.
+     *
+     * The line terminators are covered too, and that half is latent rather than
+     * live: no key or alternate carries one today. It is here because the
+     * failure mode is the one this function was written to fix, a SyntaxError
+     * reported to a callback nothing reads, so the next key added would inherit
+     * it silently. U+2028 and U+2029 need no escape: they have been legal inside
+     * a string literal since ES2019, which every WebView this app supports is
+     * well past.
      */
     internal fun jsQuote(s: String): String = buildString {
         append('"')
         for (c in s) {
-            if (c == '"' || c == '\\') append('\\')
-            append(c)
+            when (c) {
+                '"', '\\' -> { append('\\'); append(c) }
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                else -> append(c)
+            }
         }
         append('"')
     }
