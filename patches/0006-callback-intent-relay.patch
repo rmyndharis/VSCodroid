@@ -1,4 +1,4 @@
-Relay the OAuth callback into the app with an intent:// navigation.
+Relay the OAuth callback into the app, and take Microsoft's name off the page.
 
 callback.html hands the result back by writing to localStorage, which the
 workbench then reads. That never happens here: the callback lands in the system
@@ -13,10 +13,30 @@ timeout, because the activation that permits the navigation is gone by the time
 one would fire. The localStorage write is left in place so the flow still works
 if the page is ever opened in the WebView itself.
 
+The naming matters more here than anywhere else in the tree, which is why it is
+in this patch rather than in 0011: this is the one page of the product that is
+rendered by the user's own browser rather than inside the app, at the end of every
+extension sign-in, with a title in the browser's tab bar.
+
+The third piece of Microsoft branding on this page is not here. Its `.branding`
+rule carries the VS Code logo as a 150 KB base64 PNG on one line, and a diff that
+removes a line has to quote it. The Branding stage of scripts/build-vscode-oss.sh
+strips it instead, and verify-server-tree.py asserts on both sides of the pivot
+that the packaged page carries no embedded image and no Microsoft product name.
+
 diff --git a/src/vs/code/browser/workbench/callback.html b/src/vs/code/browser/workbench/callback.html
-index 4f54d4d..abdefec 100644
+index 4f54d4d1..fa0adede 100644
 --- a/src/vs/code/browser/workbench/callback.html
 +++ b/src/vs/code/browser/workbench/callback.html
+@@ -7,7 +7,7 @@
+ 		<!-- Disable pinch zooming -->
+ 		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+ 
+-		<title>Visual Studio Code</title>
++		<title>VSCodroid</title>
+ 
+ 		<!-- Scripts -->
+ 		<script>
 @@ -62,6 +62,22 @@
  			}
  
@@ -40,3 +60,12 @@ index 4f54d4d..abdefec 100644
  		</script>
  
  		<!-- Styling -->
+@@ -112,7 +128,7 @@
+ 	</head>
+ 	<body>
+ 		<span class="branding">
+-			Visual Studio Code
++			VSCodroid
+ 		</span>
+ 		<div class="message-container">
+ 			<div class="message">

@@ -307,6 +307,192 @@ def main(tree):
               "workbench.css does not hide Accounts/Manage",
               "built from a ref that predates the 2026-08-15 un-hide")
 
+    # Everything below asserts an effect of a patch or of a build-vscode-oss.sh
+    # stage, so all of it is answered by one prior question: was this tree built
+    # from what this checkout holds? A tree that predates the work is not a tree
+    # whose branding was lost, and the two have to read differently or the next
+    # person spends an afternoon hunting a regression that never happened.
+    #
+    # The signal is the manifest build-vscode-oss.sh writes into every tree it
+    # produces (check-patch-fingerprints.py --write-manifest). Presence only:
+    # which patches, and whether they have been edited since, is the sharper
+    # question check-patch-fingerprints.py answers, and it needs patches/, which
+    # this script deliberately does not take -- it also runs inside the build
+    # container against a tree that is not next to a checkout.
+    #
+    # Absent, the patch-dependent checks are skipped rather than run and reported
+    # as failures. They cannot pass on such a tree, so running them adds nine FAIL
+    # lines (one for callback.html's branding, eight nls phrases) that all
+    # describe the same one fact, each of them phrased as a regression.
+    #
+    # Stated in both directions. A silent pass left the reader of a green run
+    # with no line saying the provenance question had been asked at all, which is
+    # the one question that reframes every check below it. The label is worded as
+    # presence for the same reason the paragraph above gives: this script never
+    # sees patches/, so it cannot say WHICH patches, only that the tree names a
+    # set. check-patch-fingerprints.py is where that claim is computed.
+    manifest = present(tree / "vscodroid-patches.json", "vscodroid-patches.json")
+    if manifest:
+        check(True, "the tree records which patches built it")
+    elif manifest is False and os.environ.get("ALLOW_UNADAPTED"):
+        # A deliberately unadapted build has no patches to record, so demanding
+        # the manifest here failed the build for doing exactly what was asked --
+        # the Patch manifest step and the fingerprint check next to it already
+        # obey this variable, and this sibling, which is what actually decides
+        # the exit code, was left behind. Downgraded rather than skipped so the
+        # tree's state still appears in the output.
+        #
+        # Safe on the fetch side, where the variable means nothing: a tree with
+        # no manifest is refused there by check-patch-fingerprints.py, which
+        # fetch-vscode-oss.sh and the Gradle packaging gate both run and which
+        # honours no such escape hatch.
+        print("  note    no vscodroid-patches.json, and ALLOW_UNADAPTED is set: "
+              "this tree was built without the patches on purpose")
+    elif manifest is False:
+        check(False, "the tree records which patches built it",
+              "no vscodroid-patches.json at the tree root, so this tree predates "
+              "them (or was built with ALLOW_UNADAPTED). The callback branding "
+              "and nls checks are skipped: they describe what those patches do, "
+              "and nothing here says the branding was lost. Rebuild the server "
+              "with the \"Build Code - OSS server\" workflow and refetch.")
+
+    # Two redistribution claims that hold for a tree of ANY age, so they run
+    # before the gate below rather than inheriting it. Neither is a patch effect:
+    # build-vscode-oss.sh's "Callback page" stage strips the embedded logo and its
+    # Prune stage strips the sourceMappingURL comments, and both sit outside the
+    # patches guard, so an ALLOW_UNADAPTED tree and a tarball predating the
+    # manifest are exactly the trees these two have something to say about. Below
+    # the gate they could only ever fire on a tree that already carried one.
+    callback = tree / "out/vs/code/browser/workbench/callback.html"
+    page = None
+    try:
+        if callback.exists():
+            page = callback.read_text(errors="replace")
+        else:
+            check(False, "out/vs/code/browser/workbench/callback.html exists",
+                  "the OAuth callback page is missing")
+    except OSError as e:
+        check(False, "callback.html is readable", str(e))
+    if page is not None:
+        # The VS Code logo travelled in this page as a 150 KB base64 PNG, and the
+        # page is rendered in the user's own browser at the end of every extension
+        # sign-in, so the image is displayed and redistributed rather than merely
+        # present. This is the half of the strip that runs on the fetch side,
+        # where nothing else would notice a tarball built before that stage.
+        check("data:image" not in page, "callback.html embeds no image",
+              "this is upstream's VS Code logo; it cannot be redistributed here")
+
+    # The minify task ends every bundle with a sourceMappingURL comment naming
+    # main.vscode-cdn.net. The .map files it points at are filtered out of the
+    # package, so what a device gets is a Microsoft service URL sitting inside a
+    # tree whose stated job is to carry none. build-vscode-oss.sh's Prune stage
+    # strips them; this is the half that runs on the fetch side, where a tarball
+    # built before that stage arrives with the right name and a digest that
+    # verifies. The strip's own assertion cannot cover that, and this one cannot
+    # cover a minifier that stops emitting the comment on its own line, so both
+    # exist: the build refuses what it could not strip, and this refuses what
+    # reached it unstripped either way.
+    #
+    # The whole tree, not the out/ subtree the strip walks. What is claimed here
+    # is an absence in a redistributed artifact, and scoping the walk to the
+    # subtree the strip touches made it a claim the walk could not check:
+    # measured on this tree, out/ carries the URL nowhere and
+    # extensions/copilot/dist/extension.js carries it once, as
+    # `await t.fetch("https://main.vscode-cdn.net/extensions/copilotChat.json")`.
+    # That is a live request to a Microsoft service rather than an inert
+    # sourceMappingURL comment, and it was the single occurrence in the tree that
+    # the narrow walk could not see.
+    #
+    # Copilot is exempted by name rather than by a filter that happens to miss
+    # it. The extension is Microsoft's own, it ships as the chat provider, and
+    # fetching its own configuration is what it does; there is no version of this
+    # tree that carries Copilot and not that URL. Stating the exception keeps the
+    # line true for everything this build produces, and a NEW file naming that
+    # host anywhere else now fails instead of being out of scope.
+    #
+    # That host only, which is why the label names it. The webview machinery
+    # names `vscode-cdn.net` hosts of its own and they are deliberate: measured
+    # with `grep -rhoE '[a-z0-9.*{}-]*vscode-cdn\.net'` over the packaged tree
+    # under android/app/src/main/assets/vscode-reh, 5 occurrences in 4 files
+    # outside extensions/copilot and not one of them `main.`, being the webview
+    # CSP `frame-src` entry in out/server-main.js, the `{{uuid}}.vscode-cdn.net`
+    # webviewContentExternalBaseUrlTemplate default in workbench.js, and the bare
+    # host that builds `vscode-resource.vscode-cdn.net` in workbench.js and in
+    # both extension host bundles. Those are the addresses
+    # VSCodroidWebViewClient's shouldInterceptRequest answers locally; the
+    # workbench hardcodes them and product.json cannot reach them, so a tree
+    # stripped of them would render no webview at all. Widening this walk to
+    # every `vscode-cdn.net` would fail every build there is.
+    #
+    # 11,749 .js/.css files, 217 MiB, 0.6s on the packaged tree. The walk above
+    # already listed them, so only the reads are new.
+    copilot = tree / "extensions/copilot"
+    carrying = []
+    for path in candidates:
+        # Regular files only, the same guard the ELF walk above applies and for
+        # the same two reasons: tar restores symlinks and special files, so a
+        # broken symlink named *.js would be read as a failure it is not, and a
+        # FIFO named *.js would block the gate on the open. The packaged tree has
+        # no symlinks today, which is why this is a guard rather than a fix.
+        try:
+            if not path.is_file() or path.is_symlink():
+                continue
+        except OSError as e:
+            check(False, f"{path.relative_to(tree)} could not be examined", str(e))
+            continue
+        if path.suffix not in (".js", ".css") or copilot in path.parents:
+            continue
+        try:
+            if b"main.vscode-cdn.net" in path.read_bytes():
+                carrying.append(str(path.relative_to(tree)))
+        except OSError as e:
+            check(False, f"{path.relative_to(tree)} could not be read", str(e))
+    check(not carrying,
+          "no sourceMappingURL host (main.vscode-cdn.net) outside the Copilot extension",
+          f"{len(carrying)} carrying main.vscode-cdn.net, "
+          f"starting with {', '.join(carrying[:3])}")
+
+    # Everything after this return depends on the patches, and a check appended
+    # after it inherits that whether or not it should. A check that a tree of ANY
+    # age must pass belongs ABOVE this line.
+    if not manifest:
+        return 1 if failed else 0
+
+    # Product naming outside product.json, which is where the branding overlay
+    # stops looking. Both of these are user-facing: the OAuth callback page is
+    # rendered in the user's own browser at the end of every extension sign-in,
+    # and the nls bundle carries the strings the workbench shows on its onboarding
+    # screen and after installing an extension.
+    #
+    # Asserted as absences of the exact strings patches 0006 and 0011 rewrite, not
+    # as a sweep for "VS Code": 140 other shipped strings mention Microsoft's
+    # product nominatively, describing its extension API and its gallery, and
+    # renaming those would make them false. See the header of patches/0011.
+    if page is not None:
+        check("Visual Studio Code" not in page, "callback.html is branded",
+              "the sign-in page the system browser renders still names Microsoft's product")
+
+    nls_bundle = tree / "out/nls.messages.js"
+    messages = None
+    try:
+        if nls_bundle.exists():
+            messages = nls_bundle.read_text(errors="replace")
+        else:
+            check(False, "out/nls.messages.js exists", "the string bundle is missing")
+    except OSError as e:
+        check(False, "nls.messages.js is readable", str(e))
+    if messages is not None:
+        for phrase in ("Welcome to VS Code",
+                       "Welcome to Visual Studio Code",
+                       "reload Visual Studio Code",
+                       "reloading VS Code",
+                       "Get Started with VS Code for the Web",
+                       "Setup VS Code Web",
+                       "VS Code accessible",
+                       "Setup VS Code Accessibility"):
+            check(phrase not in messages, f"no shipped string says {phrase!r}",
+                  "patch 0011 no longer covers it, or upstream reintroduced it elsewhere")
+
     return 1 if failed else 0
 
 

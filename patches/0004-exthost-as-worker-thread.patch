@@ -1,4 +1,5 @@
-Run the Extension Host as a worker_thread instead of a forked process.
+Run the Extension Host as a worker_thread instead of a forked process, and let a
+client reconnect reattach to it.
 
 Completes the pair started with the Pty Host. The Extension Host is the
 longest-lived fork the server makes, and on Android 12+ every fork spends one of
@@ -10,30 +11,159 @@ _canSendSocket is therefore forced off, which selects the named-pipe path VS Cod
 already uses on Windows: the host connects back over a pipe and the server
 bridges the two sockets itself, with no handle ever crossing the IPC boundary.
 
-That is not quite sufficient, and the gap is not in the plan this follows.
-_sendSocketToExtensionHost is unreachable on the initial connection once the flag
-is off, but acceptReconnection() calls it without checking the flag at all. Left
-alone, send(msg, socket) would report success while dropping the socket, and the
-host would wait for a connection that never arrives with nothing logged. It now
-refuses and says so, naming the process in the message -- which is also what
-keeps that parameter referenced once the body that used it is gone. Reconnecting
-after a WebView recreation consequently needs a fresh connection rather than a
-resumed one; that is a real limitation, recorded here rather than discovered
-later.
+The pipe path was never written to survive a reconnection, and that is the second
+half of this patch. Upstream ends the host's pipe socket when the client's socket
+closes, and the host treats that close as a shutdown and terminates. On a desktop
+the pipe path is a Windows --socket-path niche; here it is the only path, so every
+WebSocket drop killed every extension while the workbench itself looked healthy.
+Backgrounding the app for between one and five minutes is enough to reach it: the
+WebSocket goes, and the app does not force a reload below five minutes, so the
+client reconnects with the same reconnection token onto an extension host that is
+already gone.
+
+Splicing the two halves of the old stream back together does not work and is
+worth stating, because it is the obvious fix. The server is a byte pipe between
+two PersistentProtocol endpoints; when the client's socket dies, whatever the
+server had already read from the host and written into it is lost, and neither
+endpoint can replay it because neither knows a reconnection happened. Resuming
+the same stream onto a new socket hands the client's fresh ProtocolReader the
+tail of a message it never saw the head of.
+
+So the host redoes the handshake instead. The named pipe server stays listening
+rather than closing after the first connection; the server ends the host's socket
+when the client goes and the host dials the pipe again, calling
+beginAcceptReconnection / endAcceptReconnection / sendResume as it reattaches.
+That restarts its writer at a message boundary, replays what was not
+acknowledged, and sends the Resume the client is waiting for after the server's
+Pause. The client's own replay covers the other direction, and PersistentProtocol
+drops the duplicates. It is upstream's socket-path behaviour reached over a pipe.
+
+Two details that are load-bearing rather than tidy:
+
+The accepted pipe socket is paused whenever no client is attached. A socket with
+no 'data' listener is still flowing, so the bytes the host writes between its
+re-dial and the client's return would be emitted to nobody and dropped, which
+puts the hole back in a place nothing can see.
+
+The grace now lives on the server. Upstream leaves it to the host, which starts
+it when its own socket closes; here that close is the reconnect mechanism, so
+only the server knows a client is missing. It is capped at
+ReconnectionShortGraceTime rather than the three-hour default: an extension host
+is the most expensive thing this server holds, the app reloads the page outright
+past five minutes in the background, and a renderer crash orphans the connection
+under a token the client will never present again.
+
+Where the state machine lands, state by state. Worth writing down because a
+desync here presents as extensions silently dying, which is the same symptom as
+the bug being fixed, so the next reader has no way to tell them apart from the
+outside.
+
+Second and later reconnects. Each cycle ends where it began, so nothing
+accumulates: onClientGone clears _pipeStore, _clientDisconnected clears
+_connectionData and _extHostSocket before it ends the pipe, and the host's next
+dial is accepted into a null _extHostSocket. The host keeps one
+PersistentProtocol across all of them and calls beginAcceptReconnection per
+cycle, which is what upstream's socket path already does per reconnect.
+
+A reconnect after the grace has expired. It cannot arrive: _cleanResources fires
+onClose, the agent server deletes the connection, and the token is answered with
+"Unknown reconnection token (seen before)". The host learns it the same moment,
+from the other side: its socket is destroyed, it dials once more, the pipe server
+is already closed, and the failed dial terminates it instead of looping, because
+`reconnecting` is cleared only by a successful connect.
+
+A client that never comes back. _scheduleDisconnectTimeout is what disposes the
+host, and it is now the ONLY thing that can: the host no longer terminates itself
+when its socket closes, so nothing else would reap an orphan. It is armed from
+onClientGone, which is registered for every client that gets piped.
+
+Two clients on one reconnection token. acceptReconnection puts the older one
+through the same teardown an observed disconnect gets, then waits for the host's
+re-dial. Last one wins, one at a time, which is upstream's semantic as well.
+
+Two residuals, neither introduced here and neither closed here:
+
+If the client's socket closes between the WebSocket arriving and the host's first
+dial, no listener has been attached to it yet, so nothing observes the close and
+no grace is scheduled. Upstream has the same gap; what differs is that upstream's
+host eventually terminates itself where this one waits. Closing it means
+listening on connectionData.socket from the constructor rather than from
+_pipeSockets.
+
+The pipe stays listening for the life of the connection rather than closing after
+the first connect, so anything running as the app UID can dial it during a
+reconnect gap and be taken for the extension host. It crosses no boundary that is
+not already crossed, since the same UID can read the connection token out of the
+app's own files, but the window is wider than upstream's one dial at startup.
+
+MEASURED on an arm64 emulator (API 37) running this tree, both halves.
+
+Under the threshold, the client's socket has to actually go, and backgrounding
+alone does not do it there: the app holds a foreground service and never pauses
+the WebView, so the page keeps answering and the server logged no disconnect at
+all across 150s in the background. SIGSTOP on the app process reaches it, node
+being a separate process that keeps running while the client stops answering.
+Frozen 120s, past ProtocolConstants.TimeoutTime and inside the grace, then
+resumed: the same two connection ids reconnected, the ExtensionHostConnection
+logged "The client has reconnected", and the host was the same one, the server's
+pid and all three of its worker thread ids unchanged, still unchanged six and a
+half minutes later. The grace the teardown prints is 300000ms, the short one.
+
+One line in that log reads alarmingly and is not: acceptReconnection puts the
+stale socket through _clientDisconnected, so "will wait 300000ms for a
+reconnection before disposing" is printed two milliseconds AFTER "The client has
+reconnected". The clearTimeout on the next statement cancels it, which is what
+those six and a half minutes confirm. Worth moving the log line the next time
+this file is edited, since it is the first thing a reader chasing a disposal
+would find.
+
+Past the threshold, 330s in the background: MainActivity forced the reload, the
+old connection was disposed gracefully, host <1> exited with code 0, and <2> was
+launched two seconds later under fresh connection ids. No "Unknown reconnection
+token" page, and the old host's language server and file watcher went with it.
 
 diff --git a/src/vs/server/node/extensionHostConnection.ts b/src/vs/server/node/extensionHostConnection.ts
-index 06d614b..04286bc 100644
+index 06d614be..04793eac 100644
 --- a/src/vs/server/node/extensionHostConnection.ts
 +++ b/src/vs/server/node/extensionHostConnection.ts
-@@ -11,6 +11,7 @@ import { Disposable, DisposableStore, toDisposable } from '../../base/common/lif
+@@ -7,11 +7,13 @@ import * as cp from 'child_process';
+ import * as net from 'net';
+ import { VSBuffer } from '../../base/common/buffer.js';
+ import { Emitter, Event } from '../../base/common/event.js';
+-import { Disposable, DisposableStore, toDisposable } from '../../base/common/lifecycle.js';
++import { Disposable, DisposableStore } from '../../base/common/lifecycle.js';
  import { FileAccess } from '../../base/common/network.js';
  import { delimiter, join } from '../../base/common/path.js';
  import { IProcessEnvironment, isWindows } from '../../base/common/platform.js';
 +import { forkOrWorker } from '../../base/node/workerAsChildProcess.js';
  import { removeDangerousEnvVariables } from '../../base/common/processes.js';
++import { ProtocolConstants } from '../../base/parts/ipc/common/ipc.net.js';
  import { createRandomIPCHandle, NodeSocket, WebSocketNodeSocket } from '../../base/parts/ipc/node/ipc.net.js';
  import { IConfigurationService } from '../../platform/configuration/common/configuration.js';
-@@ -127,7 +128,11 @@ export class ExtensionHostConnection extends Disposable {
+ import { ILogService } from '../../platform/log/common/log.js';
+@@ -115,6 +117,21 @@ export class ExtensionHostConnection extends Disposable {
+ 	private _remoteAddress: string;
+ 	private _extensionHostProcess: cp.ChildProcess | null;
+ 	private _connectionData: ConnectionData | null;
++	/**
++	 * The pipe half of the connection, and the state that lets a client reconnect
++	 * reattach to the extension host that is already running.
++	 *
++	 * The named pipe server stays listening for the life of the connection rather
++	 * than closing after the first connection, because the host re-dials it every
++	 * time a client goes away. `_extHostSocket` is the accepted socket while a host
++	 * is attached, and it is paused whenever no client is: a socket with no 'data'
++	 * listener is still flowing, so anything the host wrote in the gap would be
++	 * emitted to nobody and lost.
++	 */
++	private _extHostNamedPipeServer: net.Server | null;
++	private _extHostSocket: net.Socket | null;
++	private _pipeStore: DisposableStore | null;
++	private _disconnectTimeout: Timeout | null;
+ 
+ 	constructor(
+ 		private readonly _reconnectionToken: string,
+@@ -127,11 +144,19 @@ export class ExtensionHostConnection extends Disposable {
  		@IConfigurationService private readonly _configurationService: IConfigurationService
  	) {
  		super();
@@ -46,7 +176,169 @@ index 06d614b..04286bc 100644
  		this._disposed = false;
  		this._remoteAddress = remoteAddress;
  		this._extensionHostProcess = null;
-@@ -190,14 +195,12 @@ export class ExtensionHostConnection extends Disposable {
+ 		this._connectionData = new ConnectionData(socket, initialDataChunk);
++		this._extHostNamedPipeServer = null;
++		this._extHostSocket = null;
++		this._pipeStore = null;
++		this._disconnectTimeout = null;
+ 		if (!this._canSendSocket && socket instanceof WebSocketNodeSocket) {
+ 			socket.setRecordInflateBytes(false);
+ 		}
+@@ -156,26 +181,53 @@ export class ExtensionHostConnection extends Disposable {
+ 		this._logService.error(`${this._logPrefix}${_str}`);
+ 	}
+ 
+-	private async _pipeSockets(extHostSocket: net.Socket, connectionData: ConnectionData): Promise<void> {
++	private _pipeSockets(extHostSocket: net.Socket, connectionData: ConnectionData): void {
+ 
+ 		const disposables = new DisposableStore();
+-		disposables.add(connectionData.socket);
+-		disposables.add(toDisposable(() => {
+-			if (!extHostSocket.destroyed && !extHostSocket.writableEnded) {
+-				extHostSocket.end();
+-			}
+-		}));
++		this._pipeStore = disposables;
+ 
+-		const stopAndCleanup = () => {
++		const unpipe = () => {
++			if (this._pipeStore === disposables) {
++				this._pipeStore = null;
++			}
+ 			disposables.dispose();
+ 		};
+ 
+-		disposables.add(connectionData.socket.onEnd(stopAndCleanup));
+-		disposables.add(connectionData.socket.onClose(stopAndCleanup));
+-
+-		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'end')(stopAndCleanup));
+-		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'close')(stopAndCleanup));
+-		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'error')(stopAndCleanup));
++		// The client going away no longer ends the host's socket from in here. That
++		// is what _clientDisconnected does, and it does it after taking the state
++		// down, so the host's re-dial cannot race the socket it is replacing.
++		const onClientGone = () => {
++			unpipe();
++			this._clientDisconnected();
++		};
++		disposables.add(connectionData.socket.onEnd(onClientGone));
++		disposables.add(connectionData.socket.onClose(onClientGone));
++
++		// The host going away does NOT take the client with it: it re-dials the pipe
++		// after every client disconnect, and if it really died its own exit handler
++		// runs _cleanResources.
++		//
++		// The client's socket is deliberately left attached, which is the one place
++		// this side is not the mirror of onClientGone. Disposing the store stops
++		// this class reading it, but a browser client is a WebSocketNodeSocket and
++		// its constructor put a 'data' listener on the NodeSocket underneath, so the
++		// socket keeps being drained and whatever arrives in the gap is dropped with
++		// nothing to notice -- the same hazard extHostSocket.pause() exists to avoid
++		// on the other side. What makes it safe is what reaching here means: the pipe
++		// is intra-process, the host being a worker_thread of this process, so a host
++		// socket closing under an attached client means the worker died, and its
++		// 'exit' handler runs _cleanResources, which ends the client socket right
++		// after. If this ever becomes a real inter-process pipe, the client has to
++		// come down here too.
++		const onExtHostGone = () => {
++			unpipe();
++			if (this._extHostSocket === extHostSocket) {
++				this._extHostSocket = null;
++			}
++		};
++		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'end')(onExtHostGone));
++		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'close')(onExtHostGone));
++		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'error')(onExtHostGone));
+ 
+ 		disposables.add(connectionData.socket.onData((e) => extHostSocket.write(e.buffer)));
+ 		disposables.add(Event.fromNodeEventEmitter<Buffer>(extHostSocket, 'data')((e) => {
+@@ -185,22 +237,108 @@ export class ExtensionHostConnection extends Disposable {
+ 		if (connectionData.initialDataChunk.byteLength > 0) {
+ 			extHostSocket.write(connectionData.initialDataChunk.buffer);
+ 		}
++
++		// Explicit, because _acceptExtHostPipe paused it: adding a 'data' listener
++		// only resumes a stream that was never paused on purpose.
++		extHostSocket.resume();
++	}
++
++	/**
++	 * Takes the pipe connection the extension host dials, and attaches it to the
++	 * client if there is one. Called for the first connection and for every re-dial
++	 * the host makes after a client goes away.
++	 */
++	private _acceptExtHostPipe(extHostSocket: net.Socket): void {
++		if (this._disposed || this._extHostSocket) {
++			// One host at a time. A second socket can only be a stale dial.
++			extHostSocket.destroy();
++			return;
++		}
++		// Paused until a client is attached. Left flowing, everything the host writes
++		// while it waits is emitted to no listener and dropped, and the protocol has
++		// no way to notice: it is the same stream, so the client would resume mid-way
++		// through a message that never arrived.
++		extHostSocket.pause();
++		this._extHostSocket = extHostSocket;
++		if (this._connectionData) {
++			this._pipeSockets(extHostSocket, this._connectionData);
++		}
++	}
++
++	/**
++	 * The client's socket closed. Take the pipe down so the host re-dials, and start
++	 * the clock on whether it is coming back.
++	 */
++	private _clientDisconnected(): void {
++		if (this._disposed) {
++			return;
++		}
++		if (this._connectionData) {
++			this._connectionData.socket.dispose();
++			this._connectionData = null;
++		}
++		const extHostSocket = this._extHostSocket;
++		this._extHostSocket = null;
++		if (extHostSocket && !extHostSocket.destroyed && !extHostSocket.writableEnded) {
++			// Ending it is what makes the reconnect work, rather than what breaks it.
++			// The two ends speak PersistentProtocol and this server is a byte pipe in
++			// the middle: whatever it read from the host and wrote into a socket that
++			// was already closing is gone, so resuming the same stream onto a new
++			// client socket would hand a fresh ProtocolReader the tail of a message it
++			// never saw the head of. Closing the pipe makes the host redo the
++			// reconnection handshake, which restarts its writer at a frame boundary
++			// and replays what was not acknowledged.
++			extHostSocket.end();
++		}
++		this._scheduleDisconnectTimeout();
++	}
++
++	/**
++	 * How long a disconnected client has to come back before the extension host is
++	 * disposed.
++	 *
++	 * Upstream leaves this to the host itself, which schedules the grace when its
++	 * own socket closes. On this path the host's socket closing is the reconnect
++	 * mechanism rather than the disconnect signal, so the decision has to be made
++	 * here, where the client is.
++	 *
++	 * Capped at the short grace rather than the full one. An extension host is the
++	 * most expensive thing this server holds, the app reloads the page outright
++	 * after five minutes in the background, and a renderer crash orphans this
++	 * connection under a token the client will never present again.
++	 */
++	private _scheduleDisconnectTimeout(): void {
++		if (this._disconnectTimeout || this._disposed) {
++			return;
++		}
++		const graceTime = Math.min(ProtocolConstants.ReconnectionShortGraceTime, this._environmentService.reconnectionGraceTime);
++		this._log(`The client has disconnected, will wait ${graceTime}ms for a reconnection before disposing.`);
++		this._disconnectTimeout = setTimeout(() => {
++			this._disconnectTimeout = null;
++			this._log(`The client did not reconnect in time.`);
++			this._cleanResources();
++		}, graceTime);
+ 	}
+ 
  	private async _sendSocketToExtensionHost(extensionHostProcess: cp.ChildProcess, connectionData: ConnectionData): Promise<void> {
  		// Make sure all outstanding writes have been drained before sending the socket
  		await connectionData.socketDrain();
@@ -58,16 +350,90 @@ index 06d614b..04286bc 100644
 -			socket = connectionData.socket.socket.socket;
 -		}
 -		extensionHostProcess.send(msg, socket);
-+		// Unreachable on the initial connection now that _canSendSocket is false,
-+		// but acceptReconnection() calls this without checking it. A worker_thread has
-+		// no channel that can carry a socket handle, and send() would drop it while
-+		// reporting success -- leaving the host waiting for a connection that never
-+		// arrives, with nothing logged. Refusing here at least says so.
++		// Unreachable now that _canSendSocket is false: the initial connection takes
++		// the pipe path and acceptReconnection re-pipes. A worker_thread has no
++		// channel that can carry a socket handle, and send() would drop it while
++		// reporting success, so this refuses rather than going quiet if the flag ever
++		// comes back.
 +		this._logError(`<${extensionHostProcess.pid}> Cannot hand a socket to a worker_thread Extension Host; the client must reconnect from scratch.`);
  	}
  
  	public shortenReconnectionGraceTimeIfNecessary(): void {
-@@ -287,7 +290,11 @@ export class ExtensionHostConnection extends Disposable {
++		// Inert on this path, and left in place rather than emptied so the name still
++		// matches the one ManagementConnection answers. The message is only listened
++		// for in the SOCKET branch of _createExtHostProtocol, which _canSendSocket =
++		// false makes unreachable; the pipe branch the host takes instead has no grace
++		// runners at all, because the grace moved to this side of the pipe with
++		// _scheduleDisconnectTimeout. Nothing here needs rescheduling either: that
++		// timeout is already capped at the short grace this message exists to ask for.
+ 		if (!this._extensionHostProcess) {
+ 			return;
+ 		}
+@@ -218,13 +356,32 @@ export class ExtensionHostConnection extends Disposable {
+ 		}
+ 		const connectionData = new ConnectionData(_socket, initialDataChunk);
+ 
+-		if (!this._extensionHostProcess) {
+-			// The extension host didn't even start up yet
+-			this._connectionData = connectionData;
+-			return;
++		// A reconnection can arrive while the previous client socket is still open,
++		// which is what a stale TCP connection looks like from in here. Put the old
++		// one through the same teardown an observed disconnect gets rather than
++		// attaching a second pipe on top of it: the host's socket carries one
++		// PersistentProtocol stream and cannot be spliced onto a different client
++		// halfway through, so it has to close and re-dial either way.
++		if (this._pipeStore || this._connectionData) {
++			if (this._pipeStore) {
++				this._pipeStore.dispose();
++				this._pipeStore = null;
++			}
++			this._clientDisconnected();
++		}
++
++		if (this._disconnectTimeout) {
++			clearTimeout(this._disconnectTimeout);
++			this._disconnectTimeout = null;
+ 		}
+ 
+-		this._sendSocketToExtensionHost(this._extensionHostProcess, connectionData);
++		// Covers the host that has not started up yet and the host that is between
++		// pipe connections alike: in both, _extHostSocket is null and the socket is
++		// picked up by _acceptExtHostPipe as soon as the host dials.
++		this._connectionData = connectionData;
++		if (this._extHostSocket) {
++			this._pipeSockets(this._extHostSocket, connectionData);
++		}
+ 	}
+ 
+ 	private _cleanResources(): void {
+@@ -233,6 +390,25 @@ export class ExtensionHostConnection extends Disposable {
+ 			return;
+ 		}
+ 		this._disposed = true;
++		if (this._disconnectTimeout) {
++			clearTimeout(this._disconnectTimeout);
++			this._disconnectTimeout = null;
++		}
++		if (this._pipeStore) {
++			this._pipeStore.dispose();
++			this._pipeStore = null;
++		}
++		// Closed before the socket is destroyed, so a host that reacts to the close
++		// by dialling again is refused by the operating system rather than accepted
++		// and dropped in a loop.
++		if (this._extHostNamedPipeServer) {
++			this._extHostNamedPipeServer.close();
++			this._extHostNamedPipeServer = null;
++		}
++		if (this._extHostSocket) {
++			this._extHostSocket.destroy();
++			this._extHostSocket = null;
++		}
+ 		if (this._connectionData) {
+ 			this._connectionData.socket.end();
+ 			this._connectionData = null;
+@@ -287,7 +463,11 @@ export class ExtensionHostConnection extends Disposable {
  			if (this._configurationService.getValue<boolean>('extensions.supportNodeGlobalNavigator')) {
  				args.push('--supportGlobalNavigator');
  			}
@@ -80,3 +446,98 @@ index 06d614b..04286bc 100644
  			const pid = this._extensionHostProcess.pid;
  			this._log(`<${pid}> Launched Extension Host Process.`);
  
+@@ -313,9 +493,13 @@ export class ExtensionHostConnection extends Disposable {
+ 			});
+ 
+ 			if (extHostNamedPipeServer) {
++				// Kept listening instead of closed after the first connection. The host
++				// re-dials this pipe every time a client goes away, which is how it
++				// survives a reconnection without a socket handle ever crossing the
++				// worker boundary.
++				this._extHostNamedPipeServer = extHostNamedPipeServer;
+ 				extHostNamedPipeServer.on('connection', (socket) => {
+-					extHostNamedPipeServer.close();
+-					this._pipeSockets(socket, this._connectionData!);
++					this._acceptExtHostPipe(socket);
+ 				});
+ 			} else {
+ 				const messageListener = (msg: IExtHostReadyMessage) => {
+diff --git a/src/vs/workbench/api/node/extensionHostProcess.ts b/src/vs/workbench/api/node/extensionHostProcess.ts
+index 06a165e7..a150d974 100644
+--- a/src/vs/workbench/api/node/extensionHostProcess.ts
++++ b/src/vs/workbench/api/node/extensionHostProcess.ts
+@@ -275,17 +275,64 @@ function _createExtHostProtocol(): Promise<IMessagePassingProtocol> {
+ 
+ 		return new Promise<PersistentProtocol>((resolve, reject) => {
+ 
+-			const socket = net.createConnection(pipeName, () => {
+-				socket.removeListener('error', reject);
+-				const protocol = new PersistentProtocol({ socket: new NodeSocket(socket, 'extHost-renderer') });
+-				protocol.sendResume();
+-				resolve(protocol);
+-			});
+-			socket.once('error', reject);
++			// The pipe closing is a reconnect, not a shutdown.
++			//
++			// On Android the extension host is a worker_thread, so the server cannot
++			// hand it a socket over IPC and always takes this pipe path. The server
++			// ends the pipe whenever the client's WebSocket drops, because it is only a
++			// byte pipe in the middle and cannot replay what it read from here and
++			// wrote into a socket that was already closing. Terminating on that, which
++			// is all this path used to do, killed every extension on any WebSocket drop
++			// -- backgrounding the app for a minute was enough.
++			//
++			// Dialling again immediately is deliberate even though no client may be
++			// attached yet: the reconnection handshake restarts this end's writer at a
++			// message boundary and replays what was not acknowledged, and the server
++			// holds those bytes paused until a client arrives. The server disposes this
++			// connection if one does not, so there is no unbounded wait here.
++			let protocol: PersistentProtocol | null = null;
++			let reconnecting = false;
+ 
+-			socket.on('close', () => {
+-				onTerminate('renderer closed the socket');
+-			});
++			const connect = () => {
++				const onError = (err: Error) => {
++					if (protocol) {
++						// The pipe is gone for good; the server closes it before it
++						// disposes the connection.
++						onTerminate(`could not reattach to the server: ${err.message}`);
++					} else {
++						reject(err);
++					}
++				};
++
++				const socket = net.createConnection(pipeName, () => {
++					socket.removeListener('error', onError);
++					if (protocol) {
++						reconnecting = false;
++						protocol.beginAcceptReconnection(new NodeSocket(socket, 'extHost-renderer'), null);
++						protocol.endAcceptReconnection();
++						protocol.sendResume();
++					} else {
++						protocol = new PersistentProtocol({ socket: new NodeSocket(socket, 'extHost-renderer') });
++						protocol.sendResume();
++						resolve(protocol);
++					}
++				});
++				socket.once('error', onError);
++
++				socket.on('close', () => {
++					if (!protocol) {
++						onTerminate('renderer closed the socket');
++						return;
++					}
++					if (reconnecting) {
++						return;
++					}
++					reconnecting = true;
++					connect();
++				});
++			};
++
++			connect();
+ 		});
+ 	}
+ }

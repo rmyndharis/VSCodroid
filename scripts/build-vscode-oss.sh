@@ -102,7 +102,7 @@ WORK="${WORK:-/work}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SRC="$WORK/vscode"
-# gulpfile.reh.js: BUILD_ROOT = path.dirname(REPO_ROOT), and destinationFolderName
+# gulpfile.reh.ts: BUILD_ROOT = path.dirname(REPO_ROOT), and destinationFolderName
 # carries no `min` suffix: the min and non-min variants share this directory.
 OUT="$WORK/vscode-reh-web-linux-$ARCH"
 
@@ -280,90 +280,6 @@ else
     exit 1
 fi
 
-step "Branding"
-# Skippable so the stage can be run bare when isolating a build problem, but only
-# on purpose: an unbranded tree carries Microsoft's product name and icons, which
-# is exactly what this build exists to avoid shipping.
-BRANDING="${BRANDING:-$REPO_ROOT/branding}"
-if [ -d "$BRANDING" ]; then
-    # Restore what this stage overwrites before overwriting it. The overlay is
-    # applied with update(), so on a reused work volume it merges into the
-    # previous run's output, which means a key REMOVED from the overlay stays in
-    # the file forever, and the stage silently stops matching what it declares.
-    # That cost three build attempts: extensionsGallery was dropped from the
-    # overlay and the build kept downloading builtin extensions from Open VSX.
-    git -C "$SRC" checkout -- product.json resources/server/ \
-        src/vs/workbench/browser/media/code-icon.svg \
-        src/vs/workbench/browser/parts/editor/media/ 2>/dev/null || true
-    python3 - "$BRANDING/product.json" "$SRC/product.json" <<'PY'
-import json, sys
-
-overlay_path, product_path = sys.argv[1], sys.argv[2]
-overlay = json.load(open(overlay_path))
-product = json.load(open(product_path))
-
-removed = [k for k in overlay.get("remove", []) if product.pop(k, None) is not None]
-product.update(overlay.get("set", {}))
-
-# Two spaces and a trailing newline: this file is read by humans when a build
-# behaves oddly, and gulp only cares that it parses.
-with open(product_path, "w") as f:
-    json.dump(product, f, indent=2)
-    f.write("\n")
-
-print(f"  product.json: {len(overlay.get('set', {}))} set, {len(removed)} removed, {len(product)} keys")
-for key in ("nameLong", "applicationName", "urlProtocol"):
-    print(f"    {key} = {product[key]}")
-PY
-
-    # gulpfile.reh.js:343-351 copies these four into the reh-web package as they
-    # are. Upstream they are Microsoft's VS Code icon and name, which must not
-    # travel with this app. The filenames are fixed by that same gulp task.
-    #
-    # Fatal, not a warning. "Keeping upstream" here means shipping Microsoft's
-    # icon and name inside the APK, which is the exposure this whole stage
-    # exists to remove -- the stage already refuses to run when the branding
-    # directory is absent, and a single file renamed or deleted put the same
-    # artwork in the package through a green build.
-    for asset in manifest.json code-192.png code-512.png favicon.ico; do
-        if [ ! -f "$BRANDING/server/$asset" ]; then
-            echo "  ERROR: $BRANDING/server/$asset is missing" >&2
-            echo "  gulpfile.reh.js copies these four into the package as they are, so" >&2
-            echo "  the alternative to ours is Microsoft's. Restore the file, or remove" >&2
-            echo "  it from this list if the packaging stopped using it." >&2
-            exit 1
-        fi
-        cp "$BRANDING/server/$asset" "$SRC/resources/server/$asset"
-        echo "  resources/server/$asset"
-    done
-
-    # Two more marks live outside resources/server, inside the workbench bundle:
-    # the titlebar app icon and the empty-editor watermark. One theme-agnostic
-    # letterpress stands in for upstream's four themed variants.
-    if [ ! -f "$BRANDING/workbench/code-icon.svg" ] || [ ! -f "$BRANDING/workbench/letterpress.svg" ]; then
-        echo "  ERROR: $BRANDING/workbench is incomplete" >&2
-        echo "  code-icon.svg is the titlebar mark and letterpress.svg the empty-editor" >&2
-        echo "  watermark. Upstream's are the VS Code logo, which is copyrighted and" >&2
-        echo "  cannot travel in this APK. Both files are required." >&2
-        exit 1
-    fi
-    cp "$BRANDING/workbench/code-icon.svg" \
-        "$SRC/src/vs/workbench/browser/media/code-icon.svg"
-    echo "  src/vs/workbench/browser/media/code-icon.svg"
-    for variant in dark hcDark hcLight light; do
-        cp "$BRANDING/workbench/letterpress.svg" \
-            "$SRC/src/vs/workbench/browser/parts/editor/media/letterpress-$variant.svg"
-    done
-    echo "  src/vs/workbench/browser/parts/editor/media/letterpress-{dark,hcDark,hcLight,light}.svg"
-elif [ -n "${ALLOW_UNADAPTED:-}" ]; then
-    echo "  no branding at $BRANDING, building unbranded (ALLOW_UNADAPTED set)"
-else
-    echo "  ERROR: no branding at $BRANDING" >&2
-    echo "  The tree would carry Microsoft's name and icons." >&2
-    echo "  Set ALLOW_UNADAPTED=1 to build one deliberately." >&2
-    exit 1
-fi
-
 step "Dependencies (npm ci)"
 # Around 3 GB over the wire, and a single reset anywhere in it fails the whole
 # stage, which then costs another full download to retry. npm's own retry only
@@ -384,6 +300,201 @@ for attempt in 1 2 3; do
 done
 elapsed $(( SECONDS - t0 ))
 du -sh node_modules remote/node_modules 2>/dev/null | sed 's/^/  /'
+
+
+# Its own stage, and its position is load-bearing: after the Dependencies stage,
+# before Branding. Measured on the artifact rather than argued: with the strip
+# ahead of that stage, out/vs/code/browser/workbench/callback.html shipped at
+# 157034 bytes still matching data:image while this stage printed that it had
+# removed one; with the strip below, 3729 bytes and no match. What undoes an
+# earlier write to src/ has not been established and is deliberately not named
+# here, because the file 157034 restores to is the PATCHED one rather than
+# upstream's 156200, which no explanation offered so far accounts for. The
+# ordering and the outcome are what is established, and Verify asserts the
+# outcome. Before Branding because that stage's restore list must not name this
+# file (see the note there).
+step "Callback page"
+# The OAuth callback page carries the VS Code logo as a base64 PNG on a single
+# 150 KB line of CSS. That page is rendered by the user's own browser at the
+# end of every extension sign-in, so the image is redistributed and displayed
+# rather than merely present.
+#
+# Stripped here rather than in patches/0006, which already edits this file for
+# its name and its title, because a diff that removes a line has to quote it,
+# and a 150 KB line in a patch is a patch nobody can read. The assertion is on
+# the outcome rather than on the count, so running this stage twice on a reused
+# work volume is not an error while a page that still embeds an image is.
+#
+# Unconditional, unlike Patches and Branding: an ALLOW_UNADAPTED tree still must
+# not redistribute the logo, so this stage has no guard to skip it.
+python3 - "$SRC/src/vs/code/browser/workbench/callback.html" <<'PY'
+import re, sys
+
+path = sys.argv[1]
+html = open(path, encoding="utf-8").read()
+html, n = re.subn(r'^[ \t]*background-image:[ \t]*url\("data:image[^"]*"\);\n', "", html, flags=re.M)
+if "data:image" in html:
+    sys.exit("  ERROR: callback.html still embeds an image after the strip")
+open(path, "w", encoding="utf-8").write(html)
+print(f"  src/vs/code/browser/workbench/callback.html: {n} embedded image removed")
+PY
+
+# Branding runs after the Dependencies stage. Measured on two clean-volume builds
+# that differed in nothing else: with this stage ahead of the install the
+# packaged workbench carried upstream's code-icon.svg (559 bytes, fill #167abf)
+# and upstream's letterpress artwork byte for byte, while the stage printed both
+# paths as branded; with it below, both are byte-identical to branding/.
+# product.json and resources/server/ survived either way, which is why the name
+# looked right, only the artwork was wrong, and nobody caught it until someone
+# looked at the editor.
+#
+# No mechanism is asserted for what undoes an earlier write to src/, because none
+# offered so far survives its own evidence: the Patches stage applies 0006 to
+# callback.html before this point and that patch is present in the packaged tree.
+# The constraint the measurement supports is enough, and it is the only thing
+# this comment claims: the overlay has to be the last thing to touch src/ before
+# the bundler reads it. Verify compares all seven artwork files against branding/
+# so each build proves the outcome rather than inheriting this reasoning.
+step "Branding"
+# Skippable so the stage can be run bare when isolating a build problem, but only
+# on purpose: an unbranded tree carries Microsoft's product name and icons, which
+# is exactly what this build exists to avoid shipping.
+BRANDING="${BRANDING:-$REPO_ROOT/branding}"
+if [ -d "$BRANDING" ]; then
+    # Restore what this stage overwrites before overwriting it. The overlay is
+    # applied with update(), so on a reused work volume it merges into the
+    # previous run's output, which means a key REMOVED from the overlay stays in
+    # the file forever, and the stage silently stops matching what it declares.
+    # That cost three build attempts: extensionsGallery was dropped from the
+    # overlay and the build kept downloading builtin extensions from Open VSX.
+    #
+    # Fatal rather than silent. `|| true` here meant that an upstream rename of
+    # any of these paths made the restore a no-op, and on a reused work volume
+    # the overlay would then merge into the previous run's file -- the exact
+    # failure the paragraph above describes, reintroduced through the fix for it.
+    #
+    # The src/ entries are redundant while patches exist, since the Patches stage
+    # resets src/ and build/ wholesale earlier in this script; they are what
+    # covers an ALLOW_UNADAPTED build, where that stage does nothing at all.
+    #
+    # callback.html is deliberately NOT in this list. Two stages above own that
+    # file: patch 0006 rewrites it for the intent:// relay and the Callback page
+    # stage strips its embedded logo. Checking it out here would silently undo
+    # both, shipping a callback page with no relay, which means every extension
+    # sign-in completes in the browser and never returns to the app, and putting
+    # the 150 KB image back. It needs no reset of its own: the strip asserts its
+    # outcome rather than its match count, so a second run over an
+    # already-stripped file is a pass rather than an error.
+    git -C "$SRC" checkout -- product.json resources/server/ \
+        src/vs/workbench/browser/media/code-icon.svg \
+        src/vs/workbench/browser/parts/editor/media/ \
+        src/vs/sessions/contrib/chat/browser/media/ || {
+        echo "  ERROR: could not restore this stage's own targets (see git's message above)" >&2
+        echo "  One of those paths has moved upstream. Point this line at the new one" >&2
+        echo "  before building: without the restore the overlay merges into the" >&2
+        echo "  previous run's file and stops matching what it declares." >&2
+        exit 1
+    }
+    python3 - "$BRANDING/product.json" "$SRC/product.json" <<'PY'
+import json, sys
+
+overlay_path, product_path = sys.argv[1], sys.argv[2]
+overlay = json.load(open(overlay_path))
+product = json.load(open(product_path))
+
+removed = [k for k in overlay.get("remove", []) if product.pop(k, None) is not None]
+# An entry naming a key upstream does not have pops nothing and used to be
+# invisible: only successful removals were counted, so a list could accumulate
+# keys dropped years ago with no signal. Reported rather than fatal, because a
+# remove entry is also insurance against upstream reintroducing a key.
+inert = [k for k in overlay.get("remove", []) if k not in removed]
+product.update(overlay.get("set", {}))
+
+# Two spaces and a trailing newline: this file is read by humans when a build
+# behaves oddly, and gulp only cares that it parses.
+with open(product_path, "w") as f:
+    json.dump(product, f, indent=2)
+    f.write("\n")
+
+print(f"  product.json: {len(overlay.get('set', {}))} set, {len(removed)} removed, {len(product)} keys")
+if inert:
+    print(f"    remove entries that matched nothing: {', '.join(inert)}")
+for key in ("nameLong", "applicationName", "urlProtocol"):
+    print(f"    {key} = {product[key]}")
+PY
+
+    # gulpfile.reh.ts's packageTask copies these four into the reh-web package as
+    # they are. Upstream they are Microsoft's VS Code icon and name, which must not
+    # travel with this app. The filenames are fixed by that same gulp task.
+    #
+    # Fatal, not a warning. "Keeping upstream" here means shipping Microsoft's
+    # icon and name inside the APK, which is the exposure this whole stage
+    # exists to remove -- the stage already refuses to run when the branding
+    # directory is absent, and a single file renamed or deleted put the same
+    # artwork in the package through a green build.
+    for asset in manifest.json code-192.png code-512.png favicon.ico; do
+        if [ ! -f "$BRANDING/server/$asset" ]; then
+            echo "  ERROR: $BRANDING/server/$asset is missing" >&2
+            echo "  gulpfile.reh.ts copies these four into the package as they are, so" >&2
+            echo "  the alternative to ours is Microsoft's. Restore the file, or remove" >&2
+            echo "  it from this list if the packaging stopped using it." >&2
+            exit 1
+        fi
+        cp "$BRANDING/server/$asset" "$SRC/resources/server/$asset"
+        echo "  resources/server/$asset"
+    done
+
+    # More marks live outside resources/server, inside the workbench bundle: the
+    # titlebar app icon, the empty-editor watermark, and the chat sessions
+    # watermark. One theme-agnostic letterpress stands in for upstream's themed
+    # variants.
+    if [ ! -f "$BRANDING/workbench/code-icon.svg" ] || [ ! -f "$BRANDING/workbench/letterpress.svg" ]; then
+        echo "  ERROR: $BRANDING/workbench is incomplete" >&2
+        echo "  code-icon.svg is the titlebar mark and letterpress.svg the empty-editor" >&2
+        echo "  watermark. Upstream's are the VS Code logo, which is copyrighted and" >&2
+        echo "  cannot travel in this APK. Both files are required." >&2
+        exit 1
+    fi
+    # Each destination is checked before it is written, which the source side has
+    # had since the resources/server loop and this side never did. `cp` creates a
+    # file whether or not one was there, so an upstream rename left upstream's own
+    # logo in the bundle, wrote a stray file nothing reads, and printed the same
+    # success line as always. The Verify stage looks at resources/server only, so
+    # nothing downstream noticed either.
+    #
+    # letterpress-sessions-* is currently referenced by nothing in the packaged
+    # tree, and is replaced anyway: it is upstream's mark, it travels in the APK,
+    # and a version that starts rendering it would do so silently.
+    brand_over() {
+        local src="$1" dest="$2"
+        if [ ! -f "$SRC/$dest" ]; then
+            echo "  ERROR: $dest is not in this source tree" >&2
+            echo "  Upstream renamed or moved it. Copying over it would leave the VS Code" >&2
+            echo "  logo in the bundle and write a stray file nothing reads. Point this" >&2
+            echo "  line at the new path, or drop it if the artwork is gone." >&2
+            exit 1
+        fi
+        cp "$BRANDING/$src" "$SRC/$dest"
+        echo "  $dest"
+    }
+    brand_over workbench/code-icon.svg src/vs/workbench/browser/media/code-icon.svg
+    for variant in dark hcDark hcLight light; do
+        brand_over workbench/letterpress.svg \
+            "src/vs/workbench/browser/parts/editor/media/letterpress-$variant.svg"
+    done
+    for variant in dark light; do
+        brand_over workbench/letterpress.svg \
+            "src/vs/sessions/contrib/chat/browser/media/letterpress-sessions-$variant.svg"
+    done
+
+elif [ -n "${ALLOW_UNADAPTED:-}" ]; then
+    echo "  no branding at $BRANDING, building unbranded (ALLOW_UNADAPTED set)"
+else
+    echo "  ERROR: no branding at $BRANDING" >&2
+    echo "  The tree would carry Microsoft's name and icons." >&2
+    echo "  Set ALLOW_UNADAPTED=1 to build one deliberately." >&2
+    exit 1
+fi
 
 step "Build (core-ci)"
 # Two tasks, in the order Microsoft's own pipelines run them, and NOT the single
@@ -468,6 +579,69 @@ if [ -f "$OUT/node" ]; then
     echo "  removed the unusable GNU/Linux node binary ($size)"
 fi
 
+# The second copy of the workbench. packageTask ships both the browser entry
+# point (out/vs/code/browser/workbench/workbench.js, which workbench.html loads)
+# and the embedder bundle beside it, which is what the vscode-web npm package
+# exposes and which nothing in this tree names: a recursive grep over the whole
+# packaged output matches only the two files themselves. 18 MB of JavaScript and
+# 1.4 MB of CSS, 4.8 MiB of them compressed in the base module.
+for dead in out/vs/workbench/workbench.web.main.internal.js \
+            out/vs/workbench/workbench.web.main.internal.css; do
+    if [ -f "$OUT/$dead" ]; then
+        size=$(du -h "$OUT/$dead" | cut -f1)
+        rm -f "$OUT/$dead"
+        echo "  removed the unreferenced embedder bundle $dead ($size)"
+    fi
+done
+
+# Every minified bundle ends with a sourceMappingURL pointing at
+# main.vscode-cdn.net and naming the upstream commit, written by the minify
+# task's hardcoded URL. The .map files are filtered out of the package, so the
+# URL resolves to nothing this app ships; what it is, is a Microsoft service URL
+# left inside a redistributed artifact by a build whose stated job is to remove
+# them.
+python3 - "$OUT/out" <<'PY'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+# Whole lines, not the tail. The comment is written last today, but the Mobile
+# CSS stage appends after it, so anchoring on end-of-file would make this stage
+# order-dependent for no reason.
+pattern = re.compile(rb"(?m)^(?://|/\*)# sourceMappingURL=https://main\.vscode-cdn\.net/[^\n]*\n?")
+stripped = 0
+left = []
+for path in root.rglob("*"):
+    if path.suffix not in (".js", ".css") or not path.is_file() or path.is_symlink():
+        continue
+    data = path.read_bytes()
+    if b"main.vscode-cdn.net" not in data:
+        continue
+    new, n = pattern.subn(b"", data)
+    if n:
+        path.write_bytes(new)
+        stripped += n
+    if b"main.vscode-cdn.net" in new:
+        left.append(str(path.relative_to(root)))
+# The outcome, not the count, for the same reason the callback.html strip asserts
+# one: the pattern is line-anchored, and an esbuild that appends the comment to
+# the last line without a newline before it would match zero times, print
+# "stripped 0" and let every URL through with the build green. Measured on the
+# 1.133.0 package, after the prune above takes the two embedder bundles out of
+# this walk: 20 files carry the URL, 20 line-anchored hits, nothing left.
+#
+# Fatal rather than a warning even though the URL is inert on device. The tree is
+# redistributed, this stage is what makes the claim that the bundles this build
+# produces name main.vscode-cdn.net nowhere, and verify-server-tree.py asserts it
+# again on the fetch side, over the whole tree apart from the Copilot extension,
+# which fetches its own configuration from that host and is Microsoft's to begin
+# with -- so a tree that got past here would be refused there instead, one build
+# later and further from the cause.
+if left:
+    sys.exit(f"  ERROR: {len(left)} files still name main.vscode-cdn.net after the strip: "
+             f"{', '.join(left[:5])}")
+print(f"  stripped {stripped} sourceMappingURL comments pointing at main.vscode-cdn.net")
+PY
+
 # gulp's reh-web package task leaves both of these behind, and product.json still
 # names one of them in licenseFileName. Code - OSS is MIT, and MIT asks that the
 # copyright notice travel with the copies; this tree is redistributed inside
@@ -484,8 +658,13 @@ step "Mobile CSS"
 # the packaged workbench.css; the mutation lost its home when the download
 # script was deleted, so menus have been desktop-sized on device since. An
 # append rather than a patch because it is additive CSS against a generated
-# file - there is no source context to drift. Guarded idempotent so a reused
-# work volume does not accumulate copies.
+# file - there is no source context to drift.
+#
+# Unguarded, because the guard could not fire. It tested for the marker first, on
+# the theory that a reused work volume would carry the previous run's append; but
+# the -min-ci task series begins with a rimraf of the packaging destination, so
+# workbench.css is freshly generated on every run, warm volume or cold. The
+# assertion after the append is the half that earns its keep.
 #
 # This block also used to hide the Accounts/Manage section of the activity bar
 # (parity with the pre-pivot CSS). Removed 2026-08-15 on the owner's call: the
@@ -498,8 +677,7 @@ if [ ! -f "$WORKBENCH_CSS" ]; then
     echo "  ERROR: $WORKBENCH_CSS not in the package" >&2
     exit 1
 fi
-if ! grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS"; then
-    cat >> "$WORKBENCH_CSS" << 'CSSEOF'
+cat >> "$WORKBENCH_CSS" << 'CSSEOF'
 
 /* VSCodroid: Mobile-friendly hamburger menu overrides */
 .menubar-menu-items-holder { min-width: 280px !important; }
@@ -509,9 +687,24 @@ if ! grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS"; then
 .monaco-menu .keybinding { font-size: 12px !important; }
 .monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; }
 CSSEOF
-fi
 grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS" || { echo "  ERROR: append did not land" >&2; exit 1; }
 echo "  appended mobile menu overrides to workbench.css"
+
+step "Patch manifest"
+# What the fingerprints cannot see. A fingerprint row proves a patch arrived, not
+# which version of it did: editing an already-matching patch leaves every gate
+# green while the published server keeps the old behaviour, and the only thing
+# describing the new one is a CHANGELOG line. This records the sha256 of each
+# patch's diff into the tree, so the same check that reads the fingerprints can
+# also tell a tarball built from today's patches apart from one built from
+# yesterday's -- on the fetch side and in the Gradle packaging gate, neither of
+# which has any other signal.
+#
+# Same condition as the fingerprint check below: a deliberately unadapted build
+# has no patches to record.
+if [ -d "$PATCHES" ] && [ -n "$(ls -A "$PATCHES"/*.patch 2>/dev/null)" ]; then
+    python3 "$SCRIPT_DIR/check-patch-fingerprints.py" --write-manifest "$OUT" "$PATCHES"
+fi
 
 step "Verify"
 fail=0
@@ -586,7 +779,7 @@ PY
     # The icons themselves, not only the name inside manifest.json. The Branding
     # stage now refuses to run without them, but that proves what went into the
     # source tree; this proves what came out of the package, which is the tree
-    # that gets redistributed. gulpfile.reh.js copies resources/server across
+    # that gets redistributed. gulpfile.reh.ts copies resources/server across
     # verbatim, so byte-identical is the right bar -- measured against a
     # packaged tree, where all four match branding/server exactly.
     for asset in manifest.json code-192.png code-512.png favicon.ico; do
@@ -594,6 +787,38 @@ PY
             echo "  ok      resources/server/$asset is ours"
         else
             echo "  FAIL   resources/server/$asset is not the branded file"
+            fail=1
+        fi
+    done
+
+    # The artwork inside the workbench bundle, held to the same bar, and this is
+    # the half that was missing. resources/server was checked and the workbench
+    # was not, so a build that produced upstream's code-icon.svg (559 bytes, the
+    # VS Code mark) passed Verify green while the Branding stage printed the path
+    # as branded. That shipped once, and the only thing that noticed was a person
+    # looking at the editor.
+    #
+    # Byte-identical is the right bar here too: these are copied, not processed.
+    # Measured on a packaged tree, all seven match branding/workbench exactly.
+    for asset in \
+        out/vs/workbench/browser/media/code-icon.svg \
+        out/vs/workbench/browser/parts/editor/media/letterpress-dark.svg \
+        out/vs/workbench/browser/parts/editor/media/letterpress-hcDark.svg \
+        out/vs/workbench/browser/parts/editor/media/letterpress-hcLight.svg \
+        out/vs/workbench/browser/parts/editor/media/letterpress-light.svg \
+        out/vs/sessions/contrib/chat/browser/media/letterpress-sessions-dark.svg \
+        out/vs/sessions/contrib/chat/browser/media/letterpress-sessions-light.svg; do
+        case "$asset" in
+            *code-icon.svg) ours="$BRANDING/workbench/code-icon.svg" ;;
+            *)              ours="$BRANDING/workbench/letterpress.svg" ;;
+        esac
+        if [ ! -f "$OUT/$asset" ]; then
+            echo "  FAIL   $asset is missing from the package"
+            fail=1
+        elif cmp -s "$ours" "$OUT/$asset"; then
+            echo "  ok      $asset is ours"
+        else
+            echo "  FAIL   $asset is not the branded file"
             fail=1
         fi
     done

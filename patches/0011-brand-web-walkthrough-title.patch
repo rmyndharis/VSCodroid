@@ -1,20 +1,76 @@
-Brand the web Getting Started walkthrough.
+Rebrand the strings where the editor names itself Microsoft's product.
 
-The welcome page's featured walkthrough is the one piece of product naming
-that lives in source strings rather than product.json: on first launch the
-user is greeted with "Get Started with VS Code for the Web" over a page
-titled "Setup VS Code Web". The pre-pivot build rewrote both strings in the
-packaged nls.messages files; that mutation lost its home when the download
-script was deleted, so every Code - OSS build since has shipped Microsoft's
-naming on the very first screen a user reads.
+Product naming is not confined to product.json. Decoding the packaged
+out/nls.messages.js against out/nls.metadata.json finds 150 strings carrying
+"VS Code" or "Visual Studio Code", and a handful of them are the running
+application referring to ITSELF by Microsoft's name on a surface a user of this
+app reaches. Those are what this changes:
 
-The walkthrough's telemetry footer needs no equivalent edit: upstream gates
-it on productService.enableTelemetry, which the branding overlay sets to
-false, so it never renders here.
+  * the onboarding overlay's hero title and its dialog aria-label,
+    "Welcome to VS Code" and "Welcome to Visual Studio Code", which is the first
+    screen of the 2026 onboarding
+  * the three reload prompts after installing or uninstalling an extension,
+    "Please reload Visual Studio Code to enable it", and its plural and
+    uninstall variants
+  * the profile-switch confirmation, "Switching a profile requires reloading
+    VS Code"
+  * the featured web walkthrough, "Get Started with VS Code for the Web" over a
+    page titled "Setup VS Code Web", and the accessibility walkthrough beside it
 
+The other 140 are deliberately left alone, and the distinction is not squeamish:
+they are nominative references to Microsoft's product and its extension API,
+which is what they describe. "For VS Code extensions, specifies the VS Code
+version that the extension is compatible with" would become false if it named
+this app; "The categories used by the VS Code gallery" describes a gallery this
+app does not even use. Renaming those would trade a trademark question for an
+accuracy one, and add 140 lines that conflict on every version bump.
+
+Two more are left alone for a different reason. "Get started with VS Code" and
+"Setup VS Code" belong to the walkthrough gated `when: '!isWeb'`, which never
+renders in this build.
+
+verify-server-tree.py asserts the absence of each rebranded string in the
+packaged nls bundle, on both the build side and the fetch side, so an upstream
+revision that reintroduces one fails rather than shipping.
+
+The walkthrough's telemetry footer needs no equivalent edit: upstream gates it on
+productService.enableTelemetry, which the branding overlay sets to false, so it
+never renders here.
+
+diff --git a/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts b/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts
+index b04aae0a..9e3d53ce 100644
+--- a/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts
++++ b/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts
+@@ -956,8 +956,8 @@ class ExtensionsContributions extends Disposable implements IWorkbenchContributi
+ 				if (requireReload) {
+ 					notificationService.prompt(
+ 						Severity.Info,
+-						vsixs.length > 1 ? localize('InstallVSIXs.successReload', "Completed installing extensions. Please reload Visual Studio Code to enable them.")
+-							: localize('InstallVSIXAction.successReload', "Completed installing extension. Please reload Visual Studio Code to enable it."),
++						vsixs.length > 1 ? localize('InstallVSIXs.successReload', "Completed installing extensions. Please reload VSCodroid to enable them.")
++							: localize('InstallVSIXAction.successReload', "Completed installing extension. Please reload VSCodroid to enable it."),
+ 						[{
+ 							label: localize('InstallVSIXAction.reloadNow', "Reload Now"),
+ 							run: () => hostService.reload()
+diff --git a/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts b/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts
+index 83d08390..01d98080 100644
+--- a/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts
++++ b/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts
+@@ -941,7 +941,7 @@ export class UninstallAction extends ExtensionAction {
+ 
+ 		try {
+ 			await this.extensionsWorkbenchService.uninstall(this.extension);
+-			alert(localize('uninstallExtensionComplete', "Please reload Visual Studio Code to complete the uninstallation of the extension {0}.", this.extension.displayName));
++			alert(localize('uninstallExtensionComplete', "Please reload VSCodroid to complete the uninstallation of the extension {0}.", this.extension.displayName));
+ 		} catch (error) {
+ 			if (!isCancellationError(error)) {
+ 				this.dialogService.error(getErrorMessage(error));
+diff --git a/src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts b/src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts
+index 168a3d01..5a5b0d6b 100644
 --- a/src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts
 +++ b/src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts
-@@ -289,12 +289,12 @@
+@@ -288,13 +288,13 @@ export const walkthroughs: GettingStartedWalkthroughContent = [
+ 
  	{
  		id: 'SetupWeb',
 -		title: localize('gettingStarted.setupWeb.title', "Get Started with VS Code for the Web"),
@@ -29,3 +85,53 @@ false, so it never renders here.
  		content: {
  			type: 'steps',
  			steps: [
+@@ -375,12 +375,12 @@ export const walkthroughs: GettingStartedWalkthroughContent = [
+ 	{
+ 		id: 'SetupAccessibility',
+ 		title: localize('gettingStarted.setupAccessibility.title', "Get Started with Accessibility Features"),
+-		description: localize('gettingStarted.setupAccessibility.description', "Learn the tools and shortcuts that make VS Code accessible. Note that some actions are not actionable from within the context of the walkthrough."),
++		description: localize('gettingStarted.setupAccessibility.description', "Learn the tools and shortcuts that make VSCodroid accessible. Note that some actions are not actionable from within the context of the walkthrough."),
+ 		isFeatured: true,
+ 		icon: setupIcon,
+ 		when: CONTEXT_ACCESSIBILITY_MODE_ENABLED.key,
+ 		next: 'Setup',
+-		walkthroughPageTitle: localize('gettingStarted.setupAccessibility.walkthroughPageTitle', 'Setup VS Code Accessibility'),
++		walkthroughPageTitle: localize('gettingStarted.setupAccessibility.walkthroughPageTitle', 'Setup VSCodroid Accessibility'),
+ 		content: {
+ 			type: 'steps',
+ 			steps: [
+diff --git a/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts b/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
+index 0bcd4fcd..de9429a9 100644
+--- a/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
++++ b/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
+@@ -180,7 +180,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
+ 		this.overlay = append(container, $('.onboarding-a-overlay'));
+ 		this.overlay.setAttribute('role', 'dialog');
+ 		this.overlay.setAttribute('aria-modal', 'true');
+-		this.overlay.setAttribute('aria-label', localize('onboarding.a.aria', "Welcome to Visual Studio Code"));
++		this.overlay.setAttribute('aria-label', localize('onboarding.a.aria', "Welcome to VSCodroid"));
+ 
+ 		// Card
+ 		this.card = append(this.overlay, $('.onboarding-a-card'));
+@@ -479,7 +479,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
+ 		const content = append(wrapper, $('.onboarding-a-signin-content'));
+ 		const contentMain = append(content, $('.onboarding-a-signin-content-main'));
+ 		const title = append(contentMain, $('h2.onboarding-a-signin-title'));
+-		title.textContent = localize('onboarding.signIn.heroTitle', "Welcome to VS Code");
++		title.textContent = localize('onboarding.signIn.heroTitle', "Welcome to VSCodroid");
+ 
+ 		const subtitle = append(contentMain, $('p.onboarding-a-signin-subtitle'));
+ 		subtitle.textContent = localize('onboarding.signIn.heroSubtitle', "Sign in to use GitHub Copilot.");
+diff --git a/src/vs/workbench/services/userDataProfile/browser/userDataProfileManagement.ts b/src/vs/workbench/services/userDataProfile/browser/userDataProfileManagement.ts
+index 43da4619..68b0bbe4 100644
+--- a/src/vs/workbench/services/userDataProfile/browser/userDataProfileManagement.ts
++++ b/src/vs/workbench/services/userDataProfile/browser/userDataProfileManagement.ts
+@@ -197,7 +197,7 @@ export class UserDataProfileManagementService extends Disposable implements IUse
+ 		if (shouldRestartExtensionHosts) {
+ 			if (isRemoteWindow) {
+ 				const { confirmed } = await this.dialogService.confirm({
+-					message: reloadMessage ?? localize('reload message', "Switching a profile requires reloading VS Code."),
++					message: reloadMessage ?? localize('reload message', "Switching a profile requires reloading VSCodroid."),
+ 					primaryButton: localize('reload button', "&&Reload"),
+ 				});
+ 				if (confirmed) {

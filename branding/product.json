@@ -20,7 +20,16 @@
     "",
     "What is true of both: server.js merges shallowly, so a nested object it",
     "names replaces the built one wholesale. Nothing here may rely on a nested",
-    "key surviving that merge."
+    "key surviving that merge.",
+    "",
+    "sharedDataFolderName renames a folder nothing currently creates, and it is",
+    "set for that reason rather than in spite of it. Measured on the packaged",
+    "tree: appSharedDataHome, the one reader of the key, appears only as a getter",
+    "definition and a memoize registration in four bundles, with no caller",
+    "anywhere, and the browser workbench builds its own from userRoamingDataHome",
+    "without consulting the key at all. So no ~/.vscode-oss-shared exists on any",
+    "install and there is nothing to migrate; what this buys is that an upstream",
+    "version which starts calling that getter writes ~/.vscodroid-shared instead."
   ],
   "remove": [
     "webviewContentExternalBaseUrlTemplate",
@@ -54,6 +63,7 @@
     "dataFolderName": ".vscodroid",
     "serverApplicationName": "vscodroid-server",
     "serverDataFolderName": ".vscodroid-server",
+    "sharedDataFolderName": ".vscodroid-shared",
     "urlProtocol": "vscodroid",
     "quality": "stable",
     "linkProtectionTrustedDomains": [

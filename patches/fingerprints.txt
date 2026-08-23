@@ -37,24 +37,33 @@
 # surrounding code; it cannot prove the same text appears nowhere else in the
 # tree. Proving that still wants an unpatched build, and nothing here does it.
 #
-# A row proves the patch ARRIVED, not which version of it did, and that is the
-# trap this file is easiest to fall into. Editing a patch that already has a row
-# changes nothing the check can see: the pattern still matches, so a published
-# server built before the edit passes, the APK is built from it, and the only
-# thing describing the new behaviour is a CHANGELOG line. A row therefore has to
-# move with a revision whose behaviour is the point of the revision. 0003 is the
-# worked example: its pattern was `__vsc_disconnect`, which its first version
-# already added, and it now names the exit wait a later version added, so a
-# server predating that wait is refused instead of accepted.
+# A row proves the patch ARRIVED, not which version of it did, and that used to
+# be the trap this file was easiest to fall into. Editing a patch that already
+# has a row changes nothing a pattern can see: it still matches, so a published
+# server built before the edit passed, the APK was built from it, and the only
+# thing describing the new behaviour was a CHANGELOG line.
 #
-# Choosing the replacement is the original problem with less freedom, since the
-# revision has to have introduced something durable of its own. `this._worker.once`
-# qualifies because the packaged bundle already emits `this._worker.terminate()`
-# from this same class, so neither the field nor the method is being mangled, and
-# `'exit'` is a string literal. Both halves were read out of the bundle rather
-# than assumed. A revision that introduces no such text leaves this file unable
-# to see it, and the honest move then is to say so where the behaviour is
-# claimed, not to pick a pattern that cannot fail.
+# That half is now covered by something other than a row. build-vscode-oss.sh
+# writes vscodroid-patches.json into the tree it produces, recording the sha256
+# of each patch's diff, and check-patch-fingerprints.py recomputes those hashes
+# from patches/ and compares. A tarball built from different patch text is
+# refused wherever that check runs, which includes the fetch and the Gradle
+# packaging gate. The prose above each diff is not hashed, because git apply
+# never reads it, so rewriting a patch's reasoning there is free.
+#
+# Everything from the first `diff --git` down IS hashed, comments in the added
+# code included. Editing one of those is a rebuild: the published server has to
+# be built again and refetched before any APK can be packaged, because until then
+# the manifest in the tree names the old text and the gate says so. Budget half
+# an hour on an arm64 runner for a comment, and reach for the header when the
+# note can live there instead.
+#
+# Rows are therefore back to answering the question they are good at: did this
+# reach the packaged bundle at all. Moving one with a revision is still worth
+# doing where the revision introduces something durable of its own -- 0003 is the
+# worked example, its pattern moved from `__vsc_disconnect`, which its first
+# version already added, to the exit wait a later version added -- but it is no
+# longer the only thing standing between an edited patch and a stale server.
 
 # 0001's pattern names the isLinux widening, not the android comparison. Patch
 # 0001 adds two things that both compare against 'android': the widened _isLinux
@@ -68,6 +77,13 @@
 0001 platform|out/server-main.js|platform === 'linux' ||
 0002 userDataPath|out/vs/platform/terminal/node/ptyHostMain.js|case"android"
 0003 ptyHost worker|out/server-main.js|this._worker.once('exit'
+# 0003 again, for the half of it that is its own bundle. The row above is
+# satisfied entirely by workerAsChildProcess.ts, which the server pulls into
+# out/server-main.js; the process.send-over-parentPort bridge lives in
+# src/bootstrap-fork.ts and becomes out/bootstrap-fork.js, which no row named.
+# Without the bridge both Workers start with no IPC channel at all, so the file
+# not reaching the target's graph is exactly what a fingerprint is for.
+0003 ptyHost bridge|out/bootstrap-fork.js|__vsc_disconnect
 0004 extHost worker|out/server-main.js|worker_thread Extension Host
 0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
@@ -90,7 +106,12 @@
 # (the positive control `scrollTopChanged` occurs 41 times), and an esbuild
 # minify of the new handler emits `!n.scrollTopChanged&&!n.scrollLeftChanged`,
 # so the token survives and only this patch introduces it.
-0014 menu submenu scroll dismiss|out/vs/workbench/workbench.web.main.internal.js|scrollTopChanged&&!
+#
+# The bundle it names used to be out/vs/workbench/workbench.web.main.internal.js,
+# which workbench.html does not load and which the Prune stage now deletes: the
+# row was proving the patch reached the copy nobody runs. The pattern occurs
+# exactly once in each, so repointing it changes nothing but which claim is made.
+0014 menu submenu scroll dismiss|out/vs/code/browser/workbench/workbench.js|scrollTopChanged&&!
 # 0015 gates on the width comparison the guard needs. Measured in the packaged
 # pre-patch bundles, `innerWidth===` occurs zero times in both workbench.js and
 # workbench.web.main.internal.js, while the positive control `innerWidth` occurs

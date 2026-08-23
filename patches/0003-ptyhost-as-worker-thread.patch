@@ -34,12 +34,19 @@ out, and anything still buffered was cut off mid-write with nothing logged. The
 wait is still bounded, by WORKER_EXIT_GRACE_MS, because a Worker keeps its host
 process alive and a module that never exits would otherwise hold the server open.
 
-ipc.cp.ts picks between them on serverName. Only the Pty Host moves in this
-change; the file watcher keeps forking, and the Extension Host is a separate step
-because it also has to stop passing sockets over its channel.
+ipc.cp.ts picks between them on an explicit useWorker option, set at the Pty Host
+construction site in nodePtyHostStarter.ts. It used to compare serverName against
+the literal 'Pty Host', which is a log label: upstream renaming it would have
+turned the comparison quietly false, the host would have gone back to forking, and
+every gate here would still have passed, including this patch's own fingerprint.
+An option the call site has to set fails to apply if that call site moves.
+
+Only the Pty Host moves in this change; the file watcher keeps forking, and the
+Extension Host is a separate step because it also has to stop passing sockets over
+its channel.
 
 diff --git a/src/bootstrap-fork.ts b/src/bootstrap-fork.ts
-index a92290a..282873b 100644
+index b87e855b..57e08d49 100644
 --- a/src/bootstrap-fork.ts
 +++ b/src/bootstrap-fork.ts
 @@ -6,6 +6,36 @@
@@ -81,7 +88,7 @@ index a92290a..282873b 100644
  
 diff --git a/src/vs/base/node/workerAsChildProcess.ts b/src/vs/base/node/workerAsChildProcess.ts
 new file mode 100644
-index 0000000..e4fc8ae
+index 00000000..e4fc8ae9
 --- /dev/null
 +++ b/src/vs/base/node/workerAsChildProcess.ts
 @@ -0,0 +1,200 @@
@@ -286,7 +293,7 @@ index 0000000..e4fc8ae
 +	return fork(modulePath, args, options);
 +}
 diff --git a/src/vs/base/parts/ipc/node/ipc.cp.ts b/src/vs/base/parts/ipc/node/ipc.cp.ts
-index 2c5ef50..1ec1754 100644
+index 73630126..afa610a3 100644
 --- a/src/vs/base/parts/ipc/node/ipc.cp.ts
 +++ b/src/vs/base/parts/ipc/node/ipc.cp.ts
 @@ -4,6 +4,7 @@
@@ -297,7 +304,24 @@ index 2c5ef50..1ec1754 100644
  import { createCancelablePromise, Delayer } from '../../../common/async.js';
  import { VSBuffer } from '../../../common/buffer.js';
  import { CancellationToken } from '../../../common/cancellation.js';
-@@ -203,7 +204,13 @@ export class Client implements IChannelClient, IDisposable {
+@@ -79,6 +80,16 @@ export interface IIPCOptions {
+ 	 * full of messages - see notes on that method.
+ 	 */
+ 	useQueue?: boolean;
++
++	/**
++	 * Runs the module in a worker_threads Worker instead of forking a process.
++	 *
++	 * Android 12+ kills background child processes past a system-wide limit of 32.
++	 * Declared here rather than inferred from serverName so that a caller opting in
++	 * has to say so: a comparison against a log label would go quietly false the day
++	 * upstream renamed it, and the host would fork again with every gate still green.
++	 */
++	useWorker?: boolean;
+ }
+ 
+ export class Client implements IChannelClient, IDisposable {
+@@ -203,7 +214,13 @@ export class Client implements IChannelClient, IDisposable {
  
  			removeDangerousEnvVariables(forkOpts.env);
  
@@ -307,8 +331,24 @@ index 2c5ef50..1ec1754 100644
 +			// here spends one of them for the lifetime of the window; a Worker spends
 +			// none. bootstrap-fork gives the module the same IPC either way, so
 +			// nothing below this line has to know which it got.
-+			const asWorker = this.options.serverName === 'Pty Host';
++			const asWorker = this.options.useWorker === true;
 +			this.child = forkOrWorker(asWorker, fork, this.modulePath, args, forkOpts);
  
  			const onMessageEmitter = new Emitter<VSBuffer>();
  			const onRawMessage = Event.fromNodeEventEmitter(this.child, 'message', msg => msg);
+diff --git a/src/vs/platform/terminal/node/nodePtyHostStarter.ts b/src/vs/platform/terminal/node/nodePtyHostStarter.ts
+index 707f1ca8..73ab8107 100644
+--- a/src/vs/platform/terminal/node/nodePtyHostStarter.ts
++++ b/src/vs/platform/terminal/node/nodePtyHostStarter.ts
+@@ -22,6 +22,11 @@ export class NodePtyHostStarter extends Disposable implements IPtyHostStarter {
+ 	start(): IPtyHostConnection {
+ 		const opts: IIPCOptions = {
+ 			serverName: 'Pty Host',
++			// A thread rather than a process, so the Pty Host stays off Android's
++			// 32-process budget. bootstrap-fork gives the module the same IPC either
++			// way. Declared here rather than matched on serverName inside ipc.cp.ts:
++			// this call site moving then fails to apply instead of quietly forking.
++			useWorker: true,
+ 			args: ['--type=ptyHost', '--logsPath', this._environmentService.logsHome.with({ scheme: Schemas.file }).fsPath],
+ 			env: {
+ 				VSCODE_ESM_ENTRYPOINT: 'vs/platform/terminal/node/ptyHostMain',
