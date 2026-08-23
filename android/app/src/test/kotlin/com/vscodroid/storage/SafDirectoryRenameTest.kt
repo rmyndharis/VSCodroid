@@ -215,6 +215,37 @@ class SafDirectoryRenameTest {
         verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
     }
 
+    /**
+     * The same move against a provider that carries `FLAG_SUPPORTS_MOVE` and not
+     * `FLAG_SUPPORTS_RENAME`, or that simply refuses this document.
+     *
+     * The create fallback below exists for the case where nothing moved at all, where the
+     * alternative is the new name being absent from the device entirely. Applied here it
+     * was the wrong answer twice over: the device kept the whole moved subtree under its
+     * OLD name in the NEW parent, and gained a second copy under the new name rebuilt
+     * from the mirror, which stops at `MAX_UPLOAD_ENTRIES` and never held anything
+     * `SKIP_DIRECTORIES` excluded. Nothing is missing in this case: the content is on the
+     * device, whole, in the folder the user dragged it to, wearing its previous name.
+     */
+    @Test
+    fun `a move that landed is not duplicated when the rename is refused`() {
+        deviceTree(mapOf("root" to listOf("util", "lib"), "doc:lib" to emptyList()))
+        File(mirror, "lib").mkdirs()
+        every { DocumentsContract.renameDocument(any(), any(), any()) } returns null
+
+        observe(FileObserver.MOVED_FROM or isDirFlag, "util")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib/helpers")
+        // Present by write-back time, so a create that did fire would have something to
+        // copy: without this the case would pass for the wrong reason.
+        File(mirror, "lib/helpers").mkdirs()
+        drain()
+
+        verify(exactly = 1) { DocumentsContract.moveDocument(any(), any(), any(), any()) }
+        verify(exactly = 1) { DocumentsContract.renameDocument(any(), any(), "helpers") }
+        verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
     /** `mv util lib/helpers`: the move relocates it, the rename gives it the new name. */
     @Test
     fun `a move that also renames does both, in that order`() {

@@ -172,8 +172,8 @@ class SafFolderPathLoggingTest {
      *
      * The case above proves nothing about the copy, and that is how two leaks survived a
      * guard written for exactly this. With `query` answering null the walk gives up
-     * before phase 2 exists, so `copyDocumentToLocal` is never reached and the gate's
-     * coverage became the reviewer's coverage.
+     * before phase 2 exists, so `copyDocumentToLocal` is never reached and the only
+     * thing covering the gate there was reading it.
      */
     private fun deviceHoldingOneFile(lastModified: Long = 1_700_000_000_000L) {
         val docId = "primary:Documents/$folderName/notes.txt"

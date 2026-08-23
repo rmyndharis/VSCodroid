@@ -366,6 +366,123 @@ class InitialSyncWiringTest {
         assertEquals(listOf("notes.txt"), openedDocuments)
     }
 
+    /**
+     * The save the watcher never carried, meeting a device edit made afterwards.
+     *
+     * `shouldOverwriteMirror` is last-writer-wins on modification time, so the device
+     * copy wins and the mirror is replaced in place, after which the record vouches for
+     * the result: the edit is gone and nothing anywhere holds it. Reaching that needs
+     * only a save the write-back did not deliver (the app killed before the drain ran it,
+     * or the file past the watch cap) and then any other app touching the same file.
+     */
+    @Test
+    fun `a mirror edit the record cannot vouch for is set aside before the device replaces it`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        // The editor saves, and nothing carries it to the device.
+        local.writeText("an hour of writing")
+        local.setLastModified(1_700_000_060_000)
+        // Then the file is edited on the device by something else, later.
+        deviceFolderHolding("notes.txt", "changed on the device", 1_700_000_120_000)
+        sync()
+
+        assertEquals(
+            "changed on the device", local.readText(),
+            "the device copy is newer and still has to arrive",
+        )
+        val preserved = File(mirror, "notes.txt${SafSyncEngine.LOCAL_COPY_SUFFIX}1700000060000")
+        assertTrue(
+            preserved.isFile,
+            "the only copy of the local edit was overwritten; the mirror now holds " +
+                mirror.list()?.sorted(),
+        )
+        assertEquals("an hour of writing", preserved.readText())
+    }
+
+    /**
+     * The condition that keeps the guard off the ordinary case, and the one the guard is
+     * useless without.
+     *
+     * A save the watcher DID deliver leaves exactly the same bookkeeping behind: the
+     * record still names the pre-edit copy, and the device carries the write-back's own
+     * fresh timestamp, so the device wins the comparison and the record cannot vouch for
+     * the mirror. What separates it is content, which is why the two sides are compared
+     * rather than their timestamps. Without that, every file touched in a session would
+     * leave a spare copy in the workspace on the next open.
+     */
+    @Test
+    fun `a save the watcher already delivered is replaced without a copy left behind`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        local.writeText("an hour of writing")
+        local.setLastModified(1_700_000_060_000)
+        // The watcher carried it across, so the device holds the same bytes under the
+        // timestamp its own write stamped on them.
+        deviceFolderHolding("notes.txt", "an hour of writing", 1_700_000_120_000)
+        sync()
+
+        assertEquals(
+            listOf("notes.txt"), mirror.list()?.sorted(),
+            "an edit that did reach the device left a spare copy in the workspace",
+        )
+    }
+
+    /**
+     * And nothing is set aside when there is no record to be silent about.
+     *
+     * The record is the only evidence that a mirror file is not this app's own copy, so
+     * without one every file in the mirror looks diverged, the ordinary stale copy a
+     * previous sync wrote included. A record that is absent, unreadable or in a format
+     * this build does not know all arrive as null, which is not the same as a record
+     * that parsed and names nothing, and each has to mean the pre-existing behaviour
+     * rather than a workspace full of spare copies.
+     */
+    @Test
+    fun `with no record behind it a stale mirror copy is replaced, not set aside`() {
+        mirrorHolding("notes.txt", "stale copy", 1_700_000_000_000)
+        deviceFolderHolding("notes.txt", "changed on the phone", 1_700_000_060_000)
+
+        sync()
+
+        assertEquals(
+            listOf("notes.txt"), mirror.list()?.sorted(),
+            "a mirror with no record behind it left a spare copy of every stale file",
+        )
+    }
+
+    /**
+     * A record that parsed and vouches for nothing is not the same as no record, and
+     * this is the half of that distinction the case above cannot reach.
+     *
+     * It is the ordinary state of a folder on a provider that omits
+     * COLUMN_LAST_MODIFIED: with no clock to compare, every file is kept rather than
+     * refreshed, and a sync that kept everything it saw records nothing. Read as "the
+     * record is silent about this file", every stale mirror copy in such a folder then
+     * gains a `.local-` twin on every open, and nothing ever removes one.
+     */
+    @Test
+    fun `a record that vouches for nothing sets nothing aside`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+
+        // What a sync that kept every file it saw leaves behind: the header, and no
+        // line under it.
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            .writeText(SafSyncEngine.RECORD_HEADER)
+        deviceFolderHolding("notes.txt", "changed on the device", 1_700_000_120_000)
+        sync()
+
+        assertEquals(
+            listOf("notes.txt"), mirror.list()?.sorted(),
+            "a record that names nothing was read as silence about this file, so the " +
+                "workspace gained a spare copy of it",
+        )
+    }
+
     @Test
     fun `a file the mirror does not have is fetched`() {
         deviceFolderHolding("fresh.txt", "brand new", 1_700_000_000_000)

@@ -208,6 +208,23 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
+     * The skip has to name the document at a severity a release build keeps.
+     *
+     * `Logger.d` is gated on a debuggable build, so on a release build the only trace of
+     * a document the editor does not have was a count in the summary line. The file is
+     * intact on the device and the folder opened successfully, so nothing else says
+     * anything at all, and a user asking why they cannot find it needs the name.
+     */
+    @Test
+    fun `a document skipped for size is named at a severity a release build keeps`() {
+        deviceHolding("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        verify(atLeast = 1) { Logger.i(any(), match { it.contains("big.zip") }) }
+    }
+
+    /**
      * The four cases above pin that the device document survives. These pin the other
      * half, which was missing: that the user is told their edit did not travel.
      *

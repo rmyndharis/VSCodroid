@@ -676,6 +676,35 @@ class SafReconcileDeletionsTest {
         assertTrue(doomed.isFile, "a record this build cannot identify was acted on anyway")
     }
 
+    /**
+     * The record is replaced in one step, not truncated and rewritten.
+     *
+     * The upload journal beside it writes a temporary file and renames precisely because
+     * "a truncate-and-write here would lose every bracket at once to a process death in
+     * the middle", and the record carries the same kind of information for the same
+     * reason: every consumer of a damaged one fails safe, so what a half-written record
+     * costs is a mirror that cannot be reclaimed and, on a provider that reports no
+     * modification time, a folder that stops receiving device-side changes until each
+     * file is healed by byte comparison.
+     *
+     * Asserted through the temporary name rather than by killing a process: a stale one
+     * left behind is consumed by the next write, so a record that appeared without it
+     * being touched was written in place.
+     */
+    @Test
+    fun `the record is written through a temporary and moved into place`() {
+        val partial = File(record.path + SafSyncEngine.PARTIAL_SUFFIX)
+        partial.writeText("what an interrupted write left behind")
+
+        deviceFolderHolding("a.txt" to "kept")
+        sync()
+
+        val leftBehind = partial.exists()
+        partial.delete()
+        assertFalse(leftBehind, "the record was written in place, so the temporary is untouched")
+        assertEquals(listOf("a.txt"), recordedPaths(), "and the record itself is wrong")
+    }
+
     @Test
     fun `the record is kept beside the mirror, not inside it`() {
         // Anything inside the mirror is inside the folder VS Code opens: it shows up in

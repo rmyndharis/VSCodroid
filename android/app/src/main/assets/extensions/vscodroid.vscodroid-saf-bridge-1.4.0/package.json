@@ -49,9 +49,21 @@
         "title": "VSCodroid: Clear Caches"
       },
       {
+        "command": "vscodroid.manageToolchains",
+        "title": "VSCodroid: Manage Toolchains"
+      },
+      {
         "command": "vscodroid.about",
         "title": "VSCodroid: About"
       }
-    ]
+    ],
+    "menus": {
+      "statusBar/remoteIndicator": [
+        {
+          "command": "vscodroid.about",
+          "group": "remote_90_vscodroid_about"
+        }
+      ]
+    }
   }
 }

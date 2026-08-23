@@ -209,6 +209,42 @@ class SafMirrorReclamationTest {
     }
 
     /**
+     * The record's own scratch file outlives everything else when a write is
+     * interrupted between it and the rename.
+     *
+     * `MIRROR_ENTRY` does not match its name, which is what keeps the pass from
+     * treating it as half of a mirror and is also why nothing ever removed it: once the
+     * mirror and record it belonged to had gone, it sat in `saf-mirrors` for the life
+     * of the install, in a directory every terminal is handed as SAF_MIRRORS_DIR.
+     */
+    @Test
+    fun `a record's leftover scratch file goes with the mirror it belonged to`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        val (liveDir, _) = mirrorFor(liveUri)
+        val orphan = File(
+            mirrorsDir,
+            staleDir.name + SafSyncEngine.SYNCED_RECORD_SUFFIX + SafSyncEngine.PARTIAL_SUFFIX,
+        ).apply { writeText(SafSyncEngine.RECORD_HEADER) }
+        // The same file beside a folder the user still grants belongs to a record that
+        // is still being kept up to date, and the next sync of that folder writes over
+        // it. Removing it would be removing a live write's destination.
+        val inUse = File(
+            mirrorsDir,
+            liveDir.name + SafSyncEngine.SYNCED_RECORD_SUFFIX + SafSyncEngine.PARTIAL_SUFFIX,
+        ).apply { writeText(SafSyncEngine.RECORD_HEADER) }
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(
+            orphan.exists(),
+            "the scratch file outlived the mirror and the record it was written for, " +
+                "where nothing can ever reach it again",
+        )
+        assertTrue(inUse.isFile, "a live folder's own scratch file was taken with it")
+    }
+
+    /**
      * Builds the mirror directory and the sync record the engine keeps beside it,
      * which is what the pair it returns holds.
      *

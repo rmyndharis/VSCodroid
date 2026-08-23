@@ -180,10 +180,23 @@ class SafStorageManager(context: Context) {
 
     /**
      * Checks if we still hold a valid persisted permission for the given URI.
+     *
+     * Both halves, because a session opened on this answer needs both. [persistPermission]
+     * takes read and write together, but this asked only about read while every
+     * local-to-device call the session then makes needs write: `openOutputStream(uri,
+     * "wt")`, `createDocument`, `renameDocument`, `moveDocument`, `deleteDocument`. On a
+     * read-only grant the folder opened, the sync completed and the watcher started, and
+     * the user's saves then failed one at a time behind a notice throttled to one per ten
+     * seconds for the whole folder. Refusing up front is the same answer the revoked case
+     * already gets, arriving before any of that.
+     *
+     * ⚠️ [persistedReadUris], which drives the recent-list prune, deliberately stays on
+     * read alone: a folder this app cannot write to still belongs in Open Recent, and
+     * pruning it there would take its grant with it.
      */
     fun hasPersistedPermission(uri: Uri): Boolean {
         return context.contentResolver.persistedUriPermissions.any {
-            it.uri == uri && it.isReadPermission
+            it.uri == uri && it.isReadPermission && it.isWritePermission
         }
     }
 
@@ -313,9 +326,21 @@ class SafStorageManager(context: Context) {
      * Deletes the sync record beside each mirror too: both are named after the same
      * hash, the record with a suffix.
      *
-     * Call it where no folder is open. Nothing here can tell which mirror the editor is
-     * holding, so the call site is what keeps it away from one; see
-     * [com.vscodroid.SplashActivity], which always precedes `MainActivity`.
+     * Nothing here can tell which mirror the editor is holding, and what makes the pass
+     * safe anyway is what it will touch rather than when it runs: only a mirror whose
+     * persisted permission is already gone, which the editor therefore cannot be syncing
+     * or watching, and each one is set aside by an atomic rename before anything is
+     * deleted, so a folder granted a moment later gets a fresh directory this pass
+     * cannot reach.
+     *
+     * That is the argument to rely on, because the timing one does not hold. It used to
+     * read "the call site is what keeps it away from one; see SplashActivity, which
+     * always precedes MainActivity". `NodeService` is declared with no
+     * `android:stopWithTask`, so swiping the task from Recents destroys the activities
+     * and leaves the server serving; the next launcher tap starts a fresh task at
+     * SplashActivity with a workspace still open, and this whole block runs against it.
+     * An OAuth callback reaches `MainActivity` directly and skips SplashActivity
+     * altogether.
      *
      * Returns immediately. The scan itself is a handful of stats, but what it can find
      * is a mirror of a whole project, and deleting one of those is a recursive delete of
@@ -395,6 +420,22 @@ class SafStorageManager(context: Context) {
 
         root.listFiles()?.forEach { entry ->
             val name = entry.name
+            // The scratch file a record write leaves behind when the process dies
+            // between writing it and renaming it into place. Nothing else here can see
+            // it: [MIRROR_ENTRY] does not match the name, so once the mirror and record
+            // it belonged to are gone it stayed in `saf-mirrors` for the life of the
+            // install, in a directory every terminal gets as SAF_MIRRORS_DIR.
+            //
+            // Deleted outright rather than set aside. What it holds is a copy of the
+            // record and never a user document, so there is nothing to be careful with,
+            // and [discardEntry]'s leftovers are matched by [MIRROR_ENTRY] too, which
+            // this name is not: renaming it would only move the orphan.
+            if (MIRROR_RECORD_PARTIAL.matches(name) &&
+                name.substringBefore('.') !in liveMirrorNames()
+            ) {
+                if (entry.delete()) removed++
+                return@forEach
+            }
             // The prefix alone is not enough to claim an entry: a person can name a
             // directory anything, and this one is only ours when what follows the prefix
             // is a name we would have set aside.
@@ -1168,6 +1209,17 @@ class SafStorageManager(context: Context) {
          */
         internal val MIRROR_ENTRY =
             Regex("^[0-9a-f]{12}(${Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX)})?$")
+
+        /**
+         * The record's own scratch file, which [MIRROR_ENTRY] deliberately does not
+         * match: it is not half of a mirror and must never be counted as one, only
+         * cleared away once the mirror it belonged to has gone.
+         */
+        internal val MIRROR_RECORD_PARTIAL = Regex(
+            "^[0-9a-f]{12}" +
+                Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX + SafSyncEngine.PARTIAL_SUFFIX) +
+                "$"
+        )
 
         /**
          * Marks an entry renamed out of the way and awaiting deletion. Reclaimed

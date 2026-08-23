@@ -19,6 +19,7 @@
  * - vscodroid.showStorageUsage     : Per-component storage breakdown
  * - vscodroid.manageDeviceFolders  : Lists the local copies of device folders and removes one
  * - vscodroid.clearCaches          : Deletes cached data, reports bytes freed
+ * - vscodroid.manageToolchains     : Opens the Android Toolchains screen
  * - vscodroid.about                : Opens the Android About dialog
  */
 
@@ -216,8 +217,15 @@ function activate(context) {
                 const json = /** @type {string} */ (await sendBridgeCommand('generateSshKey'));
                 const result = JSON.parse(json || '{}');
                 if (result.success) {
+                    // The bridge raises `existed` for a whole pair it found rather
+                    // than made, and it never overwrites one. Reporting a creation
+                    // either way told a user their key had just been replaced, which
+                    // is the one thing that would break every host they had already
+                    // added the old one to.
                     vscode.window.showInformationMessage(
-                        'SSH key created at ~/.ssh/id_ed25519. Run "VSCodroid: Copy SSH Public Key" to add it to your Git host.'
+                        result.existed
+                            ? 'An SSH key is already set up at ~/.ssh/id_ed25519. Run "VSCodroid: Copy SSH Public Key" to add it to your Git host.'
+                            : 'SSH key created at ~/.ssh/id_ed25519. Run "VSCodroid: Copy SSH Public Key" to add it to your Git host.'
                     );
                 } else {
                     vscode.window.showErrorMessage(
@@ -482,6 +490,24 @@ function activate(context) {
         }
     );
 
+    // -- Toolchains --
+
+    // The Toolchains screen had one way in: the launcher shortcut SplashActivity
+    // publishes. A user who skipped the first-run picker, or who cleared the
+    // shortcut, had no route from inside the editor at all, while the bridge
+    // method and its relay branch have both been there the whole time with no
+    // sender. This is that sender.
+    const toolchainsCmd = vscode.commands.registerCommand(
+        'vscodroid.manageToolchains',
+        async () => {
+            try {
+                await sendBridgeCommand('openToolchainSettings');
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Failed to open Toolchains: ${err.message}`);
+            }
+        }
+    );
+
     // -- About --
 
     const aboutCmd = vscode.commands.registerCommand('vscodroid.about', async () => {
@@ -501,6 +527,7 @@ function activate(context) {
         storageUsageCmd,
         manageDeviceFoldersCmd,
         clearCachesCmd,
+        toolchainsCmd,
         aboutCmd
     );
 }
