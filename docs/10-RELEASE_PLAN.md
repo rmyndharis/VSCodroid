@@ -408,11 +408,15 @@ with no section naming the version a user installed.
 5. Upload the AAB to Play and start the staged rollout in 6.2
 ```
 
-No gate is planned for step 1. The only moment the heading is wrong is the
-moment a tag is taken, so a check on a pull request would fail every branch
-that correctly leaves the section open. Its one honest home is the tag path,
-beside the existing "Check the tag matches the app version" step, which
-already has the version in hand.
+Step 1 is gated on the tag path. The "Check the tag matches the app version"
+step in `release.yml` refuses a tag whose `versionName` has no `## [X.Y.Z]`
+heading in `CHANGELOG.md`, so a tag taken with the section still open fails
+before the build starts rather than publishing a version the file does not name.
+
+The tag is the only honest home for it. A check on a pull request would fail
+every branch that correctly leaves the section open, and the heading is wrong
+at no other moment; that step already holds the version to look for, which is
+why the two checks step 2 names live there as well.
 
 ---
 
