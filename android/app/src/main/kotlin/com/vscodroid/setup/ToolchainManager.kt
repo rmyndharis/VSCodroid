@@ -29,6 +29,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
+import android.annotation.SuppressLint
 
 /**
  * Manages on-demand toolchain installation via Play Asset Delivery or HTTP fallback.
@@ -820,6 +821,10 @@ class ToolchainManager(private val context: Context) {
             report(packName, status, percent)
         }
 
+        // Not enumerated, and the else arm below is why. Play Core adds statuses,
+        // and a `when` naming all of today's would keep compiling while silently
+        // ignoring a new one; the else arm reports whatever arrives instead.
+        @SuppressLint("SwitchIntDef")
         when (status) {
             AssetPackStatus.COMPLETED -> {
                 // Heavy I/O: copy files, chmod, symlinks. Run off main thread

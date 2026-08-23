@@ -1072,10 +1072,14 @@ class HeapLatchCallSiteTest {
             val t = it.trimStart()
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }.joinToString("\n")
-        return Regex("""\.edit\(\).*?\.(?:commit|apply)\(\)""", RegexOption.DOT_MATCHES_ALL)
-            .findAll(code)
-            .map { it.value }
-            .toList()
+        // Both spellings, because the KTX form moved the choice from the call that
+        // ends the statement to an argument on the call that starts it. Reading
+        // only the chained shape is how this scan came back empty while both
+        // writers were still committing.
+        return Regex(
+            """\.edit\(\).*?\.(?:commit|apply)\(\)|\.edit\([^)]*\)\s*\{[^}]*\}""",
+            RegexOption.DOT_MATCHES_ALL,
+        ).findAll(code).map { it.value }.toList()
     }
 
     @Test
@@ -1188,7 +1192,7 @@ class HeapLatchCallSiteTest {
         // on into the next one, and then the terminator this reads belongs to some
         // other edit.
         assertTrue(
-            sites.none { (_, statement) -> statement.indexOf(".edit()", 1) > 0 },
+            sites.none { (_, statement) -> statement.indexOf(".edit(", 1) > 0 },
             "one edit runs into the next, so the call ending it is not its own: $sites",
         )
 
@@ -1201,8 +1205,11 @@ class HeapLatchCallSiteTest {
                 charging.joinToString("\n") { (name, s) -> "  $name: $s" },
         )
         charging.forEach { (name, statement) ->
+            // Either spelling of the same decision: the chained form says it at the
+            // end, the KTX form says it in the argument. An `edit { }` with no
+            // argument applies, which is what this refuses.
             assertTrue(
-                statement.endsWith(".commit()"),
+                statement.endsWith(".commit()") || statement.contains("edit(commit = true)"),
                 "the kill count must be committed, not applied, in $name: $statement",
             )
         }

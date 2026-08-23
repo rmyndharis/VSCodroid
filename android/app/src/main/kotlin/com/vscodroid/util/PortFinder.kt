@@ -4,6 +4,7 @@ import android.content.Context
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import androidx.core.content.edit
 
 object PortFinder {
     private const val TAG = "PortFinder"
@@ -97,7 +98,7 @@ object PortFinder {
         // still returned and still reused for the whole process lifetime through
         // ProcessManager's cached _port.
         if (port in DEFAULT_PORT until DEFAULT_PORT + SCAN_RANGE) {
-            prefs.edit().putInt(KEY_PORT, port).apply()
+            prefs.edit { putInt(KEY_PORT, port) }
         }
         return port
     }

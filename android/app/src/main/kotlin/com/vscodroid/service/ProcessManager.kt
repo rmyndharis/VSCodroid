@@ -17,6 +17,7 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
+import androidx.core.content.edit
 
 /**
  * Manages the Node.js server process lifecycle.
@@ -1520,7 +1521,7 @@ class ProcessManager(private val context: Context) {
             val kills = heapKillsForValue(
                 prefs.getInt(PREF_HEAP_VALUE_SEEN, 0), prefs.getInt(PREF_HEAP_KILLS, 0), asked
             )
-            prefs.edit().putInt(PREF_HEAP_VALUE_SEEN, asked).putInt(PREF_HEAP_KILLS, kills).commit()
+            prefs.edit(commit = true) { putInt(PREF_HEAP_VALUE_SEEN, asked).putInt(PREF_HEAP_KILLS, kills) }
             if (heapOverrideSuspended(kills)) {
                 heapOverrideSuspendedNow = true
                 Logger.w(

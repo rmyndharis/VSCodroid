@@ -24,6 +24,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.core.content.edit
+import android.annotation.SuppressLint
 
 /**
  * What a client that binds after a start attempt has to be told, and whether
@@ -60,6 +62,12 @@ data class StartupNotice(val message: String, val terminal: Boolean)
  * caller that does not is the watchdog, and [setupProcessCallbacks] hands its
  * report to the scope rather than acting on the watchdog thread.
  */
+// InlinedApi: FOREGROUND_SERVICE_TYPE_SPECIAL_USE is an int constant that the
+// compiler inlines, so no field is looked up at run time and API 33 cannot fail
+// on it. It is passed to ServiceCompat.startForeground, which is what decides
+// whether the platform is told a type at all. The manifest declares the same
+// type, and both permissions it needs are held.
+@SuppressLint("InlinedApi")
 class NodeService : Service() {
 
     private val tag = "NodeService"
@@ -1006,7 +1014,7 @@ class NodeService : Service() {
             val before = prefs.getInt(PREF_HEAP_KILLS, 0)
             val charged = heapKillsAfter(exitCode, overrideRaisedCeiling = true, current = before)
             if (charged == before) return@withContext null
-            prefs.edit().putInt(PREF_HEAP_KILLS, charged).commit()
+            prefs.edit(commit = true) { putInt(PREF_HEAP_KILLS, charged) }
             charged
         } ?: return
         Logger.w(tag, "Server killed with a user heap ceiling in effect ($after of $HEAP_OVERRIDE_KILL_BUDGET)")

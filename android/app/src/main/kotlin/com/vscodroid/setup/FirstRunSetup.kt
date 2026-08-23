@@ -20,6 +20,8 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.Certificate
 import java.util.Base64
+import androidx.core.content.edit
+import android.annotation.SuppressLint
 
 /**
  * @param assetBytes how much the APK's asset tree weighs, and [largestAssetBytes]
@@ -33,6 +35,17 @@ import java.util.Base64
  *   tree every branch of the pre-flight computes the same number, so a test that
  *   did not supply its own figures would pass there while distinguishing nothing.
  */
+// ApplySharedPref: every write here uses commit() on purpose. What each one
+// records is a step of a run that a kill can interrupt at any moment, and the
+// heap-override latch records a SIGKILL of this very process; apply()'s flush
+// window is exactly the interval those writes exist to survive.
+//
+// UsableSpace: the pre-flight deliberately asks what is free rather than what
+// the platform would let this app allocate. getAllocatableBytes counts space it
+// would clear by evicting other apps' caches, which is a promise about a device
+// state, not about this one, and the figure the user is shown has to be the one
+// the extraction will actually meet.
+@SuppressLint("ApplySharedPref", "UsableSpace")
 class FirstRunSetup(
     private val context: Context,
     private val assetBytes: Long = BuildConfig.EXTRACTED_ASSET_BYTES,
@@ -440,7 +453,7 @@ class FirstRunSetup(
                 } else {
                     "$attempt$MIXED_TREE"
                 }
-            prefs.edit().putString(KEY_EXTRACTION_ATTEMPT, marker).commit()
+            prefs.edit(commit = true) { putString(KEY_EXTRACTION_ATTEMPT, marker) }
 
             reportProgress("Creating directories...", 2)
             createDirectories()
@@ -2821,7 +2834,7 @@ claude() {
             // Recorded whether or not anything was found: the debt is discharged
             // by looking, and a device that never had the directory must not go
             // on looking for it at every update either.
-            prefs.edit().putStringSet(KEY_RETIRED_SWEPT, HashSet(sweptAlready + owed)).apply()
+            prefs.edit { putStringSet(KEY_RETIRED_SWEPT, HashSet(sweptAlready + owed)) }
         }
 
         // The server manages this file for marketplace installs, so it is never
@@ -2873,7 +2886,7 @@ claude() {
      * instance handed back by `getStringSet` must not be modified at all.
      */
     private fun rememberBundledIds(ids: List<String>) {
-        prefs.edit().putStringSet(KEY_BUNDLED_IDS, HashSet(ids)).apply()
+        prefs.edit { putStringSet(KEY_BUNDLED_IDS, HashSet(ids)) }
     }
 
     private fun generateExtensionsManifest(extensionsDir: File, bundledDirs: Array<String>) {
@@ -3137,7 +3150,7 @@ claude() {
                 // tree, which is the exact failure this flag exists to prevent.
                 // Already on Dispatchers.IO, so the synchronous write costs
                 // nothing observable.
-                prefs.edit().putBoolean(KEY_PIVOT_MIGRATED, true).commit()
+                prefs.edit(commit = true) { putBoolean(KEY_PIVOT_MIGRATED, true) }
             }
         }
     }
@@ -3148,10 +3161,11 @@ claude() {
 
     private fun getCurrentVersionCode(): Int {
         return try {
-            context.packageManager.getPackageInfo(context.packageName, 0).let {
-                if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt()
-                else @Suppress("DEPRECATION") it.versionCode
-            }
+            // longVersionCode unconditionally: it arrived in API 28 and minSdk
+            // here is 33, so the deprecated field the old branch fell back to was
+            // unreachable.
+            context.packageManager.getPackageInfo(context.packageName, 0)
+                .longVersionCode.toInt()
         } catch (e: Exception) {
             0
         }
@@ -3172,11 +3186,11 @@ claude() {
      * retry of an attempt that did not finish.
      */
     private fun markSetupComplete() {
-        prefs.edit()
-            .putString(KEY_VERSION, getCurrentVersion())
-            .putInt(KEY_VERSION_CODE, getCurrentVersionCode())
-            .remove(KEY_EXTRACTION_ATTEMPT)
-            .commit()
+        prefs.edit(commit = true) {
+            putString(KEY_VERSION, getCurrentVersion())
+            putInt(KEY_VERSION_CODE, getCurrentVersionCode())
+            remove(KEY_EXTRACTION_ATTEMPT)
+        }
     }
 
     private fun getCurrentVersion(): String {

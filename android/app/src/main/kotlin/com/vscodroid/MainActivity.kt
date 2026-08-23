@@ -88,6 +88,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.core.content.edit
+import androidx.core.net.toUri
+import android.annotation.SuppressLint
 
 class MainActivity : AppCompatActivity() {
     private val tag = "MainActivity"
@@ -1734,6 +1737,10 @@ class MainActivity : AppCompatActivity() {
      * exists; the placeholder is a `data:` URL and issues no requests to
      * intercept.
      */
+    // MissingOnRenderProcessGone: this client does override it, below, and the
+    // recovery it drives is covered by RendererCrashLoopTest. The check does not
+    // see the override on an anonymous Kotlin subclass.
+    @SuppressLint("MissingOnRenderProcessGone")
     private fun bootstrapClient() = object : WebViewClient() {
         /**
          * The two URLs this client acts on, and the reason the pages carrying
@@ -2211,7 +2218,7 @@ class MainActivity : AppCompatActivity() {
      * moment the server came up.
      */
     private fun folderFromUrl(url: String?): String? =
-        url?.let { Uri.parse(it) }
+        url?.let { it.toUri() }
             ?.takeIf { it.isHierarchical }
             ?.getQueryParameter("folder")
             ?.takeIf { File(it).isDirectory }
@@ -2484,7 +2491,7 @@ class MainActivity : AppCompatActivity() {
         // Written only on a change: this runs on every main-frame load, and the
         // server redirects, so a folder switch alone reaches it twice.
         if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == folderPath) return
-        workspacePrefs.edit().putString(KEY_LAST_FOLDER, folderPath).apply()
+        workspacePrefs.edit { putString(KEY_LAST_FOLDER, folderPath) }
     }
 
     /**
@@ -3191,7 +3198,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(getString(R.string.dialog_ok), null)
             .setNeutralButton(getString(R.string.about_licenses)) { _, _ -> showLicensesDialog() }
             .setNegativeButton(getString(R.string.about_privacy_policy)) { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")))
+                startActivity(Intent(Intent.ACTION_VIEW, "https://rmyndharis.github.io/VSCodroid/privacy-policy.html".toUri()))
             }
             .show()
     }
@@ -3221,7 +3228,7 @@ class MainActivity : AppCompatActivity() {
                 showLicenseTextsDialog()
             }
             .setNeutralButton(getString(R.string.licenses_source_code)) { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rmyndharis/VSCodroid")))
+                startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/rmyndharis/VSCodroid".toUri()))
             }
             .show()
     }

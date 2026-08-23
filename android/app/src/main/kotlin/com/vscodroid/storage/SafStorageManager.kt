@@ -14,6 +14,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
+import androidx.core.content.edit
 
 /**
  * Manages Storage Access Framework (SAF) interactions for VSCodroid.
@@ -984,7 +985,7 @@ class SafStorageManager(context: Context) {
                 put("lastOpened", f.lastOpened)
             })
         }
-        prefs.edit().putString(KEY_RECENT_FOLDERS, array.toString()).apply()
+        prefs.edit { putString(KEY_RECENT_FOLDERS, array.toString()) }
     }
 
     companion object {

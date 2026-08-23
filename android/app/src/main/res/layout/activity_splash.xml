@@ -30,8 +30,7 @@
     android:id="@+id/splashRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:keepScreenOn="true"
-    android:background="@color/colorBackground">
+    android:keepScreenOn="true">
 
     <!-- App icon. Decorative: the TextView below carries the same @string/app_name
          as visible text, so describing the icon with it made a screen reader open

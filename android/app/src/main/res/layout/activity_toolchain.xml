@@ -4,7 +4,6 @@
     android:id="@+id/toolchainRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/colorBackground"
     android:orientation="vertical">
 
     <!-- Toolbar with back arrow -->

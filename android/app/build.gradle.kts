@@ -81,7 +81,10 @@ val bundleNotices = tasks.register<Sync>("bundleNotices") {
 
 android {
     namespace = "com.vscodroid"
-    compileSdk = 36
+    // Compile against the newest platform, which the androidx libraries this app
+    // uses now require. Compile-time only: what the platform applies to a running
+    // app is decided by targetSdk below, and that is deliberately not moved here.
+    compileSdk = 37
 
     signingConfigs {
         create("release") {
@@ -96,6 +99,16 @@ android {
     defaultConfig {
         applicationId = "com.vscodroid"
         minSdk = 33
+        // Held at 36 on purpose, and lint's OldTargetApi is answered rather than
+        // ignored. Targeting 37 blocks local network access by default, so a dev
+        // server running here stops being reachable from another device on the
+        // same Wi-Fi, which is one of the things this app exists to do. Making
+        // that move means declaring ACCESS_LOCAL_NETWORK, requesting it at run
+        // time and handling a refusal; scripts/check-local-network-permission.py
+        // fails the build if the number moves without the permission, so this is
+        // recorded rather than left to be discovered by a user whose friend's
+        // browser simply times out.
+        @Suppress("OldTargetApi")
         targetSdk = 36
         versionCode = 13
         versionName = "1.2.0"
@@ -276,9 +289,18 @@ android {
     sourceSets["main"].assets.srcDir(bundleNotices)
 
     lint {
-        // The baseline is what makes this affordable: the 16 issues recorded in
+        // The baseline is what makes this affordable: the 3 issues recorded in
         // lint-baseline.xml are filtered out of every report, so what remains is
         // what arrived after it was taken.
+        //
+        // Three, and each is a decision rather than a backlog. Two are the newer
+        // asset-delivery this build declines: measured on the merged release
+        // manifest, 2.3.0 adds ACCESS_NETWORK_STATE, RECEIVE_BOOT_COMPLETED and
+        // WAKE_LOCK to what the installed app asks for, and the reason is written
+        // beside the version in libs.versions.toml. The third is x86_64 for
+        // ChromeOS, which this app cannot offer: every bundled binary, from the
+        // Node runtime to git and Python, is an arm64 build taken from Termux,
+        // and there is no second toolchain to ship.
         //
         // An entry naming a file above this module carries whatever path lint
         // recorded, and that depends on where the checkout sat. Regenerated
@@ -384,7 +406,7 @@ dependencies {
     // configuration is on the module, not the root project:
     //   ./gradlew :app:dependencies --configuration debugUnitTestRuntimeClasspath
     // Adding it changed no existing verdict, because nothing parsed JSON before it.
-    testImplementation("org.json:json:20250107")
+    testImplementation(libs.org.json)
 
     // Instrumented Testing (JUnit 4, runs on device)
     androidTestImplementation(libs.androidx.test.ext.junit)

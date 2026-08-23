@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.widget.Toast
 import com.vscodroid.service.NodeService
+import androidx.core.content.edit
 
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : AppCompatActivity() {
@@ -539,10 +540,9 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun markPickerShown() {
-        getSharedPreferences("vscodroid", MODE_PRIVATE)
-            .edit()
-            .putBoolean("toolchain_picker_shown", true)
-            .apply()
+        getSharedPreferences("vscodroid", MODE_PRIVATE).edit() {
+            putBoolean("toolchain_picker_shown", true)
+        }
     }
 
     private fun showToolchainPicker() {

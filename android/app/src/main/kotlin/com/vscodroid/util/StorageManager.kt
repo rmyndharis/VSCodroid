@@ -7,6 +7,7 @@ import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
 import java.util.Locale
+import android.annotation.SuppressLint
 
 /**
  * Tracks disk usage per component and provides cache-clearing operations.
@@ -18,6 +19,11 @@ import java.util.Locale
  * - Tools (usr/: bash, git, python, npm, etc.)
  * - Cache (npm-cache, tmp, crash-logs, toolchain staging directories)
  */
+// UsableSpace: this reports what is free, which is what the storage screen and
+// the extraction pre-flight both need. getAllocatableBytes would add space the
+// platform would reclaim from other apps' caches, and that is not space this
+// app can count on having when it writes.
+@SuppressLint("UsableSpace")
 object StorageManager {
     private const val TAG = "StorageManager"
 

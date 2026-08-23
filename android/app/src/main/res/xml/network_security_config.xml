@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
     <!-- Cleartext is permitted because this app is a development environment, and
          the thing being developed is served over plain HTTP by every framework
          there is. A dev server on this device answers at the device's own network
@@ -23,5 +23,5 @@
          Reachability from other devices is a separate matter: Android's local
          network permission gates inbound connections from SDK 37 onward, and that
          needs a manifest permission rather than anything in this file. -->
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
 </network-security-config>

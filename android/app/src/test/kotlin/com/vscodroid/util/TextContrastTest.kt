@@ -264,15 +264,35 @@ class TextContrastTest {
      * is not on the window. If nothing up the tree declares one this fails rather than
      * guessing, since a guessed ground is a measurement of nothing.
      */
+    /**
+     * The colour a screen is drawn on when nothing in its layout declares one.
+     *
+     * Read from the app theme rather than assumed, so this stays a measurement.
+     * Null when the theme names none, which [groundsFor] then reports rather
+     * than measuring against a colour nobody chose.
+     */
+    private val themeWindowBackground: String? by lazy {
+        if (!themesXml.isFile) return@lazy null
+        Regex("""<item name="android:windowBackground">([^<]+)</item>""")
+            .find(themesXml.readText())?.groupValues?.get(1)?.trim()
+    }
+
     private fun groundsFor(el: Element, layout: String): List<Pair<String, Rgb>> {
         val declared = generateSequence<Node>(el) { it.parentNode }
             .filterIsInstance<Element>()
             .firstNotNullOfOrNull {
                 it.attr(ANDROID_NS, "background") ?: it.attr(APP_NS, "cardBackgroundColor")
             }
+            // The window is the ground when no view paints one, and reading it
+            // off the theme is not the guess this used to refuse: a screen whose
+            // root declares nothing is drawn on android:windowBackground, and
+            // that value is a fact in themes.xml rather than an assumption. The
+            // roots that used to repeat it were painting the same colour twice.
+            ?: themeWindowBackground
         checkNotNull(declared) {
             "nothing from ${el.tagName} up to the root of $layout declares a background, " +
-                "so there is no ground to measure this text against"
+                "and the theme names no android:windowBackground either, so there is no " +
+                "ground to measure this text against"
         }
         val grounds = mutableListOf(declared to flatten(declared))
         if (layout == SWAPPED_GROUND_LAYOUT) {

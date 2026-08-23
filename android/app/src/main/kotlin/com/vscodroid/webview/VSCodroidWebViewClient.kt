@@ -29,6 +29,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
 import java.net.URLDecoder
+import android.annotation.SuppressLint
 
 /**
  * The directories this app publishes to content rendered inside the WebView,
@@ -682,6 +683,7 @@ internal class BoundedInputStream(wrapped: java.io.InputStream, private var rema
     override fun available(): Int = minOf(super.available().toLong(), remaining).toInt()
 }
 
+@SuppressLint("MissingOnRenderProcessGone")
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
     private val resourceRoots: List<String>,
@@ -727,6 +729,9 @@ class VSCodroidWebViewClient(
      */
     private val onTlsFailure: (TlsFailure) -> Unit = { },
 ) : WebViewClient() {
+    // MissingOnRenderProcessGone: overridden below, and what it does there is the
+    // reason the class exists in one piece. The check misses the override on a
+    // Kotlin class with a primary constructor.
 
     private val tag = "WebViewClient"
 

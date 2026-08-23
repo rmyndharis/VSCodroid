@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.PopupWindow
 import com.vscodroid.R
 import androidx.appcompat.widget.AppCompatTextView
+import androidx.core.graphics.drawable.toDrawable
 
 class LongPressPopup(
     private val context: Context,
@@ -112,7 +113,7 @@ class LongPressPopup(
         )
 
         popup = PopupWindow(container, popupWidth, popupHeight, true).apply {
-            setBackgroundDrawable(ColorDrawable(context.getColor(R.color.colorPopupBg)))
+            setBackgroundDrawable(context.getColor(R.color.colorPopupBg).toDrawable())
             elevation = dpToPx(4).toFloat()
             isOutsideTouchable = true
             // The window takes input focus, which is what makes an alternate

@@ -28,6 +28,7 @@ import java.io.File
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import androidx.core.net.toUri
 
 /**
  * How long generateSshKey waits for ssh-keygen before killing it.
@@ -573,7 +574,7 @@ class AndroidBridge(
         // open to those ids for ten minutes with no sign-in in flight.
         var armed: List<String> = emptyList()
         return try {
-            val uri = Uri.parse(url)
+            val uri = url.toUri()
             // The one destination this method judges, and it is refused before
             // anything is armed rather than merely left unarmed.
             //
@@ -774,7 +775,7 @@ class AndroidBridge(
     @JavascriptInterface
     fun openRecentFolder(authToken: String, uriString: String) {
         if (!security.validateToken(authToken)) return
-        val uri = Uri.parse(uriString)
+        val uri = uriString.toUri()
         // Null, and printed as such, only for a bridge built with no SAF manager,
         // which is also a bridge whose open callback defaults to doing nothing.
         // Production has no such caller: `MainActivity` passes both together.

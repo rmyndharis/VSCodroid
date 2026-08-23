@@ -1,23 +1,31 @@
 [versions]
 agp = "9.3.1"
-coreKtx = "1.16.0"
-appcompat = "1.7.0"
-webkit = "1.12.1"
-lifecycle = "2.8.7"
-coroutines = "1.9.0"
+coreKtx = "1.19.0"
+appcompat = "1.8.0"
+webkit = "1.17.0"
+lifecycle = "2.11.0"
+coroutines = "1.11.0"
 activity = "1.13.0"
 material = "1.14.0"
-junit = "5.11.4"
-mockk = "1.13.13"
+junit = "6.1.3"
+mockk = "1.14.11"
+# Held at 2.2.2 deliberately, and lint's newer-version notice is answered here
+# rather than ignored. Measured on the merged release manifest: 2.3.0 adds
+# ACCESS_NETWORK_STATE, RECEIVE_BOOT_COMPLETED and WAKE_LOCK to what the
+# installed app asks for, against the two this build records. That is three
+# capabilities a user and a Play reviewer both see, bought for nothing this app
+# uses; scripts/check-permission-claims.py is what caught it and will catch the
+# next attempt too.
 playAssetDelivery = "2.2.2"
-constraintlayout = "2.2.0"
+constraintlayout = "2.2.2"
 viewpager2 = "1.1.0"
-browser = "1.8.0"
-androidxTestExt = "1.2.1"
-androidxTestRunner = "1.6.2"
-androidxTestRules = "1.6.1"
-espresso = "3.6.1"
-uiautomator = "2.3.0"
+browser = "1.10.0"
+androidxTestExt = "1.3.0"
+androidxTestRunner = "1.7.0"
+androidxTestRules = "1.7.0"
+espresso = "3.7.0"
+uiautomator = "2.4.0"
+orgJson = "20260814"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -46,5 +54,6 @@ androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "
 androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
