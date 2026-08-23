@@ -10,6 +10,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -210,6 +211,41 @@ class TruncatedRepairRetryTest {
             bashrc.readText().contains("export PROJECTS_DIR"),
             "an append behind the repair cost the header shape its retry",
         )
+    }
+
+    /**
+     * The launch before there is anything to repair, which is every fresh
+     * install and every launch after Clear Data.
+     *
+     * SplashActivity runs this repair above the `isFirstRun()` branch, and
+     * `home/` is made by `createDirectories()` inside the setup that has not run
+     * yet. So the create arm saw a `.bashrc` that was absent for the ordinary
+     * reason, tried to write one into a directory that was not there, and could
+     * only fail: an ERROR line saying the terminal has no prompt, no PATH exports
+     * and no npm, on 100% of first launches. In a release build logcat is the
+     * only trace this project has, and a line that is always wrong is the kind
+     * that teaches a reader to skip the ones that are not.
+     *
+     * NEGATIVE CONTROL: drop `&& bashrc.parentFile?.isDirectory == true` from the
+     * branch. The write then fails and the ERROR is logged, so the last assertion
+     * reddens.
+     */
+    @Test
+    fun `a launch before the first extraction says nothing about a bashrc that cannot exist yet`() {
+        // Recursive because setUp also stages the machine-settings directory
+        // under `home`, and a fresh install has neither.
+        assertTrue(
+            bashrc.parentFile!!.deleteRecursively(),
+            "could not stage a home directory that the first extraction has not made yet",
+        )
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertFalse(
+            bashrc.parentFile!!.exists(),
+            "the repair made the home directory, which belongs to createDirectories",
+        )
+        verify(exactly = 0) { Logger.e(any(), any(), any()) }
     }
 
     /**

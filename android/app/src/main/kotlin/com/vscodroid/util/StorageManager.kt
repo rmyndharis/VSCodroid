@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
+import java.util.Locale
 
 /**
  * Tracks disk usage per component and provides cache-clearing operations.
@@ -292,11 +293,20 @@ object StorageManager {
         true
     }
 
+    /**
+     * The separator is pinned to [Locale.US] because the unit beside it is not
+     * localized: `KB`, `MB` and `GB` are written here in English and the module
+     * ships a single `res/values`, so letting the number follow the device
+     * locale renders `1,0 GB`, half of one convention and half of another, on
+     * every device whose region uses a comma. It also made the same code print
+     * two different strings on two JDKs, because the CLDR data behind a region
+     * moves between releases.
+     */
     fun formatSize(bytes: Long): String {
         return when {
-            bytes >= 1_073_741_824 -> "%.1f GB".format(bytes / 1_073_741_824.0)
-            bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
-            bytes >= 1_024 -> "%.1f KB".format(bytes / 1_024.0)
+            bytes >= 1_073_741_824 -> "%.1f GB".format(Locale.US, bytes / 1_073_741_824.0)
+            bytes >= 1_048_576 -> "%.1f MB".format(Locale.US, bytes / 1_048_576.0)
+            bytes >= 1_024 -> "%.1f KB".format(Locale.US, bytes / 1_024.0)
             else -> "$bytes B"
         }
     }

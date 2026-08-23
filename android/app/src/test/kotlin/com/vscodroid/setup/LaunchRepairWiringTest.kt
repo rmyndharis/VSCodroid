@@ -64,9 +64,10 @@ class LaunchRepairWiringTest {
      * to `onCreate` and not added here fails that same test, which is how the two
      * stay in step.
      *
-     * The order matters at one place and is worth keeping honest everywhere:
+     * The order matters at two places and is worth keeping honest everywhere:
      * `repairTruncatedSetupFiles` has to precede the three appenders that extend
-     * `.bashrc` only when it already exists.
+     * `.bashrc` only when it already exists, and `ensureProjectsDir` has to
+     * precede `createStorageSymlinks`, which links to what it creates.
      *
      * One toolchain repair is deliberately absent: `reconcileDeliveredPacks` runs
      * from `continueAfterSetup` instead, because it is the only member of the
@@ -89,6 +90,11 @@ class LaunchRepairWiringTest {
         "createBashEnvFile",
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
+        // Behind ensureProjectsDir, and that pair is the second ordered one in
+        // this list: the link is only written when the directory it points at is
+        // there, so ahead of it a launch that had lost both would repair the
+        // directory and leave the link for the launch after.
+        "createStorageSymlinks",
         "repairInstalledToolchains",
         "reclaimRevokedMirrors",
     )
@@ -299,10 +305,12 @@ class LaunchRepairWiringTest {
      * working because it compares the whole list rather than its length.
      *
      * Order is checked because the list above says "in call order" and because
-     * one pair genuinely depends on it: `repairTruncatedSetupFiles` clears a
+     * two pairs genuinely depend on it. `repairTruncatedSetupFiles` clears a
      * `.bashrc` that an older release left half-written, and the three appenders
-     * behind it extend that file only when it already exists. Reordered, they
+     * behind it extend that file only when it already exists; reordered, they
      * would extend the broken one and the clear would then throw their work away.
+     * `createStorageSymlinks` writes `~/projects` only while the directory it
+     * points at is there, so `ensureProjectsDir` has to have run first.
      */
     @Test
     fun `the guarded calls are these, in this order`() {

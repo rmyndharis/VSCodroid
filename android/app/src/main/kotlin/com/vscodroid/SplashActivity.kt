@@ -51,6 +51,17 @@ class SplashActivity : AppCompatActivity() {
      */
     private var pickerAdapter: ToolchainPickerAdapter? = null
 
+    /**
+     * The progress closure this instance installed, or null if it never got as
+     * far as installing one.
+     *
+     * Held so [onDestroy] can take it back, and compared by identity there: the
+     * sink lives in the companion of [FirstRunSetup] because the extraction
+     * outlives the screen that started it, so a departing instance must not
+     * silence the one that replaced it.
+     */
+    private var progressSink: ((String, Int) -> Unit)? = null
+
     // Progress UI refs (only valid after setContentView to progress layout)
     private val progressRows = mutableMapOf<String, ProgressRow>()
 
@@ -113,19 +124,48 @@ class SplashActivity : AppCompatActivity() {
         // reachable from outside the app by some routes, and wiped by Clear
         // Data, not because the app moved it.
         repair("the projects directory") { setup.ensureProjectsDir() }
+        // Immediately after it, because it points AT it. The link was written
+        // once, at first run, behind a guard that follows it -- so a projects
+        // directory deleted from outside the app left `~/projects` dangling,
+        // reading as present to every check, until the next app update. The
+        // terminal starts there.
+        repair("the projects symlink") { setup.createStorageSymlinks() }
         // A toolchain keeps the manifest it was installed with, so a
         // packaging fix never reaches an install that already exists. This
         // gives those binaries back the execute bit they should have had.
         // It returns immediately, the walk itself runs on the toolchain
         // I/O thread, because the trees involved have thousands of files
         // and this block is on the main thread.
-        repair("the toolchain repair pass") { ToolchainManager(this).repairInstalledToolchains() }
+        //
+        // applicationContext, not this, and that is not a style choice: the
+        // walk it submits runs on the toolchain I/O thread over thousands of
+        // files, and this Activity finishes for MainActivity moments later, so
+        // handing it our own Context keeps a finished Activity, its Window and
+        // its ContextImpl reachable for the whole walk -- exactly while the
+        // editor, the WebView renderer and Node are all starting. Every
+        // ToolchainManager built in this file passes applicationContext for the
+        // same reason; ToolchainActivity and AndroidBridge already did.
+        //
+        // The Context is only half of it, and this line is the half that needs
+        // nothing else: it hands the manager no callback, so there is no closure
+        // to name this screen. Where there is one, in [startDownloads], the
+        // closure holds this screen strongly on purpose, because it is the only
+        // thing that advances the queue; [endDownloadQueue] is what bounds that
+        // retention.
+        repair("the toolchain repair pass") { ToolchainManager(applicationContext).repairInstalledToolchains() }
         // A folder whose permission the user withdrew in system settings never
         // comes back through the app, so its mirror is disk nothing can reach.
-        // Here because it is the one point that is guaranteed to have no folder
-        // open: this activity always precedes MainActivity, and nothing can tell
-        // a mirror the editor is holding from one it is not. It returns
-        // immediately, for the reason the line above does.
+        //
+        // Here because it is a launch, not because a launch guarantees no folder
+        // is open: this used to say "this activity always precedes MainActivity"
+        // and that is false. NodeService is declared with no stopWithTask, so
+        // swiping the task from Recents leaves the server serving with a
+        // workspace open, and the next tap starts a fresh task here; an OAuth
+        // callback reaches MainActivity through its VIEW filter without coming
+        // past this screen at all. What makes the pass safe is what it will
+        // touch, and reclaimRevokedMirrors documents it: only a mirror whose
+        // permission is already gone, which the editor cannot be syncing. It
+        // returns immediately, for the reason the line above does.
         repair("the SAF mirror reclaim") { SafStorageManager(this).reclaimRevokedMirrors() }
 
         if (!setup.isFirstRun()) {
@@ -159,12 +199,16 @@ class SplashActivity : AppCompatActivity() {
             statusText.text = getString(R.string.status_updating_app)
         }
 
-        setup.onProgress = { message, percent ->
+        // Named rather than assigned inline, so [onDestroy] can hand back exactly
+        // this closure and nobody else's.
+        val sink: (String, Int) -> Unit = { message, percent ->
             runOnUiThread {
                 statusText.text = message
                 progressBar.progress = percent
             }
         }
+        progressSink = sink
+        setup.onProgress = sink
 
         runSetupWithRetry(setup, statusText, progressBar)
     }
@@ -352,11 +396,29 @@ class SplashActivity : AppCompatActivity() {
      */
     override fun onStart() {
         super.onStart()
-        pickerAdapter?.setInstalled(ToolchainManager(this).getInstalledToolchains())
+        pickerAdapter?.setInstalled(ToolchainManager(applicationContext).getInstalledToolchains())
     }
 
     override fun onDestroy() {
+        // The Play Core subscription only. The state callback stays, because it
+        // is what advances the download queue and leaving this screen does not
+        // stop the transfer: a queue still running re-registers this listener at
+        // its next fetch, and [endDownloadQueue] settles both when it ends.
         toolchainManager?.unregisterListener()
+        // Without this the extraction goes on reporting into a destroyed
+        // activity's closure, which keeps that Activity and its whole view
+        // hierarchy reachable for the rest of a run measured in minutes.
+        //
+        // Identity-checked on the far side, and the case that needs it is two
+        // Splash instances existing at once (noHistory plus a standard
+        // launchMode, which runSetup's own comment names): the departing one's
+        // onDestroy can run after the replacement has installed its own sink, so
+        // a blanket clear would silence the screen the user is looking at. A
+        // config-change relaunch runs the other way round -- the old instance is
+        // destroyed before the new one is created -- so ordering alone would
+        // have covered that one.
+        FirstRunSetup.detachProgress(progressSink)
+        progressSink = null
         super.onDestroy()
     }
 
@@ -411,7 +473,7 @@ class SplashActivity : AppCompatActivity() {
         // could have given back: the reclaim half calls removePack, which posts
         // the delete and returns, so it was never going to free bytes in time for
         // a pre-flight that had already read them.
-        repair("the delivered toolchain reconcile") { ToolchainManager(this).reconcileDeliveredPacks() }
+        repair("the delivered toolchain reconcile") { ToolchainManager(applicationContext).reconcileDeliveredPacks() }
         if (shouldShowPicker()) {
             Logger.i(tag, "The toolchain picker has not been answered yet; offering it")
             showToolchainPicker()
@@ -454,7 +516,7 @@ class SplashActivity : AppCompatActivity() {
         // Read on the main thread, as ToolchainActivity already reads it twice: it
         // is one small JSON file, and the alternative is drawing the cards wrong
         // and correcting them afterwards.
-        adapter.setInstalled(ToolchainManager(this).getInstalledToolchains())
+        adapter.setInstalled(ToolchainManager(applicationContext).getInstalledToolchains())
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
         // So [onStart] can correct these cards when the screen comes back. One
@@ -473,7 +535,7 @@ class SplashActivity : AppCompatActivity() {
             // the last point before the download is spent.
             val selected = notYetInstalled(
                 adapter.getSelectedPackNames(),
-                ToolchainManager(this).getInstalledToolchains(),
+                ToolchainManager(applicationContext).getInstalledToolchains(),
             )
             markPickerShown()
             if (selected.isEmpty()) {
@@ -516,16 +578,51 @@ class SplashActivity : AppCompatActivity() {
         }
 
         // Set up toolchain manager
-        val manager = ToolchainManager(this)
+        val manager = ToolchainManager(applicationContext)
         toolchainManager = manager
         val alreadySaid = mutableSetOf<ToolchainFailure>()
+        // Strongly, and holding it weakly is what this replaced. The callback is
+        // the only thing that advances the queue -- handleDownloadState ends in
+        // downloadNext(), which installs the pack behind the one that just
+        // settled -- so behind a weak reference the queue stopped whenever the
+        // collector happened to run. Only on the HTTP path, because the Play path
+        // already ends at onDestroy's unregisterListener, which is to say
+        // precisely the sideload and GitHub-release users. Pressing Back on this
+        // screen sets nothing (only Cancel sets `cancelled`), so a user who
+        // picked three toolchains got somewhere between one and three of them,
+        // decided by the timing of a collection.
+        //
+        // What bounds the retention is who holds the manager. `toolchainManager`
+        // is a field of this screen and this callback names the screen, so the
+        // two are a cycle, and a cycle nothing outside points at is collected
+        // whole. Outside it there are exactly two holders and both ARE the queue:
+        // an ioExecutor task running an HTTP transfer, which ends when the
+        // transfer does, and Play Core's listener registry. The registry is the
+        // one that needs saying, because install() re-registers before every
+        // fetch and so undoes onDestroy's unregister; [endDownloadQueue] is what
+        // settles it. This screen is therefore reachable for as long as the
+        // downloads it started are running, and not a step past them. That holds
+        // only because every state either settles or can be advanced past:
+        // [handleDownloadState] ends the queue on a status that will not arrive
+        // on its own AND on the one that would wait for a question this screen
+        // can no longer put.
+        // ToolchainActivity holds its screen weakly because nothing there depends
+        // on the callback arriving; here everything does.
         manager.onStateChange = { packName, status, percent, why ->
             runOnUiThread {
                 handleDownloadState(packName, status, percent)
                 // The row has space for one word and the reason is a sentence, so
                 // it is said here rather than squeezed in there. Without it the
                 // queue moves on and the only record of WHY is in logcat.
-                val reason = reasonToAnnounce(why, alreadySaid)
+                //
+                // To this screen only. The queue outlives it, so a failure that
+                // lands after the user has left put its sentence over the editor,
+                // unattributed and about a screen that is no longer there. Same
+                // rule as ToolchainActivity, which gates its own Toast on the
+                // screen being started; the test on it is weaker here because
+                // this screen never comes back, so there is nothing to defer to.
+                val reason =
+                    if (isFinishing || isDestroyed) null else reasonToAnnounce(why, alreadySaid)
                 if (reason != null) {
                     Toast.makeText(this, getString(reason.message), Toast.LENGTH_LONG).show()
                 }
@@ -539,6 +636,10 @@ class SplashActivity : AppCompatActivity() {
             if (currentPack != null) {
                 manager.cancel(currentPack)
             }
+            // Nothing after this is acted on -- handleDownloadState returns on
+            // `cancelled` -- so the queue is over here just as it is when it
+            // drains, and what the manager holds of this screen goes back.
+            endDownloadQueue()
             launchMain()
         }
 
@@ -602,12 +703,44 @@ class SplashActivity : AppCompatActivity() {
         currentDownloadIndex++
         if (currentDownloadIndex >= downloadQueue.size) {
             // All done
+            endDownloadQueue()
             launchMain()
             return
         }
         val packName = downloadQueue[currentDownloadIndex]
         progressRows[packName]?.statusText?.text = getString(R.string.progress_installing)
         toolchainManager?.install(packName)
+    }
+
+    /**
+     * Gives back everything the manager holds of this screen, once the queue has
+     * nothing left to report.
+     *
+     * Both halves, because either one alone keeps it. `onStateChange` names this
+     * Activity and the manager holds the callback: while the queue is running
+     * that is exactly right, since the callback is what advances it, and the
+     * moment the queue is over it is a finished window kept alive by a download
+     * that has ended.
+     *
+     * The Play Core half is not a duplicate of [onDestroy]'s unregister.
+     * `ToolchainManager.install` registers the listener again before every fetch,
+     * so a queue that goes on draining after the user has left undoes that
+     * unregister with the next pack it starts, and ends with this screen sitting
+     * in a process-wide registry with nothing left to take it out.
+     *
+     * Called where the queue ends and nowhere else: from [downloadNext] when the
+     * last pack settles, and from Cancel. That it is reached at all rests on
+     * [handleDownloadState] advancing on every status that will not arrive on its
+     * own, and on the one status that would otherwise wait for ever, a
+     * cellular-data confirmation this screen is no longer alive to put.
+     * NOT from [onDestroy], which is the one
+     * place it must not be: leaving this screen does not stop the transfer, and
+     * clearing the callback there is what leaves the packs behind the in-flight
+     * one uninstalled.
+     */
+    private fun endDownloadQueue() {
+        toolchainManager?.unregisterListener()
+        toolchainManager?.onStateChange = null
     }
 
     /**
@@ -647,11 +780,11 @@ class SplashActivity : AppCompatActivity() {
         // Only the download the queue is waiting for gets to speak.
         //
         // The listener is registered for the app rather than for one fetch
-        // (ToolchainManager.kt:81), and every queued pack gets a row up front, so
-        // a state naming some other pack reaches here and used to be acted on. It
-        // could repaint a finished pack's row red, and worse, move the index --
-        // stepping over whichever pack was genuinely downloading and leaving it
-        // uninstalled with its row still reading "installing".
+        // (ToolchainManager.registerListener), and every queued pack gets a row up
+        // front, so a state naming some other pack reaches here and used to be
+        // acted on. It could repaint a finished pack's row red, and worse, move
+        // the index -- stepping over whichever pack was genuinely downloading and
+        // leaving it uninstalled with its row still reading "installing".
         //
         // downloadNext() increments the index before calling install(), so the
         // pack being fetched is always the one at the index by the time any state
@@ -663,6 +796,27 @@ class SplashActivity : AppCompatActivity() {
         }
 
         val row = progressRows[packName] ?: return
+
+        // Play's cellular-data question needs a window to put it in, and this
+        // screen is the only one that can put it. The queue outlives the screen
+        // on purpose (pressing Back sets nothing, only Cancel sets `cancelled`),
+        // so a pack that reaches REQUIRES_USER_CONFIRMATION after the user has
+        // left is waiting on a question nobody will ever be asked:
+        // showCellularDataConfirmation needs a live Activity, its failure is only
+        // logged, the status never settles, and the advance below never fires.
+        // The queue then stops rather than skips, so this pack and every one
+        // behind it stay uninstalled, and because [endDownloadQueue] is reached
+        // only where the queue ends, this destroyed screen and its whole view
+        // hierarchy stay in Play Core's process-wide registry for the life of the
+        // process. ToolchainActivity defers the question to its next onStart
+        // instead; here there is no next onStart, since launchMain finishes this
+        // screen for good.
+        //
+        // Losing the pack is the lesser half of that trade, and it is recoverable:
+        // ToolchainActivity's poll picks up a pack still sitting in this status
+        // and puts the question itself.
+        val unaskable = status == AssetPackStatus.REQUIRES_USER_CONFIRMATION &&
+            (isFinishing || isDestroyed)
 
         when (status) {
             AssetPackStatus.DOWNLOADING, AssetPackStatus.TRANSFERRING -> {
@@ -681,10 +835,15 @@ class SplashActivity : AppCompatActivity() {
                 row.statusText.text = getString(R.string.progress_waiting)
             }
             AssetPackStatus.REQUIRES_USER_CONFIRMATION -> {
-                try {
-                    toolchainManager?.showConfirmationDialog(this)
-                } catch (e: Exception) {
-                    Logger.e(tag, "Failed to show confirmation dialog", e)
+                if (unaskable) {
+                    row.statusText.text = getString(R.string.progress_failed)
+                    showResult(row.statusText, R.color.colorError, row.nameText.text.toString())
+                } else {
+                    try {
+                        toolchainManager?.showConfirmationDialog(this)
+                    } catch (e: Exception) {
+                        Logger.e(tag, "Failed to show confirmation dialog", e)
+                    }
                 }
             }
             // Anything else ends this pack without installing it. FAILED is the
@@ -706,7 +865,7 @@ class SplashActivity : AppCompatActivity() {
         // matching no branch advanced nothing: downloadNext() was never reached
         // and the screen sat on its progress list for the rest of the session,
         // with every toolchain behind the stalled one left uninstalled. Deciding
-        // it here, from the status alone, means a branch cannot forget to do it
+        // it here, in one place, means a branch cannot forget to do it
         // -- which is the shape the bug had, rather than the particular states
         // it happened to miss.
         //
@@ -714,7 +873,13 @@ class SplashActivity : AppCompatActivity() {
         // said it was: cancelButton is always visible and goes straight to
         // launchMain(), and a relaunch skips setup entirely because
         // markSetupComplete() has already run by the time this screen appears.
-        if (isTerminalPackStatus(status)) {
+        //
+        // `unaskable` beside it rather than inside [isTerminalPackStatus],
+        // because the word there means what Play says about the pack and this is
+        // about what this screen can still do with it. The other reader of that
+        // function, ToolchainActivity's subscription release, must go on hearing
+        // "still going somewhere" for a confirmation it can defer to its onStart.
+        if (isTerminalPackStatus(status) || unaskable) {
             downloadNext()
         }
     }
@@ -724,10 +889,30 @@ class SplashActivity : AppCompatActivity() {
     // -- Navigation --
 
     private fun launchMain() {
-        startActivity(Intent(this, MainActivity::class.java).apply {
-            data = intent?.data
-            intent?.extras?.let { putExtras(it) }
-        })
+        // The download queue outlives this screen, and nothing else stops it.
+        // Only Cancel sets `cancelled`, so pressing Back on the first-run
+        // download screen finishes this Activity while the transfer carries on:
+        // the HTTP path reports straight through `onStateChange` rather than
+        // through the Play Core listener onDestroy unregisters, so minutes later
+        // `downloadNext()` drains the queue and a destroyed Activity calls
+        // startActivity. Either the app pops itself into the foreground long
+        // after the user left it, or Android's background-activity-start rules
+        // drop the launch and nothing says so.
+        //
+        // The navigation alone, never the whole method: an early return here also
+        // skipped publishToolchainShortcut() below, and that is the only publisher
+        // of the only route to the Toolchains screen. Pressing Back during the
+        // first-run downloads therefore cost the user that route for the session,
+        // which is a worse trade than the stray launch this guard exists to stop.
+        val gone = isFinishing || isDestroyed
+        if (gone) {
+            Logger.i(tag, "The splash screen is gone; not launching the editor behind the user")
+        } else {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                data = intent?.data
+                intent?.extras?.let { putExtras(it) }
+            })
+        }
         // After the editor is on its way, never before.
         //
         // pushDynamicShortcut is a synchronous binder round trip to the system
@@ -744,29 +929,23 @@ class SplashActivity : AppCompatActivity() {
         // Those are floor numbers. The devices this project exists for have a
         // busier system server than an idle emulator does.
         publishToolchainShortcut()
-        finish()
+        if (!gone) finish()
     }
 
     /**
      * Publishes the launcher shortcut that opens [ToolchainActivity].
      *
      * The screen had no way in. It is not exported, it has no launcher entry,
-     * and its only caller is the `openToolchainSettings` command on the
-     * BroadcastChannel relay -- which no bundled extension sends. So the
-     * picker's one appearance decided the toolchains permanently.
+     * and its only caller was the `openToolchainSettings` command on the
+     * BroadcastChannel relay, which nothing sent -- so the picker's one
+     * appearance decided the toolchains permanently.
      *
-     * That last sentence used to explain itself by saying every bundled
-     * extension of ours ran on the Node host, where `BroadcastChannel` is the
-     * one from `node:worker_threads` and shares nothing but a name with the DOM
-     * channel the relay opens. That stopped being true: `saf-bridge` now
-     * declares `browser` and reaches the relay, and contributes six commands
-     * through it. `openToolchainSettings` is still not one of them, so the
-     * conclusion holds and the reason for it does not -- which is why the reason
-     * is written as history rather than as a standing fact.
-     *
-     * A launcher shortcut is deliberately the entry point that does not depend on
-     * the WebView, because reaching this screen matters most when the editor
-     * layer is the thing that is broken.
+     * There are two routes now. `saf-bridge` declares `browser`, so it reaches
+     * the relay, and its `VSCodroid: Manage Toolchains` command is the sender
+     * that command never had. This shortcut is the other one, and it is the one
+     * that survives a workbench that has not loaded: reaching this screen
+     * matters most when the editor layer is the thing that is broken, which is
+     * exactly when the Command Palette is not there to be opened.
      *
      * Pushed at runtime rather than declared in res/xml/shortcuts.xml, for two
      * reasons that both bite:
@@ -827,8 +1006,9 @@ class SplashActivity : AppCompatActivity() {
  * A pack wrongly treated as finished costs that toolchain until the user
  * installs it again, which they now can: publishToolchainShortcut() gives
  * ToolchainActivity a launcher shortcut. Until that existed the loss was
- * permanent -- the screen's only caller was a BroadcastChannel command nothing
- * can send (AndroidBridge.kt:229, MainActivity.kt:907) -- so this paragraph
+ * permanent -- the screen's only caller was a BroadcastChannel command that at
+ * the time had no sender (AndroidBridge.openToolchainSettings, dispatched by
+ * the relay MainActivity injects; saf-bridge sends it now) -- so this paragraph
  * used to read "and costs it for good".
  *
  * A pack wrongly waited on costs that toolchain and every one queued behind it,

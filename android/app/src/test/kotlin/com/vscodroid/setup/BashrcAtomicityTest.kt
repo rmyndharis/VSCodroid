@@ -480,6 +480,54 @@ class BashrcAtomicityTest {
         assertEquals(partial, bashrc.readText(), "a file the repair cannot classify was rewritten anyway")
     }
 
+    /**
+     * A `.bashrc` that is GONE is written again, which nothing did.
+     *
+     * `createBashrc` is reached only from `runSetupLocked`, on a version change,
+     * and every per-launch appender opens with `bashrc.exists()` or returns on
+     * its absence. So `rm ~/.bashrc` in the bundled terminal cost the shell its
+     * prompt, PROJECTS_DIR, aliases, npm/npx/claude and the startup `cd` until
+     * the next app update, while `ensureProjectsDir` sat three calls away in the
+     * same block precisely because a path can vanish between launches.
+     *
+     * It is not the line the repair refuses to cross either: nothing of the
+     * user's is in a file that is not there.
+     */
+    @Test
+    fun `a bashrc that has been deleted is written again`() {
+        assertTrue(bashrc.delete(), "could not stage the missing .bashrc")
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(bashrc.isFile, "a deleted .bashrc was left missing, as it was before")
+        val written = bashrc.readText()
+        assertTrue(written.contains("export PROJECTS_DIR"), "the recreated file is not the one we write")
+        assertTrue(written.contains(currentMarker), "the recreated file has no prompt block")
+    }
+
+    /**
+     * And a failed recreate leaves the path absent rather than half a file, so
+     * the next launch enters the same branch again. Same contract the two
+     * rewrites above have, reached through the same blocked temporary path.
+     */
+    @Test
+    fun `a blocked recreate leaves nothing behind and heals on the next launch`() {
+        assertTrue(bashrc.delete(), "could not stage the missing .bashrc")
+        val blocker = blockTheWrite()
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertFalse(bashrc.exists(), "a failed recreate left a file the appenders would extend")
+
+        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(
+            bashrc.readText().contains("export PROJECTS_DIR"),
+            "the install did not heal once there was room to write",
+        )
+    }
+
     @Test
     fun `a healthy bashrc is left exactly as it is`() {
         // The control. Without it every assertion above would also hold for a
@@ -515,9 +563,9 @@ class BashrcAtomicityTest {
      * Those three run from SplashActivity on every launch, so a failure heals by
      * itself next time. This one runs only inside `runSetupLocked`, whose
      * `markSetupComplete()` sits at the end of the same try block, and
-     * `isFirstRun()` is keyed on versionName -- so a failure that merely logs
-     * lets setup be certified with no .bashrc at all, and nothing writes one
-     * until the app updates. The every-launch repairs cannot fill the gap
+     * `isFirstRun()` is keyed on versionName or versionCode -- so a failure that
+     * merely logs lets setup be certified with no .bashrc at all, and nothing
+     * writes one until the app updates. The every-launch repairs cannot fill the gap
      * either: `createNpmWrappers`, `ensureToolchainEnvSourcing` and
      * `ensurePromptFix` all open with `if (bashrc.exists())`, so with the file
      * absent all three no-op forever too.

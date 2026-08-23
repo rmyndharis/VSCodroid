@@ -224,8 +224,17 @@ object Environment {
      *
      * Only REMOTE_MACHINE_SCOPES are taken from it: MACHINE, WINDOW, RESOURCE,
      * LANGUAGE_OVERRIDABLE, MACHINE_OVERRIDABLE (`configuration.ts:387`). An
-     * APPLICATION-scoped setting is still ignored here no matter how correct the
-     * path is, which is why Workspace Trust needs the server's CLI flag.
+     * APPLICATION-scoped setting is still ignored by the WEB CLIENT here no
+     * matter how correct the path is, which is why Workspace Trust needs the
+     * server's CLI flag.
+     *
+     * The web client is not the only reader, and the difference decides which
+     * defaults are worth writing. The server builds its own ConfigurationService
+     * on this same file with an empty options object, so it takes every key
+     * whatever the scope: that is why `extensions.verifySignature`, which is
+     * APPLICATION-scoped and which only the server reads, does take effect. A
+     * key that is APPLICATION-scoped AND read only by the workbench cannot be
+     * defaulted from here at all, and the file says nothing when one is dropped.
      *
      * Settings the user edits in the workbench go to IndexedDB in the WebView
      * instead, and take precedence over this file. That is the right order: these

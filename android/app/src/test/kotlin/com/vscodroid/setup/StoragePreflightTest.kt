@@ -239,6 +239,50 @@ class StoragePreflightTest {
 
     // ---- the arithmetic ----
 
+    /**
+     * The slack has to cover what its own doc says it covers, and 64 MiB did not.
+     *
+     * `EXTRACTED_ASSET_BYTES` is the sum of logical file lengths. What the unpack
+     * actually consumes is that sum rounded up to a filesystem block per file,
+     * plus a block for each directory it creates, and the slack is the only term
+     * standing for either. Measured over the shipped tree on 2026-08-23: 23,494
+     * files and 5,021 directories, 809.5 MiB logical and 872.8 MiB at 4 KiB
+     * blocks, so 63.3 MiB of rounding from the files alone before the
+     * directories add about 19.6 MiB more. Against that the old 64 MiB asked
+     * 873.5 MiB for an unpack consuming roughly 892 on ext4: the gate passed a
+     * device, the bar ran for minutes, and the write then met ENOSPC, which is
+     * the one direction the constant's own doc names as the one to avoid.
+     *
+     * f2fs with inline_data keeps the 17,270 files under ~3.4 KiB inside the
+     * inode and lands near 821 MiB, which is why the shortfall was invisible on
+     * most devices and why the figures below are the ext4 ones.
+     *
+     * The counts are recorded rather than walked, deliberately. Walking
+     * `src/main/assets` would need an `assumeTrue` for the CI runner, which stubs
+     * those directories empty, and a case that always skips reports nothing on
+     * every merge. Re-measure and update these two numbers when the tree moves;
+     * the durable fix is for the build to compute the figure block-rounded, at
+     * which point this case can go.
+     */
+    @Test
+    fun `the slack covers the block rounding of the tree this release ships`() {
+        val shippedFiles = 23_494L
+        val shippedDirectories = 5_021L
+        val blockBytes = 4_096L
+
+        // 872.8 MiB block-rounded against 809.5 MiB logical, in bytes.
+        val fileRounding = 915_128_320L - 848_756_736L
+        val directoryBlocks = shippedDirectories * blockBytes
+        val overhead = fileRounding + directoryBlocks
+
+        assertTrue(
+            slack >= overhead,
+            "the slack is ${slack / mb} MiB against ${overhead / mb} MiB of on-disk overhead " +
+                "for $shippedFiles files and $shippedDirectories directories, so the " +
+                "pre-flight admits a device the unpack then fills",
+        )
+    }
+
     @Test
     fun `a fresh install has to fit the whole tree`() {
         assertEquals(

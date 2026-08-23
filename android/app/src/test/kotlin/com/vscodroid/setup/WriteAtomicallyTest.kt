@@ -3,6 +3,7 @@ package com.vscodroid.setup
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -64,6 +65,64 @@ class WriteAtomicallyTest {
         assertFalse(ok)
         assertFalse(dest.exists(), "a failed write created the file it failed to write")
         assertTrue(tempFiles().isEmpty())
+    }
+
+    /**
+     * The cause has to leave this function, because nothing else knows it.
+     *
+     * The catch here swallowed the exception whole: the boolean reached the
+     * caller and the message reached nothing, so a device that filled up
+     * mid-extraction produced a splash screen and a logcat trace that said which
+     * step failed and never the words "No space left on device" -- on a screen
+     * whose only control is Retry.
+     */
+    @Test
+    fun `a failed write reports why it failed`() {
+        val dest = File(dir, "payload.so")
+        var reported: String? = null
+
+        val ok = writeAtomically(dest, onError = { reported = it }) {
+            throw IOException("No space left on device")
+        }
+
+        assertFalse(ok)
+        assertEquals("No space left on device", reported)
+    }
+
+    /**
+     * A rename that fails reports too, and it is a different failure: the bytes
+     * were written and could not be moved into place. Reported as a sentence of
+     * its own rather than left as the silent half of the same boolean.
+     */
+    @Test
+    fun `a failed rename reports why it failed`() {
+        // A non-empty directory under the destination's name: renameTo refuses to
+        // replace it, which is the failure without needing a permission trick.
+        val dest = File(dir, "payload.so")
+        assertTrue(dest.mkdirs(), "could not stage the blocked destination")
+        File(dest, "occupied").writeText("x")
+        var reported: String? = null
+
+        val ok = writeAtomically(dest, onError = { reported = it }) { it.write("hello".toByteArray()) }
+
+        assertFalse(ok, "a write that could not be moved into place reported success")
+        assertTrue(
+            reported != null && reported!!.isNotEmpty(),
+            "the rename failure reported no cause at all",
+        )
+    }
+
+    /**
+     * The control: a caller that asks for no cause is unaffected, which is what
+     * keeps every existing writer in the file unchanged.
+     */
+    @Test
+    fun `a successful write reports no cause`() {
+        val dest = File(dir, "payload.so")
+        var reported: String? = null
+
+        assertTrue(writeAtomically(dest, onError = { reported = it }) { it.write("hello".toByteArray()) })
+        assertNull(reported, "a successful write reported a cause")
     }
 
     @Test

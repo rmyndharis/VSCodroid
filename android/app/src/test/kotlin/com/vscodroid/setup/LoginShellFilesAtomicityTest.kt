@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -20,23 +21,29 @@ import java.io.IOException
 import java.lang.reflect.InvocationTargetException
 
 /**
- * `.bash_profile` and `.tmux.conf`, the two setup files that were still written
- * straight to their destination.
+ * The setup files that were still written straight to their destination:
+ * `.bash_profile`, `.tmux.conf`, `~/.ssh/config` and the welcome README.
  *
- * Both are guarded by their own existence and both are reached only from
+ * All four are guarded by their own existence and all are reached only from
  * `runSetupLocked`, which `isFirstRun()` gates on versionName or versionCode:
- * no per-launch repair reads either path, and `repairTruncatedSetupFiles`
+ * no per-launch repair reads any of those paths, and `repairTruncatedSetupFiles`
  * covers `.bashrc` and settings.json alone. `writeText` creates and truncates
  * before writing a byte, so a write that failed left a file that satisfied the
  * guard for the life of the install, and one Retry tap cemented it.
  *
- * What that costs is confined to INTERACTIVE LOGIN shells, which is what a tmux
- * window is: they read `.bash_profile` and never `.bashrc` or `BASH_ENV`, so
- * they come up with no prompt block, no aliases and no `npm`/`npx`/`claude`,
- * while the editor's own terminals (profile args are empty, so not login
- * shells) and `bash -c` (covered by `createBashEnvFile` through `BASH_ENV`) are
- * unaffected, and `PROJECTS_DIR` still arrives through the process
- * environment.
+ * For the two shell files what that costs is confined to INTERACTIVE LOGIN
+ * shells, which is what a tmux window is: they read `.bash_profile` and never
+ * `.bashrc` or `BASH_ENV`, so they come up with no prompt block, no aliases and
+ * no `npm`/`npx`/`claude`, while the editor's own terminals (profile args are
+ * empty, so not login shells) and `bash -c` (covered by `createBashEnvFile`
+ * through `BASH_ENV`) are unaffected, and `PROJECTS_DIR` still arrives through
+ * the process environment.
+ *
+ * For `~/.ssh/config` it costs every clone, fetch and push over ssh: the file is
+ * what `GIT_SSH_COMMAND` passes with `-F`, and the Termux ssh resolves `~` to
+ * its own compiled-in prefix, so without the absolute `IdentityFile` and
+ * `UserKnownHostsFile` it looks for the key in a directory this app cannot read.
+ * The welcome README costs a greeting, which is why it warns rather than throws.
  *
  * The failure is arranged as in [BashrcAtomicityTest]: by occupying the
  * temporary path [writeAtomically] derives from the destination. That path only
@@ -51,6 +58,8 @@ class LoginShellFilesAtomicityTest {
 
     private val bashProfile by lazy { File(filesDir, "home/.bash_profile") }
     private val tmuxConf by lazy { File(filesDir, "home/.tmux.conf") }
+    private val sshConfig by lazy { File(filesDir, "home/.ssh/config") }
+    private val welcome by lazy { File(Environment.getProjectsDir(context), "README.md") }
 
     @BeforeEach
     fun setUp() {
@@ -62,6 +71,9 @@ class LoginShellFilesAtomicityTest {
 
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
+        // Pinned so the welcome README lands somewhere this test can read,
+        // rather than at whatever a relaxed mock invents for the external dir.
+        every { context.getExternalFilesDir(null) } returns File(filesDir, "external")
 
         File(filesDir, "home").mkdirs()
     }
@@ -145,6 +157,79 @@ class LoginShellFilesAtomicityTest {
             tmuxConf.exists(),
             "a truncated .tmux.conf was left behind; tmux reads it on every start and " +
                 "nothing here would ever rewrite it",
+        )
+    }
+
+    @Test
+    fun `the ssh client configuration is written on a first run`() {
+        invoke("setupSshDefaults")
+
+        // The absolute IdentityFile is the whole reason this file exists, so it
+        // is what the control reads.
+        assertTrue(sshConfig.readText().contains("IdentityFile ${filesDir.absolutePath}/home/.ssh/id_ed25519"))
+    }
+
+    /**
+     * Loud like `.bash_profile`, and for a heavier reason: a truncated ssh config
+     * satisfies its own `exists()` guard for the life of the install, and the
+     * only writer sits in `runSetupLocked` behind a version change. What that
+     * leaves is ssh looking for the key under Termux's compiled-in prefix, so
+     * every clone, fetch and push over ssh fails and nothing on device rewrites
+     * the file.
+     *
+     * NEGATIVE CONTROL: put `sshConfig.writeText(content)` back. The write then
+     * lands past the blocked temp path, so nothing is thrown and a file is left
+     * behind, and both assertions fail.
+     */
+    @Test
+    fun `a failed ssh config write leaves nothing behind and fails loudly`() {
+        assertTrue(sshConfig.parentFile!!.mkdirs(), "could not stage the .ssh directory")
+        block(sshConfig)
+
+        val thrown = assertThrows(InvocationTargetException::class.java) { invoke("setupSshDefaults") }
+
+        assertTrue(
+            thrown.cause is IOException,
+            "the failure must reach runSetupLocked's catch, which is what offers the Retry; " +
+                "it surfaced as ${thrown.cause}",
+        )
+        assertFalse(
+            sshConfig.exists(),
+            "a truncated ssh config was left behind, and its own exists() guard means no " +
+                "launch would ever replace it",
+        )
+    }
+
+    @Test
+    fun `the welcome readme is written on a first run`() {
+        assertTrue(welcome.parentFile!!.mkdirs(), "could not stage the projects directory")
+
+        invoke("createWelcomeProject")
+
+        assertTrue(welcome.readText().contains("# Welcome to VSCodroid"))
+    }
+
+    /**
+     * Quiet like `.tmux.conf`. What is lost is a greeting, and failing an 875 MB
+     * unpack over one is not a trade worth making; what must not happen is a half
+     * sentence under a name whose own existence is the guard, greeting every
+     * later launch.
+     *
+     * NEGATIVE CONTROL: restore `welcomeFile.writeText(content)`. The write then
+     * succeeds and the file exists, so the assertion reddens.
+     */
+    @Test
+    fun `a failed welcome readme write is quiet and leaves nothing behind`() {
+        assertTrue(welcome.parentFile!!.mkdirs(), "could not stage the projects directory")
+        block(welcome)
+
+        // Must not throw: it runs in the middle of the first-run unpack.
+        invoke("createWelcomeProject")
+
+        assertFalse(
+            welcome.exists(),
+            "a half-written README was left in the projects directory, where its own " +
+                "exists() guard greets every later launch with it",
         )
     }
 }

@@ -52,7 +52,27 @@ class FirstRunSetup(
     private val tag = "FirstRunSetup"
     private val prefs = context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE)
 
-    var onProgress: ((message: String, percent: Int) -> Unit)? = null
+    /**
+     * Where [reportProgress] sends its updates, backed by [progressSink] so that
+     * the extraction reports to whichever screen is on show rather than to the
+     * one that started it.
+     *
+     * An instance field is what it was, and [setupMutex] is what made that wrong.
+     * The lock is process-wide, so a relaunch mid-extraction (locale, font scale,
+     * display size, an mcc/mnc change while a new phone's SIM registers, none of
+     * which SplashActivity declares) leaves the running unpack reporting into the
+     * DESTROYED activity's closure -- which keeps that Activity and its whole
+     * view hierarchy reachable for the rest of the run -- while the replacement
+     * blocks on the lock for the same minutes with its bar at 0 and no way to
+     * move it. A bar stuck at 0% for minutes is what makes someone force-quit,
+     * and that costs the whole extraction.
+     *
+     * Assigning is therefore a handover: the newest screen wins, and
+     * [detachProgress] gives it back only if it is still the one installed.
+     */
+    var onProgress: ((message: String, percent: Int) -> Unit)?
+        get() = progressSink
+        set(value) { progressSink = value }
 
     enum class SetupResult { SUCCESS, LOW_STORAGE, ERROR }
 
@@ -79,6 +99,43 @@ class FirstRunSetup(
     /** The most recent [reportProgress] label, which names the step in flight. */
     @Volatile
     private var currentStep: String? = null
+
+    /**
+     * Why the first failed write of this run failed, or null if none has.
+     *
+     * Kept so the abort in [runSetupLocked] can name a cause. Without it the
+     * thrown `IOException("could not unpack vscode-reh")` was the whole story and
+     * [describeFailure] had nothing else to render, so the failure this subsystem
+     * exists for -- a disk that fills partway through -- reached the user with no
+     * mention of disk anywhere.
+     *
+     * The FIRST, not the last: extraction attempts every remaining file after one
+     * fails, so the last cause is whatever the tail of the tree hit, and the
+     * first is the one that describes what went wrong.
+     */
+    private var firstWriteFailure: String? = null
+
+    /**
+     * Whether what is already on disk was written by an interrupted run of THIS
+     * exact build, which is what makes [extractAssetFile] free to skip a file it
+     * finds at the asset's own length.
+     *
+     * Two conditions, not one. The attempt marker names the build, and an install
+     * that no earlier build ever completed under is what makes the tree beneath
+     * that marker this build's alone; on an upgrade the marker is written over
+     * the previous release's files, so it cannot license anything. The marker
+     * carries the rest of it: replacing one that names a different build poisons
+     * it, so a tree written by more than one unfinished run can never match. See
+     * the comment where this is set.
+     *
+     * Set from [KEY_EXTRACTION_ATTEMPT] at the top of [runSetupLocked] and
+     * nowhere else, so the per-launch reconcile from SplashActivity, which
+     * reaches [reconcilePythonRuntime] without ever entering [runSetupLocked],
+     * always writes. The reconcile that [runSetupLocked] itself makes, after the
+     * `usr/` extraction, can skip on a retry of the same build, which is what
+     * the flag is for.
+     */
+    private var resumeSameBuild = false
 
     fun isFirstRun(): Boolean = setupIsStale(
         prefs.getString(KEY_VERSION, null),
@@ -180,6 +237,58 @@ class FirstRunSetup(
         val previousVersionCode = getPreviousVersionCode()
         val currentVersionCode = getCurrentVersionCode()
         val isUpgrade = previousVersionCode > 0
+
+        // Who wrote what is already on disk. An attempt that never reached
+        // markSetupComplete() leaves this key naming its own build, so the next
+        // attempt at the SAME build knows the files under it are its own and
+        // [extractAssetFile] may skip the ones already at the right length. An
+        // upgrade sees a different key and rewrites everything, which is the
+        // point: equal length is not equal content.
+        //
+        // The key alone does not say that, which is what the first half of the
+        // condition is for. The marker is written before the first byte, and the
+        // previous release's files are already on disk by then, so on an upgrade
+        // it stands over a tree the PREVIOUS build wrote: an attempt that stops
+        // part way leaves a mixture, half this build and half the last, with
+        // nothing in a length to tell the two apart. An install no earlier build
+        // ever completed under is most of the answer, and it is not all of it,
+        // because "no build ever COMPLETED here" is not "no OTHER build ever
+        // WROTE here" and both keys are written only by markSetupComplete(): a
+        // fresh install where v1 wrote half the tree and died, then updated to v2
+        // before it ever finished, leaves both keys unset with v1's files on
+        // disk. v2 records its own marker the moment it starts writing, and
+        // without more than that it would hand its own retry a skip over v1's
+        // bytes. runPreExtractionMigrations cannot catch that one either, being
+        // gated on an upgrade this install does not look like.
+        //
+        // So the marker is poisoned rather than replaced when it names a
+        // different build: from then on it can never equal the attempt it is
+        // compared against, and no retry is licensed until markSetupComplete()
+        // clears it. The cost of the poison is one re-copy of a tree written by
+        // more than one build, which is the answer that was wanted anyway. An
+        // upgrade re-copies for the same reason, and there is no cheaper answer
+        // without a per-file digest the build does not produce.
+        //
+        // Both keys, not the code alone, because the question is "has any build
+        // ever completed here" and either key on its own answers something
+        // narrower.
+        //
+        // Read here and WRITTEN below the storage pre-flight, which is the only
+        // exit that returns without touching a byte. Written here it claimed a
+        // tree the run had not written into, and the poison then fired on a
+        // record nobody had earned: a fresh install refused for LOW_STORAGE under
+        // v1 leaves v1's marker standing over an empty tree, and if the app
+        // updates before the user frees space, v2 reads a marker naming another
+        // build and poisons its own for ever. Every v2 retry then re-copies all
+        // 810 MiB although v2 is the only build that ever wrote a byte, which is
+        // exactly the user the skip exists for: someone who frees space in two
+        // goes.
+        val attempt = "${getCurrentVersion()}/$currentVersionCode"
+        val nothingCompletedHere =
+            prefs.getString(KEY_VERSION, null) == null && previousVersionCode == 0
+        val storedAttempt = prefs.getString(KEY_EXTRACTION_ATTEMPT, null)
+        resumeSameBuild = nothingCompletedHere && storedAttempt == attempt
+        firstWriteFailure = null
 
         if (isUpgrade) {
             Logger.i(tag, "Upgrading from versionCode $previousVersionCode to $currentVersionCode (${getCurrentVersion()})")
@@ -317,6 +426,22 @@ class FirstRunSetup(
                 return@withContext SetupResult.LOW_STORAGE
             }
 
+            // Past the last exit that writes nothing, and before the first byte:
+            // from here on this build owns whatever is under the marker. See
+            // where [resumeSameBuild] is set for what the value means and why a
+            // marker naming a different build is poisoned rather than replaced.
+            //
+            // commit(), not apply(): what follows is minutes of I/O and a kill in
+            // the flush window would take the record with it, which is the same
+            // reason markSetupComplete() commits.
+            val marker =
+                if (storedAttempt == null || storedAttempt == attempt) {
+                    attempt
+                } else {
+                    "$attempt$MIXED_TREE"
+                }
+            prefs.edit().putString(KEY_EXTRACTION_ATTEMPT, marker).commit()
+
             reportProgress("Creating directories...", 2)
             createDirectories()
 
@@ -346,9 +471,15 @@ class FirstRunSetup(
             // What is NOT promised, spelled out because the missing half of it
             // was written here as a guarantee and was not one:
             //
-            //  - the retry is cheap in SPACE, not in time. Nothing skips a file
-            //    because it is already there, so a retry re-copies the whole
-            //    tree; on a phone that is minutes behind a progress bar.
+            //  - the retry is cheap in space, and cheap in time only on a fresh
+            //    install. [extractAssetFile] skips a destination that already
+            //    holds the asset's own length, but only when the previous attempt
+            //    was this versionName and versionCode ([KEY_EXTRACTION_ATTEMPT])
+            //    and no earlier build ever completed here, because equal length is
+            //    not equal content and an upgrade's marker stands over the
+            //    previous release's files. Every upgrade attempt re-copies the
+            //    whole tree, and there is no cheaper answer without a per-file
+            //    digest the build does not produce.
             //  - a failure that is not about disk repeats exactly. A
             //    destination the write cannot use fails the same way every
             //    time, and the user gets "Setup failed" on each attempt with
@@ -371,21 +502,12 @@ class FirstRunSetup(
             // percent changes: 55 updates rather than one per file across 16,891 of
             // them. Capped, because a tree fetched after the APK was built would
             // otherwise run the bar past the step.
-            var serverBytes = 0L
-            var serverPercent = SERVER_PROGRESS_START
-            val extracted = extractAssetDir("vscode-reh", "server/vscode-reh") { bytes ->
-                serverBytes += bytes
-                if (BuildConfig.BUNDLED_SERVER_BYTES > 0) {
-                    val span = SERVER_PROGRESS_END - SERVER_PROGRESS_START
-                    val next = SERVER_PROGRESS_START +
-                        (serverBytes * span / BuildConfig.BUNDLED_SERVER_BYTES).toInt()
-                            .coerceAtMost(span)
-                    if (next > serverPercent) {
-                        serverPercent = next
-                        reportProgress("Extracting server files...", next)
-                    }
-                }
-            }
+            val serverMessage = "Extracting server files..."
+            val extracted = extractAssetDir(
+                "vscode-reh",
+                "server/vscode-reh",
+                byteProgress(serverMessage, SERVER_PROGRESS_START, SERVER_PROGRESS_END, BuildConfig.BUNDLED_SERVER_BYTES),
+            )
             if (!extracted) incomplete += "vscode-reh"
 
             reportProgress("Extracting server bootstrap...", 60)
@@ -393,11 +515,26 @@ class FirstRunSetup(
                 if (!extractAssetFile(script, "server/$script")) incomplete += script
             }
 
-            reportProgress("Extracting tools...", 62)
-            if (!extractAssetDir("usr", "usr")) incomplete += "usr"
+            // The same byte counter, because this step is long enough to read as
+            // a hang too: 2,812 files and 110 MiB with the bar pinned at 62 was
+            // tens of seconds of nothing moving, which is exactly what the server
+            // counter above was written to stop.
+            val toolsMessage = "Extracting tools..."
+            reportProgress(toolsMessage, USR_PROGRESS_START)
+            val usrExtracted = extractAssetDir(
+                "usr",
+                "usr",
+                byteProgress(toolsMessage, USR_PROGRESS_START, USR_PROGRESS_END, bundledUsrBytes),
+            )
+            if (!usrExtracted) incomplete += "usr"
 
             if (incomplete.isNotEmpty()) {
-                throw IOException("could not unpack ${incomplete.joinToString(", ")}")
+                // With the cause, when a write reported one. The synthetic message
+                // was all describeFailure had to render, so a device that filled up
+                // told the user "could not unpack vscode-reh" and never the word
+                // disk, on a screen whose only control is Retry.
+                val cause = firstWriteFailure?.let { ": $it" }.orEmpty()
+                throw IOException("could not unpack ${incomplete.joinToString(", ")}$cause")
             }
             // Extraction merges; it never removes. An upgrade that changes the
             // bundled Python therefore writes the new stdlib beside the old one
@@ -431,10 +568,6 @@ class FirstRunSetup(
             createDefaultSettings()
 
             reportProgress("Done!", 100)
-
-            if (isUpgrade) {
-                runMigrations(previousVersionCode)
-            }
 
             markSetupComplete()
 
@@ -522,9 +655,9 @@ class FirstRunSetup(
      *   short steps, where the cost of reporting outweighs what it shows.
      *
      * @return false if any file under [assetPath] was present in the APK and
-     *   could not be written. An asset that is simply absent is not a failure --
-     *   several are, in builds that skip a download script -- so it answers
-     *   true.
+     *   could not be written, or if the subtree could not be listed at all. An
+     *   asset that is simply absent is not a failure -- several are, in builds
+     *   that skip a download script -- so it answers true.
      *
      * Two callers act on it, differently, and one ignores it. [runSetupLocked]
      * collects the server tree, the four bootstrap scripts and `usr/` into a list
@@ -553,7 +686,31 @@ class FirstRunSetup(
     ): Boolean {
         val destDir = File(context.filesDir, destPath)
         return try {
-            val assets = context.assets.list(assetPath) ?: return true
+            // A listing that cannot be read is a failure, not an empty subtree.
+            // It answered true, i.e. "all of this is unpacked", and the whole
+            // abort in [runSetupLocked] hangs off that boolean: a null at the
+            // `vscode-reh` root would have reported a complete extraction with
+            // zero files written, left `incomplete` empty, run
+            // markSetupComplete() and flipped isFirstRun() false for the life of
+            // the install. `list` answers an empty array rather than null for a
+            // path that is not there, so this is reached only when the platform
+            // itself could not answer, and the safe direction for a function
+            // whose contract is "false only when the copy failed" is false.
+            //
+            // The same at a leaf, deliberately, and worth saying because this
+            // recurses: a null for `vscode-reh/out/server-main.js` aborts the
+            // install just as a null for `vscode-reh` does. Falling through to
+            // [extractAssetFile] instead would be harmless only while the asset
+            // can still be opened, and would be the original defect when it
+            // cannot: an asset that fails to open is reported as absent, which
+            // answers true, so the file would be skipped and the tree certified
+            // without it. The IOException below is a different signal and is
+            // degraded rather than refused, because that is how the platform
+            // says "this path is a file, not a directory".
+            val assets = context.assets.list(assetPath) ?: run {
+                Logger.w(tag, "Could not list the assets under $assetPath; treating it as unpacked would certify an empty tree")
+                return false
+            }
             if (assets.isEmpty()) {
                 return extractAssetFile(assetPath, destPath, onBytes)
             }
@@ -593,14 +750,51 @@ class FirstRunSetup(
                 return true
             }
 
-        val written = input.use { stream -> writeAtomically(destFile) { output -> stream.copyTo(output) } }
+        var cause: String? = null
+        val written = input.use { stream ->
+            // A retry of an interrupted run of the same build leaves the file
+            // where it is when it already has the asset's own length.
+            //
+            // Nothing skipped anything before, so a Retry after a LOW_STORAGE
+            // refusal or a failure at the 800th MiB re-copied all 23,000 files
+            // from zero: minutes behind a bar the user has already watched once,
+            // repeated for someone who frees space in two goes. `available()` on
+            // an asset stream is the uncompressed length before any read, so this
+            // costs one stat per file and no reading at all.
+            //
+            // Guarded on [resumeSameBuild] rather than done unconditionally, and
+            // that guard is the whole of what makes it safe: equal length is not
+            // equal content, and an upgrade whose new asset happens to weigh what
+            // the old one did HAS to be written. The fast path is taken only by a
+            // run whose predecessor was interrupted over the same versionName and
+            // versionCode AND on an install no earlier build ever completed under,
+            // which is what makes the file under it this build's own rather than
+            // the previous release's.
+            //
+            // It repairs rather than preserving damage. A file left truncated by
+            // a kill or a full disk has a length that does not match, so the skip
+            // passes it over and the copy runs.
+            if (resumeSameBuild) {
+                val assetLength = stream.available().toLong()
+                if (assetLength > 0 && destFile.isFile && destFile.length() == assetLength) {
+                    onBytes?.invoke(assetLength)
+                    return true
+                }
+            }
+            writeAtomically(destFile, onError = { cause = it }) { output -> stream.copyTo(output) }
+        }
         // Reported from the destination rather than from copyTo's return, because the
         // write goes through a temporary file and a rename: a failed copy leaves the
         // destination as it was, and counting bytes that never landed would run the bar
         // past the end of a step that had not finished.
         if (written) onBytes?.invoke(destFile.length())
         if (!written) {
-            Logger.w(tag, "Failed to write $destPath; it keeps whatever it held before")
+            if (firstWriteFailure == null) firstWriteFailure = cause
+            Logger.w(
+                tag,
+                "Failed to write $destPath (${cause ?: "no cause reported"}); " +
+                    "it keeps whatever it held before",
+            )
         }
         return written
     }
@@ -975,7 +1169,7 @@ class FirstRunSetup(
                 // copy of a remote helper is -- that too has to be replaced.
                 val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
                 if (current == target) continue
-                link.delete()
+                if (!unlinkStale(link, "git-core link $name")) continue
                 repaired++
             }
 
@@ -1013,6 +1207,29 @@ class FirstRunSetup(
         }
 
         Logger.i(tag, "git-core: $created links created, $repaired repaired")
+    }
+
+    /**
+     * Removes a link that has to be replaced, and says so when it cannot.
+     *
+     * @return true when the path is gone and the caller may write the new link.
+     *
+     * All five sites in this file that replace a link discarded the answer, and
+     * failed the same way: a refused delete fell through to `Os.symlink`, came
+     * back EEXIST, and left a `Logger.d`, which is gated on a debuggable build
+     * and therefore absent from every release install. What was left behind is a
+     * link still pointing where it pointed before -- a tool missing from PATH,
+     * git unable to fetch over HTTPS, the Copilot SDK resolving an alias to
+     * nothing, or a terminal starting in a directory that has moved -- with no
+     * record anywhere that the repair meant to fix it had been refused.
+     *
+     * [what] names the link rather than the exception, because there is no
+     * exception: `File.delete()` reports refusal by returning false.
+     */
+    private fun unlinkStale(link: File, what: String): Boolean {
+        if (link.delete()) return true
+        Logger.w(tag, "Could not remove the stale $what at ${link.absolutePath}; it keeps its old target")
+        return false
     }
 
     /**
@@ -1058,7 +1275,7 @@ class FirstRunSetup(
                     if (currentTarget == target) continue
                 } catch (_: Exception) { }
                 // Stale or broken symlink, remove it
-                link.delete()
+                if (!unlinkStale(link, "tool symlink $name")) continue
                 updated++
                 linkUpdated = true
             }
@@ -1109,7 +1326,7 @@ class FirstRunSetup(
                 try {
                     if (Os.readlink(rgLink.absolutePath) == target) continue
                 } catch (_: Exception) { }
-                rgLink.delete()
+                if (!unlinkStale(rgLink, "ripgrep symlink")) continue
             }
 
             try {
@@ -1144,9 +1361,29 @@ class FirstRunSetup(
     fun setupCopilotAndroidAliases() {
         val serverRoot = File(context.filesDir, "server/vscode-reh")
 
-        fun linkIfAbsent(link: File, target: String) {
-            val exists = try { Os.lstat(link.absolutePath); true } catch (e: Exception) { false }
-            if (exists) return
+        /**
+         * Creates the alias, and repoints one whose target has moved.
+         *
+         * Presence was the whole test, which is what its three siblings
+         * (setupToolSymlinks, setupGitCore, setupRipgrepVscodeSymlink) all
+         * readlink and compare precisely to avoid. Nothing rewrites this
+         * directory: it is built at runtime under the server tree rather than
+         * carried in the assets, so extraction never touches it and only the
+         * pre-pivot migration ever removed it. An alias written by an earlier
+         * release, or one whose upstream entry was renamed, therefore kept
+         * pointing where it always had for the life of the install.
+         *
+         * A path that is present and is NOT a symlink is left alone rather than
+         * deleted: readlink answering nothing means a real file or directory,
+         * which is not ours to remove on a guess.
+         */
+        fun linkTo(link: File, target: String) {
+            val present = try { Os.lstat(link.absolutePath); true } catch (e: Exception) { false }
+            if (present) {
+                val current = runCatching { Os.readlink(link.absolutePath) }.getOrNull()
+                if (current == null || current == target) return
+                if (!unlinkStale(link, "Copilot platform alias ${link.name}")) return
+            }
             try {
                 Os.symlink(target, link.absolutePath)
             } catch (e: Exception) {
@@ -1162,7 +1399,7 @@ class FirstRunSetup(
             alias.mkdirs()
             linuxPkg.listFiles()?.forEach { entry ->
                 if (entry.name != "package.json") {
-                    linkIfAbsent(File(alias, entry.name), "../copilot-linux-arm64/${entry.name}")
+                    linkTo(File(alias, entry.name), "../copilot-linux-arm64/${entry.name}")
                 }
             }
             try {
@@ -1188,7 +1425,7 @@ class FirstRunSetup(
                     .getString("version")
                 val alias = File(extCopilot.parentFile, "copilot-android-arm64")
                 alias.mkdirs()
-                linkIfAbsent(File(alias, "sdk"), "../copilot/sdk")
+                linkTo(File(alias, "sdk"), "../copilot/sdk")
                 val manifest = """{"name":"@github/copilot-android-arm64","version":"$version","type":"module","exports":{"./sdk":{"import":"./sdk/index.js"}}}"""
                 val aliasManifest = File(alias, "package.json")
                 if (!aliasManifest.exists() || aliasManifest.readText() != manifest) {
@@ -1203,7 +1440,7 @@ class FirstRunSetup(
         // ripgrep-universal directory alias; its rg is the Bionic symlink.
         val rgBin = File(serverRoot, "node_modules/@vscode/ripgrep-universal/bin")
         if (File(rgBin, "linux-arm64").isDirectory) {
-            linkIfAbsent(File(rgBin, "android-arm64"), "linux-arm64")
+            linkTo(File(rgBin, "android-arm64"), "linux-arm64")
         }
     }
 
@@ -1231,13 +1468,26 @@ class FirstRunSetup(
         // compiled-in prefix (/data/data/com.termux/...), not $HOME.
         val sshConfig = File(sshDir, "config")
         if (!sshConfig.exists()) {
-            sshConfig.writeText("""
+            val content = """
                 Host *
                     StrictHostKeyChecking accept-new
                     IdentityFile $homeDir/.ssh/id_ed25519
                     ServerAliveInterval 60
                     UserKnownHostsFile $homeDir/.ssh/known_hosts
-            """.trimIndent() + "\n")
+            """.trimIndent() + "\n"
+            // Atomic and loud, the pair createBashProfile is, and this was the
+            // last exists()-guarded writer in the file still using writeText.
+            // writeText creates and truncates before writing a byte, so a kill or
+            // a full disk here left an empty config that satisfies the guard
+            // above for ever, on a writer runSetupLocked reaches only when the
+            // version moves and that repairTruncatedSetupFiles does not cover.
+            // What that costs is every clone, fetch and push over ssh: the config
+            // is what GIT_SSH_COMMAND passes with -F, and without its absolute
+            // IdentityFile and UserKnownHostsFile the Termux ssh resolves ~ to
+            // its own compiled-in prefix, which is not a path this app can read.
+            if (!writeAtomically(sshConfig) { it.write(content.toByteArray()) }) {
+                throw IOException("could not write $sshConfig")
+            }
             try {
                 Os.chmod(sshConfig.absolutePath, 384) // 0600
             } catch (e: Exception) {
@@ -1435,7 +1685,16 @@ class FirstRunSetup(
      * `if (bashrc.exists())`. Deleting the file would have turned a truncated
      * one into no file at all, with nothing to write it again.
      *
-     * Which is why nothing here deletes. The second draft cleared the file and
+     * Which is why nothing here deletes. It does now CREATE, in the one case
+     * where there is nothing of the user's to protect: a `.bashrc` that is gone
+     * rather than short, and only once `home/` itself is there, because before
+     * the first extraction has made it the write cannot do anything but fail.
+     * That was the same dead end from the other direction: every writer keyed on
+     * the file being there, so `rm ~/.bashrc` was permanent until the next app
+     * update, and it is why this method reads `isFile` and `exists()` separately
+     * rather than only the first.
+     *
+     * The second draft cleared the file and
      * then called the writer, whose `!exists()` guard the clear had just
      * satisfied, and that leaves the same hole one failure further along: the
      * rewrite can fail, on exactly the full disk this repair exists for, and
@@ -1520,6 +1779,40 @@ class FirstRunSetup(
                             "than gone, so there is still something for the next launch to repair.",
                     )
                 }
+            }
+        } else if (!bashrc.exists() && bashrc.parentFile?.isDirectory == true) {
+            // The parent test is not defensive tidying; without it this arm fired
+            // on every fresh install and could only fail. SplashActivity runs this
+            // repair ahead of the isFirstRun branch, and `home/` is created by
+            // createDirectories() inside runSetupLocked, which has not run yet:
+            // none of the repairs before this one goes near it. So writeBashrc
+            // opened `home/.bashrc.tmp~` in a directory that was not there, got
+            // FileNotFoundException, returned false, and the branch below logged
+            // at ERROR that the terminal has no prompt and no PATH, on 100% of
+            // first launches and on every relaunch after a LOW_STORAGE refusal.
+            // In a release build logcat is the only trace this project has, so a
+            // line that is always wrong costs the lines that are not.
+            //
+            // Absent, which is the one shape nothing covered. `createBashrc` is
+            // reached only from runSetupLocked, on a version change, and every
+            // per-launch appender opens with `bashrc.exists()` or returns on its
+            // absence -- so `rm ~/.bashrc` in the bundled terminal left the shell
+            // with no prompt, no PROJECTS_DIR, no aliases, no npm/npx/claude and
+            // no startup cd until the next app update.
+            //
+            // Recreating is not the "never replace what could be the user's own
+            // edit" line this method draws elsewhere: a file that is not there
+            // holds nothing of theirs, and this writes only what the app owns.
+            // `isFile` above rather than `exists()` keeps a directory at the path
+            // out of both branches; mkdirs would not repair that and neither
+            // would this.
+            val written = runCatching { writeBashrc() }
+                .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
+                .getOrDefault(false)
+            if (written) {
+                Logger.i(tag, "Recreated a .bashrc that had gone")
+            } else {
+                Logger.e(tag, "Could not recreate the missing .bashrc; the terminal keeps no prompt, no PATH exports and no npm")
             }
         }
 
@@ -1908,7 +2201,7 @@ claude() {
         val projectsDir = File(Environment.getProjectsDir(context))
         val welcomeFile = File(projectsDir, "README.md")
         if (!welcomeFile.exists()) {
-            welcomeFile.writeText("""
+            val content = """
                 # Welcome to VSCodroid
 
                 This is your default projects directory. Create folders here to start coding.
@@ -1924,22 +2217,69 @@ claude() {
 
                 **Terminal**: Node.js, Python, Git and Bash are bundled and ready to
                 use. Run `node -v` or `python3 -V` to check.
-            """.trimIndent() + "\n")
+            """.trimIndent() + "\n"
+            // Same shape as the ssh config beside it, and for the same reason,
+            // though the consequence here is only cosmetic: writeText truncates
+            // first, so a kill mid-write left a half sentence under a name whose
+            // own existence is the guard, greeting every later launch. A warning
+            // rather than a throw, because a missing greeting is not worth
+            // failing an install over.
+            if (!writeAtomically(welcomeFile) { it.write(content.toByteArray()) }) {
+                Logger.w(tag, "Could not write the welcome README; the projects directory keeps what it had")
+            }
         }
     }
 
-    private fun createStorageSymlinks() {
+    /**
+     * Keeps `~/projects` pointing at the workspace [Environment] computes.
+     *
+     * Two things were wrong with creating it once. The guard was `!link.exists()`,
+     * and `exists()` FOLLOWS the link, so a dangling one -- the ordinary state
+     * after the projects directory is deleted from outside the app, which is why
+     * [ensureProjectsDir] exists at all -- read as absent, and `Os.symlink` then
+     * failed with EEXIST into a debug log. Every other symlink writer in this
+     * file asks `Os.lstat` for exactly that reason. And it ran only from
+     * `runSetupLocked`, which a complete install re-enters only when the version
+     * moves, so a link that went stale stayed stale until the next app update
+     * while `ensureProjectsDir()` was repairing the directory it points at on
+     * every launch.
+     *
+     * Public and idempotent so it can sit beside that repair in the per-launch
+     * block: three stats when the link is already right.
+     */
+    fun createStorageSymlinks() {
         val homeDir = File(context.filesDir, "home")
         val projectsDir = Environment.getProjectsDir(context)
 
         // ~/projects -> app-external projects dir (convenience symlink)
         val link = File(homeDir, "projects")
-        if (!link.exists() && File(projectsDir).exists()) {
-            try {
-                Os.symlink(projectsDir, link.absolutePath)
-            } catch (e: Exception) {
-                Logger.d(tag, "Failed to create projects symlink: ${e.message}")
-            }
+        // Asked before anything is removed, and that order is the point. It used
+        // to sit below the delete, so a link whose target had moved was unlinked
+        // and then, with the new target not yet on disk, the method returned:
+        // `~/projects` was gone where a wrong but usable link had been, and the
+        // terminal that starts there had nothing to start in. Nothing is taken
+        // away until there is something to put back. ensureProjectsDir() runs
+        // immediately before this in both call paths, so the window is narrow,
+        // but this method is public and per-launch and the ordering was all that
+        // held it shut.
+        if (!File(projectsDir).exists()) return
+        val present = try { Os.lstat(link.absolutePath); true } catch (e: Exception) { false }
+        if (present) {
+            val current = runCatching { Os.readlink(link.absolutePath) }.getOrNull()
+            // Not a link at all is the user's own directory under our name, and
+            // replacing it would take their files with it.
+            if (current == null || current == projectsDir) return
+            // Through [unlinkStale], as every link replacement in this file now
+            // is: the answer used to be discarded here and at its four siblings,
+            // so a refusal fell through to Os.symlink, came back EEXIST, and left
+            // the link pointing at a directory that had moved with nothing but a
+            // Logger.d to say so. Terminals start here.
+            if (!unlinkStale(link, "projects symlink")) return
+        }
+        try {
+            Os.symlink(projectsDir, link.absolutePath)
+        } catch (e: Exception) {
+            Logger.d(tag, "Failed to create projects symlink: ${e.message}")
         }
     }
 
@@ -2148,6 +2488,40 @@ claude() {
         //
         // Still only a default, and the view's own title menu reverses it, so
         // a user who opens the bar keeps it open.
+        //
+        // WHICH KEYS CAN LAND HERE AT ALL, because the answer is not "any of
+        // them" and the file gives no sign when one cannot. Two readers open
+        // this path and they filter differently:
+        //
+        //  - the server (out/server-main.js) builds its ConfigurationService on
+        //    `machineSettingsResource` with an empty options object, so it reads
+        //    every key whatever its declared scope. `extensions.verifySignature`
+        //    reaches it that way: the server is what downloads a gallery
+        //    extension and it is the only reader of that key.
+        //  - the workbench parses the same file through RemoteUserConfiguration
+        //    with REMOTE_MACHINE_SCOPES, which is every scope EXCEPT
+        //    APPLICATION. An APPLICATION-scoped key is dropped before the
+        //    workbench sees it.
+        //
+        // So a setting only the web client reads and that upstream registers
+        // with `scope: 1` cannot be defaulted from this file, however plainly it
+        // belongs beside its neighbours. `extensions.autoCheckUpdates` and
+        // `extensions.autoUpdate` are exactly that shape: both scope 1, both
+        // read only by the workbench's ExtensionsWorkbenchService, absent from
+        // server-main.js entirely. Writing them here would look like turning off
+        // the startup gallery query and the unattended updates and would turn
+        // off neither, which is worse than leaving them alone, because the next
+        // reader of this file would believe it.
+        //
+        // Three keys BELOW are already that shape, and they stay because removing
+        // one would read as a change of behaviour when it is none.
+        // `security.workspace.trust.enabled`: what settles trust is the
+        // `--disable-workspace-trust` the server is started with. `update.mode`
+        // and `update.showReleaseNotes`: both are registered `scope: 1` in the
+        // shipped workbench bundle and appear nowhere in `out/server-main.js`, so
+        // neither reader of this file can act on either. What actually keeps this
+        // build off an update service is that the packaged `product.json` carries
+        // no `updateUrl` for anything to ask.
         val defaults = """
             {
                 "workbench.secondarySideBar.defaultVisibility": "hidden",
@@ -2261,6 +2635,16 @@ claude() {
             .filter { it in bundled && unpackWasAbandoned(File(extensionsDir, it)) }
             .toSet()
         val toExtract = bundledDirsToExtract(installed, bundled.toList(), abandoned)
+        // One counter across the whole loop, so the bar reflects the step rather
+        // than restarting per extension. Its total is what the APK bundles, so a
+        // run re-unpacking only some of the directories stops the bar short of
+        // the step's end instead of over-running it, which is the safe direction.
+        val progress = byteProgress(
+            "Setting up extensions...",
+            EXTENSIONS_PROGRESS_START,
+            EXTENSIONS_PROGRESS_END,
+            bundledExtensionBytes,
+        )
         for (name in toExtract) {
             // Merges rather than emptying the directory first. That leaves a
             // file this build no longer ships behind, which is inert because
@@ -2379,7 +2763,7 @@ claude() {
                         "would leave it looking installed",
                 )
             }
-            if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name")) {
+            if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name", progress)) {
                 if (failedUnpackMustBeRemoved(name, existedBefore, marker.isFile) &&
                     !dest.deleteRecursively()
                 ) {
@@ -2678,11 +3062,13 @@ claude() {
     /**
      * Migrations that have to run *before* the assets are unpacked.
      *
-     * Kept separate from [runMigrations] because the ordering is not a detail:
-     * extraction merges into whatever is already on disk and never deletes, so
-     * anything that removes a stale tree has to happen first. Run afterwards it
-     * would delete what was just unpacked, and the app would come up with no
-     * server at all.
+     * Runs before extraction, and the ordering is not a detail: extraction merges
+     * into whatever is already on disk and never deletes, so anything that
+     * removes a stale tree has to happen first. Run afterwards it would delete
+     * what was just unpacked, and the app would come up with no server at all.
+     * That is also why there is no post-extraction migration hook: the one that
+     * existed had an empty body for several releases, and a migration that
+     * belongs after extraction can be given its own call site when there is one.
      *
      * It also runs before the storage pre-flight, which is a second ordering
      * constraint with its own reason, see the call site. Everything here only
@@ -2744,25 +3130,16 @@ claude() {
             }
 
             if (reclaimed) {
-                prefs.edit().putBoolean(KEY_PIVOT_MIGRATED, true).apply()
+                // commit(), not apply(). apply() returns before the write reaches
+                // disk, and everything after this line is minutes of extraction on
+                // a device the system may reclaim at any point: losing the flag
+                // makes the next attempt delete the partly written NEW server
+                // tree, which is the exact failure this flag exists to prevent.
+                // Already on Dispatchers.IO, so the synchronous write costs
+                // nothing observable.
+                prefs.edit().putBoolean(KEY_PIVOT_MIGRATED, true).commit()
             }
         }
-    }
-
-    private fun runMigrations(fromVersionCode: Int) {
-        Logger.i(tag, "Running migrations from versionCode $fromVersionCode")
-
-        // Post-extraction migrations go here; anything that deletes belongs in
-        // runPreExtractionMigrations instead.
-        //
-        // Note that files owned by the user are not migrated from this method at
-        // all. settings.json and .bashrc are both written only when absent, so a
-        // change to their defaults reaches nobody who already has them; the
-        // anchored rewrites in updateSettingsNativeLibPaths() and
-        // ensurePromptFix() handle that, and they run on every launch rather than
-        // only on a version change.
-
-        Logger.i(tag, "Migrations complete")
     }
 
     fun getPreviousVersionCode(): Int {
@@ -2780,11 +3157,26 @@ claude() {
         }
     }
 
+    /**
+     * Records the setup that has just completed, and retires the attempt marker.
+     *
+     * commit(), not apply(). apply() returns before the write reaches disk, so a
+     * kill in the flush window left isFirstRun() true after a successful 810 MiB
+     * unpack and the next launch did all of it again. The window is milliseconds
+     * and SharedPreferences flushes at activity stop, so it is unlikely; what it
+     * costs when it lands is minutes, and this runs on Dispatchers.IO where the
+     * synchronous write costs nothing observable.
+     *
+     * [KEY_EXTRACTION_ATTEMPT] goes in the same edit, so the record of a run in
+     * flight cannot outlive the run: the skip it licenses is only ever for a
+     * retry of an attempt that did not finish.
+     */
     private fun markSetupComplete() {
         prefs.edit()
             .putString(KEY_VERSION, getCurrentVersion())
             .putInt(KEY_VERSION_CODE, getCurrentVersionCode())
-            .apply()
+            .remove(KEY_EXTRACTION_ATTEMPT)
+            .commit()
     }
 
     private fun getCurrentVersion(): String {
@@ -2801,10 +3193,69 @@ claude() {
         // failing step can be named without threading a parameter through the
         // twenty call sites below.
         currentStep = message
-        onProgress?.invoke(message, percent)
+        progressSink?.invoke(message, percent)
+    }
+
+    /**
+     * An [extractAssetDir] byte counter that walks the bar from [from] to [to].
+     *
+     * One shape, three steps. The server tree had this inline and the two behind
+     * it had nothing at all: `usr/` copied 2,812 files with the bar pinned at 62
+     * and the extensions 3,787 with it pinned at 88, which is a fifth of the tree
+     * spent on a bar that does not move -- exactly what the server counter was
+     * written to prevent, on steps long enough to read as a hang.
+     *
+     * Reports only when the whole percent changes, so a step is tens of updates
+     * rather than one per file. Capped at [to], because a tree fetched after the
+     * APK was built weighs more than [total] and would otherwise run the bar into
+     * the next step. Null when [total] is not known (the build injects a zero on
+     * a runner with stubbed asset directories), which leaves the step silent
+     * rather than dividing by it.
+     */
+    private fun byteProgress(message: String, from: Int, to: Int, total: Long): ((Long) -> Unit)? {
+        if (total <= 0) return null
+        var done = 0L
+        var shown = from
+        val span = to - from
+        return { bytes ->
+            done += bytes
+            val next = from + (done * span / total).toInt().coerceAtMost(span)
+            if (next > shown) {
+                shown = next
+                reportProgress(message, next)
+            }
+        }
     }
 
     companion object {
+        /**
+         * The closure the running extraction reports through.
+         *
+         * In the companion beside [setupMutex] and for the same reason: the lock
+         * is process-wide, so the run and the screen watching it need not belong
+         * to the same [FirstRunSetup]. Volatile because it is written on the main
+         * thread and read from Dispatchers.IO, which is what [lastFailure] and
+         * `currentStep` are volatile for; as an instance field it was neither,
+         * and stayed correct only through the happens-before edge that submitting
+         * the coroutine happened to supply.
+         */
+        @Volatile
+        private var progressSink: ((message: String, percent: Int) -> Unit)? = null
+
+        /**
+         * Drops [sink] if it is still the installed one.
+         *
+         * Identity, not a blanket clear, and the case that needs it is two Splash
+         * instances existing at once: a departing screen must not silence the
+         * screen that replaced it, and one that has already been replaced has
+         * nothing left to give back. Not the config-change relaunch, which runs
+         * the other way round and destroys the old instance before it creates the
+         * new one, so ordering alone would have covered that one.
+         */
+        fun detachProgress(sink: ((message: String, percent: Int) -> Unit)?) {
+            if (sink != null && progressSink === sink) progressSink = null
+        }
+
         /** How much of an exception message is worth putting on a splash screen. */
         internal const val DETAIL_LIMIT = 120
 
@@ -2840,6 +3291,17 @@ claude() {
         private const val SERVER_PROGRESS_START = 5
         private const val SERVER_PROGRESS_END = 60
 
+        /** The band `usr/` reports across; "Setting up git..." opens at 82. */
+        private const val USR_PROGRESS_START = 62
+        private const val USR_PROGRESS_END = 82
+
+        /**
+         * The band the bundled extensions report across; "Configuring
+         * environment..." opens at 97.
+         */
+        private const val EXTENSIONS_PROGRESS_START = 88
+        private const val EXTENSIONS_PROGRESS_END = 97
+
         private const val KEY_VERSION = "setup_version"
         private const val KEY_VERSION_CODE = "setup_version_code"
 
@@ -2859,6 +3321,52 @@ claude() {
         private const val KEY_PIVOT_MIGRATED = "pivot_tree_reclaimed"
 
         /**
+         * The build whose extraction is in flight, as `versionName/versionCode`.
+         *
+         * Written below the storage pre-flight and before the first byte is
+         * copied, and removed by [markSetupComplete], so its presence means an
+         * attempt that began writing and did not finish. A run refused for
+         * storage leaves it exactly as it found it, having written nothing to
+         * claim. Together with an install no earlier build ever completed under,
+         * it licenses [extractAssetFile] to skip a destination already at the
+         * asset's own length: the files under it were then written by this same
+         * build, so equal length is equal content in the only case it is trusted
+         * for.
+         *
+         * On its own it does NOT say that, and this said it did. On an upgrade
+         * the previous release's whole tree is already on disk when this is
+         * written, so an attempt that stops part way records the new build over a
+         * mixture, and the retry would keep every file of the old release whose
+         * length happened to match. That is why the skip asks a second question,
+         * and why replacing this marker with one naming a different build poisons
+         * it with [MIXED_TREE] instead. See where [resumeSameBuild] is set.
+         *
+         * Both halves of the version, not just the code, because either can move
+         * on its own and either moving means different assets. Absent on every
+         * install that predates it, which reads as "not this build" and rewrites,
+         * so an existing install is never handed a skip it did not earn.
+         *
+         * What it deliberately does not cover: a rebuilt APK installed over a
+         * failed run at the SAME versionName and versionCode, which is `adb
+         * install -r` during development and nothing a user meets. Covering it
+         * needs a per-file digest the build does not produce.
+         */
+        private const val KEY_EXTRACTION_ATTEMPT = "extraction_attempt"
+
+        /**
+         * Appended to [KEY_EXTRACTION_ATTEMPT] once a second build has written
+         * into the same unfinished tree, which is what makes the record unusable.
+         *
+         * The suffix, rather than a second preference key, because the question
+         * the marker answers is already "did THIS build write everything below
+         * me", and a value that can never equal the attempt it is compared
+         * against answers it with no new state to keep in step. Nothing parses it
+         * back off: [markSetupComplete] removes the key outright, so the poison
+         * lives exactly as long as the unfinished tree it describes.
+         */
+        private const val MIXED_TREE = "!mixed"
+
+        /**
          * Headroom above the bytes to be written, and the one number here that is
          * still a judgement rather than a measurement.
          *
@@ -2873,6 +3381,20 @@ claude() {
          * scales with the file COUNT, not with the total size, and the count has
          * been stable across pins while the size has not.
          *
+         * 96 MiB, raised from 64, because 64 did not cover what it names.
+         * Measured over the shipped tree: 23,494 files and 5,021 directories,
+         * 809.5 MiB of logical length and 872.8 MiB once each file is rounded to
+         * a 4 KiB block -- 63.2 MiB of rounding from the files alone, before the
+         * directories (a block each on ext4, about 19.6 MiB more) and before
+         * settings.json, .bashrc, the ssh defaults and the CA bundle this
+         * constant also claims. So the gate asked 873.5 MiB for an unpack that
+         * consumes about 892 on ext4, and it over-passed in the one direction its
+         * own doc names as the one to avoid: a device between those two figures
+         * passed the gate, ran for minutes and then met ENOSPC. f2fs with
+         * inline_data stores the 17,270 files under ~3.4 KiB inside the inode and
+         * lands near 821 MiB, so the shortfall was an ext4 story only, which is
+         * why it went unseen.
+         *
          * The same figure serves the upgrade path, which asks for far fewer bytes,
          * and that is not an oversight. Rounding on a rewrite is roughly neutral,
          * the file already occupies its blocks, but the credit given for it is
@@ -2881,7 +3403,7 @@ claude() {
          * other. One over-estimate covering another is worth more here than a
          * second constant nobody can measure either.
          */
-        private const val EXTRACTION_SLACK_BYTES = 64L * 1_048_576L
+        private const val EXTRACTION_SLACK_BYTES = 96L * 1_048_576L
 
         /**
          * How much the device was short the last time the pre-flight refused,
@@ -3813,10 +4335,30 @@ internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
  * file, and destinations that are not the same file never had anything to say
  * to each other.
  *
+ * The read that decides WHAT to write is outside this, and the lock does not
+ * reach it. Every appender to `.bashrc` reads the file, decides, and only then
+ * calls here, so two threads can read the same bytes and the later write wins,
+ * dropping the earlier one's block. It is bounded rather than closed: each
+ * appender re-tests its own guard string on the next launch and appends again,
+ * so the cost is one launch without one block, not a permanent loss. Closing it
+ * would mean computing the payload under this monitor, which is a shape the four
+ * appenders do not have; the bound is written down here so a reader does not
+ * take the word atomic for more than it covers.
+ *
+ * @param onError told why a write failed, in one sentence, for a caller that has
+ *   somewhere to put it. Nothing is logged here: this is reached from every
+ *   config writer in the file, each of which already logs its own failure, and
+ *   the one that needs the CAUSE is extraction, which carries it into the
+ *   message the splash screen shows.
+ *
  * @return true if [dest] now holds what [write] produced. On false, [dest] is
  *   untouched -- it keeps its previous contents, or stays absent.
  */
-internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boolean {
+internal fun writeAtomically(
+    dest: File,
+    onError: ((String) -> Unit)? = null,
+    write: (FileOutputStream) -> Unit,
+): Boolean {
     val tmp = File(dest.parentFile, "${dest.name}.tmp~")
     val path = tmp.absolutePath
     val lock = claimWriteLock(path)
@@ -3825,10 +4367,18 @@ internal fun writeAtomically(dest: File, write: (FileOutputStream) -> Unit): Boo
             try {
                 FileOutputStream(tmp).use(write)
             } catch (e: IOException) {
+                // The message, not just the failure. "No space left on device" is
+                // the one sentence this whole subsystem is built around, and it
+                // died here: the boolean reached the caller, the exception reached
+                // nothing, and a device that filled up mid-unpack was told "Setup
+                // failed" with no mention of disk on a screen whose only control
+                // is Retry.
+                onError?.invoke(e.message?.trim().orEmpty().ifEmpty { e.javaClass.simpleName })
                 tmp.delete()
                 return false
             }
             if (!tmp.renameTo(dest)) {
+                onError?.invoke("could not move ${tmp.name} onto ${dest.name}")
                 tmp.delete()
                 return false
             }

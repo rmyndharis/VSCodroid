@@ -14,6 +14,7 @@ import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -32,8 +33,8 @@ import java.io.File
  * and carries on, which is right when one file of a 390 MB unpack is missing
  * from the APK and wrong when the copy failed: the install reached the editor,
  * could never serve it, and `markSetupComplete()` certified that -- with
- * `isFirstRun()` keyed on versionName, so nothing tried again until the app
- * updated.
+ * `isFirstRun()` keyed on versionName or versionCode, so nothing tried again
+ * until the app updated.
  *
  * These drive the real `runSetup()`. The failure is arranged the way the rest of
  * this package arranges it, by occupying the temporary path `writeAtomically`
@@ -107,7 +108,7 @@ class SetupAbortsOnIncompleteTreeTest {
 
         assertEquals(FirstRunSetup.SetupResult.SUCCESS, result)
         assertEquals("// the server", File(filesDir, "server/vscode-reh/server-main.js").readText())
-        verify { editor.putString(any(), any()) }
+        verify { editor.putString(SETUP_VERSION_KEY, any()) }
     }
 
     @Test
@@ -125,10 +126,75 @@ class SetupAbortsOnIncompleteTreeTest {
     }
 
     /**
+     * The other way the tree can come up short, and the one that used to be
+     * reported as a complete install.
+     *
+     * `AssetManager.list()` answers an empty array for a path that is not there,
+     * so null means the platform itself could not answer. `extractAssetDir` read
+     * that as an empty directory, which is indistinguishable from a leaf file, so
+     * it returned true: nothing was written, nothing was collected as incomplete,
+     * `markSetupComplete()` ran, and `isFirstRun()` went false for the life of
+     * the install with no server tree under it.
+     *
+     * NEGATIVE CONTROL: restore `?: emptyArray()` in `extractAssetDir`. The run
+     * then reports SUCCESS with `server/vscode-reh` never created, and both
+     * assertions fail.
+     */
+    @Test
+    fun `a server tree the platform cannot list is not certified as unpacked`() {
+        every { assets.list("vscode-reh") } returns null
+
+        val result = runBlocking { FirstRunSetup(context).runSetup() }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.SUCCESS,
+            result,
+            "a listing the platform could not answer was read as an unpacked tree",
+        )
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    /**
+     * And the same one level down, which is not a corollary: `extractAssetDir`
+     * recurses into itself, so the refusal above is reached once per path in the
+     * tree and a leaf is where all but a handful of them are.
+     *
+     * Aborting there too is the intended answer, and it is pinned here rather
+     * than left to be inferred from a case that only stubs the root. Degrading a
+     * leaf to the old `?: emptyArray()` sends it to `extractAssetFile`, which is
+     * harmless exactly when the asset can still be opened and is the original
+     * defect when it cannot: an asset it fails to open is reported as absent,
+     * which answers true, so an unanswerable listing would certify a tree with a
+     * file missing from it. The same reasoning as at the root, one level down.
+     *
+     * NEGATIVE CONTROL: restore `?: emptyArray()` in `extractAssetDir`. This
+     * fixture can open the asset, so the leaf extracts and the run reports
+     * SUCCESS, which is what both assertions below refuse.
+     */
+    @Test
+    fun `an entry under the server tree the platform cannot list is not certified either`() {
+        every { assets.list("vscode-reh/server-main.js") } returns null
+
+        val result = runBlocking { FirstRunSetup(context).runSetup() }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.SUCCESS,
+            result,
+            "a listing the platform could not answer was read as an unpacked file",
+        )
+        assertFalse(
+            File(filesDir, "server/vscode-reh/server-main.js").exists(),
+            "nothing was written, so reporting anything but a failure certifies an empty tree",
+        )
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    /**
      * And it must not be marked complete, which is the half that makes the
      * failure permanent rather than merely visible. `isFirstRun()` is keyed on
-     * versionName, so a run recorded as complete is never repeated until the
-     * app updates -- the error screen would be shown once and then forgotten.
+     * versionName or versionCode, so a run recorded as complete is never repeated
+     * until the app updates -- the error screen would be shown once and then
+     * forgotten.
      */
     @Test
     fun `a setup that cannot unpack the server tree is not recorded as complete`() {
@@ -136,7 +202,12 @@ class SetupAbortsOnIncompleteTreeTest {
 
         runBlocking { FirstRunSetup(context).runSetup() }
 
-        verify(exactly = 0) { editor.putString(any(), any()) }
+        // Named rather than `any()`, and that is not a loosening. A run also
+        // records the build whose extraction is in flight, before the first byte
+        // is copied, so that a retry of the same build may skip the files it
+        // already wrote; that write is expected on a failed run and is the whole
+        // point of it. What must not be written is the completion record.
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
     }
 
     /**
@@ -179,5 +250,40 @@ class SetupAbortsOnIncompleteTreeTest {
         runBlocking { setup.runSetup() }
 
         assertNull(setup.lastFailure, "a successful run recorded a failure cause")
+    }
+
+    /**
+     * And the cause has to say what the failure WAS, not only that the tree is
+     * short.
+     *
+     * `writeAtomically` caught its IOException, deleted the temporary file and
+     * returned false without keeping the message, so the one failure this whole
+     * subsystem is built around -- a disk that fills partway through -- reached
+     * the user as "could not unpack vscode-reh" with the words "No space left on
+     * device" nowhere in the string or in logcat, on a screen whose only control
+     * is Retry.
+     *
+     * Asserted on the separator rather than on the operating system's wording:
+     * with no cause the message ends at the tree's name, so the colon and a
+     * following character is exactly the difference the fix makes, and it does
+     * not depend on how a JVM phrases a write into an occupied path.
+     */
+    @Test
+    fun `the failure detail carries the cause of the write that failed`() {
+        blockTheServerWrite()
+        val setup = FirstRunSetup(context)
+
+        runBlocking { setup.runSetup() }
+
+        val detail = setup.lastFailure!!.detail
+        assertTrue(
+            detail.contains("could not unpack vscode-reh: "),
+            "the failure says only which tree is short and not why the write failed: $detail",
+        )
+    }
+
+    private companion object {
+        /** The completion record, as [FirstRunSetup] spells it. */
+        const val SETUP_VERSION_KEY = "setup_version"
     }
 }

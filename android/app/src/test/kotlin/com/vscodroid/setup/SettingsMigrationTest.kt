@@ -171,7 +171,8 @@ class SettingsMigrationTest {
      * runs inside `runSetupLocked`, whose `markSetupComplete()` sits at the end
      * of the same try block -- so a failure that merely logs lets setup be
      * certified with no settings file at all, and `isFirstRun()` is keyed on
-     * versionName, meaning nothing writes it again until the app updates. The
+     * versionName or versionCode, meaning nothing writes it again until the app
+     * updates. The
      * every-launch repair cannot help either: `updateSettingsNativeLibPaths`
      * opens with `if (!settingsFile.exists()) return`.
      *

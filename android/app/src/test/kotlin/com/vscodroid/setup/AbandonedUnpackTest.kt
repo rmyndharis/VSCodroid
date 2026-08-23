@@ -253,9 +253,17 @@ class AbandonedUnpackTest {
      * Driven as two runs, because "the retry retries" is the property and one
      * run cannot show it. The mark is refused by putting a DIRECTORY at its
      * path, which `createNewFile()` declines, and the copy is failed by putting
-     * one at `extension.js`, which the rename inside `writeAtomically` cannot
-     * replace. Both go with the tree the first run removes, so the second run
-     * finds nothing in its way.
+     * one at the temporary path `writeAtomically` opens, which `FileOutputStream`
+     * declines on every platform. Both go with the tree the first run removes, so
+     * the second run finds nothing in its way.
+     *
+     * The block is on the TEMPORARY path rather than on `extension.js` itself,
+     * and that is not a detail. Measured on this project's own macOS build host:
+     * `File.renameTo` a plain file onto an existing empty directory returns TRUE
+     * on APFS, so blocking the destination fails nothing there and the case
+     * quietly proved nothing, while on the device's ext4 the same rename gives
+     * EISDIR. Opening a directory for writing fails on both, so the injection
+     * below is the one that means the same thing everywhere it runs.
      *
      * NEGATIVE CONTROL, measured: restore `if (!existedBefore &&
      * !dest.deleteRecursively())` in `extractBundledExtensions`. The first run
@@ -268,7 +276,7 @@ class AbandonedUnpackTest {
         // No package.json, which is what makes it abandoned on a device that
         // predates the mark: the state a kill during a pre-marker release left.
         assertTrue(File(installed, UNPACK_MARKER_NAME).mkdirs(), "could not block the mark")
-        assertTrue(File(installed, "extension.js").mkdirs(), "could not block the copy")
+        assertTrue(File(installed, "extension.js.tmp~").mkdirs(), "could not block the copy")
 
         val failed = runCatching { extractBundledExtensions() }
         assertTrue(
