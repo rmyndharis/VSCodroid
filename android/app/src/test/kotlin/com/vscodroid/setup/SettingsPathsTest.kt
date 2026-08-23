@@ -575,4 +575,72 @@ class SettingsPathsTest {
             )
         }
     }
+
+    /**
+     * Where the insertion point is measured from.
+     *
+     * JSONC allows comments ahead of the root object, and a brace inside one used
+     * to win the search. The managed line then landed in the middle of the comment
+     * and the document stopped parsing, which drops every setting it holds rather
+     * than only the managed ones.
+     *
+     * The document these use carries no `workbench.secondarySideBar.defaultVisibility`,
+     * which is what every install upgrading from 1.1.0 looks like, so the insertion
+     * branch is the one actually taken here rather than a shape invented for a test.
+     */
+    @Nested
+    inner class LeadingComments {
+
+        private fun documentUnder(comment: String) =
+            """
+            $comment
+            {
+                "editor.fontSize": 14,
+                "git.path": "$git",
+                "workbench.colorTheme": "Monokai"
+            }
+            """.trimIndent()
+
+        @Test
+        fun `a brace inside a leading comment is not the document's own`() {
+            val comment = "// theme overrides {see docs}"
+
+            val result = requireNotNull(
+                refreshManagedPaths(documentUnder(comment), shell, git, wrapper),
+            )
+
+            assertTrue(
+                result.startsWith("$comment\n{"),
+                "the comment was split open and the document no longer parses:\n$result",
+            )
+        }
+
+        @Test
+        fun `a leading comment without a brace still receives the insertion`() {
+            // The control. Without it the test above passes just as well on a build
+            // where the insertion stopped happening at all, which is the failure it
+            // would be least able to see.
+            val comment = "// theme overrides"
+
+            val result = requireNotNull(
+                refreshManagedPaths(documentUnder(comment), shell, git, wrapper),
+            )
+
+            assertTrue(result.startsWith("$comment\n{"), "the comment moved:\n$result")
+            assertTrue(
+                result.contains(""""workbench.secondarySideBar.defaultVisibility""""),
+                "nothing was inserted, so the case above proves nothing:\n$result",
+            )
+        }
+
+        @Test
+        fun `a document whose only brace sits in a comment is left alone`() {
+            // Declining costs one default. Guessing costs the file, because the
+            // write that follows is atomic and the original is gone by then.
+            assertNull(
+                refreshManagedPaths("// nothing here but a { in a comment\n", shell, git, wrapper),
+                "a document with no root object was edited anyway",
+            )
+        }
+    }
 }

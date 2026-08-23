@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 
 ### Fixed
+- A comment above settings.json's opening brace is no longer mistaken for the document itself when an upgrade adds a setting, which left the file unparseable and dropped every preference.
 - The setup screen now keeps the display awake while it unpacks the app, so a screen timeout can no longer strand a first run part-way through an 800 MB extraction.
 - Toolchain screen: a download already running is now shown with its progress and a Cancel button instead of an Install button that started nothing.
 - Clearing caches now frees the toolchain download staging directories it was already counting, leaving alone any directory a running download is still using.

@@ -4216,10 +4216,48 @@ internal fun refreshManagedPaths(
  * settings, and the second one is not what any of these keys accept.
  */
 private fun insertSetting(content: String, key: String, value: String): String {
-    val brace = content.indexOf('{')
+    val brace = rootBraceIndex(content)
     if (brace < 0) return content
-    val indent = FIRST_PROPERTY.find(content)?.groupValues?.get(1) ?: "    "
+    val indent = FIRST_PROPERTY.find(content, brace)?.groupValues?.get(1) ?: "    "
     return content.substring(0, brace + 1) +
         "\n$indent\"$key\": $value," +
         content.substring(brace + 1)
+}
+
+/**
+ * The offset of the document's own opening brace, or -1 when there is not one.
+ *
+ * `indexOf('{')` answers a different question. This is JSONC, so comments may
+ * precede the root object, and a brace inside one is indistinguishable to a plain
+ * search: the line then lands in the middle of that comment. The cost is not the
+ * managed setting being missed. A document that no longer parses drops EVERY
+ * setting it holds, the user's theme and font size included, and the write is
+ * atomic, so the file it replaces is already gone.
+ *
+ * Only whitespace and comments are legal ahead of the root brace, so skipping
+ * exactly those two is the whole scan. Anything else means this is not a shape
+ * this app wrote or understands, and -1 leaves it untouched rather than guessing:
+ * declining to add a setting costs one default, and guessing wrong costs the file.
+ */
+private fun rootBraceIndex(content: String): Int {
+    var i = 0
+    while (i < content.length) {
+        val c = content[i]
+        when {
+            c == '{' -> return i
+            c.isWhitespace() -> i++
+            content.startsWith("//", i) -> {
+                val newline = content.indexOf('\n', i)
+                if (newline < 0) return -1
+                i = newline + 1
+            }
+            content.startsWith("/*", i) -> {
+                val end = content.indexOf("*/", i + 2)
+                if (end < 0) return -1
+                i = end + 2
+            }
+            else -> return -1
+        }
+    }
+    return -1
 }
