@@ -76,10 +76,18 @@ when the APKs can be built on Linux and only installed on the other runner.
 
 ## What CI does instead
 
-`build.yml` compiles them (`assembleDebugAndroidTest`). That is not a
-substitute for running them and is not offered as one; it catches only the
-second way they were rotting. Until it was added, nothing compiled them either,
-so they could drift out of the app's API and stay broken indefinitely.
+`build.yml` compiles them (`assembleDebugAndroidTest`), and `release.yml` runs
+the same task before it signs anything, because a tag may name a commit that
+reached neither of `build.yml`'s triggers. That is not a substitute for running
+them and is not offered as one; it catches only the second way they were
+rotting. Until it was added, nothing compiled them either, so they could drift
+out of the app's API and stay broken indefinitely.
+
+`lint.yml` and `release.yml` also run
+`scripts/check-instrumented-inventory.py`, which is what keeps this file
+truthful about the suite: the count below and the table of what each class
+covers are the only account of coverage anywhere, and both had gone stale
+against a directory nobody executes.
 
 ## How to run them
 
@@ -90,32 +98,30 @@ cd android
 ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
 ```
 
+`scripts/device-test.sh --instrumented` is the same run with the preconditions
+checked first, and it writes what happened to
+`app/build/reports/device-run.txt`. Prefer it: the preconditions it checks both
+present as a timeout rather than as an error.
+
 Results land in `app/build/outputs/androidTest-results/connected/`. **Read that
 XML rather than the exit code**: a run that fails before reaching the tests
 writes no results at all, and its exit code is indistinguishable from a genuine
-failure.
+failure. It is also the only place the skip count appears, and a skipped test
+prints nothing in Gradle's console output.
 
-Read the times out of that XML rather than trusting a figure written here. The
-one recorded run in this checkout (a Pixel 9 Pro XL AVD on API 36) reports
-116.1 s of suite time for 22 tests, of which `firstRun_launchesWithoutCrash`
-alone was 60.686 s. That test is gone: it slept a flat 60 seconds and asserted
-nothing, so the only failure it could report was a throw out of `onCreate`,
-which `firstRun_extractionSetsVersion` reports as well in 11.7 s, and that one
-also catches a setup ending in `showSetupError()`.
+**At HEAD there are 50 tests across eleven classes.** That figure is not kept by
+hand: `scripts/check-instrumented-inventory.py` counts the sources with
+`grep -cE '^\s*@Test'` and fails the build when this file disagrees with them,
+because it had said 22 and then 37 while the suite was neither, and a stale
+count in a document whose subject is coverage is worse than no count.
 
-That accounted for 21 tests and roughly 52 s of test time. This paragraph claimed
-three minutes for a long time; the recorded run says otherwise, which is what
-reading the XML is for.
-
-**At HEAD there are 37 tests across eight classes**, counted from the sources rather
-than from any run, with `grep -cE '^\s*@Test'` over this directory:
-`KeyRowAccessibilityInstrumentedTest` arrived with the extra key row's accessibility
-work and adds eleven, `SafWatchWiringTest` arrived with the per-directory watch work
-and adds five, `ExtractionOnDeviceTest` arrived with the first-run setup work and
-adds four, and the classes have moved since besides. No recorded run covers
-this set, so there is no honest wall-clock figure to quote for it; the 52 s above
-measured a different suite and is kept only as the reason not to say "three
-minutes". Read the times out of your own run's XML.
+The recorded run in this checkout is a Pixel 7 Pro AVD on API 33, 2026-08-23:
+50 tests, no failures, no skips, **66.8 s** of suite time. Where it goes is
+lopsided and worth knowing before you wait on it: `SplashActivityTest` 21.4 s
+and `ServerHealthTest` 14.2 s are two thirds of it, both of them waiting on real
+extraction and a real server; `TextEntryInstrumentedTest` and
+`GestureTrackpadTouchInstrumentedTest` together cost 0.03 s. Read your own run's
+XML rather than trusting this paragraph, which is what it is here to encourage.
 
 ## What is here, and what it is worth
 
@@ -127,8 +133,11 @@ minutes". Read the times out of your own run's XML.
 | `FileObserverTreeSemanticsTest` | The platform behaviour the SAF write-back rests on: that a watch covers a directory and not a tree, that the path an event reports is the bare entry name, and that inotify's directory flag survives the trip through FileObserver. Needs no app state at all, so it has no precondition that a skip could hide. |
 | `SafWatchWiringTest` | That those semantics are wired up: a save two directories down and a `.vscode/` settings file are both queued for write-back, a scratch file beside an ordinary one is not, deleting a watched directory releases its watch, and a skipped directory is never watched at all. The layer above `FileObserverTreeSemanticsTest`: that one proves the platform behaves as assumed, this one proves the assumption was used. |
 | `ToolchainInsetsTest` | With edge-to-edge enforced, the Toolchains screen stays out of both system bars: toolbar below the status bar, grid above the navigation bar. The screen shipped drawing its title under the clock, so this is the regression the padding exists to prevent. |
+| `ExecTrampolineOnDeviceTest` | The one claim no JVM test can settle: that the trampoline starts a program the app is otherwise forbidden to run. SELinux denies `execute_no_trans` on `app_data_file`, so nothing under `filesDir` can be execve'd whatever its mode, and only a test running as the app itself can ask that -- `adb shell run-as` runs in a domain that is allowed to execute files this one may not, so it reports success for a binary that fails on the device. The control is asserted first and is not optional: if a direct execve of the copied payload SUCCEEDS here, nothing was being denied on this device, and the case that runs it through the trampoline would pass for a reason that has nothing to do with the trampoline. The whole toolchain design rests on this. |
 | `ExtractionOnDeviceTest` | The parts of bundled-extension extraction a JVM cannot answer: that `AssetManager.list()` returns an empty array for a leaf, which is the basis on which `extractAssetDir` decides file-or-directory and which every unit test stubs; that `deleteRecursively()` succeeds on app-private storage, which the retry after a failed unpack depends on; and the abort-and-retry itself, driven by a real out-of-space condition. Redirects `getFilesDir()` through a `ContextWrapper` so the real AssetManager stays in play, so it needs no server tree and no first-run setup. |
-| `KeyRowAccessibilityInstrumentedTest` | The extra key row and the trackpad as an accessibility service would find them: every key carries a content description, a latched modifier and the open alternates layer say so in their node state, a key with no alternates advertises no long click, each key clears 48dp on a mainstream phone, and the trackpad offers one action per arrow. It reads the `AccessibilityNodeInfo` and performs the actions it advertises by id rather than tapping. A `View` initialiser touches resources on its first line, so none of this is reachable from the JVM suite; the unit tests next door assert the wiring by reading the source instead. The view has to be inside a real window, because a detached one reports almost nothing. |
+| `TextEntryInstrumentedTest` | That the row actually types what it says: every character it can produce, taken from the row itself rather than from a list here, resolves to key presses that enter it, a shifted character is pressed with Shift held, and each press carries the layout it was resolved from and a current timestamp. `KeyCharacterMap` and `KeyEvent` are android.jar stubs that throw off a device, so every JVM case injects a fake and the real lookup is only exercised here. The failure that leaves has shipped once: `{` and `(` inserting nothing at all, with every JVM case green. |
+| `GestureTrackpadTouchInstrumentedTest` | What a second finger does to a drag. The pad reads deltas off pointer index 0, and once the first finger lifts that index becomes the finger left behind, so one frame reported the gap between two fingers as a single delta and the accumulator paid it out as a burst of arrows. Real multi-pointer `MotionEvent`s against a `View` whose initialiser reaches colours, strings and display metrics, so none of it is reachable from a JVM test. |
+| `KeyRowAccessibilityInstrumentedTest` | The extra key row and the trackpad as an accessibility service would find them: activating a key delivers its press and activating a modifier flips its state, a latched modifier says so on the node that speaks it, a plain key publishes none, a key with no alternates advertises no long click, a key and an alternate each call themselves a button, every key clears 48dp at each width the row is paged for, a resize repacks the row without spending a latched modifier or changing its height, the gap between keys is still drawn, and the trackpad offers one action per arrow and ends the drag when one is performed. It reads the `AccessibilityNodeInfo` and performs the actions it advertises by id rather than tapping. A `View` initialiser touches resources on its first line, so none of this is reachable from the JVM suite; the unit tests next door assert the wiring by reading the source instead. The view has to be inside a real window, because a detached one reports almost nothing. |
 
 ## A green run is not necessarily a run
 

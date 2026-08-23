@@ -194,6 +194,85 @@ class NonInteractiveShellEnvTest {
         )
     }
 
+    /**
+     * What a user is told when npm fails in a folder that cannot hold a symlink.
+     *
+     * npm writes `node_modules/.bin/<name>` as a link for every package that
+     * ships an executable, and shared storage is served through FUSE, which has
+     * no `symlink(2)`: measured on an API 37 emulator, real npm in the default
+     * workspace exits 243 with `syscall: 'symlink'` and writes no `.bin` at all,
+     * while the same npm in the app's internal storage exits 0 and writes the
+     * link. New installs get internal storage; one that already put the user's
+     * work on shared storage keeps it, so this is the whole of what those
+     * installs have to go on, and without it the failure is a page of npm output
+     * with the cause nowhere in it.
+     *
+     * `ln` is overridden rather than a hostile filesystem arranged, because there
+     * is none to arrange on a build host. What that leaves untested is FUSE
+     * itself, which is what the device measurement covers; what it does test is
+     * every decision this makes around the probe.
+     */
+    @Test
+    fun `a folder that refuses a symlink gets one line of cause, once`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+
+        val out = runBash(
+            cwd,
+            bashEnvFile().path,
+            """
+            node() { return 7; }
+            ln() { return 1; }
+            npm install; echo "first=${'$'}?"
+            npm install; echo "second=${'$'}?"
+            ls -a | grep probe || echo no-leftover-probe
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            1, out.count { it.startsWith("vscodroid: this folder is on shared storage") },
+            "the cause was not named exactly once per shell: $out",
+        )
+        assertTrue(
+            out.any { it.contains("node_modules/.bin") },
+            "the note does not say what npm could not do: $out",
+        )
+        assertEquals(
+            listOf("first=7", "second=7"), out.filter { it.startsWith("first=") || it.startsWith("second=") },
+            "wrapping npm changed the exit status a script or a task sees: $out",
+        )
+        assertTrue(out.contains("no-leftover-probe"), "the probe was left in the user's folder: $out")
+    }
+
+    /**
+     * The control, and the reason the note tries a symlink rather than matching
+     * the path: a folder where links work must hear nothing, whatever npm did.
+     * Matching on a path would have to name the shared-storage layout, and would
+     * then be wrong for every workspace opened through the SAF picker, whose
+     * mirror is internal.
+     */
+    @Test
+    fun `a folder where symlinks work hears nothing about them`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+
+        val failed = runBash(cwd, bashEnvFile().path, "node() { return 7; }\nnpm install; echo \"status=\$?\"")
+        assertFalse(
+            failed.any { it.startsWith("vscodroid:") },
+            "a folder that can hold links was told it cannot: $failed",
+        )
+        assertTrue(failed.contains("status=7"), "the exit status did not survive: $failed")
+
+        val ok = runBash(cwd, bashEnvFile().path, "node() { return 0; }\nnpm install; echo \"status=\$?\"")
+        assertEquals(listOf("status=0"), ok, "a successful npm said something: $ok")
+    }
+
     /** Non-empty lines of stdout+stderr from `bash -c $script`, run in [cwd]. */
     private fun runBash(cwd: File, bashEnv: String?, script: String): List<String> {
         val builder = ProcessBuilder("/bin/bash", "-c", script)

@@ -2694,6 +2694,23 @@ class MainActivity : AppCompatActivity() {
                     '  .statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
                     '  .context-view .action-label { padding: 6px 12px !important; }',
+                    // The three floors above are for buttons, and a menu separator
+                    // is an .action-item too: it sits inside the activity bar when
+                    // the compact menubar is open and inside .context-view for a
+                    // right-click menu, so both floors land on a 1px divider and
+                    // render it as a blank band. Measured on an API 37 emulator at
+                    // 411px portrait, with the build-time menu CSS in play: the File
+                    // menu's seven separators were 71px each and the menu 1427px in
+                    // an 810px viewport, which is most of why it overflows at all.
+                    // Both halves have to go, the label's and the item's, because
+                    // either one alone still holds the row open.
+                    '  .activitybar .action-label.separator,',
+                    '  .context-view .action-label.separator { min-height: 0 !important; padding: 0 !important; line-height: normal !important; }',
+                    // Dropped whole by a WebView without :has() (Chromium 105; this
+                    // build floors at 107), which leaves the divider as it was rather
+                    // than breaking the rules around it.
+                    '  .activitybar .action-item:has(> .action-label.separator),',
+                    '  .context-view .action-item:has(> .action-label.separator) { min-height: 0 !important; }',
                     // Unprefixed, so it is wider than its name: the workbench also uses
                     // .slider for the colour picker, not only the scrollbar. Harmless
                     // there because that strip is already far wider than 12px, but

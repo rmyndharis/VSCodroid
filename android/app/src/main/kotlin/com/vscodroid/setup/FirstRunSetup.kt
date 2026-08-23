@@ -1556,7 +1556,11 @@ class FirstRunSetup(
             val content = String(existing, Charsets.ISO_8859_1)
             val additions = StringBuilder()
             val added = mutableListOf<String>()
-            if (!content.contains("npm()")) {
+            // [npmBlockMarker], not `npm()`, and the difference is what lets this
+            // block ever change again: every install that already has the pair
+            // matches `npm()`, so that guard froze whatever the release which
+            // first wrote the file happened to say.
+            if (!content.contains(npmBlockMarker)) {
                 additions.append(npmBashFunctions())
                 added += "npm/npx"
             }
@@ -1569,10 +1573,10 @@ class FirstRunSetup(
                 added += "claude"
             }
             // One rewrite through a temporary file rather than an append per
-            // block. Each guard above reads a string its own block opens with,
-            // so an append killed partway certified itself: `npm()` was there,
-            // its body was not, and no later launch would add the rest. The two
-            // decisions stay separate; only the write is shared.
+            // block. A guard that reads a string its own block opens with
+            // certifies a partial append: `claude()` is there, its body is not,
+            // and no later launch adds the rest. The two decisions stay
+            // separate; only the write is shared.
             if (additions.isNotEmpty()) {
                 val names = added.joinToString(" and ")
                 if (writeAtomically(bashrc) { it.write(existing); it.write(additions.toString().toByteArray()) }) {
@@ -2094,14 +2098,62 @@ class FirstRunSetup(
         Logger.i(tag, "Guarded the startup cd in .bashrc ($STARTUP_DIR_VERSION)")
     }
 
+    /**
+     * The marker [createNpmWrappers] guards the block below on.
+     *
+     * `npm()` was the guard until the note arrived, and it cannot be: an install
+     * that already has the pair matches it, so the block would never reach the
+     * devices the note is for. Keyed on the newest thing in the block instead,
+     * which leaves a `.bashrc` written by an older release carrying two `npm`
+     * definitions. bash takes the last one, so that is the one that runs, and
+     * appending is the only way to change a file the user is free to edit.
+     */
+    private val npmBlockMarker = "__vscodroid_symlink_note()"
+
     private fun npmBashFunctions(): String = """
 
 # npm/npx: shell functions (SELinux blocks exec of scripts under filesDir)
 # VSCODROID_PLATFORM_FIX=1: override process.platform to "linux" for npm only
 # (child processes like Rollup/esbuild see real "android" platform)
 # --prefer-offline: use local cache first, saves time on slow mobile connections
-npm() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" --prefer-offline "${'$'}@"; }
+npm() {
+    VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npm-cli.js" --prefer-offline "${'$'}@"
+    # Captured before anything else runs, and handed back below, so wrapping the
+    # command cannot change what a script or a task sees.
+    local __npm_status=${'$'}?
+    [ ${'$'}__npm_status -eq 0 ] || __vscodroid_symlink_note
+    return ${'$'}__npm_status
+}
 npx() { VSCODROID_PLATFORM_FIX=1 node "${'$'}PREFIX/lib/node_modules/npm/bin/npx-cli.js" "${'$'}@"; }
+
+# One line of cause when npm fails somewhere that cannot hold a symbolic link.
+# npm writes node_modules/.bin/<name> as a link for every package that ships an
+# executable, which is most of them, and shared storage is served through FUSE,
+# which has no symlink(2) at all: the install dies with EPERM on a .bin path that
+# says nothing about where the folder lives. Measured on an API 37 emulator:
+# `ln -s` under Android/data answers "Permission denied" where the same call
+# under the app's own files directory succeeds.
+#
+# The directory is ASKED rather than its path matched, so this says nothing about
+# a workspace it does not recognise and nothing at all where links do work. Once
+# per shell, because it is a property of the folder rather than of the command,
+# and on stderr, because BASH_ENV is read by the shell behind every $(...) and
+# stdout there belongs to whoever wrote the substitution.
+__vscodroid_symlink_note() {
+    [ -n "${'$'}{__VSCODROID_SYMLINK_NOTED-}" ] && return 0
+    # A directory nobody may write refuses the probe for its own reason, and a
+    # note blaming symlinks for that would be wrong.
+    [ -w . ] || return 0
+    local probe=".vscodroid-symlink-probe.${'$'}${'$'}"
+    if ln -s . "${'$'}probe" 2>/dev/null; then
+        rm -f "${'$'}probe" 2>/dev/null
+        return 0
+    fi
+    __VSCODROID_SYMLINK_NOTED=1
+    echo "vscodroid: this folder is on shared storage, which cannot hold symbolic links," >&2
+    echo "vscodroid: so npm cannot create node_modules/.bin here. Move the project to" >&2
+    echo "vscodroid: internal storage and open it there:  mv \"${'$'}PWD\" ~/" >&2
+}
 """
 
     /**
@@ -2220,7 +2272,7 @@ claude() {
                 This is your default projects directory. Create folders here to start coding.
 
                 Your default projects are stored at:
-                `Android/data/${context.packageName}/files/projects/`
+                `${projectsDir.absolutePath}/`
 
                 The same directory is `~/projects` in the terminal, which is where
                 new terminals start.
@@ -2538,6 +2590,7 @@ claude() {
         val defaults = """
             {
                 "workbench.secondarySideBar.defaultVisibility": "hidden",
+                "workbench.sash.size": 20,
                 "workbench.startupEditor": "none",
                 "workbench.colorTheme": "Default Dark Modern",
                 "editor.fontSize": 14,
@@ -3868,6 +3921,13 @@ private val VERIFY_SIGNATURE = Regex(""""extensions\.verifySignature"\s*:""")
 private val SECONDARY_SIDE_BAR = Regex(""""workbench\.secondarySideBar\.defaultVisibility"\s*:""")
 
 /**
+ * Whether the user's settings already mention the sash size.
+ *
+ * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
+ */
+private val SASH_SIZE = Regex(""""workbench\.sash\.size"\s*:""")
+
+/**
  * The two settings that route Python environment discovery through `pet`, the
  * Python extension's native locator.
  *
@@ -4756,6 +4816,15 @@ internal fun refreshManagedPaths(
             "workbench.secondarySideBar.defaultVisibility",
             "\"hidden\"",
         )
+    }
+
+    // Same reach and the same one-way rule. Upstream registers this default as
+    // `isIOS ? 20 : 4`, and Android is in neither branch, so every view divider
+    // in this build is a 4px target for a finger. 20 is the maximum the setting
+    // registers and the value upstream already picked for the other touch
+    // platform, so this is that decision extended rather than a new one.
+    if (!SASH_SIZE.containsMatchIn(updated)) {
+        updated = insertSetting(updated, "workbench.sash.size", "20")
     }
 
     // Reaches installs that already have a settings.json, which is every device

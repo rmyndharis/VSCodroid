@@ -2,14 +2,21 @@ package com.vscodroid.util
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.system.Os
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Tests for [Environment]: path generation and environment configuration.
@@ -43,24 +50,101 @@ class EnvironmentTest {
         }
     }
 
+    /**
+     * Which filesystem a workspace lands on, which is not a matter of taste.
+     *
+     * Shared storage is served through FUSE and has no `symlink(2)`, so
+     * `npm install` cannot write `node_modules/.bin` for any package shipping an
+     * executable and dies with EPERM on a path that says nothing about storage.
+     * Measured on an API 37 emulator: `ln -s` under `Android/data` answers
+     * "Permission denied" and the same call under `filesDir` succeeds, and real
+     * npm reproduces both sides. So a new install gets internal storage.
+     *
+     * An install that already has a projects directory on shared storage keeps
+     * it. `.bashrc` exports `PROJECTS_DIR` when it is first written and nothing
+     * rewrites it, so an answer that moved under such an install would leave
+     * every terminal starting somewhere the editor is not, and the user's files
+     * would be somewhere neither of them looks.
+     *
+     * These cases were two assertions against fabricated paths, which could not
+     * see any of it: the decision is made of `isDirectory` questions, so the
+     * directories here are real.
+     */
     @Nested
     inner class ProjectsDirTest {
 
-        @Test
-        fun `getProjectsDir uses external storage when available`() {
-            val externalDir = File("/storage/emulated/0/Android/data/com.vscodroid/files")
-            every { context.getExternalFilesDir(null) } returns externalDir
+        @TempDir
+        lateinit var root: File
 
-            val result = Environment.getProjectsDir(context)
-            assertEquals("${externalDir.absolutePath}/projects", result)
+        private val projectsFilesDir by lazy { File(root, "files").apply { mkdirs() } }
+        private val externalDir by lazy { File(root, "external").apply { mkdirs() } }
+        private val legacy by lazy { File(externalDir, "projects") }
+
+        @BeforeEach
+        fun stubStorage() {
+            every { context.filesDir } returns projectsFilesDir
+            every { context.getExternalFilesDir(null) } returns externalDir
+            // Os throws off a device, and the production code reads that as "no
+            // link", so the case below would pass for the wrong reason. Routed to
+            // java.nio as [com.vscodroid.setup.ProjectsSymlinkTest] does, which
+            // makes the link and its target real.
+            mockkStatic(Os::class)
+            every { Os.readlink(any()) } answers {
+                Files.readSymbolicLink(Path.of(firstArg<String>())).toString()
+            }
+        }
+
+        @AfterEach
+        fun unstubOs() = unmockkStatic(Os::class)
+
+        @Test
+        fun `a fresh install gets internal storage, where a symlink can be made`() {
+            assertEquals("$projectsFilesDir/projects", Environment.getProjectsDir(context))
         }
 
         @Test
-        fun `getProjectsDir falls back to internal storage when external unavailable`() {
+        fun `an install that already has one on shared storage keeps it`() {
+            assertTrue(legacy.mkdirs(), "could not stage the directory an older release made")
+
+            assertEquals(legacy.absolutePath, Environment.getProjectsDir(context))
+        }
+
+        /**
+         * The deletion `FirstRunSetup.ensureProjectsDir` exists to repair: some
+         * routes outside the app still reach that directory. Answering "internal"
+         * for the launch after it would move an existing install's workspace on
+         * the strength of someone else's delete, and `.bashrc` would go on
+         * exporting the old path. `~/projects` is written beside the directory and
+         * outlives it, so it is the record of which one is in use.
+         */
+        @Test
+        fun `it keeps naming shared storage while the directory is missing`() {
+            val link = File(projectsFilesDir, "home/projects")
+            assertTrue(link.parentFile!!.mkdirs(), "could not stage the home directory")
+            Files.createSymbolicLink(link.toPath(), legacy.toPath())
+
+            assertEquals(legacy.absolutePath, Environment.getProjectsDir(context))
+        }
+
+        /**
+         * The control for the case above. A fresh install's `~/projects` names
+         * internal storage, so the link must not drag it back to the old place.
+         */
+        @Test
+        fun `a link into internal storage is not read as a shared-storage install`() {
+            val internal = File(projectsFilesDir, "projects")
+            val link = File(projectsFilesDir, "home/projects")
+            assertTrue(link.parentFile!!.mkdirs(), "could not stage the home directory")
+            Files.createSymbolicLink(link.toPath(), internal.toPath())
+
+            assertEquals(internal.absolutePath, Environment.getProjectsDir(context))
+        }
+
+        @Test
+        fun `it falls back to internal storage when shared storage is unavailable`() {
             every { context.getExternalFilesDir(null) } returns null
 
-            val result = Environment.getProjectsDir(context)
-            assertEquals("${mockFilesDir}/home/projects", result)
+            assertEquals("$projectsFilesDir/projects", Environment.getProjectsDir(context))
         }
     }
 

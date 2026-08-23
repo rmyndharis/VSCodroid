@@ -685,7 +685,17 @@ cat >> "$WORKBENCH_CSS" << 'CSSEOF'
 .monaco-menu .monaco-action-bar.vertical .action-label { font-size: 14px !important; padding: 8px 24px 8px 12px !important; line-height: 28px !important; }
 .monaco-menu .submenu-indicator { font-size: 16px !important; }
 .monaco-menu .keybinding { font-size: 12px !important; }
-.monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; min-height: 0 !important; padding: 0 !important; line-height: normal !important; }
+/* A separator is an .action-item whose label carries .separator, so the 44px
+   touch floor two rules above lands on the divider as well and renders a 1px
+   line as a blank band. Measured on an API 37 emulator, 411px portrait: each of
+   the File menu's seven separators was 71px and the menu was 1427px tall in an
+   810px viewport. Neutralising both halves puts them at 11px and the menu at
+   1007px with every real row still 44px. :has() is Chromium 105 and this build
+   floors at WebView 107; where it is missing the selector is dropped whole and
+   the divider stays as it was, which is the old behaviour rather than a broken
+   one. */
+.monaco-menu .monaco-action-bar.vertical .action-item:has(> .action-label.separator) { min-height: 0 !important; }
 CSSEOF
 grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS" || { echo "  ERROR: append did not land" >&2; exit 1; }
 echo "  appended mobile menu overrides to workbench.css"

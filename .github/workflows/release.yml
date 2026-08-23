@@ -4,6 +4,29 @@ on:
   push:
     tags:
       - "v*"
+  # A build the signed artifacts can be exercised by without publishing one.
+  # Nothing else in this repository builds `assembleRelease` or `bundleRelease`
+  # with the real keystore: r8.yml runs the shrinker against a stub tree and
+  # stops short of signing, and build.yml builds debug. So the whole
+  # release-only half -- validateSigningRelease, packageRelease, bundleRelease,
+  # checkBundleSize, the symbol zip, the toolchain ZIPs and their digest
+  # manifest -- was reachable only by pushing a tag, which is to say only by
+  # publishing. A failure there is discovered on the one build that cannot be
+  # taken back.
+  #
+  # It cannot publish. `github-release` is the only job that writes anything
+  # outward, and it is gated on `github.event_name == 'push'`; the tag/version
+  # gate at the top of build-release is gated the same way, because there is no
+  # tag on this path to compare against. The gate is on the TRIGGER and not on
+  # the ref, and that distinction is the whole guarantee: a workflow_dispatch
+  # can be aimed at a tag ref, so `startsWith(github.ref, 'refs/tags/v')` would
+  # be true for a dispatched run and would publish from one. The ref test is
+  # kept beside it as the second half rather than the first.
+  #
+  # Its cost is a runner-hour and the artifacts it uploads expire; it holds the
+  # signing secrets, which is why it takes the same write access to start as
+  # pushing a tag does.
+  workflow_dispatch:
 
 # Read by default, raised to write on the one job that publishes. build-release
 # holds the signing secrets and runs by far the most foreign code in the
@@ -85,6 +108,16 @@ jobs:
       # say the name, and a tag that disagrees with it points them all at the
       # wrong commit.
       - name: Check the tag matches the app version
+        # Tag path only, because every question it asks needs a tag: the name to
+        # compare against versionName, the predecessor to compare versionCode
+        # against, and the CHANGELOG heading that has to have been renamed by
+        # the moment of tagging. On a dispatched run `github.ref_name` is a
+        # branch, so the first `case` would refuse it, and the CHANGELOG rule
+        # would refuse every branch that correctly still says Unreleased --
+        # which is the reason the step's own comment gives for not running it on
+        # a pull request. Nothing is lost: no dispatched run publishes, so there
+        # is no artefact for a wrong version to end up on.
+        if: github.event_name == 'push'
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -262,6 +295,28 @@ jobs:
 
       - name: Check the device-test checklist accounts for its own rows
         run: python3 scripts/check-checklist-totals.py
+
+      # With the rest of this block, for the reason its header gives. This one
+      # covers the suite a person is told to run before tagging: its README is
+      # the only account of what it covers, and a tag is the moment that account
+      # is being acted on.
+      - name: Check the instrumented suite matches what documents it
+        run: python3 scripts/check-instrumented-inventory.py
+
+      # This job runs Gradle four times, so it is a place the wrapper actually
+      # downloads a distribution. Presence only: a sum that is present and wrong
+      # is refused by the wrapper itself on the next invocation, while an absent
+      # one runs whatever the URL serves and looks exactly like a pinned tree.
+      - name: Check the Gradle distribution is pinned to a digest
+        run: |
+          props=android/gradle/wrapper/gradle-wrapper.properties
+          if ! grep -q '^distributionSha256Sum=[0-9a-f]\{64\}$' "$props"; then
+            echo "::error file=$props::no distributionSha256Sum; the wrapper would" \
+                 "run whatever $(grep -m1 '^distributionUrl=' "$props") serves." \
+                 "Take the digest from that URL with .sha256 appended."
+            exit 1
+          fi
+          grep '^distributionUrl=\|^distributionSha256Sum=' "$props"
 
       # Needs real history, which both this job and lint.yml now take: in
       # actions/checkout's default single-commit clone `git log -1 -- <file>`
@@ -517,6 +572,34 @@ jobs:
       - name: Run lint
         working-directory: android
         run: ./gradlew lint
+
+      # The last thing build.yml does that a tag did not. Nothing runs the
+      # instrumented suite -- no runner measured here can, see
+      # androidTest/README.md -- so compiling it is the whole of what CI can
+      # offer, and that compile lived in build.yml's test job alone, which fires
+      # on pull_request and on push to main. A tag cut from a branch that
+      # reached neither got a signed build whose on-device suite may not even
+      # build, and the person told to run that suite before tagging finds out
+      # after the tag exists.
+      #
+      # Cheap here. The androidTest APK carries none of the bundled tree, which
+      # is measurable rather than assumed: its merged-asset directory
+      # (app/build/intermediates/assets/debugAndroidTest) is 0 B against 832 MB
+      # for the debug and release variants, and the APK it produces is 1.7 MB
+      # against the app's 334. The debug classes it compiles against were
+      # already compiled by the unit-test step above.
+      #
+      # Not measured: whether Gradle still schedules the app's own 832 MB asset
+      # merge as a dependency of this task even though nothing here consumes it.
+      # If it does, the cost is one more local copy of a tree this job already
+      # merges twice, for assembleRelease and bundleRelease, inside a 90 minute
+      # budget.
+      #
+      # Before the keystore, with the rest of the re-run block, so a failure
+      # here never reaches a step handling a secret.
+      - name: Compile the instrumented tests
+        working-directory: android
+        run: ./gradlew assembleDebugAndroidTest
 
       # Decode signing keystore from base64 secret
       #
@@ -823,6 +906,27 @@ jobs:
     name: GitHub Release
     runs-on: ubuntu-latest
     needs: build-release
+    # The one job that publishes, and the one gate that keeps a dispatched run
+    # from doing so. Everything outward-facing this workflow does happens here:
+    # the release is created, and every asset a device later resolves through
+    # `releases/latest` is attached to it -- the toolchain ZIPs and the
+    # toolchains.sha256 that non-Play installs verify against. So publishing
+    # from an arbitrary branch would not merely add a release, it would move
+    # that pointer for every sideloaded install, including ones already on a
+    # toolchain.
+    #
+    # Both halves are deliberate and neither is sufficient alone.
+    # `github.event_name == 'push'` is the one that holds, because the only
+    # push trigger this workflow declares is the `v*` tag filter; a
+    # workflow_dispatch can be aimed at a tag ref, so the ref test on its own
+    # would let a dispatched run publish. The ref test is kept because the
+    # trigger test alone would start passing the moment a branch push trigger
+    # were added above.
+    #
+    # A skipped job does not fail the run, so a dispatched build reports green
+    # having published nothing, and the write scope below is never granted on
+    # that path.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     # The only job that writes. It builds nothing and downloads nothing beyond
     # the artifact build-release produced, so the write scope is held for the
     # few seconds it is used rather than for the ninety minutes above.

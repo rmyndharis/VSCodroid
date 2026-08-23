@@ -1,0 +1,82 @@
+Give the side bar sash somewhere to travel on a phone-width viewport.
+
+The primary side bar cannot be resized in portrait. Its minimum width and its
+reachable maximum are the same number, so the sash between it and the editor is
+rendered disabled and dragging it does nothing.
+
+The editor part's minimum width is the smaller of its own 220px minimum and
+whatever the container has left once every other visible part sits at its own
+minimum. On a narrow viewport the second term wins, and that term is by
+construction "the container minus the side bar's minimum", so the side bar's
+reachable maximum comes out equal to its minimum and the split view has no range
+to offer. Lowering the side bar's own 170px minimum does not help: the collapse
+is structural and reproduces at any value.
+
+Measured in the shipped build on a 411px portrait viewport (activity bar 48,
+side bar 170): the editor reported 193, all three vertical sashes carried the
+disabled class, and a 122px drag on the side bar sash moved it by 0. Sweeping
+the viewport width put the boundary at 439px: 438 and below disabled, 439 and
+above enabled. A phone in portrait is 360 to 412.
+
+The fix splits the shortfall instead of handing all of it to the editor. When
+the container cannot afford the editor's own minimum, the editor asks for half
+of what is left. That is always a real reduction, so the sash always has
+somewhere to go, and it can never demand more room than exists. At 411px the
+side bar can now reach 266px rather than being pinned at 170.
+
+Wide windows keep the upstream behaviour: there the editor's own minimum is the
+smaller of the two and is returned unchanged, so the case the upstream min()
+exists to protect is untouched.
+
+Only the width is changed. minimumHeight has the same shape and is deliberately
+left alone: the editor's own minimum height is 70px, so the term that collapses
+the width never wins vertically on a phone. Nothing was measured about the panel
+sash and nothing here claims anything about it.
+
+One note for whoever tidies this later. this.centeredLayoutWidget.minimumWidth
+is read twice rather than hoisted into a local, and that is deliberate. The
+comparison against it is the token patches/fingerprints.txt matches to prove
+this patch reached the packaged bundle; a local name is minified away. If you
+hoist it, move that row to something the new shape introduces and check the
+replacement occurs zero times in an unpatched bundle first.
+
+diff --git a/src/vs/workbench/browser/parts/editor/editorPart.ts b/src/vs/workbench/browser/parts/editor/editorPart.ts
+index cd3ad87..6f056cd 100644
+--- a/src/vs/workbench/browser/parts/editor/editorPart.ts
++++ b/src/vs/workbench/browser/parts/editor/editorPart.ts
+@@ -1035,7 +1035,34 @@
+ 	//#region Part
+ 
+ 	// TODO @sbatten @joao find something better to prevent editor taking over #79897
+-	get minimumWidth(): number { return Math.min(this.centeredLayoutWidget.minimumWidth, this.layoutService.getMaximumEditorDimensions(this.layoutService.getContainer(getWindow(this.container))).width); }
++	get minimumWidth(): number {
++		// What is left for the editor once every other visible part is at ITS own
++		// minimum. Returning exactly that, which is what the line above did whenever
++		// it was the smaller of the two, keeps the layout satisfiable and at the same
++		// time pins the side bar: the side bar's reachable maximum is the container
++		// minus this number, so the two come out equal and the sash between them has
++		// nowhere to travel.
++		//
++		// Measured on a 411px portrait viewport, activity bar 48, side bar at its
++		// 170px minimum: the editor reported 193, the side bar's reachable maximum
++		// was 363 - 193 = 170, and all three vertical sashes rendered disabled.
++		// Dragging the side bar sash 122px moved it by 0. That held for every
++		// viewport narrower than 439px, which is every phone in portrait.
++		//
++		// Splitting what is left gives the sash somewhere to go and still never asks
++		// for more room than exists. Halving rather than clamping to a fixed floor,
++		// because a floor stops reducing anything once the leftover falls below it,
++		// and that is the narrow end where the pinning is worst.
++		//
++		// Wider viewports are untouched: there the editor's own minimum is the
++		// smaller of the two and is returned exactly as before.
++		//
++		// this.centeredLayoutWidget.minimumWidth is read twice rather than hoisted
++		// into a local. That comparison is what patches/fingerprints.txt matches to
++		// prove this reached the packaged bundle, and a local name is minified away.
++		const available = this.layoutService.getMaximumEditorDimensions(this.layoutService.getContainer(getWindow(this.container))).width;
++		return available < this.centeredLayoutWidget.minimumWidth ? available / 2 : this.centeredLayoutWidget.minimumWidth;
++	}
+ 	get maximumWidth(): number { return this.centeredLayoutWidget.maximumWidth; }
+ 	get minimumHeight(): number { return Math.min(this.centeredLayoutWidget.minimumHeight, this.layoutService.getMaximumEditorDimensions(this.layoutService.getContainer(getWindow(this.container))).height); }
+ 	get maximumHeight(): number { return this.centeredLayoutWidget.maximumHeight; }

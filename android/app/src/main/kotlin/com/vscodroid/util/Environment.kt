@@ -2,6 +2,7 @@ package com.vscodroid.util
 
 import android.content.Context
 import android.net.Uri
+import android.system.Os
 import com.vscodroid.setup.ToolchainManager
 import java.io.File
 import java.security.MessageDigest
@@ -166,30 +167,63 @@ object Environment {
     fun getServerScript(context: Context): String =
         "${context.filesDir}/server/server.js"
 
+    /**
+     * The default workspace: internal storage, unless this install already put
+     * the user's work on shared storage.
+     *
+     * It used to be `getExternalFilesDir(null)/projects` for everyone, chosen so
+     * that a file manager could reach the code. That reachability is gone:
+     * Android 11 closed `Android/data` to other apps and to the system Files
+     * app, and minSdk here is 33, so no supported device has it. A few routes
+     * remain (MTP over USB, some OEM managers), which is how the folder gets
+     * deleted from outside at all, but nothing a user can rely on.
+     *
+     * What did not go away is the filesystem. Shared storage is served through
+     * FUSE, which does not implement `symlink(2)` at all, so every symlink an
+     * ordinary toolchain writes fails with EPERM: measured on an API 37
+     * emulator, `ln -s` under `Android/data/<pkg>/files/projects` answers
+     * "Permission denied" while the same call under `filesDir` succeeds. That
+     * cost `npm install` any package shipping an executable, because npm writes
+     * `node_modules/.bin/<name>` as a link and dies on the first one, and it
+     * costs pnpm, a Python venv without `--copies` and any build step that links.
+     * The npm failure names a `.bin` path and an EPERM, neither of which a user
+     * has any reason to connect to where the folder lives.
+     *
+     * An install that already has a projects directory on shared storage keeps
+     * it, and that is not caution for its own sake: `.bashrc` bakes
+     * `PROJECTS_DIR` in when it is first written and nothing rewrites it, so an
+     * answer that moved under an existing install would leave every terminal
+     * starting somewhere the editor is not. Moving the user's own files is not
+     * something to do behind their back either. The directory's own existence is
+     * the record, because nothing creates it any more: a fresh install never has
+     * one and an install that does can only have got it from a release where it
+     * was the default.
+     *
+     * Clear Data still wipes whichever of the two is in use, and work that has to
+     * stay reachable from outside the app still belongs in a folder opened
+     * through the SAF picker. Neither of those changed with the location.
+     */
     fun getProjectsDir(context: Context): String {
-        // App-external storage, which needs no permission.
-        // Path: /storage/emulated/0/Android/data/<pkg>/files/projects
-        //
-        // "visible in file managers" is what this comment claimed until
-        // 2026-08-16, and it is not something to rely on. Android 11 closed
-        // Android/data to other apps and to the system Files app, and minSdk
-        // here is 33, so no supported device has the unrestricted access the
-        // claim assumed. Some routes remain (MTP over USB, a few OEM managers),
-        // which is how the projects folder gets deleted from outside at all;
-        // see the CHANGELOG entry about surviving exactly that.
-        //
-        // The consequence that matters is the one for Clear Data: it wipes this
-        // directory, and a user cannot count on being able to copy anything out
-        // first. docs/USER_GUIDE.md carries the warning and the rescue steps
-        // where it recommends clearing. Work that has to stay reachable from
-        // outside the app belongs in a folder opened through the SAF picker.
-        val externalDir = context.getExternalFilesDir(null)
-        return if (externalDir != null) {
-            File(externalDir, "projects").absolutePath
-        } else {
-            // Fallback to internal storage if external unavailable
-            "${context.filesDir}/home/projects"
-        }
+        val filesDir = context.filesDir.absolutePath
+        val internal = "$filesDir/projects"
+        val externalDir = context.getExternalFilesDir(null) ?: return internal
+        val legacy = File(externalDir, "projects")
+        if (legacy.isDirectory) return legacy.absolutePath
+        // Answered before the link is read, so the ordinary case costs one stat
+        // and no syscall: once either directory is there, that is the answer.
+        if (File(internal).isDirectory) return internal
+        // Neither is on disk, which happens twice: on the first launch of a
+        // fresh install, and after something outside the app deleted the shared
+        // storage directory, which is what ensureProjectsDir() exists to repair.
+        // Telling those apart matters, because answering "internal" for the
+        // second would move an existing install's workspace on the strength of a
+        // deletion, with `.bashrc` still exporting the old path. `~/projects` is
+        // written beside the directory and outlives it, so its target is the
+        // record of which one this install has been using. Os.readlink throws off
+        // a device and on anything that is not a link, and both mean the same
+        // thing here: no such record.
+        val link = runCatching { Os.readlink("$filesDir/home/projects") }.getOrNull()
+        return if (link == legacy.absolutePath) legacy.absolutePath else internal
     }
 
     fun getHomeDir(context: Context): String =

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Toolchains screen has a Command Palette entry, **VSCodroid: Manage Toolchains**. The launcher icon's shortcut was the only route to it.
 - **VSCodroid: About**, which carries the licence notices and the written offer of source, is now on the remote indicator in the status bar as well as in the Command Palette.
 - Files served to extension webviews answer byte-range requests, which is what seeking in a media preview needs.
+- The release build can be exercised without publishing one. It cannot publish: the job that writes is gated on the trigger, so a dispatched run reports green having released nothing.
+- A unit-test coverage report, on request: `./gradlew :app:createDebugUnitTestCoverageReport -PvscodroidCoverage`. Nothing gates on the figure and the suite CI runs stays uninstrumented.
 
 ### Changed
 - The toolchain picker is offered until you answer it. An interrupted first run used to skip it permanently, leaving the launcher shortcut as the only way to add a language.
@@ -50,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The privacy policy now describes the sign-in callback window as the app enforces it: matched against the specific sign-in that produced it, not against the last browser launch.
 - The document-date and plain-punctuation checks now run on pull requests and on tags alike, so a documentation change no longer surfaces its first failure as an aborted release.
 - The process monitor's status bar no longer shows an internal identifier where a readable label belongs, and drops an entry for a process type the editor stopped creating.
+- The Gradle distribution is pinned to its published digest, and a build without one is refused. It was the only thing entering the build with nothing checking it.
+- The instrumented tests are compiled at tag time as well, so a tag cut from a branch that reached no other workflow cannot ship a suite that does not build.
+- The instrumented suite's own README is held to the sources it describes; its test count had been wrong twice.
 
 - Documentation, code comments and the Get Started walkthrough now use ordinary punctuation throughout, and a check keeps new text consistent with it.
 - Every dialog, toast and spoken description now comes from a string resource, so the app can be translated. No translation ships yet; sixty-nine texts were unreachable to one.
@@ -98,6 +103,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 
 ### Fixed
+- The primary side bar can be resized on a phone in portrait. Its minimum and its reachable maximum were the same number, so the divider had nowhere to travel and dragging it did nothing.
+- Dragging inside an open submenu scrolls it instead of closing it. The gesture reached the menu behind it as well, and a menu that scrolls dismisses the submenu anchored to it.
+- Menu dividers are drawn as lines again, not as blank bands. The touch-target floor applied to them too, which added about 400px to the File menu and is most of why it ran off the screen.
+- View dividers are 20px rather than 4px, which is the size the editor already uses on the other touch platform.
+- The default workspace is on internal storage. Shared storage cannot hold a symbolic link, so `npm install` failed on the first package shipping an executable, and npm blamed a path in `node_modules/.bin`. An install that already has projects on shared storage keeps them, and npm now says which of the two it hit.
 - Extensions survive a dropped connection. Backgrounding the app for a minute killed the extension host, and the workbench came back looking healthy with nothing loaded.
 - A first run interrupted part-way keeps the files it already unpacked, instead of writing the whole 800 MB tree again on the retry.
 - The storage check reserves enough for the filesystem overhead of an 800 MB tree, so an install can no longer pass it and then meet a full disk part-way through.

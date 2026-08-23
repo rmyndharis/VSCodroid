@@ -40,7 +40,7 @@ private fun canonical(path: String) = File(path).canonicalPath
 private val ROOTS = listOf(
     "$FILES/server",
     "$FILES/home/.vscodroid/extensions",
-    "$FILES/home/projects",
+    "$FILES/projects",
     "$FILES/saf-mirrors",
 ).map(::canonical)
 
@@ -290,24 +290,44 @@ class PublishedResourceRootsTest {
             "a mirrored workspace"
         )
         assertNotNull(
-            resolveWebviewResource(File(externalDir, "projects/app/docs/diagram.png").path, roots),
+            resolveWebviewResource(File(filesDir, "projects/app/docs/diagram.png").path, roots),
             "the default workspace"
         )
     }
 
     /**
-     * Catches: covering the internal fallback by publishing its parent. When
-     * external storage is unavailable the projects directory moves to
-     * `<filesDir>/home/projects`, and the shortest root that covers it is
-     * `<filesDir>/home`, the directory holding `.ssh`.
+     * The other workspace location, which is not a variant but an install that
+     * predates the move: a projects directory already on shared storage keeps
+     * being the answer, so it has to keep being published or every image in a
+     * markdown preview stops loading for exactly the users who have one.
      */
     @Test
-    fun `the internal projects fallback does not publish the home directory`() {
+    fun `a workspace an existing install left on shared storage is still served`() {
+        File(externalDir, "projects").mkdirs()
+
+        val roots = publishedResourceRoots(contextWith(externalDir))
+
+        assertNotNull(
+            resolveWebviewResource(File(externalDir, "projects/app/docs/diagram.png").path, roots),
+            "the workspace an upgraded install is still using"
+        )
+    }
+
+    /**
+     * Catches: covering the internal workspace by publishing its parent. The
+     * default workspace is `<filesDir>/projects`, a sibling of `home` rather
+     * than a child of it, and that is load-bearing here: while it was
+     * `<filesDir>/home/projects` the shortest root covering it was
+     * `<filesDir>/home`, the directory holding `.ssh` and `.bashrc`. Moving it
+     * out took that widening off the table; this refuses its return.
+     */
+    @Test
+    fun `the internal workspace does not publish the home directory`() {
         val roots = publishedResourceRoots(contextWith(null))
 
         assertNotNull(
-            resolveWebviewResource(File(filesDir, "home/projects/app/docs/diagram.png").path, roots),
-            "the fallback workspace still has to work"
+            resolveWebviewResource(File(filesDir, "projects/app/docs/diagram.png").path, roots),
+            "the default workspace still has to work"
         )
         assertNull(resolveWebviewResource(File(filesDir, "home/.ssh/id_ed25519").path, roots))
         assertNull(resolveWebviewResource(File(filesDir, "home/.bashrc").path, roots))

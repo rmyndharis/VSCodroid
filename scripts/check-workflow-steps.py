@@ -16,7 +16,7 @@ because that workflow is `workflow_dispatch` only and runs perhaps once per VS
 Code bump. The failure would have arrived a month later, on the one job whose
 output every app build depends on.
 
-Three assertions:
+Four assertions:
 
   * at least one workflow, carrying at least one step, was actually read. A
     checker that finds nothing reports nothing, and CI reads the exit code
@@ -27,7 +27,9 @@ Three assertions:
   * every `uses` reference is pinned to a full 40-character commit SHA. A
     floating tag is resolved at run time by whoever controls it, and these
     workflows publish the release assets, including the digest manifest that
-    non-Play toolchain installs verify against.
+    non-Play toolchain installs verify against;
+  * a workflow that can be started by hand AND by something else must not hand
+    the hand-started run a write-scoped token. See below.
 
 Both extensions are read. GitHub Actions runs `.yml` and `.yaml` alike, and a
 checker that knows only one of them would go on printing a healthy count while
@@ -35,7 +37,49 @@ the file it could not see carried exactly the defect this exists to catch.
 
 Deliberately not a general workflow linter. `actionlint` is that, and it is a
 Go binary this repository would have to fetch, pin and verify to run one check.
-These two questions are the ones that have actually gone wrong here.
+These questions are the ones that have actually gone wrong here.
+
+## Why the fourth one
+
+`release.yml` builds and signs, and then publishes: it creates the release and
+attaches the toolchain ZIPs and the `toolchains.sha256` that every non-Play
+install verifies against, under `releases/latest`. That pointer is read on every
+sideloaded install, including by devices already carrying a toolchain, so a
+release published off an arbitrary branch does not merely appear in a list. It
+moves what those devices resolve.
+
+That workflow now also takes `workflow_dispatch`, so the signed build can be
+exercised without publishing one -- and the only thing separating the two is a
+job-level `if:` on one job. Deleting that line is a one-character-looking edit
+whose consequence is invisible until a dispatched run has published.
+
+So: in a workflow declaring `workflow_dispatch` alongside at least one other
+trigger, a job whose token can write to this repository must be gated on a
+specific `github.event_name`, and that gate must not name `workflow_dispatch`
+at all. An allowlist, in other words, and `!= 'workflow_dispatch'` is refused
+even though it is correct as written: a denylist admits the next trigger added
+to the workflow without anyone deciding to, and this is the line whose quiet
+loosening the rule exists to prevent.
+
+The subject is the token scope rather than the step, because a rule that
+recognised publishing by naming `softprops/action-gh-release`, or by grepping
+for `gh release`, stops matching the day the same thing is written another way,
+and a rule that stops matching prints exactly what a clean tree prints. Nothing
+can create a release or attach an asset to one without `contents: write`.
+
+`contents` and not any write: `pages.yml` holds `pages: write` and deploys the
+documentation site from a hand-started run on purpose, which is a different
+question and not this one.
+
+A workflow whose ONLY trigger is `workflow_dispatch` is left alone, and that is
+the point of the "alongside" clause rather than an exemption:
+`build-vscode-oss.yml` is manual and publishing the server tarball is what it is
+for. Gating it on an event it can never see would fail every run.
+
+Gating on `github.event_name`, not on `github.ref`: a workflow_dispatch can be
+aimed at a tag ref, so a ref test alone is true for a dispatched run and would
+let one publish. A ref test beside the event test is fine and release.yml
+carries one; a ref test instead of it is the mistake this rule refuses.
 """
 
 import pathlib
@@ -77,16 +121,114 @@ def steps_of(doc):
             yield job_name, i, step
 
 
+def triggers_of(doc):
+    """The trigger names a workflow declares.
+
+    `on` is the one key that cannot be read by its name here. YAML 1.1 resolves
+    a bare `on` to the boolean True, which is what `yaml.safe_load` returns and
+    what GitHub's own schema tolerates, so `doc.get("on")` finds nothing on
+    every workflow in this tree. Both spellings are read rather than one, since
+    a quoted `"on":` in a future file would come back under the string.
+    """
+    raw = doc.get("on", doc.get(True))
+    if isinstance(raw, dict):
+        return set(raw)
+    if isinstance(raw, list):
+        return set(raw)
+    return {str(raw)} if raw else set()
+
+
+def writes_contents(doc, job) -> bool:
+    """Whether this job's GITHUB_TOKEN can write to the repository.
+
+    Job-level `permissions` replaces the workflow-level block outright rather
+    than merging with it, so the job's own is read first and the workflow's only
+    when the job declares none.
+
+    Neither declaring one is reported as write-capable, and that is the useful
+    reading rather than the strict one: with no block anywhere the scope is
+    whatever the repository's default workflow permissions happen to be, which
+    is a setting outside the file and outside review. Every workflow here
+    declares one, so this costs nothing today and starts acting the moment one
+    stops.
+
+    `contents` specifically. A job holding `pages: write` and nothing else can
+    deploy a site and cannot touch a release, and pages.yml deploys the docs
+    from a hand-started run on purpose.
+    """
+    perms = job.get("permissions", doc.get("permissions"))
+    if perms is None:
+        return True
+    if isinstance(perms, str):          # `permissions: write-all` / `read-all`
+        return perms != "read-all"
+    return perms.get("contents") == "write"
+
+
+def ungated_writers(path, doc):
+    """`(complaints, write-capable jobs examined)` for one workflow.
+
+    Jobs in `doc` that could write to the repository from a manual run.
+
+    Only asked of a workflow that takes `workflow_dispatch` together with some
+    other trigger. With that as its only trigger, writing is what the workflow
+    is for: `build-vscode-oss.yml` is manual and publishing the server tarball
+    is the whole of its job.
+
+    The question is asked of the token scope rather than of the steps, and that
+    is deliberate. A rule that recognised publishing by naming the action, or by
+    grepping for `gh release`, goes quiet the day the mechanism is written a
+    different way, and quiet is indistinguishable from clean. Nothing can create
+    a release or attach an asset without `contents: write`, so the capability is
+    the thing to look at.
+
+    It does not cover a step reaching for a personal access token out of a
+    secret, which needs no declared permission at all. Nothing here does that,
+    and no structural check of this shape could see it.
+    """
+    triggers = triggers_of(doc)
+    if "workflow_dispatch" not in triggers or len(triggers) < 2:
+        return [], 0
+
+    others = sorted(triggers - {"workflow_dispatch"})
+    bad, writers = [], 0
+    for job_name, job in (doc.get("jobs") or {}).items():
+        if not writes_contents(doc, job):
+            continue
+        writers += 1
+        gate = str(job.get("if") or "")
+        # The event has to be named, and workflow_dispatch must not appear at
+        # all -- an allowlist (`== 'push'`), never a denylist
+        # (`!= 'workflow_dispatch'`). Both read as correct today and they part
+        # company the moment a third trigger is added above: the allowlist keeps
+        # refusing everything it does not name, while the denylist admits the
+        # new one silently, which is the shape of edit this rule exists for.
+        if "github.event_name" not in gate or "workflow_dispatch" in gate:
+            bad.append(
+                f"{path.name}: job {job_name} can write to this repository "
+                f"(contents: write), and the workflow can be started by hand "
+                f"({', '.join(others)} and workflow_dispatch). Its job-level "
+                f"`if:` is {gate!r}, which does not hold a dispatched run back. "
+                f"Gate it on github.event_name, or drop the write scope; a "
+                f"github.ref test cannot stand in, because a dispatch can be "
+                f"aimed at a tag ref"
+            )
+    return bad, writers
+
+
 def main() -> int:
     failures = []
     checked_files = 0
     checked_steps = 0
+    gated_writers = 0
 
     paths = sorted(p for p in WORKFLOWS.iterdir()
                    if p.suffix in (".yml", ".yaml") and p.is_file())
     for path in paths:
         checked_files += 1
         doc = yaml.safe_load(path.read_text())
+        bad, writers = ungated_writers(path, doc)
+        failures.extend(bad)
+        gated_writers += writers - len(bad)
         for job, i, step in steps_of(doc):
             checked_steps += 1
             where = f"{path.name}: job {job}, step {i}"
@@ -127,6 +269,11 @@ def main() -> int:
     print(f"  ok     all {checked_steps} steps in {checked_files} workflows "
           f"have exactly one of uses/run")
     print(f"  ok     every uses reference is pinned to a full commit SHA")
+    # Zero is a legitimate answer and reads as one: it says no workflow that can
+    # be started by hand also holds a write-scoped job, which is the state this
+    # rule wants. It is not the empty-glob case the assertion above covers.
+    print(f"  ok     {gated_writers} write-scoped job(s) in a workflow that can "
+          f"also be started by hand, each gated on github.event_name")
     return 0
 
 

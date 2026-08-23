@@ -45,9 +45,10 @@ class SettingsPathsTest {
         pythonLocator: String? = "js",
         envExtension: String? = "false",
         secondarySideBar: String? = "hidden",
+        sashSize: String? = "20",
     ) = """
         {
-        $preamble    "editor.fontSize": 14,${claudeWrapper?.let { "\n    \"claudeCode.claudeProcessWrapper\": \"$it\"," } ?: ""}${if (verifySignature) "\n        \"extensions.verifySignature\": false," else ""}${pythonLocator?.let { "\n        \"python.locator\": \"$it\"," } ?: ""}${envExtension?.let { "\n        \"python.useEnvironmentsExtension\": $it," } ?: ""}${secondarySideBar?.let { "\n        \"workbench.secondarySideBar.defaultVisibility\": \"$it\"," } ?: ""}
+        $preamble    "editor.fontSize": 14,${claudeWrapper?.let { "\n    \"claudeCode.claudeProcessWrapper\": \"$it\"," } ?: ""}${if (verifySignature) "\n        \"extensions.verifySignature\": false," else ""}${pythonLocator?.let { "\n        \"python.locator\": \"$it\"," } ?: ""}${envExtension?.let { "\n        \"python.useEnvironmentsExtension\": $it," } ?: ""}${secondarySideBar?.let { "\n        \"workbench.secondarySideBar.defaultVisibility\": \"$it\"," } ?: ""}${sashSize?.let { "\n        \"workbench.sash.size\": $it," } ?: ""}
             "terminal.integrated.profiles.linux": {
                 "bash": {
                     "path": "$bashPath",
@@ -310,6 +311,7 @@ class SettingsPathsTest {
                 """"extensions.verifySignature": false, "python.locator": "js", """ +
                 """"python.useEnvironmentsExtension": false, """ +
                 """"workbench.secondarySideBar.defaultVisibility": "hidden", """ +
+                """"workbench.sash.size": 20, """ +
                 """"editor.fontSize": 14 }"""
 
             assertNull(refreshManagedPaths(noGit, shell, git, wrapper))
@@ -325,6 +327,7 @@ class SettingsPathsTest {
                     "python.locator": "js",
                     "python.useEnvironmentsExtension": false,
                     "workbench.secondarySideBar.defaultVisibility": "hidden",
+                    "workbench.sash.size": 20,
                     "terminal.integrated.profiles.linux": {
                         "zsh": { "path": "$oldDir/libzsh.so" }
                     }
@@ -342,6 +345,74 @@ class SettingsPathsTest {
      * refreshed. Insertion touches a user's document, so what these cover is mostly
      * what must NOT change.
      */
+    /**
+     * The sash size, which reaches installs that already have a settings.json.
+     *
+     * Upstream registers the default as `isIOS ? 20 : 4` and Android is in
+     * neither branch, so every divider in this build is a 4px target for a
+     * finger. 20 is the maximum the setting registers and the value upstream
+     * already chose for the other touch platform. Insertion touches a user's
+     * document, so what these mostly cover is what must NOT change.
+     */
+    @Nested
+    inner class SashSize {
+
+        @Test
+        fun `adds the sash size when it is absent`() {
+            val result = refreshManagedPaths(
+                settings(shell, git, args = "[]", sashSize = null), shell, git, wrapper,
+            )
+
+            requireNotNull(result) { "a missing sash size must be added" }
+            assertTrue(
+                result.contains(""""workbench.sash.size": 20"""),
+                "sash size not inserted:\n$result",
+            )
+        }
+
+        @Test
+        fun `changes nothing else`() {
+            val before = settings(shell, git, args = "[]", sashSize = null)
+            val result = requireNotNull(refreshManagedPaths(before, shell, git, wrapper))
+
+            // The line is written with the first property's own indentation, so
+            // it is matched rather than spelled out; spelling it out asserted the
+            // indentation of this fixture and not the rule.
+            val stripped = result.lines().filterNot { it.trim().startsWith(""""workbench.sash.size"""") }
+            assertEquals(before, stripped.joinToString("\n"), "more than one line changed")
+        }
+
+        @Test
+        fun `leaves a size the user chose themselves`() {
+            // Presence alone decides, either value: someone who set 4 back meant to.
+            val before = settings(shell, git, args = "[]", sashSize = "8")
+            val result = refreshManagedPaths(before, shell, git, wrapper)
+
+            if (result != null) {
+                assertTrue(
+                    result.contains(""""workbench.sash.size": 8"""),
+                    "the user's size was overwritten:\n$result",
+                )
+                assertTrue(
+                    !result.contains(""""workbench.sash.size": 20"""),
+                    "the managed value was written beside it:\n$result",
+                )
+            }
+        }
+
+        @Test
+        fun `does not add a second key beside the user's own`() {
+            val before = settings(shell, git, args = "[]", sashSize = "8")
+            val result = refreshManagedPaths(before, shell, git, wrapper) ?: before
+
+            assertEquals(
+                1,
+                result.split(""""workbench.sash.size"""").size - 1,
+                "the key was written twice:\n$result",
+            )
+        }
+    }
+
     @Nested
     inner class ClaudeWrapper {
 

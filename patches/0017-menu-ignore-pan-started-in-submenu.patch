@@ -1,0 +1,95 @@
+Ignore a menu pan that started inside one of its own submenus.
+
+On a touch screen, dragging inside an open submenu closes it instead of
+scrolling it whenever the menu behind it can scroll as well. On a phone the
+application menu is the only route to File, Edit, Selection, View, Go, Run and
+Terminal, and its File submenu is taller than the screen, so scrolling it is the
+ordinary thing to do.
+
+The chain is short. A submenu container is appended inside the item that opens
+it, so it is a DOM descendant of the parent menu. Gesture dispatches a pan to
+every registered target that contains the touch's initial target, dispatching to
+each target separately, so the EventHelper.stop in the first handler cannot stop
+the second. The parent menu therefore scrolls from a finger that was inside the
+submenu, and a parent that scrolled dismisses its submenu, because the item the
+submenu is anchored to has moved.
+
+Patch 0014 does not cover this and is not made redundant by it. That one gates
+the dismissal on the parent having really scrolled, which saves the case where
+the parent cannot scroll at all and emits a scroll event anyway. Here the parent
+genuinely scrolls, so the dismissal is correct by its own rules and the submenu
+closes regardless.
+
+Measured in the shipped build on a 320px tall viewport, the application menu
+overflowing (360px of items in 250px) and the File submenu overflowing badly
+(1428px in 285px): one drag inside the submenu scrolled the parent menu 4px and
+the submenu was gone. The same drag with the parent short enough to fit scrolled
+the submenu 205px and kept it open, which is why a viewport that fits the parent
+hides this entirely. Menu.constructor caps a menu at innerHeight minus its own
+top minus 35, so the application menu with its eight items starts overflowing
+below about 430px of viewport height. Patch 0015 records that height measured at
+266 to 360 with the on-screen keyboard up.
+
+Gating on the initial target alone is not enough, and that was measured rather
+than assumed. The momentum events Gesture emits after the finger lifts carry no
+initial target at all: 15 of 18 events were ignored correctly, the remaining 3
+scrolled the parent 2.3px, and the submenu closed anyway. The answer is
+therefore remembered from the last event that carried a target, which is always
+a real finger movement, since momentum only ever follows one.
+
+With that in place the same drag ignored all 18 events, left the parent menu at
+0, and scrolled the submenu to 142px. A pan that started in the parent still
+scrolls the parent and still dismisses the submenu: measured on a viewport wide
+enough that the parent is not covered by the submenu, 0 events ignored, parent
+scrolled to its 110px maximum, submenu dismissed.
+
+diff --git a/src/vs/base/browser/ui/menu/menu.ts b/src/vs/base/browser/ui/menu/menu.ts
+index 7bb39f0..057fcaa 100644
+--- a/src/vs/base/browser/ui/menu/menu.ts
++++ b/src/vs/base/browser/ui/menu/menu.ts
+@@ -5,7 +5,7 @@
+ 
+ import { isFirefox } from '../../browser.js';
+ import { EventType as TouchEventType, Gesture } from '../../touch.js';
+-import { $, addDisposableListener, append, clearNode, Dimension, EventHelper, EventLike, EventType, getActiveElement, getWindow, IDomNodePagePosition, isAncestor, isInShadowDOM } from '../../dom.js';
++import { $, addDisposableListener, append, clearNode, Dimension, EventHelper, EventLike, EventType, getActiveElement, getWindow, IDomNodePagePosition, isAncestor, isHTMLElement, isInShadowDOM } from '../../dom.js';
+ import { createStyleSheet } from '../../domStylesheets.js';
+ import { StandardKeyboardEvent } from '../../keyboardEvent.js';
+ import { StandardMouseEvent } from '../../mouseEvent.js';
+@@ -265,8 +265,36 @@
+ 		this.styleScrollElement(scrollElement, menuStyles);
+ 
+ 		// Support scroll on menu drag
++		let panStartedInSubmenu = false;
+ 		this._register(addDisposableListener(menuElement, TouchEventType.Change, e => {
+ 			EventHelper.stop(e, true);
++
++			// A submenu is appended inside the item that opens it, so a pan that
++			// started in an open submenu is dispatched to this menu as well: the
++			// gesture goes to every registered target that DOM-contains the touch and
++			// each one is dispatched to separately, so the stop above cannot prevent
++			// it. Scrolling this menu then moves the item the submenu is anchored to,
++			// and an anchor that moved is exactly what dismisses a submenu, so one
++			// finger drag inside a long File menu closed it instead of scrolling it.
++			// Measured on a 320px tall viewport with the parent menu overflowing: this
++			// menu scrolled 4px and the submenu was gone.
++			//
++			// The momentum events that follow the finger up carry no initialTarget at
++			// all, so the answer is remembered from the last event that had one rather
++			// than recomputed per event. Deciding per event was measured too: the drag
++			// itself was ignored correctly and the momentum still scrolled this menu
++			// 2.3px and still closed the submenu.
++			//
++			// A pan that started in this menu still scrolls it and still dismisses the
++			// submenu, which is the case that dismissal exists for.
++			if (isHTMLElement(e.initialTarget)) {
++				const submenu = e.initialTarget.closest('.monaco-submenu');
++				panStartedInSubmenu = !!submenu && menuElement.contains(submenu);
++			}
++
++			if (panStartedInSubmenu) {
++				return;
++			}
+ 
+ 			const scrollTop = this.scrollableElement.getScrollPosition().scrollTop;
+ 			this.scrollableElement.setScrollPosition({ scrollTop: scrollTop - e.translationY });

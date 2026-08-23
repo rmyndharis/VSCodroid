@@ -241,6 +241,26 @@ android {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // Which of the 2000-odd unit tests actually reach a line, answered by
+            // the tooling already in the Android plugin rather than by adding a
+            // coverage plugin: this switch makes the debug unit-test task emit
+            // JaCoCo execution data and gives it a report task,
+            // `createDebugUnitTestCoverageReport`, writing HTML and XML under
+            // app/build/reports/coverage/.
+            //
+            // Behind a property because it is not free. Turning it on instruments
+            // every class the tests load, and an instrumented run is a different
+            // run: it is slower, and a timing-sensitive case can pass or fail on
+            // that alone. The suite CI gates on therefore stays uninstrumented and
+            // the report is asked for deliberately:
+            //
+            //   ./gradlew :app:createDebugUnitTestCoverageReport -PvscodroidCoverage
+            //
+            // No threshold and no gate. A number that fails the build invites
+            // tests written to move it, which is the opposite of what the suite
+            // here is for; this exists so an untested file can be found, not so a
+            // percentage can be defended.
+            enableUnitTestCoverage = providers.gradleProperty("vscodroidCoverage").isPresent
         }
     }
 
@@ -508,6 +528,15 @@ tasks.withType<Test> {
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.files(fileTree(rootProject.projectDir.parentFile.resolve("patches")))
         .withPropertyName("serverPatches")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // One script, not the directory: MenuSeparatorFloorTest reads the block
+    // build-vscode-oss.sh appends to workbench.css, because the touch-target
+    // floors that block writes reach a menu separator and the exemption that
+    // keeps a 1px divider from being drawn as a 44px band lives there. Nothing
+    // else under scripts/ is opened by a test, and most of it is Python the
+    // Python gates already cover.
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/build-vscode-oss.sh"))
+        .withPropertyName("codeOssBuildScript")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The licence texts NoticesTest pins byte for byte. That pin exists for the
     // edit nobody means to make: a reflow, a re-wrap, an editor stripping the

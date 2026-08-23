@@ -414,13 +414,20 @@ jobs:
       #
       # Compiled here, run by a person: `scripts/device-test.sh --instrumented`
       # is the only thing that executes them, and it needs an arm64 device or
-      # emulator attached. Measured 2026-08-23 against attached arm64 emulators,
-      # so the cost of doing it is on record: 40 tests, all green, 113 s on API
-      # 33 and 97 s on API 37. Cheap enough that skipping it before a tag is a
-      # choice rather than a constraint -- and the one case no other suite can
-      # replace is ExecTrampolineOnDeviceTest's control, which asserts that a
-      # payload under filesDir cannot be executed directly. That is a kernel
-      # policy decision, and the whole toolchain design rests on it.
+      # emulator attached. It is around a minute of wall clock, so skipping it
+      # before a tag is a choice rather than a constraint -- and the one case no
+      # other suite can replace is ExecTrampolineOnDeviceTest's control, which
+      # asserts that a payload under filesDir cannot be executed directly. That
+      # is a kernel policy decision, and the whole toolchain design rests on it.
+      #
+      # No count and no per-device timing here on purpose. Three of them were
+      # written down across this file and the README, all three went stale, and
+      # a figure in a comment is one nothing can check. The README carries them
+      # against the recorded run, and check-instrumented-inventory.py holds it
+      # to the sources.
+      #
+      # release.yml runs this same task, because a tag may name a commit that
+      # reached neither of this workflow's triggers.
       - name: Compile the instrumented tests
         working-directory: android
         run: ./gradlew assembleDebugAndroidTest

@@ -261,6 +261,51 @@ class BashrcAtomicityTest {
         assertTrue(written.contains("alias ll="), "the append lost what was already there")
     }
 
+    /**
+     * The block has to be able to change again, which `npm()` as its own guard
+     * made impossible: every install that has ever run this matches that string,
+     * so whatever the release which first wrote the file happened to say was
+     * frozen onto the device for good. What it says now includes the one line
+     * that explains an npm install failing in a folder on shared storage, which
+     * cannot hold the `node_modules/.bin` links npm writes, and those are exactly
+     * the installs that keep such a folder.
+     *
+     * Two definitions of `npm` in the file afterwards, and that is the trade:
+     * bash takes the last, and appending is the only way to touch a file the
+     * user is free to edit.
+     */
+    @Test
+    fun `an install that already has the old wrappers still gets the current block`() {
+        bundleNpm()
+        bashrc.appendText("\nnpm() { node /old/npm-cli.js; }\nnpx() { :; }\nclaude() { :; }\n")
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertTrue(
+            written.contains("__vscodroid_symlink_note()"),
+            "an install with the older wrappers never receives a change to them",
+        )
+        assertTrue(
+            written.indexOf("/old/npm-cli.js") < written.lastIndexOf("npm()"),
+            "the current definition does not come last, so the older one is what bash runs",
+        )
+        assertTrue(written.contains("alias ll="), "the append lost what was already there")
+    }
+
+    /** Once it is there, a second launch must not append it again. */
+    @Test
+    fun `the block is not appended twice`() {
+        bundleNpm()
+        val setup = FirstRunSetup(context)
+
+        setup.createNpmWrappers()
+        val once = bashrc.readText()
+        setup.createNpmWrappers()
+
+        assertEquals(once, bashrc.readText(), "every launch appends the wrappers again")
+    }
+
     @Test
     fun `a failed npm wrapper append leaves the file as it was`() {
         bundleNpm()
@@ -271,7 +316,7 @@ class BashrcAtomicityTest {
         assertEquals(
             legacyBashrc,
             bashrc.readText(),
-            "a partial append survived; `npm()` opens this writer's own block, so a body " +
+            "a partial append survived; `claude()` opens this writer's own block, so a body " +
                 "cut short by process death would satisfy the guard and never be repaired",
         )
     }

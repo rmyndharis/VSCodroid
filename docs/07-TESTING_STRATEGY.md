@@ -97,12 +97,35 @@ temporary directory, and is executed directly by `node`.
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`.
 
 **What is enforced**: the suites themselves. A single failing test fails the job.
-There is no coverage instrumentation in this project: no JaCoCo, no Kover, no
-coverage task, no threshold, and nothing in any workflow that reads one.
+No workflow reads a coverage figure, no threshold exists, and none is planned.
+That half of the position has not moved and is the half that matters: a number
+a build fails on is a number tests get written to move.
+
+What does exist is a report, on request and nowhere else:
+
+```bash
+./gradlew :app:createDebugUnitTestCoverageReport -PvscodroidCoverage
+```
+
+The switch is `enableUnitTestCoverage` on the debug build type, which is the
+Android plugin's own JaCoCo wiring rather than an added plugin, and it is behind
+a property because instrumenting every class the tests load makes for a slower
+and subtly different run. Without the property the task does not exist, so the
+suite CI gates on is the uninstrumented one.
+
+Read the output for which lines of a file are untested, never as a score. The
+recorded run in this checkout is 5,123 of 8,178 lines, 62.6 percent, and that
+denominator is JaCoCo's: it counts the classes the suite actually loads, so a
+class no JVM test can construct is absent from both halves rather than sitting
+in the miss column. The figure therefore moves with which classes the tests
+touch as much as with how well they touch them, which is why nothing gates on
+it. The question "is this file tested at all" is answered elsewhere and answers
+clean: every file under `android/app/src/main/kotlin` is named by at least one
+test source.
 
 ### 3.2 Instrumented Tests
 
-Forty-nine tests across eleven classes, in `android/app/src/androidTest/`. They
+Fifty tests across eleven classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
 run covers the whole set and none of it is scheduled.

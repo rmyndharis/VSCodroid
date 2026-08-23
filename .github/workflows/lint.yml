@@ -118,6 +118,26 @@ jobs:
       - name: Check every workflow step is runnable and pinned
         run: python3 scripts/check-workflow-steps.py
 
+      # The same question asked of the build tool itself, which the step above
+      # cannot reach: `uses:` pinning covers the actions, and the wrapper
+      # downloads Gradle from a URL. Presence only, deliberately. A sum that is
+      # present and WRONG is not a silent failure -- the wrapper refuses the
+      # distribution on the next invocation and says so -- while a sum that is
+      # absent looks exactly like a pinned tree and runs whatever the URL
+      # serves. Absence is also how it comes back: `gradle wrapper
+      # --gradle-version X` regenerates that file from a fixed set of keys and
+      # drops the sum unless the bump passes --gradle-distribution-sha256-sum.
+      - name: Check the Gradle distribution is pinned to a digest
+        run: |
+          props=android/gradle/wrapper/gradle-wrapper.properties
+          if ! grep -q '^distributionSha256Sum=[0-9a-f]\{64\}$' "$props"; then
+            echo "::error file=$props::no distributionSha256Sum; the wrapper would" \
+                 "run whatever $(grep -m1 '^distributionUrl=' "$props") serves." \
+                 "Take the digest from that URL with .sha256 appended."
+            exit 1
+          fi
+          grep '^distributionUrl=\|^distributionSha256Sum=' "$props"
+
       # Same reasoning, one file further: reads two committed sources and no
       # assets. The contract an extension author writes against had never been
       # held to the bridge it describes, and one pass found fourteen
@@ -186,6 +206,15 @@ jobs:
       # pass covered everything, so a wrong count is a coverage claim nobody made.
       - name: Check the device-test checklist accounts for its own rows
         run: python3 scripts/check-checklist-totals.py
+
+      # The same question one directory over, and the answer had rotted twice.
+      # Nothing runs the instrumented suite -- no runner measured here can, and
+      # CI compiles it and stops -- so androidTest/README.md is the only account
+      # of what it covers, and it had the total wrong and three of its classes
+      # missing from the table. A directory nobody executes, described by a
+      # document nobody checks, reads as coverage twice over.
+      - name: Check the instrumented suite matches what documents it
+        run: python3 scripts/check-instrumented-inventory.py
 
       # Also in release.yml, where it is the last thing standing between a tag
       # and a published build. It ran there alone, and there is no cheaper place

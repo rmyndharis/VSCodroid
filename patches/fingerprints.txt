@@ -124,3 +124,18 @@
 # way to write that handler, deletes the token and the row starts failing on a
 # tree that is correct. The patch header says so at the call site too.
 0015 menubar keyboard resize|out/vs/code/browser/workbench/workbench.js|innerWidth===
+# 0016 gates on the comparison it introduces. Measured in the packaged pre-patch
+# workbench.js, `<this.centeredLayoutWidget.minimumWidth` occurs zero times while
+# the positive control `this.centeredLayoutWidget.minimumWidth` occurs once, so
+# the operator is what makes the token unique and the row cannot pass on the code
+# it replaces. Property names survive this bundle intact (the getter is emitted
+# with centeredLayoutWidget, layoutService and getMaximumEditorDimensions all
+# readable), so the token survives minification, and hoisting the read into a
+# local would delete it. The patch header says so at the call site too.
+0016 editor min width|out/vs/code/browser/workbench/workbench.js|<this.centeredLayoutWidget.minimumWidth
+# 0017 gates on the selector it introduces. Measured in the packaged pre-patch
+# workbench.js, `closest('.monaco-submenu')` occurs zero times while the class
+# name alone occurs three times, so the row cannot pass on the surrounding code
+# that creates the submenu. closest is a DOM method and the class is a string
+# literal, so neither is renamed.
+0017 menu pan ownership|out/vs/code/browser/workbench/workbench.js|closest('.monaco-submenu')
