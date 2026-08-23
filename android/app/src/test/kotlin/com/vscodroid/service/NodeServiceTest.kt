@@ -241,6 +241,71 @@ class StartCommandTest {
     private fun promoting(result: Boolean): () -> Boolean = { promotions++; result }
 
     @Test
+    fun `a hold promotes and starts nothing`() {
+        // The whole point of the hold, and the half that is silent when it is
+        // wrong. It has to promote, so the process survives a user who leaves
+        // during the unpack, and it must NOT be mistaken for a start: the
+        // service's own running flag stays false, which is what lets the real
+        // start that follows be answered with SERVE. Answering ALREADY_SERVING
+        // there opens the editor on a server nobody launched.
+        assertEquals(
+            StartCommand.HOLD,
+            startCommand(NodeService.ACTION_HOLD, serviceRunning = false, promote = promoting(true)),
+        )
+        assertEquals(1, promotions, "a hold that promotes nothing protects nothing")
+
+        // The start that follows it is a start, not a no-op. serviceRunning is
+        // still false because HOLD does not set it, which this asserts from the
+        // caller's side.
+        assertEquals(
+            StartCommand.SERVE,
+            startCommand(null, serviceRunning = false, promote = promoting(true)),
+        )
+    }
+
+    @Test
+    fun `a hold at a serving service starts no second server`() {
+        // Asked for while a server is already up, which happens when setup is
+        // re-entered after a launch that got as far as the editor. The process
+        // is held by that server already, so the answer is the ordinary
+        // already-serving one and nothing is promoted a second time.
+        assertEquals(
+            StartCommand.ALREADY_SERVING,
+            startCommand(NodeService.ACTION_HOLD, serviceRunning = true, promote = promoting(true)),
+        )
+        assertEquals(0, promotions, "a hold at a serving service must promote nothing")
+    }
+
+    @Test
+    fun `a refused promotion stands the hold down rather than holding nothing`() {
+        assertEquals(
+            StartCommand.STAND_DOWN,
+            startCommand(NodeService.ACTION_HOLD, serviceRunning = false, promote = promoting(false)),
+        )
+        assertEquals(1, promotions, "the refusal has to be the promotion's own answer")
+    }
+
+    @Test
+    fun `releasing the hold promotes nothing and outranks the serving arm`() {
+        // Released on both roads out of setup, including the one where a server
+        // came up while it ran. Tested at serviceRunning = true as well because
+        // that arm sits above the generic one and would otherwise swallow it.
+        assertEquals(
+            StartCommand.RELEASE_HOLD,
+            startCommand(
+                NodeService.ACTION_RELEASE_HOLD, serviceRunning = false, promote = promoting(true)
+            ),
+        )
+        assertEquals(
+            StartCommand.RELEASE_HOLD,
+            startCommand(
+                NodeService.ACTION_RELEASE_HOLD, serviceRunning = true, promote = promoting(true)
+            ),
+        )
+        assertEquals(0, promotions, "releasing a hold must never enter the foreground")
+    }
+
+    @Test
     fun `a stop is answered without entering the foreground`() {
         assertEquals(
             StartCommand.STOP_REQUESTED,

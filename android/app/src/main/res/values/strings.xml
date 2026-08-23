@@ -4,6 +4,11 @@
     <string name="notification_channel_name">VSCodroid Server</string>
     <string name="notification_channel_description">Keeps the local development server running</string>
     <string name="notification_title">VSCodroid is running</string>
+    <!-- The card the service puts up while first-run setup unpacks. Its own pair
+         rather than the server's, because no server is running yet and the whole
+         point of the hold is that the process survives a user who leaves. -->
+    <string name="notification_title_setup">VSCodroid is setting up</string>
+    <string name="notification_text_setup">Unpacking the editor and its tools. This takes a few minutes and only happens once.</string>
     <string name="notification_text">Local development server active</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap

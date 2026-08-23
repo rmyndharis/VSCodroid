@@ -165,8 +165,11 @@ class NodeService : Service() {
         setupProcessCallbacks()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
-        when (startCommand(intent?.action, isServiceRunning, ::promoteToForeground)) {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
+        return when (startCommand(action, isServiceRunning) {
+            promoteToForeground(forSetup = action == ACTION_HOLD)
+        }) {
             StartCommand.STOP_REQUESTED -> {
                 shutdown()
                 START_NOT_STICKY
@@ -191,11 +194,34 @@ class NodeService : Service() {
             // START_NOT_STICKY because the system re-delivering this is how it got
             // here: asking to be brought back would repeat a refusal rather than
             // recover from one.
+            StartCommand.HOLD -> {
+                Logger.i(tag, "Holding the process for first-run setup")
+                // NOT sticky. A hold exists only for the run that asked for it,
+                // and a process the system restarts has no setup behind it: it
+                // would come back holding itself open over nothing.
+                START_NOT_STICKY
+            }
+
+            StartCommand.RELEASE_HOLD -> {
+                if (isServiceRunning) {
+                    // A server took over while setup ran, which is the ordinary
+                    // path: the hold is already irrelevant and the card is the
+                    // server's.
+                    START_STICKY
+                } else {
+                    Logger.i(tag, "First-run setup is done; giving the hold back")
+                    ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    START_NOT_STICKY
+                }
+            }
+
             StartCommand.STAND_DOWN -> {
                 stopSelf()
                 START_NOT_STICKY
             }
         }
+    }
 
     override fun onDestroy() {
         Logger.i(tag, "Service destroying")
@@ -354,11 +380,21 @@ class NodeService : Service() {
      * arrives in the report naming itself, rather than being swallowed as a
      * quiet no-op.
      */
-    private fun promoteToForeground(): Boolean = try {
+    private fun promoteToForeground(forSetup: Boolean = false): Boolean = try {
         ServiceCompat.startForeground(
             this,
             VSCodroidApp.NOTIFICATION_ID,
-            createNotification(),
+            if (forSetup) {
+                // Its own face, because the server one says a server is running
+                // and none is. Same id, so the card the server puts up later
+                // replaces this one rather than arriving beside it.
+                createNotification(
+                    title = getString(R.string.notification_title_setup),
+                    text = getString(R.string.notification_text_setup),
+                )
+            } else {
+                createNotification()
+            },
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
         true
@@ -1217,6 +1253,33 @@ class NodeService : Service() {
     companion object {
         /** Intent action to gracefully stop the server and this service. */
         const val ACTION_STOP = "com.vscodroid.action.STOP_SERVER"
+
+        /**
+         * Hold the process while first-run setup writes, without starting a server.
+         *
+         * Extraction copies 810 MiB out of the APK and takes minutes, and until
+         * this existed the only thing keeping the process alive through it was an
+         * Activity the user could leave. A stopped Activity's process is among the
+         * first the low-memory killer takes, and what it takes is the middle of a
+         * write; the run then resumes rather than restarting, but resuming still
+         * costs the user the wait twice.
+         *
+         * Deliberately NOT [ACTION_STOP]'s opposite: this promotes to the
+         * foreground and starts nothing. [isServiceRunning] stays false, which is
+         * what lets the real start that follows be answered with
+         * [StartCommand.SERVE] rather than [StartCommand.ALREADY_SERVING]. Getting
+         * that wrong is silent and total: the editor would open on a server that
+         * was never launched.
+         */
+        const val ACTION_HOLD = "com.vscodroid.action.HOLD_FOR_SETUP"
+
+        /**
+         * Release the hold [ACTION_HOLD] took.
+         *
+         * Ends the service when nothing is serving, and is a no-op when something
+         * is, because by then the foreground status belongs to the server.
+         */
+        const val ACTION_RELEASE_HOLD = "com.vscodroid.action.RELEASE_SETUP_HOLD"
     }
 }
 
@@ -1406,6 +1469,12 @@ internal enum class StartCommand {
 
     /** The foreground promotion was refused, so nothing is started. */
     STAND_DOWN,
+
+    /** Promote and hold the process for first-run setup, starting no server. */
+    HOLD,
+
+    /** Give that hold back. */
+    RELEASE_HOLD,
 }
 
 /**
@@ -1433,6 +1502,16 @@ internal fun startCommand(
     promote: () -> Boolean,
 ): StartCommand = when {
     action == NodeService.ACTION_STOP -> StartCommand.STOP_REQUESTED
+    action == NodeService.ACTION_RELEASE_HOLD -> StartCommand.RELEASE_HOLD
+    // Ahead of the `serviceRunning` arm on purpose. A hold asked for while a
+    // server is already up needs no promotion and must not be mistaken for one:
+    // the process is held by that server, and answering SERVE here would start a
+    // second one.
+    action == NodeService.ACTION_HOLD -> when {
+        serviceRunning -> StartCommand.ALREADY_SERVING
+        promote() -> StartCommand.HOLD
+        else -> StartCommand.STAND_DOWN
+    }
     serviceRunning -> StartCommand.ALREADY_SERVING
     promote() -> StartCommand.SERVE
     else -> StartCommand.STAND_DOWN

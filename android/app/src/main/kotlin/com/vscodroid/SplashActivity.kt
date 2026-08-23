@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.widget.Toast
+import com.vscodroid.service.NodeService
 
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : AppCompatActivity() {
@@ -253,13 +254,63 @@ class SplashActivity : AppCompatActivity() {
         findViewById<View>(R.id.splashRoot).padForSystemBars()
     }
 
+    /**
+     * Promotes [NodeService] to the foreground for the length of the unpack.
+     *
+     * Starts no server: the service answers this action by promoting and nothing
+     * else, and leaves its own running flag alone so the real start that follows
+     * is still answered with a launch. Reported rather than thrown on: a refused
+     * promotion costs the protection, not the setup, and the run continues
+     * exactly as it did before this existed.
+     */
+    private fun holdProcessForSetup(): Boolean = try {
+        startForegroundService(
+            Intent(this, NodeService::class.java).apply { action = NodeService.ACTION_HOLD }
+        )
+        true
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not hold the process for setup: ${e.message}")
+        false
+    }
+
+    /** Gives that hold back. Plain [startService]: the service is already up. */
+    private fun releaseSetupHold() {
+        try {
+            startService(
+                Intent(this, NodeService::class.java).apply {
+                    action = NodeService.ACTION_RELEASE_HOLD
+                }
+            )
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not release the setup hold: ${e.message}")
+        }
+    }
+
     private fun runSetupWithRetry(
         setup: FirstRunSetup,
         statusText: TextView,
         progressBar: ProgressBar
     ) {
         lifecycleScope.launch {
-            val result = setup.runSetup()
+            // Held across the unpack, and only across it. Until this existed the
+            // process wrote 810 MiB with no started component behind it, so a
+            // user who pressed Home during the first run handed the low-memory
+            // killer a process it was free to take mid-write. The run resumes
+            // rather than restarting now, but resuming still costs the wait
+            // twice, and the hold is what stops it being paid.
+            //
+            // try/finally rather than a release after the `when`, because a
+            // destroyed Activity cancels this scope. `runSetup` blocks with no
+            // suspension point in it, so the cancellation is only observed once
+            // it has RETURNED, which is to say once the unpack is finished: the
+            // finally then gives the hold back at the right moment on both
+            // roads, and never in the middle of a write.
+            val held = holdProcessForSetup()
+            val result = try {
+                setup.runSetup()
+            } finally {
+                if (held) releaseSetupHold()
+            }
             when (result) {
                 FirstRunSetup.SetupResult.SUCCESS -> {
                     continueAfterSetup()
