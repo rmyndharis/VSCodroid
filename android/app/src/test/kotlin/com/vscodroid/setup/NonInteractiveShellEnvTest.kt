@@ -114,6 +114,40 @@ class NonInteractiveShellEnvTest {
     }
 
     /**
+     * The one failure the wrapper has to explain rather than pass through.
+     *
+     * Android's app seccomp filter refuses `epoll_pwait2` (syscall 441) on older
+     * releases, and a refused syscall there is a kill, not the ENOSYS a runtime
+     * could fall back from, so the Claude Code CLI dies the moment its event loop
+     * starts. Measured with a ptrace tracer on this project's own emulators: the
+     * same binary and the same loader die on Android 13 and run on Android 17,
+     * and a CLI four months older behaves identically, so it is the platform and
+     * not the version. Nothing here can widen that filter.
+     *
+     * What bash prints on its own is "Bad system call" and a status of 159, which
+     * tells the user nothing they can act on. The wrapper reads that status and
+     * says what happened instead.
+     */
+    @Test
+    fun `the claude wrapper explains a kill the platform did, rather than passing it through`() {
+        FirstRunSetup(context).createBashEnvFile()
+
+        val written = bashEnvFile().readText()
+        val wrapper = written.substringAfter("claude()", "").substringBefore("\n}")
+        assertTrue(wrapper.isNotEmpty(), "the claude wrapper is gone")
+        assertTrue(
+            wrapper.contains("159"),
+            "the wrapper does not read the status a SIGSYS kill leaves (128+31), so the " +
+                "user is left with bash's bare \"Bad system call\"",
+        )
+        assertTrue(
+            wrapper.contains("epoll_pwait2"),
+            "the message does not name the syscall the platform refused, which is the one " +
+                "detail that makes the failure searchable",
+        )
+    }
+
+    /**
      * It is rewritten, not appended to, so a change to what the functions say
      * reaches an install that already has the file. Appending was how `.bashrc`
      * had to be handled -- that file is the user's -- and copying that habit here

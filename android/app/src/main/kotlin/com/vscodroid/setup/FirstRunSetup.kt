@@ -2205,6 +2205,23 @@ claude() {
         return 127
     fi
     libldmusl.so "${'$'}cli" "${'$'}@"
+    # 159 is 128+31, the shell's way of saying the process was killed by SIGSYS.
+    # Android's app seccomp filter refuses epoll_pwait2 (syscall 441) on older
+    # releases, and a refused syscall is a kill rather than an ENOSYS the runtime
+    # could fall back from. Measured: the CLI dies that way on Android 13 (API
+    # 33) and runs on Android 17 (API 37), with the same binary and the same
+    # loader, and two CLI versions four months apart behave identically. Nothing
+    # here can widen that filter, so the one useful thing is to say what happened
+    # rather than leave "Bad system call" as the whole account.
+    local status=${'$'}?
+    if [ "${'$'}status" -eq 159 ]; then
+        echo "claude: this Android version refuses a system call the Claude Code" >&2
+        echo "        runtime needs (epoll_pwait2, 441). Measured: it fails on" >&2
+        echo "        Android 13 and runs on Android 17; where in between that" >&2
+        echo "        changes was not measured. No VSCodroid setting can widen" >&2
+        echo "        the filter, which Android installs on every app process." >&2
+    fi
+    return ${'$'}status
 }
 """
 
