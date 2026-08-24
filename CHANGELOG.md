@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-24
+
 ### Added
 
 - Toolchain commands now work when a program calls them, not only from bash. Tasks, `make` recipes and extensions previously failed on a correctly installed toolchain.
@@ -820,7 +822,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.9...v1.0.0
 [0.2.9]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.8...v0.2.9
