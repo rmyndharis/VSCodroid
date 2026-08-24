@@ -245,8 +245,22 @@ function newPage(options) {
 }
 
 /** Lets every queued microtask and zero-delay timer run. */
-function settle() {
-    return new Promise((done) => setTimeout(done, 5));
+function settle(until) {
+    // Polls for the condition rather than sleeping a fixed span. This was a flat
+    // 5 ms, which is not a promise about work that hops through the microtask
+    // queue and a reader callback: on a loaded CI runner the read had not
+    // finished, the bridge had recorded nothing, and the case failed for the
+    // speed of the machine rather than for anything in the code. Called with no
+    // condition it yields a few turns, which is all a case asserting that
+    // something did NOT happen can ask for.
+    const deadline = Date.now() + 2000;
+    return new Promise((done) => {
+        const tick = () => {
+            if (!until || until() || Date.now() >= deadline) return done();
+            setTimeout(tick, 1);
+        };
+        setTimeout(tick, until ? 0 : 25);
+    });
 }
 
 const BLOB = 'blob:http://127.0.0.1:5000/6f1d2c30-9a4b-4c1e-8f77-2b0a5d3e91cc';
@@ -369,7 +383,7 @@ test('a blob download is read off the blob, never over a request', async () => {
     page.anchor(url, { download: 'App.kt' }).click();
     page.revoke(url);
     assert.strictEqual(page.send(url, 'dl-1'), true, 'a started read reports that it started');
-    await settle();
+    await settle(() => page.finished.length > 0);
 
     assert.deepStrictEqual(page.fetched, [],
         'fetching a blob: URL is refused by the page policy, so a download that fetches one ' +
@@ -395,7 +409,7 @@ test('object URLs nobody downloads do not pin their bytes', async () => {
 
     page.anchor(first, { download: 'App.kt' }).click();
     page.send(first, 'dl-1');
-    await settle();
+    await settle(() => page.finished.length > 0);
 
     assert.deepStrictEqual(page.fetched, [first],
         'a blob the page stopped tracking has to fall through to a request rather than ' +
@@ -412,7 +426,7 @@ test('each piece decodes on its own', async () => {
     page.anchor(url, { download: 'App.kt' }).click();
 
     page.send(url, 'dl-1');
-    await settle();
+    await settle(() => page.chunks.length >= 3);
 
     assert.strictEqual(page.chunks.length, 3, 'one bridge call per piece read');
     const perPiece = page.chunks.map((c) => Array.from(Buffer.from(c.base64, 'base64')));
@@ -429,7 +443,7 @@ test('a download the page has no blob for is fetched', async () => {
     const page = newPage({ pieces: [Uint8Array.from([65, 66])] });
 
     page.send(REMOTE, 'dl-1');
-    await settle();
+    await settle(() => page.finished.length > 0);
 
     assert.deepStrictEqual(page.fetched, [REMOTE]);
     const bytes = Buffer.concat(page.chunks.map((c) => Buffer.from(c.base64, 'base64')));
@@ -442,7 +456,7 @@ test('a failed read is reported as an error', async () => {
     const page = newPage({ fetchRejects: true });
 
     page.send(REMOTE, 'dl-1');
-    await settle();
+    await settle(() => page.finished.length > 0);
 
     assert.strictEqual(page.finished.length, 1, 'a failure still ends the download');
     assert.strictEqual(page.finished[0].id, 'dl-1');
@@ -454,7 +468,7 @@ test('a non-ok response is reported as an error', async () => {
     const page = newPage({ status: 404 });
 
     page.send(REMOTE, 'dl-1');
-    await settle();
+    await settle(() => page.finished.length > 0);
 
     assert.strictEqual(page.finished.length, 1);
     assert.ok(/404/.test(page.finished[0].error),
@@ -474,7 +488,7 @@ test('a refused piece stops the read without reporting a second reason', async (
     page.anchor(url, { download: 'App.kt' }).click();
 
     page.send(url, 'dl-1');
-    await settle();
+    await settle(() => page.cancelled);
 
     assert.strictEqual(page.chunks.length, 2, 'reading stops at the piece that was refused');
     assert.strictEqual(page.cancelled, true, 'the reader is released rather than left open');
