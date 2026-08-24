@@ -284,9 +284,23 @@ class DownloadWriteBlockingTest {
      * hand-off and answers differently on a loaded runner.
      */
     private fun awaitProviderIdle() = assertTrue(
-        CountDownLatch(1).let { drained ->
-            providerWork.execute { drained.countDown() }
-            drained.await(5, TimeUnit.SECONDS)
+        // Drained twice, and the second pass is the one that matters. The thread
+        // is single and FIFO, so one barrier proves only that the work queued
+        // BEFORE it has run -- and the work this waits for is queued by a task
+        // that is still running when the barrier goes in. The open runs on this
+        // thread, hands `onDestinationOpened` straight back on it (the fixture's
+        // mainThread runs inline), and that is what queues the discard. So the
+        // queue reads [barrier, discard], the barrier answers first, and the
+        // case reads `discarded` before the discard it is about has happened.
+        // Measured: green here and on five runs under load, red once on a CI
+        // runner, which is what losing that race looks like. The second barrier
+        // is queued once the first has answered, by which time the discard is
+        // already on the queue ahead of it.
+        (1..2).all {
+            CountDownLatch(1).let { drained ->
+                providerWork.execute { drained.countDown() }
+                drained.await(5, TimeUnit.SECONDS)
+            }
         },
         "the provider thread never got through what it was handed, so what follows " +
             "would be reading the state of a teardown that has not happened yet",
