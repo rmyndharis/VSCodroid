@@ -580,16 +580,19 @@ class AndroidBridge(
             //
             // `vscodroid://callback` is this app's own sign-in relay. Its VIEW
             // filter is exported and BROWSABLE, so handing one to `startActivity`
-            // delivers it straight back into `MainActivity.onNewIntent` -- and the
-            // arming below runs before the scheme is looked at, so the same call
-            // both opened the ten-minute window for the ids in the URL and posted
-            // the callback that window exists to judge. `AuthTabWindow`'s stated
-            // property is that an outside caller cannot supply a sign-in this app
-            // started; a caller that can reach this method could supply exactly
-            // that, and through the relay that is anything sharing the workbench's
-            // origin. Even with the arming moved, the launch alone lets such a
-            // caller deliver a payload of its own for an id a REAL sign-in has in
-            // flight, which is the half not arming would leave open.
+            // delivers it straight back into `MainActivity.onNewIntent`. While this
+            // test sat BELOW the arming, one call both opened the ten-minute window
+            // for the ids in the URL and posted the callback that window exists to
+            // judge. The order is now the other way round, and what follows is why
+            // the refusal is kept rather than only the reordering.
+            //
+            // `AuthTabWindow`'s stated property is that an outside caller cannot
+            // supply a sign-in this app started; a caller that can reach this
+            // method could supply exactly that, and through the relay that is
+            // anything sharing the workbench's origin. Even with the arming
+            // moved, the launch alone lets such a caller deliver a payload of its
+            // own for an id a REAL sign-in has in flight, which is the half not
+            // arming would leave open.
             //
             // Nothing legitimate is lost. A sign-in returns by the browser firing
             // this filter, never by the editor asking Android to open its own

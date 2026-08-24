@@ -22,9 +22,13 @@
     stays inside the app sandbox; copying it to a cloud is what breaks that trade.
   - `server`, `usr`, the toolchains: hundreds of megabytes, and first-run setup
     extracts them again from the APK anyway.
-  - `external`: the projects directory. A source tree with `node_modules` in it
-    would exceed any backup quota on its own, and this is the one thing users
-    already keep in git.
+  - `projects`, and `external` for an install that still has one there: the
+    workspace. A source tree with `node_modules` in it would exceed any backup
+    quota on its own, and this is the one thing users already keep in git. Both
+    spellings are named because the default moved to internal storage, which has
+    no `symlink(2)` problem, while an install that already had one on shared
+    storage keeps it; the allowlist covers each without naming it, and this line
+    is here so the next reader knows both exist.
   - `saf-mirrors`: local copies of folders the user picked through SAF. The
     originals are the documents; these are rebuilt on reopening.
   - `sharedpref`: load-bearing, and the least obvious entry on this list.

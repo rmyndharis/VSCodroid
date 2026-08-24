@@ -125,6 +125,25 @@ class ExtractionOnDeviceTest {
         } catch (expected: IOException) {
             // what extractAssetFile catches
         }
+
+        // available() on a freshly opened asset is its UNCOMPRESSED length, and
+        // that is the premise the resume path rests on: extractAssetFile skips a
+        // destination whose length already equals this number. Nothing in the
+        // APK is stored uncompressed (there is no noCompress rule), so a stream
+        // reporting the packed size instead would let a retry pass over a file
+        // it had not finished writing. Asserted against the bytes rather than
+        // against a constant, so it stays true whatever the asset is.
+        assets.open("extensions/$own/package.json").use { stream ->
+            val reported = stream.available().toLong()
+            val actual = stream.readBytes().size.toLong()
+            assertEquals(
+                "available() is not the uncompressed length, so the resume skip " +
+                    "in extractAssetFile would compare against the wrong number",
+                actual,
+                reported,
+            )
+            assertTrue("the asset used for this contract is empty", actual > 0)
+        }
     }
 
     /**
