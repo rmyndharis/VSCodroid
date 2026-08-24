@@ -611,6 +611,26 @@ The status bar shows a phantom process count. This tells you how many background
 
 Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because there is no C compiler on the device. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
 
+### Packages With Prebuilt Binaries
+
+Some packages compile nothing. They download a ready-made binary chosen by
+platform name, from a fixed list their own installer carries, and Android is not
+on those lists. The install then stops with a message naming the platform it did
+not recognise, such as `Unsupported platform: android arm64 LE`. `workerd`, which
+Cloudflare Workers projects pull in through Wrangler, is one of these.
+
+Nothing on the device changes that. The Android build is not published, and
+taking the Linux one instead would fail later rather than sooner: it is built
+against a different C library, and an app may not execute a file from its own
+data directory.
+
+`npm install --ignore-scripts` installs the rest of the tree, so everything that
+does not need that particular binary works. What needs it does not run.
+
+This is not every package with a native part. Rollup and esbuild publish Android
+builds and install normally, which is why VSCodroid reports the platform it
+actually is rather than pretending to be Linux.
+
 ### Toolchains Must Be Started by Name
 
 Android refuses to execute any file inside an app's data directory, which is where
@@ -841,6 +861,7 @@ If `npm install` fails with errors:
 
 - **EACCES / permission errors** -- make sure you are working inside `~/projects/` or your home directory, not in a system path.
 - **node-gyp / compilation errors** -- the package requires native compilation. Use a pure JS alternative (see [Known Limitations](#native-npm-packages)).
+- **Unsupported platform errors** come from a package whose prebuilt binaries have no Android build, so there is nothing to install (see [Known Limitations](#packages-with-prebuilt-binaries)).
 - **Network timeout** -- check your internet connection. npm uses `--prefer-offline` by default, so cached packages install without network.
 
 ### Git Push/Pull Fails

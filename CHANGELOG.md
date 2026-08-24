@@ -66,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A build that packages the app now fails loudly if the checks guarding its bundled tree have come unattached, instead of going quiet and shipping an unchecked tree.
 - Two accessibility guards stopped passing on code that is commented out, and one no longer loses its scope to a brace inside a comment.
 - The user guide no longer promises that certificate errors should not happen. It says which roots the bundle carries and that npm does not use it.
+- The user guide separates a package whose prebuilt binaries have no Android build from one that needs a compiler. The two fail differently and only the second has an alternative.
 - The picker's checked state and the Toolchains back-arrow label are now pinned by tests. Both are invisible to a sighted reviewer, so either could be deleted without a symptom.
 - Editing a layout or a string no longer leaves the unit suite up to date. Two suites read those files, and both were skipped on exactly the edits they exist to catch.
 - A test no longer states that AGP builds no release unit test task. It does build one, and it has run; what is true is that no workflow invokes it.
