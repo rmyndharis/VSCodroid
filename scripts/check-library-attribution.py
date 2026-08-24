@@ -464,12 +464,12 @@ def toolchain_libs():
     is one file among thousands and the manifest is the list the app itself
     installs from.
 
-    The manifests are NOT committed, .gitignore excludes all three, and
-    toolchain_ruby.json is in git only because it was added before that line was,
-    which ignoring does not undo. So what this sees is decided by which download
-    scripts have run on this machine: a fresh checkout shows one frozen snapshot
-    of Ruby and nothing of Go or Java, and a CI runner shows nothing at all until
-    the download step has run. The docstring here claimed the opposite until the
+    The manifests are NOT committed: .gitignore excludes all three, and
+    toolchain_ruby.json, once tracked because it was added before that line was,
+    is untracked now. So what this sees is decided by which download scripts have
+    run on this machine: a fresh checkout shows nothing, and a CI runner shows
+    nothing at all until the download step has run. The docstring here claimed
+    the opposite until the
     manifests were checked against `git ls-files`.
 
     That makes the empty answer ambiguous, and the third return value resolves
@@ -500,11 +500,10 @@ def toolchain_libs_with_payload():
     """The manifest-declared libraries whose pack payload is on disk here.
 
     The notice check reads a FILE out of the pack, so it can only speak for a
-    pack that was actually built on this machine. `toolchain_ruby.json` is
-    tracked in git while every payload is ignored, so a checkout that has not run
-    the download scripts declares Ruby's libraries and ships none of them.
-    Demanding their notices there fails the build over files no step has yet had
-    the chance to place, which is a gate that goes red on a clean clone.
+    pack that was actually built on this machine. A manifest can be present while
+    its payload is not (a download interrupted after the manifest was written,
+    or a manifest kept from an earlier run), and demanding the notices then fails
+    the build over files no step has yet had the chance to place.
 
     The attribution and source-offer checks are deliberately NOT gated this way:
     a manifest entry is a claim about what will ship, and that claim is worth

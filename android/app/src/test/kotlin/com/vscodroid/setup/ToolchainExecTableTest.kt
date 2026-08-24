@@ -144,6 +144,94 @@ class ToolchainExecTableTest {
     }
 
     /**
+     * The variables a manifest exports travel in this table too, because of
+     * when each reader looks. Bash re-reads `toolchain-env.sh` in every shell;
+     * the server process reads the same variables once, at start, and every
+     * non-bash child inherits that snapshot. Measured on an API 37 emulator
+     * with Ruby installed while the server ran: a `"type": "process"` task
+     * found `ruby` through the trampoline and got RUBYLIB unset, a load path
+     * inside Termux's prefix and `LoadError` on `require "json"`, while the
+     * same probe through bash worked.
+     *
+     * Expanded to absolute paths for the reason the command rows are, and with
+     * `$HOME` resolved as well: the trampoline is not a shell.
+     */
+    @Test
+    fun `each variable the manifest exports gets an environment row`() {
+        elf("usr/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/lib/ruby","binaries":["usr/bin/ruby"],""" +
+                """"env":{"RUBYLIB":"${'$'}FILESDIR/usr/lib/ruby/3.4.0",""" +
+                """"GEM_HOME":"${'$'}HOME/.gem/ruby"}}]"""
+        )
+
+        regenerate()
+
+        val root = filesDir.absolutePath
+        val lines = tableLines()
+        assertTrue(
+            lines.contains("\tRUBYLIB\t$root/usr/lib/ruby/3.4.0"),
+            "a task or a make recipe starting ruby minutes after the install runs it " +
+                "without its load path:\n" + execTable.readText(),
+        )
+        assertTrue(
+            lines.contains("\tGEM_HOME\t$root/home/.gem/ruby"),
+            "\$HOME was not resolved, and the trampoline is not a shell:\n" + execTable.readText(),
+        )
+    }
+
+    /**
+     * An environment row leads with an empty field, and that is what keeps it
+     * harmless on a device whose trampoline predates it: that reader takes the
+     * first field as a command name, and a basename is never empty, so it walks
+     * past. A marker word would be a name a toolchain could ship (`env` is
+     * one), and the old reader would then try to run a variable's name as a
+     * path. The command rows are the control: they still lead with the name.
+     */
+    @Test
+    fun `an environment row never starts with a command name`() {
+        elf("usr/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/lib/ruby","binaries":["usr/bin/ruby"],""" +
+                """"env":{"RUBYLIB":"${'$'}FILESDIR/usr/lib/ruby/3.4.0"}}]"""
+        )
+
+        regenerate()
+
+        val (envRows, commandRows) = tableLines().partition { it.startsWith("\t") }
+        assertEquals(1, envRows.size, "expected one environment row:\n" + execTable.readText())
+        assertEquals(
+            listOf("ruby\t${filesDir.absolutePath}/usr/bin/ruby"), commandRows,
+            "the command rows changed shape alongside the environment rows",
+        )
+    }
+
+    /**
+     * A name the record cannot carry costs that variable and nothing else. The
+     * trampoline splits a row on its tabs, so a tab inside the name would be
+     * read as the value starting early, and the variables after a bad one must
+     * still be written: losing the whole toolchain's environment over one key
+     * is the larger failure, and the log says which key it was.
+     */
+    @Test
+    fun `a variable name the table cannot carry is skipped and the rest are written`() {
+        elf("usr/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/lib/ruby","binaries":["usr/bin/ruby"],""" +
+                """"env":{"BAD\tNAME":"x","GEM_HOME":"${'$'}HOME/.gem/ruby"}}]"""
+        )
+
+        regenerate()
+
+        val lines = tableLines()
+        assertTrue(lines.none { it.contains("BAD") }, "a torn record was written:\n" + execTable.readText())
+        assertTrue(
+            lines.contains("\tGEM_HOME\t${filesDir.absolutePath}/home/.gem/ruby"),
+            "one unusable name cost the variables after it:\n" + execTable.readText(),
+        )
+    }
+
+    /**
      * The one rule the two generators must NOT share.
      *
      * `toolchain-env.sh` skips a command [isShellFunctionName] refuses, because

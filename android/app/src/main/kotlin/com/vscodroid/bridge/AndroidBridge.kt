@@ -839,7 +839,9 @@ class AndroidBridge(
 
     /**
      * Asks for the per-component storage breakdown, which arrives by [replyId].
-     * Keys: vscode_server, extensions, user_data, logs, tools, saf_mirrors, cache, total
+     * Keys: vscode_server, extensions, user_data, logs, tools, saf_mirrors, projects,
+     * cache, total. `projects` is the workspace, counted in `total` only when it
+     * lies outside filesDir (an install that kept it on shared storage).
      * Values in bytes.
      *
      * Every figure is a directory walk and `total` walks `filesDir` again on top

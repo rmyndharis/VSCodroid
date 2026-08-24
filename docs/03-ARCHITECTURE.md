@@ -148,13 +148,13 @@ flowchart TD
   end
 ```
 
-**Nothing caps the number of language servers, and idle is not the same as killed.**
-`process-monitor.js` marks a server idle after `IDLE_KILL_THRESHOLD_MS` (5 minutes) without
-a tick of CPU, which only makes it *eligible*. It is actually shed when the app reports
-memory pressure it maps to `critical`, when the process count reaches `RECLAIM_BUDGET` (24)
-against Android's 32-process limit, or when the user runs the bundled
-**VSCodroid: Kill Idle Servers**. The count trigger exists because the phantom-process
-killer fires on the number of processes and reports no memory pressure first.
+**Nothing caps the number of language servers, and nothing kills one.**
+`process-monitor.js` marks a server idle after `IDLE_THRESHOLD_MS` (5 minutes) without a
+tick of CPU, and the process tree shows the mark. It used to SIGTERM idle servers under
+critical memory pressure, at 24 processes and on a command; measured, every server it
+named was restarted by its extension within a second under a new pid, so the count never
+moved and each cycle cost a re-index. The details view now says that disabling the
+owning extension is what frees a slot.
 
 ---
 
@@ -247,7 +247,7 @@ killer fires on the number of processes and reports no memory pressure first.
 **Rationale**:
 - A real PTY is what job control, `isatty`, resize signals and shell integration all need; anything layered in front of bash is another thing that can break them
 - The two worker-thread patches remove two guaranteed phantoms, which is the same saving a multiplexer was meant to buy, without touching the terminal path
-- Terminals are opened a few at a time in practice, and idle language servers are reclaimed by `process-monitor.js`, so bash processes are not what pushes the count toward the limit
+- Terminals are opened a few at a time in practice, and language servers are few, so bash processes are not what pushes the count toward the limit
 - VS Code's terminal profiles map cleanly onto one shell per tab, so nothing has to translate tab lifecycle into session lifecycle
 
 **Trade-off**: N terminals are N bash processes, so a user who opens many tabs spends phantom slots on them. tmux is available to anyone who wants session persistence, as an explicit choice rather than a layer under every tab.

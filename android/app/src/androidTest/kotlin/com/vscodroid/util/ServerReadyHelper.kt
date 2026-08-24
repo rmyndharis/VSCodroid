@@ -13,6 +13,8 @@ import java.net.URL
  * - [clearSetupState] removes them again, plus the toolchain picker flag.
  * - [healthCheck] asks the server for /version on a port and says whether it answered.
  * - [waitForPort] polls that same check until the port answers or the timeout runs out.
+ * - [waitForServer] does the same on whichever port `PortFinder` recorded, and says
+ *   which one it was.
  */
 object ServerReadyHelper {
 
@@ -133,13 +135,46 @@ object ServerReadyHelper {
     fun waitForPort(port: Int, timeoutMs: Long = 60_000L): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            try {
-                java.net.Socket("127.0.0.1", port).use { return true }
-            } catch (_: Exception) {
-                // Not yet
-            }
+            if (connects(port)) return true
             Thread.sleep(500)
         }
         return false
+    }
+
+    /**
+     * Waits for the server this install serves on to accept a connection, and
+     * says which port that was; 0 when the deadline passed first.
+     *
+     * The port is read from where the app records it, not assumed. The app scans
+     * up from 13337 and remembers its choice through [PortFinder], moving whenever
+     * something else holds the remembered port, so a probe of the literal turned
+     * every device where 13337 had ever been taken into red cases that said
+     * nothing about the server. It is read on every pass rather than once: on a
+     * clean install the record is written by `startServer`, which the activity
+     * the caller has just launched is still on its way to.
+     *
+     * Each pass demands `GET /version` answering 200 rather than a bare connect.
+     * The record is rewritten only inside `startServer`, after the activity the
+     * caller launched has bound the service, so on the first passes it still
+     * names the port the previous run used; a stranger holding that port
+     * accepts a connect, and a helper satisfied by one returned before the app
+     * had moved, sending the probe cases red on the stranger's port while the
+     * server was healthy on the new one. A stranger does not answer `/version`
+     * with 200, so the loop keeps reading the record until the app has moved.
+     */
+    fun waitForServer(context: Context, timeoutMs: Long = 60_000L): Int {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val port = PortFinder.rememberedPort(context)
+            if (port != 0 && healthCheck(port, timeoutMs = 1_000L)) return port
+            Thread.sleep(500)
+        }
+        return 0
+    }
+
+    private fun connects(port: Int): Boolean = try {
+        java.net.Socket("127.0.0.1", port).use { true }
+    } catch (_: Exception) {
+        false
     }
 }

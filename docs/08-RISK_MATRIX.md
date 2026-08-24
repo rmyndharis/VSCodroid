@@ -82,8 +82,8 @@
 |-------|--------|--------|
 | 1. Extension Host | Runs as a worker_thread, not a `child_process.fork()` (`patches/0004`) | Costs no phantom process |
 | 2. Terminal | ptyHost as worker_thread; each terminal spawns bash directly on a real PTY | Terminal host costs no phantom process |
-| 3. Language Servers | Lazy start. Five minutes without a tick of CPU marks a server idle (`IDLE_KILL_THRESHOLD_MS`), which makes it *eligible* to be shed, not shed | Nothing is killed by the clock alone |
-| 4. Reclaim | Idle servers are SIGTERMed when Android reports critical memory pressure, or when the process count reaches `RECLAIM_BUDGET` (24) against the 32 limit, whichever comes first, and SIGKILLed on the next scan if they survive it. `VSCodroid: Kill Idle Servers` does the same on demand | Bounded process count without waiting for a pressure signal that may never arrive |
+| 3. Language Servers | Lazy start. Five minutes without a tick of CPU marks a server idle (`IDLE_THRESHOLD_MS`) in the process tree | Nothing is killed by the clock |
+| 4. Reclaim | None. Killing an idle language server was measured to bring it back under a new pid within a second, so nothing signals one; the process tree marks idle servers and names disabling the owning extension as what frees a slot | No restart churn on a device short of memory |
 | 5. Foreground Service | specialUse type, protects main process | Main app not killed |
 | 6. Monitoring | Count phantoms, warn user if approaching limit | User can close terminals/extensions |
 | 7. User guidance | In-app tips: "Close unused terminals to save resources" | User awareness |

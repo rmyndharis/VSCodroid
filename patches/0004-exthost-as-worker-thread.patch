@@ -59,7 +59,7 @@ the bug being fixed, so the next reader has no way to tell them apart from the
 outside.
 
 Second and later reconnects. Each cycle ends where it began, so nothing
-accumulates: onClientGone clears _pipeStore, _clientDisconnected clears
+accumulates: _clientDisconnected clears _clientStore, _pipeStore,
 _connectionData and _extHostSocket before it ends the pipe, and the host's next
 dial is accepted into a null _extHostSocket. The host keeps one
 PersistentProtocol across all of them and calls beginAcceptReconnection per
@@ -75,20 +75,21 @@ is already closed, and the failed dial terminates it instead of looping, because
 A client that never comes back. _scheduleDisconnectTimeout is what disposes the
 host, and it is now the ONLY thing that can: the host no longer terminates itself
 when its socket closes, so nothing else would reap an orphan. It is armed from
-onClientGone, which is registered for every client that gets piped.
+_clientDisconnected, reached from the listeners _watchClient puts on the client's
+socket the moment it is stored, in the constructor and in acceptReconnection.
+They used to be attached in _pipeSockets, which runs only once the host has
+dialled the pipe, and the host's boot is seconds on a phone: a client that
+dropped inside that window, a renderer crash or a folder switch right after a
+workspace opened, closed a socket nothing was listening to. WebSocketNodeSocket
+fires its close once, so the listener attached afterwards never heard it, no
+grace was scheduled, and the worker lived until the server exited, one more for
+every such drop.
 
 Two clients on one reconnection token. acceptReconnection puts the older one
 through the same teardown an observed disconnect gets, then waits for the host's
 re-dial. Last one wins, one at a time, which is upstream's semantic as well.
 
-Two residuals, neither introduced here and neither closed here:
-
-If the client's socket closes between the WebSocket arriving and the host's first
-dial, no listener has been attached to it yet, so nothing observes the close and
-no grace is scheduled. Upstream has the same gap; what differs is that upstream's
-host eventually terminates itself where this one waits. Closing it means
-listening on connectionData.socket from the constructor rather than from
-_pipeSockets.
+One residual, not introduced here and not closed here:
 
 The pipe stays listening for the life of the connection rather than closing after
 the first connect, so anything running as the app UID can dial it during a
@@ -122,8 +123,12 @@ old connection was disposed gracefully, host <1> exited with code 0, and <2> was
 launched two seconds later under fresh connection ids. No "Unknown reconnection
 token" page, and the old host's language server and file watcher went with it.
 
+Not measured yet: a client dropped before the host's first dial. That path is
+the one change since the runs above, and the grace it now schedules should end
+in "The client did not reconnect in time" and a host exit 300s later.
+
 diff --git a/src/vs/server/node/extensionHostConnection.ts b/src/vs/server/node/extensionHostConnection.ts
-index 06d614be..04793eac 100644
+index 06d614be..42fd0d16 100644
 --- a/src/vs/server/node/extensionHostConnection.ts
 +++ b/src/vs/server/node/extensionHostConnection.ts
 @@ -7,11 +7,13 @@ import * as cp from 'child_process';
@@ -141,7 +146,7 @@ index 06d614be..04793eac 100644
  import { createRandomIPCHandle, NodeSocket, WebSocketNodeSocket } from '../../base/parts/ipc/node/ipc.net.js';
  import { IConfigurationService } from '../../platform/configuration/common/configuration.js';
  import { ILogService } from '../../platform/log/common/log.js';
-@@ -115,6 +117,21 @@ export class ExtensionHostConnection extends Disposable {
+@@ -115,6 +117,22 @@ export class ExtensionHostConnection extends Disposable {
  	private _remoteAddress: string;
  	private _extensionHostProcess: cp.ChildProcess | null;
  	private _connectionData: ConnectionData | null;
@@ -159,11 +164,12 @@ index 06d614be..04793eac 100644
 +	private _extHostNamedPipeServer: net.Server | null;
 +	private _extHostSocket: net.Socket | null;
 +	private _pipeStore: DisposableStore | null;
++	private _clientStore: DisposableStore | null;
 +	private _disconnectTimeout: Timeout | null;
  
  	constructor(
  		private readonly _reconnectionToken: string,
-@@ -127,11 +144,19 @@ export class ExtensionHostConnection extends Disposable {
+@@ -127,14 +145,24 @@ export class ExtensionHostConnection extends Disposable {
  		@IConfigurationService private readonly _configurationService: IConfigurationService
  	) {
  		super();
@@ -180,11 +186,16 @@ index 06d614be..04793eac 100644
 +		this._extHostNamedPipeServer = null;
 +		this._extHostSocket = null;
 +		this._pipeStore = null;
++		this._clientStore = null;
 +		this._disconnectTimeout = null;
  		if (!this._canSendSocket && socket instanceof WebSocketNodeSocket) {
  			socket.setRecordInflateBytes(false);
  		}
-@@ -156,26 +181,53 @@ export class ExtensionHostConnection extends Disposable {
++		this._watchClient(this._connectionData);
+ 
+ 		this._log(`New connection established.`);
+ 	}
+@@ -156,26 +184,51 @@ export class ExtensionHostConnection extends Disposable {
  		this._logService.error(`${this._logPrefix}${_str}`);
  	}
  
@@ -214,22 +225,20 @@ index 06d614be..04793eac 100644
 -		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'end')(stopAndCleanup));
 -		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'close')(stopAndCleanup));
 -		disposables.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'error')(stopAndCleanup));
-+		// The client going away no longer ends the host's socket from in here. That
-+		// is what _clientDisconnected does, and it does it after taking the state
-+		// down, so the host's re-dial cannot race the socket it is replacing.
-+		const onClientGone = () => {
-+			unpipe();
-+			this._clientDisconnected();
-+		};
-+		disposables.add(connectionData.socket.onEnd(onClientGone));
-+		disposables.add(connectionData.socket.onClose(onClientGone));
++		// No listener for the client going away, on purpose. Its socket has been
++		// watched since the moment it was stored (_watchClient), which is earlier
++		// than this runs: a client can drop before the host's first dial, and a
++		// listener attached here would be attached to a close that already fired.
++		// _clientDisconnected takes this pipe down with the rest of the state
++		// before it ends the host's socket, so the host's re-dial cannot race the
++		// socket it is replacing.
 +
 +		// The host going away does NOT take the client with it: it re-dials the pipe
 +		// after every client disconnect, and if it really died its own exit handler
 +		// runs _cleanResources.
 +		//
 +		// The client's socket is deliberately left attached, which is the one place
-+		// this side is not the mirror of onClientGone. Disposing the store stops
++		// this side is not the mirror of _clientDisconnected. Disposing the store stops
 +		// this class reading it, but a browser client is a WebSocketNodeSocket and
 +		// its constructor put a 'data' listener on the NodeSocket underneath, so the
 +		// socket keeps being drained and whatever arrives in the gap is dropped with
@@ -252,7 +261,7 @@ index 06d614be..04793eac 100644
  
  		disposables.add(connectionData.socket.onData((e) => extHostSocket.write(e.buffer)));
  		disposables.add(Event.fromNodeEventEmitter<Buffer>(extHostSocket, 'data')((e) => {
-@@ -185,22 +237,108 @@ export class ExtensionHostConnection extends Disposable {
+@@ -185,22 +238,138 @@ export class ExtensionHostConnection extends Disposable {
  		if (connectionData.initialDataChunk.byteLength > 0) {
  			extHostSocket.write(connectionData.initialDataChunk.buffer);
  		}
@@ -285,12 +294,42 @@ index 06d614be..04793eac 100644
 +	}
 +
 +	/**
++	 * Watches the client's socket from the moment it is stored, whether or not the
++	 * host has dialled the pipe yet.
++	 *
++	 * The listeners lived in _pipeSockets, which runs only once the host connects,
++	 * and the host's boot is seconds on a phone. A client that dropped inside that
++	 * window, a renderer crash or a folder switch right after opening a workspace,
++	 * closed a socket nothing was listening to. WebSocketNodeSocket fires its close
++	 * once, so the listener _pipeSockets attached afterwards never heard it, no
++	 * grace was ever scheduled, and since the host on this path no longer
++	 * terminates itself the worker lived until the server exited, one more per
++	 * occurrence. _clientDisconnected disposes this store before it replaces or
++	 * drops the socket, so a stale socket's late close reaches nothing.
++	 */
++	private _watchClient(connectionData: ConnectionData): void {
++		const disposables = new DisposableStore();
++		this._clientStore = disposables;
++		const onClientGone = () => this._clientDisconnected();
++		disposables.add(connectionData.socket.onEnd(onClientGone));
++		disposables.add(connectionData.socket.onClose(onClientGone));
++	}
++
++	/**
 +	 * The client's socket closed. Take the pipe down so the host re-dials, and start
 +	 * the clock on whether it is coming back.
 +	 */
 +	private _clientDisconnected(): void {
 +		if (this._disposed) {
 +			return;
++		}
++		if (this._clientStore) {
++			this._clientStore.dispose();
++			this._clientStore = null;
++		}
++		if (this._pipeStore) {
++			this._pipeStore.dispose();
++			this._pipeStore = null;
 +		}
 +		if (this._connectionData) {
 +			this._connectionData.socket.dispose();
@@ -369,7 +408,7 @@ index 06d614be..04793eac 100644
  		if (!this._extensionHostProcess) {
  			return;
  		}
-@@ -218,13 +356,32 @@ export class ExtensionHostConnection extends Disposable {
+@@ -218,13 +387,29 @@ export class ExtensionHostConnection extends Disposable {
  		}
  		const connectionData = new ConnectionData(_socket, initialDataChunk);
  
@@ -383,37 +422,38 @@ index 06d614be..04793eac 100644
 +		// attaching a second pipe on top of it: the host's socket carries one
 +		// PersistentProtocol stream and cannot be spliced onto a different client
 +		// halfway through, so it has to close and re-dial either way.
-+		if (this._pipeStore || this._connectionData) {
-+			if (this._pipeStore) {
-+				this._pipeStore.dispose();
-+				this._pipeStore = null;
-+			}
++		if (this._connectionData) {
 +			this._clientDisconnected();
-+		}
-+
-+		if (this._disconnectTimeout) {
-+			clearTimeout(this._disconnectTimeout);
-+			this._disconnectTimeout = null;
  		}
  
 -		this._sendSocketToExtensionHost(this._extensionHostProcess, connectionData);
++		if (this._disconnectTimeout) {
++			clearTimeout(this._disconnectTimeout);
++			this._disconnectTimeout = null;
++		}
++
 +		// Covers the host that has not started up yet and the host that is between
 +		// pipe connections alike: in both, _extHostSocket is null and the socket is
 +		// picked up by _acceptExtHostPipe as soon as the host dials.
 +		this._connectionData = connectionData;
++		this._watchClient(connectionData);
 +		if (this._extHostSocket) {
 +			this._pipeSockets(this._extHostSocket, connectionData);
 +		}
  	}
  
  	private _cleanResources(): void {
-@@ -233,6 +390,25 @@ export class ExtensionHostConnection extends Disposable {
+@@ -233,6 +418,29 @@ export class ExtensionHostConnection extends Disposable {
  			return;
  		}
  		this._disposed = true;
 +		if (this._disconnectTimeout) {
 +			clearTimeout(this._disconnectTimeout);
 +			this._disconnectTimeout = null;
++		}
++		if (this._clientStore) {
++			this._clientStore.dispose();
++			this._clientStore = null;
 +		}
 +		if (this._pipeStore) {
 +			this._pipeStore.dispose();
@@ -433,7 +473,7 @@ index 06d614be..04793eac 100644
  		if (this._connectionData) {
  			this._connectionData.socket.end();
  			this._connectionData = null;
-@@ -287,7 +463,11 @@ export class ExtensionHostConnection extends Disposable {
+@@ -287,7 +495,11 @@ export class ExtensionHostConnection extends Disposable {
  			if (this._configurationService.getValue<boolean>('extensions.supportNodeGlobalNavigator')) {
  				args.push('--supportGlobalNavigator');
  			}
@@ -446,7 +486,7 @@ index 06d614be..04793eac 100644
  			const pid = this._extensionHostProcess.pid;
  			this._log(`<${pid}> Launched Extension Host Process.`);
  
-@@ -313,9 +493,13 @@ export class ExtensionHostConnection extends Disposable {
+@@ -313,9 +525,13 @@ export class ExtensionHostConnection extends Disposable {
  			});
  
  			if (extHostNamedPipeServer) {

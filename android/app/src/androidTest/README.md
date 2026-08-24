@@ -109,7 +109,7 @@ writes no results at all, and its exit code is indistinguishable from a genuine
 failure. It is also the only place the skip count appears, and a skipped test
 prints nothing in Gradle's console output.
 
-**At HEAD there are 50 tests across eleven classes.** That figure is not kept by
+**At HEAD there are 52 tests across eleven classes.** That figure is not kept by
 hand: `scripts/check-instrumented-inventory.py` counts the sources with
 `grep -cE '^\s*@Test'` and fails the build when this file disagrees with them,
 because it had said 22 and then 37 while the suite was neither, and a stale
@@ -161,10 +161,13 @@ Two consequences worth knowing before the first red run:
 
 - On a freshly wiped device the fix is to **launch the app once** and re-run.
   Arranging that inside `setUp` was attempted, did not work, and was not shipped.
-- These tests probe port 13337 by literal, while the app allocates through
-  `PortFinder.getOrAllocatePort()` and moves off that port when something else
-  holds it. The failure message says so, because on such a device the probe
-  fails for a reason that has nothing to do with the server.
+- These tests probe whichever port `PortFinder.getOrAllocatePort()` recorded,
+  read back through `ServerReadyHelper.waitForServer`, so a device where 13337
+  is held sends them to the port the app actually moved to. They probed 13337
+  by literal once, and on such a device went red for a reason that had nothing
+  to do with the server. The one case left is a scan range full end to end,
+  where the app falls back to an ephemeral port it deliberately does not
+  record; the failure message names it.
 
 ## Two things this directory has already taught us
 

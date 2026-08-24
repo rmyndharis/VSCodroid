@@ -108,6 +108,19 @@ object CrashReporter {
      * by this build holds neither shape; both run again here, because this is the
      * boundary the text crosses and a file written by an older build is still on
      * the device.
+     *
+     * Blocking, and not only on its own reads. Three crash files are read whole,
+     * and [ServerLog.tail] reads all of `server.log`, up to its 256 KiB cap,
+     * under the lock a rotation holds; a rotation is a full read and a full
+     * write of that file on the thread draining the server's stdout, so a call
+     * that lands during one waits it out. That is the right trade for the report
+     * (a read that did not wait would come back short, and a short server
+     * section reads as a quiet server), but it makes this a disk-bound call. The
+     * bridge calls it from the WebView's interface thread, where blocking is what
+     * a synchronous JS call expects. `MainActivity.checkPreviousCrash` reaches it
+     * from a dialog button, and a button fires on the main thread, where the same
+     * wait is a stall on the one screen shown after a crash: that caller has to
+     * hop to `Dispatchers.IO` before calling and come back for the clipboard.
      */
     fun generateBugReport(context: Context): String {
         val sb = StringBuilder()

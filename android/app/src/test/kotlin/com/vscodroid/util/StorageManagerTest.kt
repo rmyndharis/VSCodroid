@@ -1,21 +1,105 @@
 package com.vscodroid.util
 
+import android.content.Context
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
+import java.io.File
 
 /**
- * Tests for [StorageManager], specifically the pure [StorageManager.formatSize] function.
+ * Tests for [StorageManager]: the pure [StorageManager.formatSize] function, and
+ * the workspace row of the breakdown.
  *
- * The methods that take a [android.content.Context] are covered by [StorageSymlinkTest],
+ * The rest of what takes a [android.content.Context] is covered by [StorageSymlinkTest],
  * which hands them a mock whose `filesDir` and `cacheDir` are real temporary directories.
  * This file used to claim they belonged in an instrumented test; they do not, and saying
  * so left the two directory walks with no test at all.
  */
 class StorageManagerTest {
+
+    /**
+     * The workspace row, and where it counts.
+     *
+     * `getProjectsDir` answers one of two places: `filesDir/projects` on a new
+     * install, or `Android/data/<pkg>/files/projects` on an install from a
+     * release that kept the workspace on shared storage. The walk that builds
+     * `total` covers the first and not the second, so a legacy install's `total`
+     * disagreed with Android's app-info figure by the size of the user's work,
+     * and a fresh install had the same bytes inside `total` and in no row. Real
+     * directories, because the decision is made of `isDirectory` questions.
+     */
+    @Nested
+    inner class ProjectsRowTest {
+
+        @TempDir
+        lateinit var root: File
+
+        private lateinit var context: Context
+        private lateinit var filesDir: File
+        private lateinit var externalDir: File
+
+        @BeforeEach
+        fun stubStorage() {
+            filesDir = File(root, "files").apply { mkdirs() }
+            externalDir = File(root, "external").apply { mkdirs() }
+            context = mockk(relaxed = true)
+            every { context.filesDir } returns filesDir
+            every { context.cacheDir } returns File(root, "cache").apply { mkdirs() }
+            every { context.getExternalFilesDir(null) } returns externalDir
+        }
+
+        private fun fill(dir: File, bytes: Int) {
+            dir.mkdirs()
+            File(dir, "payload.bin").writeBytes(ByteArray(bytes))
+        }
+
+        @Test
+        fun `a workspace on shared storage has a row and is counted in total`() {
+            fill(File(filesDir, "server"), 10)
+            fill(File(externalDir, "projects"), 30)
+
+            val breakdown = StorageManager.getStorageBreakdown(context)
+
+            assertEquals(30L, breakdown.getLong("projects"), "the workspace has no row")
+            assertEquals(
+                40L, breakdown.getLong("total"),
+                "total leaves out a workspace that lives outside filesDir",
+            )
+        }
+
+        @Test
+        fun `a workspace under filesDir has a row and is not counted twice`() {
+            fill(File(filesDir, "server"), 10)
+            fill(File(filesDir, "projects"), 30)
+
+            val breakdown = StorageManager.getStorageBreakdown(context)
+
+            assertEquals(30L, breakdown.getLong("projects"), "the workspace has no row")
+            assertEquals(
+                40L, breakdown.getLong("total"),
+                "a workspace already inside the filesDir walk was added to total again",
+            )
+        }
+
+        /** The row is a figure, not an offer: nothing here may delete the user's work. */
+        @Test
+        fun `the workspace row is never offered to the clear action`() {
+            fill(File(filesDir, "projects"), 30)
+
+            val clearable = StorageManager.getStorageBreakdown(context).getJSONArray("clearable")
+            val keys = (0 until clearable.length()).map { clearable.getString(it) }
+
+            assertFalse(keys.contains("projects"), "the workspace was offered to the clear action")
+        }
+    }
 
     @Nested
     inner class FormatSizeTest {

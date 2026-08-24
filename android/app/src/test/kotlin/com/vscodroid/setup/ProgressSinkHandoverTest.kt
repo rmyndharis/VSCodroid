@@ -75,8 +75,9 @@ class ProgressSinkHandoverTest {
     /**
      * The half that needs identity rather than ordering.
      *
-     * Two Splash instances can exist at once -- `noHistory` with a standard
-     * launchMode, which `runSetup`'s own comment names -- and then the departing
+     * Two Splash instances can exist at once -- MainActivity hands a VIEW
+     * launch back to a fresh Splash while a launcher-task one may be mid-setup,
+     * which `runSetup`'s own comment names -- and then the departing
      * one's `onDestroy` can run after the replacement has installed its own sink,
      * so a blanket clear there silences the screen the user is looking at.
      *

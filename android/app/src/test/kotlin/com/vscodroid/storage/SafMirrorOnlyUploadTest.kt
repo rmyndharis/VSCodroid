@@ -424,30 +424,26 @@ class SafMirrorOnlyUploadTest {
     }
 
     /**
-     * The mirror is walked breadth-first and stops at `MAX_UPLOAD_ENTRIES`, and that
-     * walk is deterministic: same root, same cap, same `sortedBy { it.name }`. So a
-     * stranded file below the cap is not "left for a later open", which is what the log
-     * line here used to claim, because no later open ever reaches it. With a stranded
-     * file in hand the cap is worth telling the user about, and it goes through the
-     * seam the directory path uses for the identical fact.
+     * The cap counts the files this pass would put across, and it is still a cap: past
+     * `MAX_UPLOAD_ENTRIES` stranded files the walk stops, what it did find is put
+     * across, and the user is told through the seam the directory path uses for the
+     * identical fact. Bounding the provider work is what the number is for, one create
+     * and one write per candidate, and that bound has to survive the walk covering the
+     * whole mirror.
      */
     @Test
-    fun `a mirror walked only as far as the cap says so when it puts a file across`() {
+    fun `a mirror with more stranded files than the cap puts the cap across and says so`() {
         deviceTree(mapOf("root" to listOf(Child("a.txt", contents = "kept"))))
         sync()
 
-        // Named to sort ahead of the padding, so the walk reaches it before the cap
-        // bites. Directories for the padding rather than files: they spend the entry
-        // budget without becoming candidates of their own.
-        File(mirror, "0stranded.md").writeText("an hour of writing")
         repeat(SafSyncEngine.MAX_UPLOAD_ENTRIES + 5) {
-            File(mirror, "d%04d".format(it)).mkdir()
+            File(mirror, "s%04d.md".format(it)).writeText("an hour of writing")
         }
         sync()
 
         assertEquals(
-            listOf("0stranded.md"), createdNames(),
-            "the stranded file the walk did reach was not put across",
+            SafSyncEngine.MAX_UPLOAD_ENTRIES, createdNames().size,
+            "the cap no longer bounds the provider work of one open",
         )
         assertEquals(
             listOf(Triple(mirror.name, 0, true)), incomplete,
@@ -457,12 +453,40 @@ class SafMirrorOnlyUploadTest {
     }
 
     /**
-     * The control for the cap, and a decision rather than an oversight. A mirror large
-     * enough to hit it is an ordinary repository, the cap is permanent for that folder,
-     * and the walk found nothing stranded in what it did examine. Announcing anyway
-     * would put the same toast in front of the user on every open of that folder, for a
-     * condition they cannot act on and that usually hides nothing. The log keeps the
-     * fact for a bug report.
+     * Entries the device already has spend none of the cap, and this is the whole of
+     * what the reopen promise rests on for a real repository. The cap used to count
+     * every entry the walk examined, and the walk is deterministic: same root, same
+     * cap, same `sortedBy { it.name }`. So in any mirror over 2000 entries, a stranded
+     * file sorting past the first 2000 was never reached, on that open or on any later
+     * one, and lived in app-private storage until an uninstall took it. The padding here
+     * is directories, which are never candidates, so the only thing that can carry the
+     * stranded file past them is the walk not counting them.
+     */
+    @Test
+    fun `a stranded file past more entries than the cap is still put across`() {
+        deviceTree(mapOf("root" to listOf(Child("a.txt", contents = "kept"))))
+        sync()
+
+        repeat(SafSyncEngine.MAX_UPLOAD_ENTRIES + 5) {
+            File(mirror, "d%04d".format(it)).mkdir()
+        }
+        // Named to sort after all of the padding, so the walk reaches it last.
+        File(mirror, "zz").mkdirs()
+        File(mirror, "zz/stranded.md").writeText("an hour of writing")
+        sync()
+
+        assertEquals(
+            listOf("zz", "stranded.md"), createdNames(),
+            "the stranded file below the padding was never reached",
+        )
+        assertTrue(incomplete.isEmpty(), "a walk that found one candidate reported a cap: $incomplete")
+    }
+
+    /**
+     * The control for the cap: a mirror large enough to have hit the old one, with
+     * nothing stranded, puts nothing across and announces nothing. Announcing would put
+     * the same toast in front of the user on every open of an ordinary repository, for
+     * a condition they cannot act on.
      */
     @Test
     fun `a mirror larger than the cap with nothing stranded says nothing`() {
@@ -479,6 +503,73 @@ class SafMirrorOnlyUploadTest {
             "announced $incomplete on an ordinary open of a large folder",
         )
         assertEquals(emptyList<String>(), createdNames())
+    }
+
+    /**
+     * A name the record could not spell used to be left out of it, and a path the record
+     * never names is exactly what this pass reads as "never on the device". So a
+     * document with a tab in its name, which a platform provider can return since the
+     * filesystem allows it, came back onto the device on the open after the user deleted
+     * it there, and phase 3 could not remove the mirror copy either. The record now
+     * spells such a name through an escape, and both passes read it back.
+     */
+    @Test
+    fun `a file whose name holds a tab is not put back after the user deletes it on the device`() {
+        deviceTree(
+            mapOf(
+                "root" to listOf(
+                    Child("a.txt", contents = "kept"),
+                    Child("notes\tv2.txt", contents = "tabbed"),
+                )
+            )
+        )
+        sync()
+        val tabbed = File(mirror, "notes\tv2.txt")
+        assertTrue(tabbed.isFile, "the first sync has to bring it down")
+        assertTrue(
+            SafSyncEngine(context).holdsOnlyVouchedCopies(mirror),
+            "the record could not vouch for a name it cannot spell, so the mirror could " +
+                "never be reclaimed",
+        )
+
+        deviceTree(mapOf("root" to listOf(Child("a.txt", contents = "kept"))))
+        sync()
+
+        assertEquals(
+            emptyList<String>(), createdNames(),
+            "a deletion made on the device was undone for a name the record never carried",
+        )
+        assertFalse(tabbed.exists(), "the deletion did not take in the mirror")
+    }
+
+    /** The control: a stranded file with such a name is still put across. */
+    @Test
+    fun `a stranded file whose name holds a tab is still put onto the device`() {
+        deviceTree(mapOf("root" to listOf(Child("a.txt", contents = "kept"))))
+        sync()
+
+        File(mirror, "notes\tv2.txt").writeText("an hour of writing")
+        sync()
+
+        assertEquals(listOf("notes\tv2.txt"), createdNames())
+    }
+
+    /**
+     * The line itself: one line, three fields, whatever the name holds, and the path
+     * comes back out exactly. `\r` counts because `readLines` ends a line on it as
+     * readily as on `\n`; the backslash counts because it is the escape.
+     */
+    @Test
+    fun `a recorded name holding the separators is one line of three fields`() {
+        val name = "a\tb\nc\rd\\e"
+        val file = File(mirror, "plain.txt").apply { writeText("x") }
+
+        val line = SafSyncEngine(context).identityLine(name, file)
+
+        assertEquals(1, line.lines().size, "the line broke: $line")
+        assertEquals(3, line.split('\t').size, "the fields split: $line")
+        assertEquals(name, SafSyncEngine.unescapeRecordPath(line.substringBefore('\t')))
+        assertEquals("plain", SafSyncEngine.unescapeRecordPath("plain"), "an ordinary name must be untouched")
     }
 
     private companion object {

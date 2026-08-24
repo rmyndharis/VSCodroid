@@ -53,6 +53,8 @@
 | KB-13 | Trackpad arrows under a screen reader | With TalkBack on, swipe to the trackpad, open its actions menu and choose each of Move cursor left, right, up and down. Same caveat as KB-12: an injected tap or swipe proves nothing here, because a drag is what touch exploration consumes | The caret moves one step in the chosen direction. A drag is the only other route and a screen reader cannot perform one, so a failure here leaves no way to move the caret at all | | |
 | KB-14 | Long-press alternates | With the keyboard up and the caret in a file, touch and hold the `()` key (last on page 1 on a 411dp phone, page 2 on a narrow one) and pick `)` | The popup appears fully on screen, right edge included: it is about two and a half times the width of the key it is centred on, so the edge is where it would run off. The soft keyboard stays up and the key row stays visible throughout, and `)` is inserted. Long press is the only route to that character, so a popup that closes the keyboard costs it entirely | | |
 | KB-15 | Ctrl+Enter from the key row | Put the caret in the MIDDLE of a line, tap Ctrl on the key row, then press Enter on the soft keyboard | A new line opens below and the caret moves to it, leaving the line under the caret unsplit (Insert Line Below). A split line means the latch was spent without being applied: the soft keyboard reports Enter as an edit rather than as a key, so this is a different path from every other row key | | |
+| KB-17 | Latched Ctrl and a composed word on the EditContext path | On a WebView 121 or newer device with Gboard suggestions on (KB-11's check says which path), latch Ctrl on the row, type a word, then space | The word is inserted plainly and the row's Ctrl clears as the word starts; the space is inserted and no suggest widget opens. Latch Ctrl and type `s` with a non-composing commit (suggestions off, or Samsung keyboard) as the control: the file still saves (KB-7) | | |
+| KB-18 | Latched modifier and a frame | Latch Ctrl on the row, tap into a Simple Browser page or an extension webview and type, then tap back into the editor and type `a` | The row's Ctrl clears within a moment of focus entering the frame, and `a` is inserted rather than run as a chord | | |
 | KB-16 | Narrow phone paging | On a device or emulator whose portrait width is 360dp or less, bring the keyboard up and swipe through every page. `adb shell wm size` and `adb shell wm density` give the width in dp: pixels times 160, divided by density | There are more pages than the five a 411dp phone shows: six at 360dp, seven at 320dp. Every key still fills a comfortable target, no label is clipped, and the keys appear in the same order, only broken across more pages. The dots say how many there are | | |
 
 ## 4. Screen & Orientation
@@ -218,6 +220,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-8 | Revoked permission reclaimed | Revoke the folder's access in Android Settings > Apps > VSCodroid, relaunch | The mirror is reclaimed and the device copy is untouched. A folder still granted must **not** be emptied while open | | |
 | SF-9 | A save that did not reach the device | Create a file in the folder, force-stop the app immediately, relaunch and reopen the same folder | The file is present in the device folder, checked from a device file manager. Before, a write the sync never delivered stayed inside VSCodroid until the app was uninstalled, with nothing saying so | | |
 | SF-10 | Conflicting edits | Edit a file in the editor, force-stop the app before the save reaches the device, edit the same file with another app, reopen the folder | The device's version is shown and the editor's version is beside it as `<name>.local-<number>`; neither is lost. Both appear in the device folder as well as in the editor | | |
+| SF-11 | Conflicting edits, the other way round | With the folder closed, edit a file with another app; then open the folder in the editor, edit the same file there, force-stop the app before the save reaches the device, and reopen the folder | The editor's version wins on the device and the other app's version is beside it as `<name>.device-<time>`; neither is lost. An ordinary save with no device edit leaves no such copy | | |
 
 ---
 
@@ -227,7 +230,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 16 | | | |
+| Keyboard Input | 18 | | | |
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 12 | | | |
 | Extensions | 6 | | | |
@@ -236,8 +239,8 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
-| SAF & Files | 10 | | | |
-| **Total** | **98** | | | |
+| SAF & Files | 11 | | | |
+| **Total** | **101** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

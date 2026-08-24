@@ -5,10 +5,10 @@
 
 process-monitor.js labels a process as a language server by matching the
 basename of each command-line argument against a list of patterns, and that list
-is what decides which processes the idle-kill can reclaim. A pattern that
-matches nothing is invisible twice over: the server keeps running, it keeps
-counting against Android's phantom-process budget, and the feature built to
-manage exactly that never sees it.
+is what decides which processes are labelled and can be marked idle in the
+details view. A pattern that matches nothing is invisible twice over: the server
+keeps running, it keeps counting against Android's phantom-process budget, and
+the view built to explain exactly that shows it as 'other'.
 
 That already happened. The list carried 'css-languageserver',
 'html-languageserver' and 'json-languageserver' while the processes VS Code
@@ -142,8 +142,8 @@ def main(extensions):
 
     if failed:
         print(f"         Add a pattern to LANG_SERVER_PATTERNS in {MONITOR.name}.")
-        print("         Until then the monitor cannot see it, and the idle-kill "
-              "cannot reclaim it.")
+        print("         Until then the monitor cannot name it, and the details "
+              "view cannot mark it idle.")
     return 1 if failed else 0
 
 

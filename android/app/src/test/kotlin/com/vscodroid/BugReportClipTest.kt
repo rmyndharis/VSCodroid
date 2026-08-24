@@ -110,4 +110,26 @@ class BugReportClipTest {
                 "description before setPrimaryClip."
         }
     }
+
+    /**
+     * And it is not built on the main thread. `generateBugReport` reads three
+     * crash files whole and all of `server.log` under the lock a rotation holds,
+     * a full read and a full write of that file on the drain thread, so a call
+     * that lands during one waits it out. A dialog button fires on the main
+     * thread, on the one screen shown after a crash.
+     */
+    @Test
+    fun `the bug report is built off the main thread before it reaches the clipboard`() {
+        val dialog = withoutComments(body("checkPreviousCrash"))
+        val built = dialog.indexOf("generateBugReport")
+        assertTrue(built >= 0) { "checkPreviousCrash no longer builds a bug report" }
+
+        val hop = dialog.lastIndexOf("withContext(Dispatchers.IO)", built)
+        assertTrue(hop >= 0) {
+            "generateBugReport runs on the main thread: it reads three crash files and all " +
+                "of server.log under the lock a rotation holds, a stall on the one screen " +
+                "shown after a crash"
+        }
+        assertTrue(dialog.indexOf("setPrimaryClip") > built) { "the clip is written before the report exists" }
+    }
 }

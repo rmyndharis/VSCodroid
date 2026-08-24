@@ -76,6 +76,10 @@ class SafDirectoryRenameTest {
         every { context.contentResolver } returns resolver
         engine = SafSyncEngine(context)
         treeUri = mockk(relaxed = true)
+        // The state a sync leaves the cache in for the folder being watched. Without it
+        // the engine speaks for no tree, every resolution here walks the provider, and
+        // the cases about what the cache must not answer pass with nothing in it.
+        engine.resetCache(treeUri)
     }
 
     /**
@@ -407,13 +411,9 @@ class SafDirectoryRenameTest {
 
         observe(FileObserver.MOVED_FROM or isDirFlag, "util")
         observe(FileObserver.MOVED_TO or isDirFlag, "lib/util")
-        // An event for a different folder repoints the cache before the drain
-        // runs, which is what a folder switch mid-drain looks like.
-        engine.handleMirrorEvent(
-            FileObserver.MODIFY,
-            File(mirror, "x.txt").apply { writeText("x") },
-            mirror, otherTree
-        )
+        // The next folder's sync relabels the cache before the drain runs, which is
+        // what a folder switch mid-drain looks like.
+        engine.resetCache(otherTree)
         deviceTree(mapOf("root" to listOf("util", "lib"), "doc:lib" to emptyList()))
         drain()
 
@@ -423,17 +423,20 @@ class SafDirectoryRenameTest {
     /**
      * The other half of the same fact, on the producer's side rather than the drain's.
      *
-     * The cache and the label naming the tree it was resolved against are one object, and
-     * the label used to be repointed on its own: an event still inside its provider round
-     * trips when the folder was switched arrives after the next folder's sync has refilled
-     * the cache, sets the label back to the old tree and then answers this tree's lookups
-     * with the other one's documents. Where one granted folder sits inside another, which
-     * is an ordinary thing for a user to do, those documents are reachable, and the write
-     * opens them with `"wt"`, which truncates at open.
+     * The cache speaks for one tree, and an event for any other has to resolve without
+     * it: an event still inside its provider round trips when the folder was switched
+     * arrives after the next folder's sync has refilled the cache, and reading this
+     * folder's entries for it would answer its lookups with the other tree's documents.
+     * Where one granted folder sits inside another, which is an ordinary thing for a
+     * user to do, those documents are reachable, and the write opens them with `"wt"`,
+     * which truncates at open.
      *
-     * NEGATIVE CONTROL: drop the `docIdCache.clear()` from the branch while keeping
-     * `cacheTree = safTreeUri`. This case goes red and the one above stays green, which
-     * shows the two bind different halves, the entries and the label, rather than one.
+     * The event used to clear the cache and adopt it for its own tree instead, which is
+     * what `SafCacheTreeTest` shows interleaving with the sync that is filling it.
+     *
+     * NEGATIVE CONTROL: drop the label test from `cachedDocId`. This case goes red and
+     * the one above stays green, which shows the two bind different halves, the read
+     * and the drain's own gate, rather than one.
      */
     @Test
     fun `an event for another folder does not let this folder's cache answer for it`() {

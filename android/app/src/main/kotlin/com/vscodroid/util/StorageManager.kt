@@ -17,6 +17,7 @@ import android.annotation.SuppressLint
  * - Extensions (marketplace + bundled)
  * - User data (settings, state, logs)
  * - Tools (usr/: bash, git, python, npm, etc.)
+ * - Projects (the default workspace, wherever this install keeps it)
  * - Cache (npm-cache, tmp, crash-logs, toolchain staging directories)
  */
 // UsableSpace: this reports what is free, which is what the storage screen and
@@ -46,10 +47,28 @@ object StorageManager {
             put("logs", dirSize(File(filesDir, "home/.vscodroid/data/logs")))
             put("tools", dirSize(File(filesDir, "usr")))
             put("saf_mirrors", dirSize(File(filesDir, "saf-mirrors")))
+            // The user's own work, routinely the largest thing here and until now
+            // in no row. An install that keeps it under filesDir had it inside
+            // `total` with nothing to say so, so the rows did not add up to the
+            // figure above them; an install from a release that put it on shared
+            // storage had it in neither, so `total` disagreed with Android's own
+            // app-info screen by the size of the workspace. Environment decides
+            // which of the two this install uses, and nothing here second-guesses
+            // it.
+            val projectsDir = File(Environment.getProjectsDir(context))
+            val projectsBytes = dirSize(projectsDir)
+            put("projects", projectsBytes)
             put("cache", CLEARABLE_CACHE_DIRS.sumOf { dirSize(File(cacheDir, it)) })
             // The whole cache directory, unlike the row above it: this is the disk
             // the app occupies rather than a figure anyone is offered a button for.
-            put("total", dirSize(filesDir) + dirSize(cacheDir))
+            // The workspace is added only when it lies outside the two walks, or a
+            // fresh install would be charged for it twice.
+            val outsideFilesDir =
+                !projectsDir.absolutePath.startsWith(filesDir.absolutePath + File.separator)
+            put(
+                "total",
+                dirSize(filesDir) + dirSize(cacheDir) + if (outsideFilesDir) projectsBytes else 0L,
+            )
             // Which of the keys above the clear action can reach. Sent rather
             // than duplicated on the JavaScript side: the two live in different
             // files with different release cadences, and a second copy is how

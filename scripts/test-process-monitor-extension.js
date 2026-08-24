@@ -35,9 +35,8 @@ const EXTENSION = path.join(
 // The extension requires 'vscode', which exists only inside the workbench.
 // Resolve that name to a stub instead of a file on disk.
 const shown = [];
-// Kept rather than discarded, because one of the checks below is about what a
-// command does when a user runs it. The callback was thrown away here, so the
-// only command that sends signals had no cover at all.
+// Kept rather than discarded, because the checks below ask which commands the
+// extension registers and what the details command renders when a user runs it.
 const commands = new Map();
 // Collected rather than discarded, for the same reason the callbacks are: the
 // details view is a user-facing render with branches of its own, and a stub that
@@ -60,8 +59,12 @@ const vscodeStub = {
             show() {},
             dispose() {},
         }),
-        showWarningMessage: (message) => { shown.push({ level: 'warning', message }); return Promise.resolve(undefined); },
-        showErrorMessage: (message) => { shown.push({ level: 'error', message }); return Promise.resolve(undefined); },
+        // The buttons are kept with the message. A 'Kill Idle Servers' button
+        // stood beside 'Show Details' on both tiers, and a stub that dropped the
+        // items could not tell a notification offering a signal from one that
+        // does not.
+        showWarningMessage: (message, ...items) => { shown.push({ level: 'warning', message, items }); return Promise.resolve(undefined); },
+        showErrorMessage: (message, ...items) => { shown.push({ level: 'error', message, items }); return Promise.resolve(undefined); },
         showInformationMessage: (message) => { shown.push({ level: 'info', message }); return Promise.resolve(undefined); },
     },
 };
@@ -137,6 +140,15 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
             `  at 8 processes : ${quiet[0].message}\n` +
             `  at 11 processes: ${busy[0].message}`,
     );
+
+    // One button, and it opens the details view. The other one signalled the
+    // idle rows, and measured on device the servers were back under new pids
+    // within a second, so the button promised a slot it never freed.
+    assert.deepStrictEqual(
+        quiet[0].items, ['Show Details'],
+        `the warning offers ${JSON.stringify(quiet[0].items)}; a button that signals a ` +
+            'language server frees nothing, because its extension restarts it',
+    );
 }
 
 // The critical tier, same property.
@@ -154,6 +166,11 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
         'the critical text changes with the counts, so it freezes at whatever they were when it opened:\n' +
             `  at 14 processes: ${fourteen[0].message}\n` +
             `  at 20 processes: ${twenty[0].message}`,
+    );
+    assert.deepStrictEqual(
+        twenty[0].items, ['Show Details'],
+        `the error offers ${JSON.stringify(twenty[0].items)}; a button that signals a ` +
+            'language server frees nothing, because its extension restarts it',
     );
 }
 
@@ -355,7 +372,7 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     assert.strictEqual(
         back.length, 1,
         'the critical tier never returned after the count fell below the soft budget, so the ' +
-            'notification carrying the Kill Idle Servers button is raised once per extension ' +
+            'notification carrying the Show Details button is raised once per extension ' +
             'host however often the count runs away afterwards',
     );
     assert.strictEqual(back[0].level, 'error', `expected the error tier again, got ${back[0].level}`);
@@ -363,110 +380,100 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// The command kills the idle ones and only those.
+// Nothing in the extension signals a process, and no command offers to.
 //
-// It filtered on the type alone and SIGTERMed every language server the
-// snapshot listed, under a name that promises the idle ones: the server doing
-// the work a user is waiting on is the one most likely to be in that list.
-// Idleness is CPU time between two scans, which only process-monitor.js can
-// see, so the row carries its answer and this asserts the command reads it.
+// 'Kill Idle Servers' SIGTERMed the idle rows and reported that they would
+// restart on demand. Measured on device, the extension owning each server
+// restarted it within a second under a new pid, so the count never moved and
+// the only thing the command achieved was a re-index. The kill stub is
+// installed for the whole of activation and the details view, and the pids are
+// deliberately implausible, so a signal that did get sent would name nothing
+// that exists.
+//
+// NEGATIVE CONTROL: register `vscodroid.killIdleServers` again and the first
+// assertion goes red before anything is signalled.
 {
     const tree = [
         { pid: 4000001, ppid: 1, type: 'langserver', cmd: 'idle-server', idle: true },
         { pid: 4000002, ppid: 1, type: 'langserver', cmd: 'busy-server', idle: false },
-        { pid: 4000003, ppid: 1, type: 'terminal', cmd: 'bash', idle: true },
+        { pid: 4000003, ppid: 1, type: 'terminal', cmd: 'bash' },
     ];
     const signalled = [];
-    // Installed before the command runs and put back in a finally. The pids are
-    // deliberately implausible, so a stub that failed to install would signal
-    // nothing that exists rather than something that does.
     const realKill = process.kill;
     process.kill = (pid, signal) => { signalled.push([pid, signal]); };
     try {
+        commands.clear();
         notificationFor({
-            timestamp: Date.now(), total: 3,
-            budget: { current: 3, idle: 5, soft: 8, error: 14, hard: 32 },
-            tree, warnings: [],
+            timestamp: Date.now(), total: 20,
+            budget: { current: 20, idle: 5, soft: 8, error: 14, hard: 32 },
+            tree,
         });
-        const kill = commands.get('vscodroid.killIdleServers');
-        assert.ok(kill, 'the extension no longer registers vscodroid.killIdleServers');
-        kill();
+        assert.ok(commands.has('vscodroid.showProcesses'), 'the details view command is gone');
+        assert.deepStrictEqual(
+            [...commands.keys()].filter((id) => /kill|idle/i.test(id)), [],
+            `a command that signals language servers is registered again: ${[...commands.keys()]}`,
+        );
+        commands.get('vscodroid.showProcesses')();
     } finally {
         process.kill = realKill;
     }
     assert.deepStrictEqual(
-        signalled, [[4000001, 'SIGTERM']],
-        'the command named Kill Idle Servers signalled something other than exactly the idle ' +
-            'language server: ' + JSON.stringify(signalled),
+        signalled, [],
+        `the extension signalled ${JSON.stringify(signalled)}; a language server's extension ` +
+            'restarts it, so the signal frees no slot',
+    );
+
+    // The idle row is marked, because it is now what the reader has instead of
+    // the button: which extension's server is doing nothing for them right now.
+    const rows = printed.join('\n');
+    assert.match(
+        rows, /^4000001 .*idle-server  \(idle\)$/m,
+        `the idle language server is not marked in the details view:\n${rows}`,
+    );
+    assert.doesNotMatch(
+        rows, /busy-server.*\(idle\)/,
+        `a language server the snapshot calls busy is marked idle:\n${rows}`,
+    );
+    assert.match(
+        rows, /2 language servers running, 1 idle/,
+        `the advice does not count the idle server:\n${rows}`,
     );
 }
 
-// And nothing at all off a snapshot nobody is refreshing.
+// A snapshot nobody is refreshing composes no notification.
 //
 // poll() swallows every read and parse failure and keeps the last snapshot, so a
 // writer that has stopped is indistinguishable from a count that is simply
 // steady -- and it does stop: process-monitor.js runs inside the bootstrap, and
 // a bootstrap SIGKILLed while the editor server it forked keeps running leaves
-// this extension reading a file nobody writes for the rest of the session. The
-// pids in that file are this app's uid, so the kernel delivers whatever it is
-// told, against a process tree that has moved on.
+// this extension reading a file nobody writes for the rest of the session.
 //
-// And nothing is composed from it either, which is the half that has to be
-// decided before the status bar is painted rather than after. updateStatusBar
-// latches the tiered notifications, so a stale snapshot at or above the error
-// budget used to raise 'The live count is in the status bar' and then have the
-// status bar blanked to '--' underneath it, latched until the count next fell
-// below the soft budget. The count is 20 on purpose: at anything under the soft
-// budget the notification arms would be silent whatever the timestamp, and the
-// assertion would pass without testing anything.
-//
-// Same tree and same idle row as the check above, so the only difference between
-// signalling and not is the age of the snapshot.
+// The staleness has to be decided before the status bar is painted rather than
+// after. updateStatusBar latches the tiered notifications, so a stale snapshot
+// at or above the error budget used to raise 'The live count is in the status
+// bar' and then have the status bar blanked to '--' underneath it, latched until
+// the count next fell below the soft budget. The count is 20 on purpose: at
+// anything under the soft budget the notification arms would be silent whatever
+// the timestamp, and the assertion would pass without testing anything.
 {
     const stale = snapshot(20, 9, 6);
     stale.timestamp = Date.now() - 10 * 60 * 1000;
-    // One row the command is entitled to act on, so the refusal below is the
-    // only thing standing between it and a SIGTERM.
-    stale.tree.find((p) => p.type === 'langserver').idle = true;
-    const idlePid = stale.tree.find((p) => p.idle).pid;
 
-    const run = (snap) => {
-        const signalled = [];
-        const realKill = process.kill;
-        process.kill = (pid, signal) => { signalled.push([pid, signal]); };
-        try {
-            const raised = notificationFor(snap);
-            commands.get('vscodroid.killIdleServers')();
-            return { raised, signalled };
-        } finally {
-            process.kill = realKill;
-        }
-    };
-
-    // POSITIVE CONTROL, on the identical tree: current, it warns and it signals.
-    // Without it both assertions below are satisfied by a fixture that could
-    // never have produced either.
-    const live = run({ ...stale, timestamp: Date.now() });
+    // POSITIVE CONTROL, on the identical tree: current, it warns. Without it
+    // the assertion below is satisfied by a fixture that could never have
+    // produced a notification.
+    const live = notificationFor({ ...stale, timestamp: Date.now() });
     assert.strictEqual(
-        live.raised.length, 1,
-        `a current snapshot of 20 raised ${live.raised.length} notifications, so the stale case ` +
+        live.length, 1,
+        `a current snapshot of 20 raised ${live.length} notifications, so the stale case ` +
             'below is not measuring the guard',
     );
-    assert.deepStrictEqual(
-        live.signalled, [[idlePid, 'SIGTERM']],
-        `a current snapshot did not reach the idle server: ${JSON.stringify(live.signalled)}`,
-    );
 
-    const old = run(stale);
+    const old = notificationFor(stale);
     assert.deepStrictEqual(
-        old.signalled, [],
-        'Kill Idle Servers signalled pids read out of a ten-minute-old snapshot: ' +
-            JSON.stringify(old.signalled),
-    );
-    assert.deepStrictEqual(
-        old.raised, [],
+        old, [],
         'a snapshot nobody is refreshing raised a notification, and it was composed before the ' +
-            'status bar it points at was blanked: ' + JSON.stringify(old.raised),
+            'status bar it points at was blanked: ' + JSON.stringify(old),
     );
 }
 
@@ -479,63 +486,40 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
 {
     const undated = snapshot(20, 9, 6);
     delete undated.timestamp;
-    undated.tree.find((p) => p.type === 'langserver').idle = true;
-    const signalled = [];
-    const realKill = process.kill;
-    process.kill = (pid, signal) => { signalled.push([pid, signal]); };
-    let raised;
-    try {
-        raised = notificationFor(undated);
-        commands.get('vscodroid.killIdleServers')();
-    } finally {
-        process.kill = realKill;
-    }
+    const raised = notificationFor(undated);
     assert.deepStrictEqual(
         raised, [],
         `a snapshot with no timestamp was rendered as current: ${JSON.stringify(raised)}`,
     );
-    assert.deepStrictEqual(
-        signalled, [],
-        'Kill Idle Servers signalled pids read out of a snapshot with no timestamp: ' +
-            JSON.stringify(signalled),
-    );
 }
 
-// The details view names the number that acts on its own, and only when the
-// snapshot carries it.
+// The details view promises no reclaim, even off a snapshot that still names one.
 //
-// The reclaim budget is the one figure here that makes something happen without
-// a user: at or above it process-monitor.js sheds idle language servers whether
-// or not Android ever reports memory pressure. It was published in the snapshot
-// and rendered nowhere, so the only automatic action this app takes was visible
-// solely in the warning left behind afterwards. Both renders are read, because
-// each has a fallback for a snapshot written before the field existed and a
-// fallback that fires when it should not is the same bug with a different shape.
+// `budget.reclaim` was the count at which process-monitor.js signalled idle
+// language servers, and the view rendered it on the budget line and in the
+// advice as the one number that made something happen on its own. The signal is
+// gone because it freed nothing, but a snapshot written by the previous build
+// can still be on disk in TMPDIR, which is never cleared, and the first poll
+// after an upgrade reads it: naming the threshold then promises an action
+// nothing takes. The advice names what does free a slot instead.
+//
+// NEGATIVE CONTROL: render `s.budget.reclaim` on the budget line again and the
+// first assertion goes red.
 {
     notificationFor(snapshot(20, 9, 6, { idle: 5, soft: 8, error: 14, reclaim: 24 }));
     commands.get('vscodroid.showProcesses')();
     const named = printed.join('\n');
     assert.match(
-        named, /^Budget: 20\/8 soft, 24 reclaim, 32 hard limit$/m,
-        `the budget line does not name the reclaim threshold:\n${named}`,
+        named, /^Budget: 20\/8 soft, 32 hard limit$/m,
+        `the budget line names a reclaim threshold nothing acts on:\n${named}`,
     );
-    assert.match(
-        named, /once the count reaches 24/,
-        `the language-server advice names memory pressure as the only trigger:\n${named}`,
-    );
-
-    // The control, on the same counts: without the field neither number is
-    // guessed, and both lines are still rendered.
-    notificationFor(snapshot(20, 9, 6));
-    commands.get('vscodroid.showProcesses')();
-    const silent = printed.join('\n');
     assert.ok(
-        !/reclaim|once the count reaches/.test(silent),
-        `a snapshot with no reclaim budget had one rendered anyway:\n${silent}`,
+        !/reclaim|once the count reaches|Kill Idle Servers|freed/.test(named),
+        `the advice promises servers are freed by this app:\n${named}`,
     );
     assert.match(
-        silent, /^Budget: 20\/8 soft, 32 hard limit$/m,
-        `the budget line itself went missing with the field:\n${silent}`,
+        named, /6 language servers running, 0 idle .*disable the extension/,
+        `the advice does not name the extension as what frees a slot:\n${named}`,
     );
 }
 
@@ -580,7 +564,7 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
 
 console.log(
     'ok -- both notification tiers say the same thing whatever the counts, stay quiet below ' +
-    'them, come from the snapshot rather than from literals, Kill Idle Servers signals ' +
-    'only the idle ones and nothing at all when the snapshot has stopped moving, and the ' +
-    'details view names the reclaim threshold and marks a snapshot nobody is refreshing',
+    'them, come from the snapshot rather than from literals and offer only the details view, ' +
+    'nothing signals a process, and the details view marks idle servers, promises no reclaim ' +
+    'and marks a snapshot nobody is refreshing',
 );

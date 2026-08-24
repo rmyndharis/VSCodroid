@@ -301,14 +301,29 @@ class SplashActivity : AppCompatActivity() {
             // twice, and the hold is what stops it being paid.
             //
             // try/finally rather than a release after the `when`, because a
-            // destroyed Activity cancels this scope. `runSetup` blocks with no
-            // suspension point in it, so the cancellation is only observed once
-            // it has RETURNED, which is to say once the unpack is finished: the
-            // finally then gives the hold back at the right moment on both
-            // roads, and never in the middle of a write.
-            val held = holdProcessForSetup()
+            // destroyed Activity cancels this scope. The unpack itself blocks
+            // with no suspension point in it, so for the instance running it the
+            // cancellation is only observed once it has RETURNED, which is to
+            // say once the unpack is finished: the finally then gives the hold
+            // back at the right moment on both roads, and never in the middle
+            // of a write.
+            //
+            // Taken inside `runSetup` rather than before it, because that
+            // argument covers only the instance that runs the unpack. A second
+            // Splash created during it (a locale change mid-extraction, or
+            // MainActivity handing a VIEW launch back here) parks on the setup
+            // lock, and parking is a suspension point: destroying that one
+            // throws it out of the lock at once, so a hold it had taken here
+            // was given back by its finally while the first instance was still
+            // writing. The service answers that release by leaving the
+            // foreground and stopping, which is the exact state the hold exists
+            // to prevent, and a Back press on the waiter left nothing to take it
+            // again. `runSetup` calls this only from the instance that has the
+            // lock and work to do, so `held` stays false for a waiter and its
+            // finally releases nothing.
+            var held = false
             val result = try {
-                setup.runSetup()
+                setup.runSetup { held = holdProcessForSetup() }
             } finally {
                 if (held) releaseSetupHold()
             }
@@ -462,13 +477,14 @@ class SplashActivity : AppCompatActivity() {
         // hierarchy reachable for the rest of a run measured in minutes.
         //
         // Identity-checked on the far side, and the case that needs it is two
-        // Splash instances existing at once (noHistory plus a standard
-        // launchMode, which runSetup's own comment names): the departing one's
-        // onDestroy can run after the replacement has installed its own sink, so
-        // a blanket clear would silence the screen the user is looking at. A
-        // config-change relaunch runs the other way round -- the old instance is
-        // destroyed before the new one is created -- so ordering alone would
-        // have covered that one.
+        // Splash instances existing at once. Not noHistory, which the manifest
+        // deliberately does not set: MainActivity.handOffToSetup starts a fresh
+        // Splash from a VIEW launch while a launcher-task Splash may be
+        // mid-setup, and then the departing one's onDestroy can run after the
+        // replacement has installed its own sink, so a blanket clear would
+        // silence the screen the user is looking at. A config-change relaunch
+        // runs the other way round -- the old instance is destroyed before the
+        // new one is created -- so ordering alone would have covered that one.
         FirstRunSetup.detachProgress(progressSink)
         progressSink = null
         super.onDestroy()
@@ -552,7 +568,7 @@ class SplashActivity : AppCompatActivity() {
 
         val grid = findViewById<RecyclerView>(R.id.toolchainGrid)
         val continueBtn = findViewById<Button>(R.id.continueButton)
-        val skipBtn = findViewById<TextView>(R.id.skipButton)
+        val skipBtn = findViewById<Button>(R.id.skipButton)
 
         val adapter = ToolchainPickerAdapter(ToolchainCardMode.PICKER)
         // What is already on disk, which this screen used to be able to assume was

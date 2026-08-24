@@ -113,7 +113,8 @@ class ResourceInterceptionWiringTest {
      * whatever the gate did, which is what the cases below exist to avoid.
      */
     private fun requestFor(
-        path: String, origin: String? = null, query: String? = null
+        path: String, origin: String? = null, query: String? = null,
+        referer: String? = WEBVIEW_REFERER,
     ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.host } returns "file+.vscode-resource.vscode-cdn.net"
@@ -126,8 +127,16 @@ class ResourceInterceptionWiringTest {
         every { uri.query } returns query?.let { URLDecoder.decode(it, "UTF-8") }
         val request = mockk<WebResourceRequest>(relaxed = true)
         every { request.url } returns uri
-        every { request.requestHeaders } returns
-            if (origin == null) emptyMap() else mapOf("Origin" to origin)
+        // A referer by default, because every real request carries one: measured
+        // at this gate over the first run, the walkthrough, the markdown preview
+        // and the Simple Browser, a no-cors load arrives with the webview
+        // document's `https://<uuid>.vscode-cdn.net/`. A fixture with neither
+        // header is the shape the gate now refuses, and one case below drives it
+        // on purpose.
+        every { request.requestHeaders } returns buildMap {
+            if (origin != null) put("Origin", origin)
+            if (referer != null) put("Referer", referer)
+        }
         return request
     }
 
@@ -333,12 +342,52 @@ class ResourceInterceptionWiringTest {
         )
     }
 
-    private fun intercept(path: String, openFolder: String?) = assertNotNull(
+    private fun intercept(
+        path: String, openFolder: String?, referer: String? = WEBVIEW_REFERER,
+    ) = assertNotNull(
         VSCodroidWebViewClient.interceptCdnRequest(
-            requestFor(path), PORT, null, published, sensitive, { openFolder }
+            requestFor(path, referer = referer), PORT, null, published, sensitive, { openFolder }
         ),
         "the request never reached a branch that builds a response, so nothing below was exercised"
     )
+
+    /**
+     * The no-cors half of the gate, driven through the real interception path.
+     *
+     * `<img>`, `<link>` and a classic `<script src>` send no `Origin`, so the
+     * origin gate never sees them. Measured on an API 37 emulator, a page served
+     * from `http://10.0.2.2:8877` and opened in the bundled Simple Browser read a
+     * workspace `.js` and `.png` that way while the response carried
+     * `Cross-Origin-Resource-Policy: same-site`: the WebView does not apply that
+     * check to a response it synthesises here. The referer is what refuses it.
+     */
+    @Test
+    fun `a no-cors request from a foreign page is refused`() {
+        // Control, so a refusal below is about the referer and not the fixture.
+        intercept(workspaceFile.path, openFolder = workspace.path)
+        assertTrue(refusals.isEmpty(), "the control was refused: $refusals")
+
+        intercept(workspaceFile.path, openFolder = workspace.path, referer = "http://10.0.2.2:8877/")
+        assertTrue(
+            refusals.any { it.contains("foreign referer") },
+            "a page in the Simple Browser read a workspace file through <script src>: $refusals"
+        )
+    }
+
+    /**
+     * And the same page with `<meta name="referrer" content="no-referrer">`,
+     * which is one attribute and, measured, leaves the request with no referer at
+     * all while it goes on reading the workspace. So absent has to be refused.
+     */
+    @Test
+    fun `a no-cors request that suppressed its referrer is refused`() {
+        intercept(workspaceFile.path, openFolder = workspace.path, referer = null)
+
+        assertTrue(
+            refusals.any { it.contains("foreign referer") },
+            "suppressing the referrer walked straight past the gate: $refusals"
+        )
+    }
 
     /**
      * Catches: replacing the resolver call in `interceptResourceRequest` with
@@ -501,5 +550,13 @@ class ResourceInterceptionWiringTest {
     private companion object {
         /** Never connected to: every path here is answered from the filesystem. */
         const val PORT = 41234
+
+        /**
+         * What a webview document's no-cors subresource load carries, measured at
+         * the gate on an API 37 emulator. The uuid is the workbench's own
+         * `webviewExternalEndpoint` template filled in per webview.
+         */
+        private const val WEBVIEW_REFERER =
+            "https://18m4k0prj7umm96am9tapr0qko2nieuq2bsup0c1g7s34jl8bqrh.vscode-cdn.net/"
     }
 }

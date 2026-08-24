@@ -41,6 +41,12 @@ import org.junit.jupiter.api.Test
  * modifier the listener cannot act on is spent` red. Adding an
  * `e.preventDefault();` to the branch turns `the page keeps the input this
  * listener has no chord for` red.
+ *
+ * Two inputs never produce a `beforeinput` for any branch to spend on, and the
+ * last cases hold the hooks that spend the latch for them: a composition on the
+ * EditContext edit path, which Chromium reports to the `EditContext` object and
+ * not to the element, and typing inside a frame, which no listener in this
+ * document can see. Dropping either hook turns its case red at the slice.
  */
 class KeyInjectorLatchTest {
 
@@ -216,6 +222,134 @@ class KeyInjectorLatchTest {
             branch.contains("dispatchEvent"),
             "a synthetic keystroke is sent for an inputType this listener has no key " +
                 "for. It reads: $branch"
+        )
+    }
+
+    /**
+     * The listener the script attaches to an `EditContext`, from its registration
+     * to the close of its body.
+     *
+     * Sliced at the event name because the body is one flag-clearing block among
+     * several: the three `beforeinput` branches above clear the same flags, so a
+     * whole-script search cannot tell a hook that spends the latch from one that
+     * only registers.
+     */
+    private fun compositionHook(): String {
+        val installed = installedListener()
+        val guard = "addEventListener('compositionstart'"
+        val start = installed.indexOf(guard)
+        assertTrue(
+            start >= 0,
+            "nothing listens for a composition starting, so on the EditContext edit " +
+                "path a composed character spends no latch: Chromium reports the " +
+                "composition to the EditContext and fires no beforeinput at the " +
+                "element, and the latch attaches to the space that commits the word. " +
+                "It reads:\n$installed"
+        )
+        val end = installed.indexOf("});", start)
+        assertTrue(end > start, "the composition hook's body is never closed")
+        return installed.substring(start, end + "});".length)
+    }
+
+    /** The window `blur` hook, from its registration to the close of its body. */
+    private fun frameBlurHook(): String {
+        val installed = installedListener()
+        val guard = "window.addEventListener('blur'"
+        val start = installed.indexOf(guard)
+        assertTrue(
+            start >= 0,
+            "nothing notices focus moving into a frame, so a Ctrl latched before " +
+                "typing in a webview survives it and cancels the first character typed " +
+                "back in the editor. It reads:\n$installed"
+        )
+        val end = installed.indexOf("});", start)
+        assertTrue(end > start, "the blur hook's body is never closed")
+        return installed.substring(start, end + "});".length)
+    }
+
+    @Test
+    fun `a composition on the EditContext path spends the latch at its start`() {
+        // The textarea path reports every composed keystroke as an
+        // insertCompositionText beforeinput, which the unhandled-input branch
+        // spends on the first one. With an EditContext attached, Chromium
+        // dispatches compositionstart and textupdate to the EditContext object
+        // and fires no beforeinput at the element, so the same keystrokes reached
+        // no branch at all and the latch stood until the IME committed a space.
+        //
+        // NEGATIVE CONTROL: drop the compositionstart listener and the slice
+        // assertion goes red; keep it and drop `mod.ctrl = false;` from its body
+        // and the first assertion below goes red.
+        val hook = compositionHook()
+        assertTrue(
+            hook.contains("mod.ctrl = false;") && hook.contains("mod.alt = false;"),
+            "the composition hook registers but spends nothing, so the latch still " +
+                "outlives the composed character. It reads: $hook"
+        )
+        assertTrue(
+            hook.contains("mod.shift = false;"),
+            "a Shift latched with Ctrl or Alt is the one that decides WHICH character " +
+                "the next row key types, and this hook leaves it standing. It reads: $hook"
+        )
+        assertFalse(
+            hook.contains("preventDefault") || hook.contains("dispatchEvent"),
+            "the hook acts on the composition instead of only spending the latch: " +
+                "there is no chord for a composed character and cancelling it types " +
+                "nothing. It reads: $hook"
+        )
+    }
+
+    @Test
+    fun `the EditContext is reached through the focused element and hooked once`() {
+        // `element.editContext` is the attribute the workbench sets on its edit
+        // surface, and the only route to the object Chromium fires the events at.
+        // The element focused when the script installs is hooked as well as any
+        // focused later: the editor usually has focus before this runs, and a
+        // hook that waited for the next focusin would miss the whole session.
+        //
+        // NEGATIVE CONTROL: hooking on `focusin` alone, without the call on
+        // `document.activeElement`, turns the second assertion red.
+        val installed = installedListener()
+        assertTrue(
+            installed.contains(".editContext"),
+            "the script never reads the editContext attribute, so it has no object to " +
+                "hear compositionstart from. It reads:\n$installed"
+        )
+        assertTrue(
+            installed.contains("hookComposition(document.activeElement)"),
+            "only elements focused after install are hooked, and the editor is " +
+                "usually focused before it. It reads:\n$installed"
+        )
+        assertTrue(
+            installed.contains("__vscodroid_hooked"),
+            "every focusin adds another compositionstart listener to the same " +
+                "EditContext. It reads:\n$installed"
+        )
+    }
+
+    @Test
+    fun `focus moving into a frame spends the latch, any other blur does not`() {
+        // A beforeinput never leaves the document it fires in, and every frame
+        // the workbench opens is served from the vscode-cdn.net origin, so what is
+        // typed in one is out of reach either way. Chromium fires blur on the
+        // window whose frame loses focus, with activeElement already the frame's
+        // element; that is the signal, and the IFRAME check is what keeps a blur
+        // for any other reason, the app losing the window or a popup taking it,
+        // from spending a latch the user is still holding.
+        //
+        // NEGATIVE CONTROL: drop the `tagName !== 'IFRAME'` guard and the first
+        // assertion goes red; keep it and drop `mod.ctrl = false;` and the second
+        // goes red.
+        val hook = frameBlurHook()
+        assertTrue(
+            hook.contains("tagName !== 'IFRAME'") && hook.contains("return;"),
+            "the blur hook spends the latch on every blur, including the WebView " +
+                "losing window focus to a dialog or the long-press popup. It reads: $hook"
+        )
+        assertTrue(
+            hook.contains("mod.ctrl = false;") &&
+                hook.contains("mod.alt = false;") &&
+                hook.contains("mod.shift = false;"),
+            "the blur hook registers but spends nothing. It reads: $hook"
         )
     }
 }

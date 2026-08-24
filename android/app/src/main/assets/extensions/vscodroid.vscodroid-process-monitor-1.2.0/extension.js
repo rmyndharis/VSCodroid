@@ -67,9 +67,11 @@ function activate(context) {
         showProcessTree();
     });
 
-    const killIdleCmd = vscode.commands.registerCommand('vscodroid.killIdleServers', () => {
-        killIdleLanguageServers();
-    });
+    // No command that signals a process. 'Kill Idle Servers' lived here and
+    // SIGTERMed the idle rows, and measured on device it freed nothing: the
+    // extension that owns a language server restarts it within a second under a
+    // new pid, so the count never moved while the toast said the servers were
+    // gone. process-monitor.js records the measurement at IDLE_THRESHOLD_MS.
 
     // Poll the JSON snapshot file
     function poll() {
@@ -111,7 +113,7 @@ function activate(context) {
     poll();
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);
 
-    context.subscriptions.push(statusBarItem, outputChannel, showCmd, killIdleCmd, {
+    context.subscriptions.push(statusBarItem, outputChannel, showCmd, {
         dispose: () => { clearInterval(pollTimer); }
     });
 }
@@ -181,9 +183,9 @@ function updateStatusBar(snapshot) {
     // simply older. The target of 5 stays because it is a constant, not a
     // reading.
     //
-    // Nothing actionable is lost. Both buttons and the details view read
-    // lastSnapshot, which poll() refreshes every interval, so they act on the
-    // current tree however old the sentence above them is -- and
+    // Nothing actionable is lost. The button opens the details view, which
+    // reads lastSnapshot, refreshed by poll() every interval, so it shows the
+    // current tree however old the sentence above it is -- and
     // showProcessTree() prints the per-type counts and the recommendations that
     // used to be crammed in here, freshly, each time it is opened.
     //
@@ -209,22 +211,18 @@ function updateStatusBar(snapshot) {
         vscode.window.showErrorMessage(
             'Too many phantom processes; Android may start killing them. ' +
                 'The live count is in the status bar.',
-            'Kill Idle Servers',
             'Show Details'
         ).then(choice => {
-            if (choice === 'Kill Idle Servers') killIdleLanguageServers();
-            else if (choice === 'Show Details') showProcessTree();
+            if (choice === 'Show Details') showProcessTree();
         });
     } else if (total >= soft && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
         vscode.window.showWarningMessage(
             `Phantom processes are above the target of ${idle}. ` +
                 'The live count is in the status bar.',
-            'Kill Idle Servers',
             'Show Details'
         ).then(choice => {
-            if (choice === 'Kill Idle Servers') killIdleLanguageServers();
-            else if (choice === 'Show Details') showProcessTree();
+            if (choice === 'Show Details') showProcessTree();
         });
     } else if (total < soft) {
         // Re-arming, and each latch comes back at the tier below the one that
@@ -235,9 +233,9 @@ function updateStatusBar(snapshot) {
         // session with the workbench open never has fewer than the workbench
         // costs, so nothing on a device cleared either flag and both tiers were
         // one-shot for the life of the extension host. Only the prompt was
-        // lost, not the remedy: the status item recolours on every poll and
-        // 'Kill Idle Servers' stays a palette command that showProcessTree()
-        // names, which is why this is a quiet failure rather than a loud one.
+        // lost, not the information: the status item recolours on every poll
+        // and the details view is a tap away, which is why this is a quiet
+        // failure rather than a loud one.
         //
         // The gap between firing and re-arming is the point, so the count
         // crossing one threshold cannot raise the same notification twice: the
@@ -256,65 +254,6 @@ function updateStatusBar(snapshot) {
         criticalShownAtThreshold = false;
         if (total <= idle) warningShownAtThreshold = false;
     }
-}
-
-function killIdleLanguageServers() {
-    if (!lastSnapshot) {
-        vscode.window.showInformationMessage('No process data available.');
-        return;
-    }
-
-    // Nothing is signalled off a snapshot nobody is refreshing. The pids in it
-    // belong to this app's uid, so the kernel delivers whatever it is told, and
-    // the one state where the writer has stopped is exactly the one where those
-    // pids describe a process tree that has moved on.
-    if (isStale(lastSnapshot)) {
-        vscode.window.showInformationMessage(
-            'Process data is out of date, so nothing was signalled. Restart the app if the ' +
-                'count in the status bar has stopped moving.',
-        );
-        return;
-    }
-
-    // Idle, not merely present. This filtered on the type alone and SIGTERMed
-    // every language server the snapshot listed, which is not what the command
-    // is called and not what a user pressing it under memory pressure is
-    // agreeing to: the server doing the work they are waiting on is the one
-    // most likely to be in the list. Idleness is CPU time between two scans and
-    // is decided in process-monitor.js, which is the only side that can see it;
-    // the row carries its answer.
-    const langservers = (lastSnapshot.tree || []).filter(p => p.type === 'langserver');
-    if (langservers.length === 0) {
-        vscode.window.showInformationMessage('No language servers running.');
-        return;
-    }
-
-    // `=== true` and not a truthiness test: a snapshot written before the row
-    // carried this field has no answer to give, and an absent one has to mean
-    // 'not known to be idle' rather than being coerced into one.
-    const idle = langservers.filter(p => p.idle === true);
-    if (idle.length === 0) {
-        vscode.window.showInformationMessage(
-            `${langservers.length} language server${langservers.length !== 1 ? 's' : ''} ` +
-                'running, none idle. Idle ones are freed automatically under memory pressure, ' +
-                'or once the process count runs away.'
-        );
-        return;
-    }
-
-    let killed = 0;
-    for (const proc of idle) {
-        try {
-            process.kill(proc.pid, 'SIGTERM');
-            killed++;
-        } catch {
-            // Process may have already exited
-        }
-    }
-
-    vscode.window.showInformationMessage(
-        `Sent SIGTERM to ${killed} idle language server${killed !== 1 ? 's' : ''}. They will restart on demand.`
-    );
 }
 
 // The words a person reads in the status bar tooltip, one per type that
@@ -336,7 +275,7 @@ function killIdleLanguageServers() {
 // sync engine is a thread inside the Android app process, so the type only ever
 // landed on processes that happened to run inside a folder opened from device
 // storage, and a language server among them was labelled 'storage' here while
-// being outside every reclaim path.
+// never being marked idle.
 const TYPE_LABELS = {
     bootstrap: 'system',
     server: 'system',
@@ -363,15 +302,13 @@ function showProcessTree() {
 
     const s = lastSnapshot;
 
-    // The third reader of that answer, and the one a user reaches deliberately.
-    // poll() blanks the status item to '--' for a snapshot nobody is refreshing
-    // and killIdleLanguageServers() refuses to signal off one, but this view is
-    // what that blanked item's command opens: the user read a tooltip saying the
-    // count is no longer live, tapped it, and was shown a whole tree, a budget
-    // line and recommendations with nothing marking them as the last ones
-    // written. Said here rather than instead of rendering them, because the rows
-    // are still the best available answer and the pids in them are what the
-    // command below refuses to signal.
+    // The second reader of that answer, and the one a user reaches deliberately.
+    // poll() blanks the status item to '--' for a snapshot nobody is refreshing,
+    // but this view is what that blanked item's command opens: the user read a
+    // tooltip saying the count is no longer live, tapped it, and was shown a
+    // whole tree, a budget line and recommendations with nothing marking them
+    // as the last ones written. Said here rather than instead of rendering
+    // them, because the rows are still the best available answer.
     if (isStale(s)) {
         outputChannel.appendLine(
             `No process data for the last ${STALE_AFTER_MS / 1000} s, so the rows below are ` +
@@ -389,16 +326,12 @@ function showProcessTree() {
     outputChannel.appendLine(`VSCodroid Process Tree (${time})`);
     outputChannel.appendLine(`Total phantom processes: ${s.total}`);
     if (s.budget) {
-        // The reclaim threshold is named alongside the other two because it is
-        // the only number here that makes something happen on its own: at or
-        // above it the monitor signals idle language servers whether or not the
-        // device ever reports memory pressure. It was published in the snapshot
-        // and rendered nowhere, so the one automatic action this app takes was
-        // visible only in the warning it leaves behind afterwards. Omitted
-        // rather than guessed for a snapshot written before the field existed.
-        const reclaim = s.budget.reclaim ? `, ${s.budget.reclaim} reclaim` : '';
+        // Two numbers and not three. A `reclaim` threshold sat between them
+        // while the monitor signalled idle servers at 24 processes; a snapshot
+        // left on disk by that build still carries the field, and naming it
+        // would promise an action nothing takes any more.
         outputChannel.appendLine(
-            `Budget: ${s.budget.current}/${s.budget.soft} soft${reclaim}, ${s.budget.hard} hard limit`
+            `Budget: ${s.budget.current}/${s.budget.soft} soft, ${s.budget.hard} hard limit`
         );
     }
 
@@ -416,19 +349,15 @@ function showProcessTree() {
     outputChannel.appendLine('PID      PPID     TYPE            COMMAND');
     outputChannel.appendLine('───────  ───────  ──────────────  ────────────────────────');
 
+    // `=== true` and not a truthiness test: a snapshot written before the row
+    // carried the field has no answer to give, and an absent one has to mean
+    // 'not known to be idle' rather than being coerced into one.
     for (const proc of s.tree || []) {
         const pid = String(proc.pid).padEnd(7);
         const ppid = String(proc.ppid).padEnd(7);
         const type = (proc.type || 'unknown').padEnd(14);
-        outputChannel.appendLine(`${pid}  ${ppid}  ${type}  ${proc.cmd || ''}`);
-    }
-
-    if (s.warnings && s.warnings.length > 0) {
-        outputChannel.appendLine('');
-        outputChannel.appendLine('Warnings:');
-        for (const w of s.warnings) {
-            outputChannel.appendLine(`  ⚠ ${w}`);
-        }
+        const idle = proc.idle === true ? '  (idle)' : '';
+        outputChannel.appendLine(`${pid}  ${ppid}  ${type}  ${proc.cmd || ''}${idle}`);
     }
 
     // Recommendations
@@ -444,18 +373,16 @@ function showProcessTree() {
             outputChannel.appendLine(`  • Close ${terminals.length - 1} terminals (${terminals.length} open, 1-2 recommended)`);
         }
         if (langservers.length > 1) {
-            // Both triggers, because memory pressure stopped being the only one.
-            // A count at or above the reclaim budget sheds idle servers by
-            // itself, which is the case a user on a device with free memory
-            // actually meets: Android's phantom-process killer fires on the
-            // number of processes and reports no pressure first. Left out rather
-            // than guessed when the snapshot predates the field, the same way the
-            // budget line above handles it.
-            const reclaim = s.budget && s.budget.reclaim
-                ? `, or once the count reaches ${s.budget.reclaim}`
-                : '';
-            outputChannel.appendLine(`  • ${langservers.length} language servers active: idle ones are freed after 5 min under memory pressure${reclaim}`);
-            outputChannel.appendLine(`  • Run "VSCodroid: Kill Idle Servers" to free them now`);
+            // What frees a language server's slot is the extension that owns
+            // it, and nothing else. Killing one, by hand or by this app, was
+            // measured to bring it back under a new pid within a second, so the
+            // advice names the owner rather than a signal. The idle count says
+            // which ones are doing nothing for the user right now.
+            const idle = langservers.filter(p => p.idle === true).length;
+            outputChannel.appendLine(
+                `  • ${langservers.length} language servers running, ${idle} idle for 5 min or more. ` +
+                    'Each restarts if killed; to free its slot, disable the extension that starts it'
+            );
         }
     }
 }

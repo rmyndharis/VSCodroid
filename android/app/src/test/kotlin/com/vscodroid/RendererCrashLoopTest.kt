@@ -165,4 +165,85 @@ class RendererCrashLoopTest {
                 "state the server-gave-up page exists to replace."
         }
     }
+
+    /**
+     * And nothing but that control takes the page down.
+     *
+     * The service restarts a server that dies, and a restart announces itself
+     * through `onServerReady` exactly as a first start does. With the crash page
+     * up, the handler loaded the workbench over it unasked: one more turn of the
+     * loop the page had just promised to stop, under the memory pressure that
+     * caused it. The port still has to be recorded, or the reload the page
+     * offers has nothing to load.
+     */
+    @Test
+    fun `a server that comes back on its own does not reload over the crash page`() {
+        val callbacks = code("private fun setupServiceCallbacks()")
+        val ready = callbacks.indexOf("onServerReady")
+        val next = callbacks.indexOf("onServerError")
+        assertTrue(ready >= 0 && next > ready) {
+            "setupServiceCallbacks no longer installs the ready callback ahead of the " +
+                "error one; this case reads the span between them"
+        }
+        val handler = callbacks.substring(ready, next)
+
+        assertTrue(handler.contains("serverPort = port")) {
+            "the ready callback no longer records the port, so a later tap on the crash " +
+                "page's control finds nothing to load"
+        }
+        val guard = handler.indexOf("rendererCrashLoopShown")
+        val load = handler.indexOf("loadVSCode(")
+        assertTrue(load >= 0) { "the ready callback no longer loads the editor at all" }
+        assertTrue(guard in 0 until load) {
+            "the ready callback loads the editor without asking whether the crash page " +
+                "is up, so a server the service restarted replaces the page that " +
+                "promised not to reopen the editor unasked"
+        }
+    }
+
+    @Test
+    fun `the crash page sets the record and every asked-for page clears it`() {
+        // Control for the case above. A guard reads a flag; the flag is only
+        // worth reading if the page that refuses sets it and the pages that
+        // expect the editor to follow clear it. Left set by the loading page,
+        // the readiness after Try again would be refused too, and the user
+        // would sit on 'starting' with nothing left to press.
+        assertTrue(code("private fun showErrorPage(").contains("rendererCrashLoopShown = control == RELOAD_URL")) {
+            "showErrorPage no longer answers the record from the control it draws, so " +
+                "either the crash page never refuses a reload or the gave-up page does"
+        }
+        listOf(
+            "private fun loadVSCode(",
+            "private fun retryServerStart()",
+            // The placeholder a rebuilt WebView starts on. A renderer death that
+            // rebuilds the view over the crash page while the server is still
+            // coming up (serverPort == 0) reaches neither of the two above, and
+            // with the record left set the readiness that follows is refused:
+            // "Starting server..." for ever, with no control on it.
+            "private fun setupWebView()",
+            // Every workbench load. A picker result that lands while the crash
+            // page is up navigates here directly, and a later self-restart's
+            // readiness must not be refused over the workbench it would replace.
+            "private fun navigateToFolder(",
+        ).forEach { declaration ->
+            assertTrue(code(declaration).contains("rendererCrashLoopShown = false")) {
+                "$declaration puts up a page the editor is expected to follow without " +
+                    "clearing the record, so the next readiness is refused"
+            }
+        }
+    }
+
+    @Test
+    fun `the rebuilt view's placeholder clears the record before the crash page can set it again`() {
+        // Order inside recreateWebView: setupWebView clears, then a looping
+        // rebuild sets it again through showRendererCrashLoop. Reversed, the
+        // placeholder would clear what the crash page had just recorded.
+        val recreate = code("private fun recreateWebView()")
+        val rebuilt = recreate.indexOf("setupWebView()")
+        val refused = recreate.indexOf("showRendererCrashLoop()")
+        assertTrue(rebuilt in 0 until refused) {
+            "recreateWebView shows the crash page before it rebuilds the view, so the " +
+                "placeholder load clears the record the page just set"
+        }
+    }
 }

@@ -38,6 +38,20 @@
 //     property of the only mechanism available, and it is already true of the
 //     shell functions, so it is a ceiling rather than a regression.
 //
+// The table carries each toolchain's environment as well as its commands, and
+// that is not a convenience. RUBYLIB, GEM_PATH and JAVA_HOME reach a non-bash
+// caller only through the server process, whose environment is composed once,
+// at start; bash re-reads `toolchain-env.sh` in every shell and never notices
+// the difference. Measured on an API 37 emulator with Ruby installed from the
+// Toolchains screen while the server ran: a `"type": "process"` task found
+// `ruby` through this file and then got RUBYLIB=nil, a load path pointing into
+// Termux's prefix, and `LoadError` on `require "json"`, while the same probe
+// through bash printed the variables and loaded the library. So an environment
+// row is applied with setenv before the exec, and only for a variable the
+// caller does not already have: a parent that set GEM_HOME on purpose, Bundler
+// for a vendored bundle or a person in a terminal, keeps its value, and what
+// the table supplies is what the server was started too early to know.
+//
 // Deliberately absent, each for a reason:
 //
 //   * execvp() is never called. The target is an absolute path taken from a
@@ -126,6 +140,14 @@ int main(int argc, char **argv) {
         return EXIT_NOT_FOUND;
     }
 
+    // The matched row, kept until the whole table has been read. An environment
+    // row may sit anywhere in the file, so the exec waits for the last line
+    // rather than firing on the first match, and a writer that orders the file
+    // differently from this one costs nothing. Copies, because the buffer below
+    // is reused by every read.
+    char *target = NULL;
+    char *arg = NULL;
+
     char line[MAX_LINE];
     for (;;) {
         // Planted before every read, and gone only when fgets filled the
@@ -173,45 +195,71 @@ int main(int argc, char **argv) {
         char *tab = strchr(line, '\t');
         if (!tab) continue;
         *tab = '\0';
-        if (strcmp(line, name) != 0) continue;
 
-        char *target = tab + 1;
-        char *arg = strchr(target, '\t');
-        if (arg) *arg++ = '\0';
+        // An environment row: an empty command field, a variable name, its
+        // value, which keeps every tab after the second. The empty field is
+        // the whole of the shape: a basename is never empty, so a trampoline
+        // built before these rows existed reads one as a command nobody asked
+        // for and walks past it, and this one cannot mistake a row for the
+        // command `env`, which a toolchain is free to ship. Not overwriting is
+        // the other half of the design, stated at the top of this file.
+        if (line[0] == '\0') {
+            char *key = tab + 1;
+            char *value = strchr(key, '\t');
+            if (!value || value == key) continue;
+            *value++ = '\0';
+            setenv(key, value, 0);
+            continue;
+        }
+
+        if (target || strcmp(line, name) != 0) continue;
+
+        char *found = tab + 1;
+        char *found_arg = strchr(found, '\t');
+        if (found_arg) *found_arg++ = '\0';
 
         // Absolute only. The trampoline has no working directory it can trust:
         // it inherits whatever the caller had, so a relative target would name a
         // different file depending on where the command was run from.
-        if (target[0] != '/') {
+        if (found[0] != '/') {
             fprintf(stderr, "vscodroid: %s: toolchain entry is not an absolute path\n", name);
             fclose(f);
             return EXIT_NOT_FOUND;
         }
 
-        // loader, target, optional script argument, argv[1..], NULL.
-        char **next = calloc((size_t)argc + 4, sizeof(char *));
-        if (!next) {
+        target = strdup(found);
+        arg = found_arg ? strdup(found_arg) : NULL;
+        if (!target || (found_arg && !arg)) {
             fprintf(stderr, "vscodroid: %s: out of memory\n", name);
             fclose(f);
             return EXIT_CANNOT_EXEC;
         }
-        int n = 0;
-        next[n++] = (char *)kLoader;
-        next[n++] = target;
-        if (arg) next[n++] = arg;
-        for (int i = 1; i < argc; i++) next[n++] = argv[i];
-        next[n] = NULL;
-
-        // Closed before the exec, not left to it. Nothing here sets FD_CLOEXEC,
-        // so an open descriptor on the table would be inherited by every
-        // toolchain command this starts.
-        fclose(f);
-        execv(kLoader, next);
-        fprintf(stderr, "vscodroid: %s: cannot run %s: %s\n", name, kLoader, strerror(errno));
-        return EXIT_CANNOT_EXEC;
     }
 
+    // Closed before the exec, not left to it. Nothing here sets FD_CLOEXEC,
+    // so an open descriptor on the table would be inherited by every
+    // toolchain command this starts.
     fclose(f);
-    fprintf(stderr, "vscodroid: %s: no toolchain entry; reinstall the toolchain\n", name);
-    return EXIT_NOT_FOUND;
+
+    if (!target) {
+        fprintf(stderr, "vscodroid: %s: no toolchain entry; reinstall the toolchain\n", name);
+        return EXIT_NOT_FOUND;
+    }
+
+    // loader, target, optional script argument, argv[1..], NULL.
+    char **next = calloc((size_t)argc + 4, sizeof(char *));
+    if (!next) {
+        fprintf(stderr, "vscodroid: %s: out of memory\n", name);
+        return EXIT_CANNOT_EXEC;
+    }
+    int n = 0;
+    next[n++] = (char *)kLoader;
+    next[n++] = target;
+    if (arg) next[n++] = arg;
+    for (int i = 1; i < argc; i++) next[n++] = argv[i];
+    next[n] = NULL;
+
+    execv(kLoader, next);
+    fprintf(stderr, "vscodroid: %s: cannot run %s: %s\n", name, kLoader, strerror(errno));
+    return EXIT_CANNOT_EXEC;
 }

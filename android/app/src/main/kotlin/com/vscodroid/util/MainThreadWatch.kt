@@ -69,9 +69,9 @@ import com.vscodroid.BuildConfig
  * after it. A stat per call is the cheaper of the two risks by a wide margin.
  *
  * Sites that did NOT fire on that launch, and which an earlier version of this
- * list named: `ProcessManager.readTokenFile`, `SafStorageManager.getPersistedFolders`,
- * `writeMemoryPressure` and the WebView rebuild. The last three need an interaction
- * a cold launch does not perform, so their absence says nothing about them.
+ * list named: `ProcessManager.readTokenFile`, `SafStorageManager.getPersistedFolders`
+ * and the WebView rebuild. The last two need an interaction a cold launch does not
+ * perform, so their absence says nothing about them.
  *
  * `readTokenFile` is the one that has to be read differently, and the reason
  * matters more than the absence. Every cold launch reads that file, at the moment

@@ -52,6 +52,9 @@ class StorageSymlinkTest {
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
         every { context.cacheDir } returns cacheDir
+        // getStorageBreakdown asks Environment.getProjectsDir, which reads the
+        // shared-storage directory; a relaxed mock answers a File with no path.
+        every { context.getExternalFilesDir(null) } returns File(tmp, "external")
     }
 
     private fun link(from: File, to: File) {

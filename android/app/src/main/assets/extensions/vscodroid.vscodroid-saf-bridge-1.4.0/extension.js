@@ -554,6 +554,7 @@ const STORAGE_LABELS = {
     logs: 'Logs',
     tools: 'Toolchains and tools',
     saf_mirrors: 'Device folder mirrors',
+    projects: 'Projects',
     cache: 'Cache'
 };
 

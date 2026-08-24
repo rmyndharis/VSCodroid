@@ -87,6 +87,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import androidx.core.content.edit
 import androidx.core.net.toUri
@@ -185,6 +186,25 @@ class MainActivity : AppCompatActivity() {
     private val webViewCrashes = ArrayDeque<Long>()
 
     /**
+     * Whether the renderer-crash page is what the WebView is showing.
+     *
+     * That page tells the user the editor will not be reopened until they ask,
+     * and the one navigator that is not the user asking is `onServerReady`. A
+     * server the service restarts after a crash (an OOM kill under the same
+     * memory pressure that took the renderer is the ordinary way) announces
+     * itself to this Activity exactly as a first start does, and the handler
+     * loaded the workbench over the page unasked. [webViewCrashes] is still full
+     * at that point, so the next renderer death was refused at once; what the
+     * user saw was the loop run one more turn than the page had promised.
+     *
+     * Set and cleared where pages change: [showErrorPage] answers it from the
+     * control it is drawing, and [loadVSCode] and [retryServerStart] clear it,
+     * because each of those is either the user asking or the page they asked
+     * for going up. Main thread only, like the record above it.
+     */
+    private var rendererCrashLoopShown = false
+
+    /**
      * Whether the "the editor restarted" explanation has already been shown.
      *
      * One per Activity, which is what the case it exists for needs and what an
@@ -215,11 +235,14 @@ class MainActivity : AppCompatActivity() {
     private var watchedSafFolder: Pair<File, Uri>? = null
 
     /**
-     * The folder [openSafFolder] is currently syncing, if any.
+     * The folder [openSafFolder] was most recently asked to open and has not
+     * finished with, if any.
      *
      * `navigateToFolder` loads `/?folder=..&tkn=..` and the server redirects, so
      * two page-finished callbacks arrive per switch. Without this, the second one
      * sees a watcher that is not yet installed and starts the same sync again.
+     * Set when the open is asked for, not when its turn under [deviceFolderOpens]
+     * comes, because those two callbacks arrive before any turn could.
      *
      * Volatile for the reason [watchedSafFolder] is: the removal guard reads it
      * off the WebView's bridge thread and cannot hop to ask. A mirror read as not
@@ -228,6 +251,27 @@ class MainActivity : AppCompatActivity() {
      */
     @Volatile
     private var syncingFolder: Uri? = null
+
+    /**
+     * Held for the whole of one device folder open, from stopping the previous
+     * watcher to starting the next, failure handling included.
+     *
+     * The engine behind [safManager] keeps one document-id cache and one
+     * watcher, on the stated premise that it serves one folder at a time, and
+     * nothing here enforced that. Two opens in flight at once (an adoption of
+     * the folder a cold start reopened, overlapped by a script switching the
+     * page to another) each ran to completion, and the second start of the
+     * watcher stopped the first, so the folder watched at the end was whichever
+     * sync finished last. When that was the adoption, which never navigates,
+     * the page was left on a folder no watcher covered, and every save into it
+     * stayed in the mirror with nothing on screen saying so.
+     *
+     * A coroutine mutex rather than a refusal, because the second open is
+     * usually the one that matters: it is the folder the page is on now. An
+     * adoption that has gone stale by the time its turn comes is skipped under
+     * the lock instead; see [adoptionIsStale].
+     */
+    private val deviceFolderOpens = Mutex()
 
     /**
      * The directories this app publishes into the WebView, resolved once.
@@ -929,13 +973,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // Deciding and recording live together in applyMemoryPressure. Nothing
-        // here branches on the level, because nothing here can be run: this
-        // method cannot be invoked without an Activity, and an Activity cannot
-        // be built in a plain JVM test, so any decision left inside it is a
-        // decision no test can reach. What remains is super, one call, and two
-        // effects that need the Activity anyway.
-        val pressure = applyMemoryPressure(File(cacheDir, "tmp"), level)
+        // Nothing here branches on the level itself: memoryPressureOf maps it,
+        // and a comparison in its place is what once read every app switch as
+        // critical. This method cannot be invoked without an Activity, so what
+        // remains is super, the map, and two effects that need the Activity.
+        // Nothing is recorded for the process monitor any more; it used to
+        // read a file written here and kill idle language servers on it, which
+        // measured as reclaiming nothing (see IDLE_THRESHOLD_MS in
+        // process-monitor.js), so the log line and the page are the whole of it.
+        val pressure = memoryPressureOf(level)
         if (pressure == PRESSURE_NONE) return
         Logger.w(tag, "Memory pressure: $pressure (trim level $level)")
         webView?.evaluateJavascript(
@@ -1037,13 +1083,51 @@ class MainActivity : AppCompatActivity() {
             .setMessage(getString(R.string.saf_sync_message, treeUriLabel(uri.lastPathSegment)))
             .setCancelable(false)
             .create()
-        dialog.show()
 
-        val previouslyWatched = watchedSafFolder
+        // Marked before anything suspends, and that timing is the marker's whole
+        // job: the two page-finished callbacks a folder switch produces arrive
+        // back to back, and the second has to find this already set.
         syncingFolder = uri
 
         lifecycleScope.launch {
+            // One open at a time, in the order they were asked for, and released
+            // in the finally below however this ends. Everything that touches
+            // the engine sits between the two, the failure handlers included, so
+            // a watcher put back after a failed switch cannot interleave with
+            // the next open stopping it. A lock() cancelled while it waits is
+            // never held, so there is nothing to release on that path either.
+            deviceFolderOpens.lock()
+            // Read once the lock is held rather than when the open was asked for:
+            // the open ahead of this one is what decides which watcher a failure
+            // here has to put back.
+            val previouslyWatched = watchedSafFolder
             try {
+                // An adoption answers a page load, and the page may have moved on
+                // while this waited its turn: the open ahead of it navigated (a
+                // picked folder always does), or the workbench opened a third.
+                // Syncing the folder it was queued for would then take the only
+                // watcher off the folder on screen, which is the state adoption
+                // exists to end. Decided inside the try so the finally releases
+                // both the marker and the lock.
+                if (adoptionIsStale(
+                        navigate,
+                        watchedSafFolder?.first?.name,
+                        SafStorageManager.mirrorNameFor(
+                            openWorkspaceFolder, Environment.getSafMirrorsDir(this@MainActivity)
+                        ),
+                        safManager.getMirrorDir(uri).name,
+                    )
+                ) {
+                    Logger.i(tag, "Not syncing a device folder the page has moved on from")
+                    return@launch
+                }
+
+                // Shown once it is this open's turn rather than when it was asked
+                // for. Put up at once, a second dialog stacked over the one still
+                // reporting the first sync's progress, and the one on top named a
+                // folder nothing was copying yet.
+                dialog.show()
+
                 // NonCancellable, and for the permission alone. The grant used to be
                 // taken on the way in, so it was taken whatever happened next; a
                 // plain hop here would drop it if this activity were destroyed in
@@ -1195,6 +1279,7 @@ class MainActivity : AppCompatActivity() {
                 // mirror a no-op, which is the defect this marker exists to avoid
                 // rather than one to introduce.
                 if (syncingFolder == uri) syncingFolder = null
+                deviceFolderOpens.unlock()
             }
         }
     }
@@ -1727,7 +1812,14 @@ class MainActivity : AppCompatActivity() {
             // viewport-fit=cover enables rendering into display cutout area
             // Through dataUrlSafe, which is not cosmetic here: see its comment for
             // what the unescaped page rendered as.
-            wv.loadData(dataUrlSafe(LOADING_PAGE), "text/html", "utf-8")
+            //
+            // The placeholder promises the editor once the server answers, so the
+            // readiness that follows has to be allowed to keep that promise. This
+            // runs for a WebView rebuilt over the crash page too, and when the
+            // server is still coming up at that moment nothing else clears the
+            // record: the user would sit on "Starting server..." with no control.
+            rendererCrashLoopShown = false
+            wv.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         }
     }
 
@@ -1966,8 +2058,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupServiceCallbacks() {
         nodeService?.onServerReady = { port ->
+            // Recorded whatever the page says, so the reload the crash page
+            // offers has a port to load when the user does ask.
             serverPort = port
-            runOnUiThread { loadVSCode(port) }
+            runOnUiThread {
+                // A server that came back on its own is not the user asking, and
+                // the crash page has told them the editor stays down until they
+                // do. Loading here anyway ran the loop that page exists to stop
+                // one more turn; see rendererCrashLoopShown.
+                if (rendererCrashLoopShown) {
+                    Logger.i(tag, "Server ready again; the renderer-crash page stays up until asked")
+                } else {
+                    loadVSCode(port)
+                }
+            }
         }
         nodeService?.onServerError = { message ->
             runOnUiThread {
@@ -2083,13 +2187,29 @@ class MainActivity : AppCompatActivity() {
      * `startForegroundService` would be answered with `ALREADY_SERVING` and start
      * nothing, leaving the loading page up for ever: a control that looks like the
      * way out and is not. What has to be repeated is the page load.
-     *
-     * The sentence is written here rather than in the resource table, which is
-     * where every other sentence this app shows lives, and that is a real cost
-     * rather than a preference: nothing outside this file can translate it. It is
-     * the same corner [LOADING_PAGE] cuts, and it is worth closing.
      */
-    private fun showRendererCrashLoop() = showErrorPage(CRASH_LOOP_MESSAGE, RELOAD_URL)
+    private fun showRendererCrashLoop() =
+        showErrorPage(getString(R.string.error_renderer_crash_loop), RELOAD_URL)
+
+    /**
+     * The page shown while the server starts, in one place.
+     *
+     * Two callers load it: the first setup, and a retry from the error page.
+     * Written twice they would drift, and the second copy is the one a user sees
+     * only after something has already gone wrong.
+     *
+     * A function rather than a constant because the sentence in it comes from
+     * the resource table, which a constant cannot reach: as a literal it was the
+     * first screen of every cold start and the one no translation could touch.
+     * Escaped like the error page's message, since a translation is free to
+     * carry an ampersand or a bracket.
+     */
+    private fun loadingPage(): String =
+        """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
+           <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
+           display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+           <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
+           <p>${escapeHtml(getString(R.string.server_starting))}</p></div></body></html>"""
 
     /**
      * The page both terminal states put up, with the one control that changes the
@@ -2115,6 +2235,11 @@ class MainActivity : AppCompatActivity() {
         // afterwards should be told it is. recreateWebView clears this for the
         // same reason when it throws the loaded page away.
         workbenchLoaded = false
+        // Answered from the control rather than by each caller, so the two pages
+        // cannot drift apart on it: the one whose control is the reload is the
+        // one that refuses an unasked reload, and the gave-up page, whose control
+        // restarts the server, needs the readiness that follows to load.
+        rendererCrashLoopShown = control == RELOAD_URL
         val retry = getString(R.string.error_server_retry)
         webView?.loadDataWithBaseURL(
             null,
@@ -2140,7 +2265,10 @@ class MainActivity : AppCompatActivity() {
      * again anyway. Only the start is missing, and only the start is sent.
      */
     private fun retryServerStart() {
-        webView?.loadData(dataUrlSafe(LOADING_PAGE), "text/html", "utf-8")
+        // The loading page promises the editor once the server answers, and the
+        // readiness that follows has to be allowed to keep that promise.
+        rendererCrashLoopShown = false
+        webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this
         // throws, so a swallowed refusal leaves the editor saying "starting" for
@@ -2155,6 +2283,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadVSCode(port: Int, folderPath: String? = null) {
+        // Every route here is the user asking for the editor or the editor going
+        // up over a page that never refused it, so the refusal is over. The one
+        // caller that is neither checks the flag before calling; see onServerReady.
+        rendererCrashLoopShown = false
         initBridge(port)
         // onServerReady routes a restart through here without a folder. Falling back
         // to the folder already on screen keeps the user's workspace instead of
@@ -2542,6 +2674,11 @@ class MainActivity : AppCompatActivity() {
         token: String? = nodeService?.getConnectionToken(),
     ) {
         val wv = webView ?: return
+        // Every workbench load passes through here, and a workbench on screen is
+        // a page that never refused a reload: a picker result landing while the
+        // crash page is up navigates here directly, and a later self-restart's
+        // readiness must not be refused over the workbench it would replace.
+        rendererCrashLoopShown = false
         // Seeded here and not only from the page-loaded callback. This method is
         // the one that knows the folder before the page exists, and between
         // loadUrl below and onPageFinished the workbench is already fetching
@@ -3466,28 +3603,37 @@ class MainActivity : AppCompatActivity() {
             .setMessage(getString(R.string.crash_message, preview))
             .setPositiveButton(getString(R.string.crash_dismiss)) { _, _ -> CrashReporter.clearCrashLogs() }
             .setNeutralButton(getString(R.string.crash_copy_report)) { _, _ ->
-                val report = CrashReporter.generateBugReport(this)
-                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-                val clip = android.content.ClipData.newPlainText("VSCodroid Bug Report", report)
-                // Marked sensitive before it goes anywhere, because of what this
-                // clip holds: [CrashReporter.generateBugReport] gathers the last
-                // 200 lines of server output and the text of the three most recent
-                // crash logs. Android 13 and later draw a preview of whatever is
-                // copied, so without this a crashing session's log is rendered
-                // over the editor for anyone looking at the screen, and the
-                // clipboard is readable by every app the user pastes into next.
-                // The preview is suppressed; the paste is unaffected.
-                //
-                // Deliberately not applied to the editor's own copy in
-                // [ClipboardBridge]. There the preview confirms what was copied,
-                // which is the whole affordance, and the text is a line the user
-                // selected rather than a log they never read.
-                clip.description.extras = android.os.PersistableBundle().apply {
-                    putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+                lifecycleScope.launch {
+                    // Off the main thread: generateBugReport reads three crash files
+                    // and all of server.log under the lock a rotation holds, and a
+                    // button fires on the main thread, which is the one screen shown
+                    // after a crash. The clipboard write, the sensitive flag and the
+                    // toast come back to Main with the result.
+                    val report = withContext(Dispatchers.IO) {
+                        CrashReporter.generateBugReport(this@MainActivity)
+                    }
+                    val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                    val clip = android.content.ClipData.newPlainText("VSCodroid Bug Report", report)
+                    // Marked sensitive before it goes anywhere, because of what this
+                    // clip holds: [CrashReporter.generateBugReport] gathers the last
+                    // 200 lines of server output and the text of the three most recent
+                    // crash logs. Android 13 and later draw a preview of whatever is
+                    // copied, so without this a crashing session's log is rendered
+                    // over the editor for anyone looking at the screen, and the
+                    // clipboard is readable by every app the user pastes into next.
+                    // The preview is suppressed; the paste is unaffected.
+                    //
+                    // Deliberately not applied to the editor's own copy in
+                    // [ClipboardBridge]. There the preview confirms what was copied,
+                    // which is the whole affordance, and the text is a line the user
+                    // selected rather than a log they never read.
+                    clip.description.extras = android.os.PersistableBundle().apply {
+                        putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+                    }
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(this@MainActivity, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
+                    CrashReporter.clearCrashLogs()
                 }
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(this, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
-                CrashReporter.clearCrashLogs()
             }
             // The third exit, and the one most people take. Back and a tap outside
             // cancel the dialog without running either button, and the guard above
@@ -3578,20 +3724,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LAST_FOLDER = "last_workspace_folder"
 
         /**
-         * The page shown while the server starts, in one place.
-         *
-         * Two callers load it now: the first setup, and a retry from the error
-         * page. Written twice they would drift, and the second copy is the one a
-         * user sees only after something has already gone wrong.
-         */
-        private const val LOADING_PAGE =
-            """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
-               <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
-               display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-               <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
-               <p>Starting server...</p></div></body></html>"""
-
-        /**
          * The control on the renderer-crash page, recognised by [bootstrapClient].
          *
          * Its own scheme-and-host rather than [RETRY_URL] because the two pages
@@ -3601,12 +3733,6 @@ class MainActivity : AppCompatActivity() {
          * never reaches `loadVSCode`, so the real client is not installed.
          */
         private const val RELOAD_URL = "vscodroid://reload-editor"
-
-        /** What the renderer-crash page says. See [showRendererCrashLoop]. */
-        private const val CRASH_LOOP_MESSAGE =
-            "The editor closed unexpectedly several times in a row, so VSCodroid " +
-                "stopped reopening it. Your files and the server are untouched. " +
-                "Closing some other apps first makes this less likely."
 
         /**
          * Every mirror this process has put a watcher on, whether or not one is
@@ -3669,9 +3795,9 @@ internal const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
  */
 private const val FORCED_REMOVAL_CONFIRM_MS = 45_000L
 
-// Severities the process monitor understands. Words rather than numbers so that
-// nothing downstream is tempted to compare them with >=, which is the defect
-// this replaced.
+// Severities a trim level maps to, logged and handed to the page. Words rather
+// than numbers so that nothing downstream is tempted to compare them with >=,
+// which is the defect this replaced.
 internal const val PRESSURE_NONE = "none"
 internal const val PRESSURE_MODERATE = "moderate"
 internal const val PRESSURE_CRITICAL = "critical"
@@ -3685,8 +3811,9 @@ internal const val PRESSURE_CRITICAL = "critical"
  * describe memory at all: it means "your UI is no longer visible" and
  * arrives on every single backgrounding, on a device with gigabytes free.
  * A `>=` comparison therefore read an ordinary app switch as worse than a
- * genuine critical warning, and every language server idle for five minutes
- * (which, after five minutes in another app, is all of them) was killed.
+ * genuine critical warning, and while the process monitor still killed idle
+ * language servers on that word, every one of them (which, after five minutes
+ * in another app, is all of them) was killed on every backgrounding.
  *
  * So this maps rather than compares, and the next constant Android adds
  * cannot clear a threshold by accident. Raising the number would have looked
@@ -3694,17 +3821,16 @@ internal const val PRESSURE_CRITICAL = "critical"
  */
 @Suppress("DEPRECATION")
 internal fun memoryPressureOf(level: Int): String = when (level) {
-    // Every level that already shed idle work keeps doing so. Critical while
-    // running, and the cached levels, which all mean the system is reclaiming
-    // and this process is a candidate; shrinking our own footprint there is
-    // what keeps the app alive rather than merely responsive.
+    // Critical while running, and the cached levels, which all mean the
+    // system is reclaiming and this process is a candidate; the page is told
+    // so it can shrink its own footprint.
     TRIM_MEMORY_RUNNING_CRITICAL,
     TRIM_MEMORY_BACKGROUND,
     TRIM_MEMORY_MODERATE,
     TRIM_MEMORY_COMPLETE -> PRESSURE_CRITICAL
 
-    // Reported, and deliberately not enough to kill anything, exactly as
-    // before: 10 sat below the old threshold of 15.
+    // Reported as moderate, exactly as before: 10 sat below the old
+    // threshold of 15.
     TRIM_MEMORY_RUNNING_LOW -> PRESSURE_MODERATE
 
     // TRIM_MEMORY_UI_HIDDEN (20) lands here, with TRIM_MEMORY_RUNNING_MODERATE
@@ -3712,79 +3838,6 @@ internal fun memoryPressureOf(level: Int): String = when (level) {
     // hint Android has. This is the only line that changes behaviour, and it
     // changes it for exactly the value that was wrong.
     else -> PRESSURE_NONE
-}
-
-/**
- * Decides what a trim level means and records it for the process monitor.
- *
- * Deciding and recording are one unit, and splitting them is what made this
- * untestable: the decision sat in `onTrimMemory`, which cannot be invoked
- * without an Activity, while the recording sat in a private method that reached
- * `this.cacheDir` for the one thing it needed. Neither half could be reached, so
- * the wire between the pinned predicate and the file the monitor reads was
- * covered by nothing, and replacing [memoryPressureOf] here with a `>=`
- * comparison, the exact defect this whole path exists to prevent, left the
- * entire suite green.
- *
- * Takes the directory rather than reaching for one, so the caller supplies what
- * it already has and a test supplies a temporary one.
- *
- * Only [PRESSURE_CRITICAL] is recorded, and the milder severity is deliberately
- * not. The file is a one-shot signal: `process-monitor.js` reads it once per
- * ten-second scan, unlinks it whatever it says, and acts only on `critical`
- * (`KILL_ON_PRESSURE`). Nothing there or anywhere else consumes `moderate`, so
- * writing it achieved nothing and could destroy something: the last writer wins,
- * so a `TRIM_MEMORY_RUNNING_LOW` arriving after a `TRIM_MEMORY_RUNNING_CRITICAL`
- * that the monitor had not yet read replaced the signal with a word the monitor
- * ignores, and that pressure episode reclaimed no idle language server.
- *
- * The severity is still returned for both, so the caller's log and the callback
- * into the workbench are unchanged; only the write is narrowed.
- *
- * @return the severity, so the caller can log it and notify the workbench,
- *   both of which need the Activity and neither of which decides anything.
- */
-internal fun applyMemoryPressure(tmpDir: File, level: Int): String {
-    val pressure = memoryPressureOf(level)
-    if (pressure == PRESSURE_CRITICAL) writeMemoryPressure(tmpDir, pressure)
-    return pressure
-}
-
-/**
- * Writes the severity where `process-monitor.js` looks for it.
- *
- * A severity, not Android's trim level. The monitor on the other end has no
- * business knowing Android's numbering, and when it did, it compared values
- * that are not ordered by severity.
- *
- * The directory is created rather than assumed, which is the same rule
- * `ProcessManager.startServer` already applies to this exact path. It is
- * `cacheDir/tmp`, and the platform deletes an app's cache directory under
- * storage pressure; the only three places that build it again are a server
- * start, first-run setup, and the cache-clearing command. So on a device short
- * of space the directory can go while the server is still running, and every
- * write after that failed. `process-monitor.js` resolved its path once at start
- * and went on finding nothing, so the idle-language-server kill never fired
- * again for the life of that server: the channel that exists to keep this app
- * under the memory and phantom-process ceilings went quiet on exactly the
- * devices it was built for.
- *
- * Failure is swallowed: the file is a hint for a monitor, and losing it is
- * worth less than the memory callback it is reporting on. Reported at warning
- * level rather than debug, because `Logger.d` is compiled out of a release
- * build, so a broken channel left no trace at all where it matters.
- */
-internal fun writeMemoryPressure(tmpDir: File, pressure: String) {
-    try {
-        if (!tmpDir.isDirectory) tmpDir.mkdirs()
-        File(tmpDir, "vscodroid-memory-pressure").writeText(pressure)
-    } catch (e: Exception) {
-        // Not the Activity's tag: the application class calls this too, and the
-        // write most likely to fail is the one that happens after the Activity
-        // is gone. Naming a destroyed component sends the reader to the wrong
-        // lifecycle.
-        Logger.w("MemoryPressure", "Failed to write memory pressure: ${e.message}")
-    }
 }
 
 /**
@@ -4204,6 +4257,33 @@ internal fun workbenchUrl(port: Int, folderPath: String, token: String?): String
  */
 internal fun shouldRestorePreviousWatcher(previousUri: String?, failedUri: String): Boolean =
     previousUri != null && previousUri != failedUri
+
+/**
+ * Whether an adoption that waited its turn behind another open should be skipped.
+ *
+ * Opens are serialised, and an adoption is a reply to a page load rather than a
+ * request: it exists to put the watcher on the folder the page is showing. By
+ * the time its turn comes the page may be elsewhere, because the open ahead of
+ * it navigated (a picked folder always does) or because the workbench moved on
+ * again, and syncing the folder it was queued for would then take the only
+ * watcher off the folder on screen, the state adoption exists to end. The open
+ * ahead may also have watched this same folder already, and a second sync under
+ * a fresh stop would only re-copy what is there.
+ *
+ * A requested open (`navigate` true) is never stale: it navigates to its folder
+ * when it finishes, so the page is on it by construction, and reopening the
+ * folder already open is how a user pulls down fresh content.
+ *
+ * Mirror names rather than URIs, for the reason [shouldRestorePreviousWatcher]
+ * compares text, and because the name is what the removal guard and the
+ * adoption lookup already compare.
+ */
+internal fun adoptionIsStale(
+    navigate: Boolean,
+    watchedMirror: String?,
+    openMirror: String?,
+    mirror: String,
+): Boolean = !navigate && (watchedMirror == mirror || openMirror != mirror)
 
 /**
  * The remembered workspace folder, or null when reopening it is not safe.

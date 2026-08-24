@@ -25,10 +25,15 @@ import java.io.File
  * The secondary side bar is upstream's home for the chat view, its default is
  * `visibleInWorkspace`, and on a phone it takes roughly 45 percent of the width,
  * beside whatever the walkthrough opened, which then wraps to one word per line.
- * The provider the view exists for is not in this build: the Copilot extension
- * is pruned from the server tree, so the width buys nothing back.
+ * The provider the view exists for does ship: the Copilot extension is in the
+ * server tree and `verify-server-tree.py` refuses a tree without it. So the
+ * default is about width, not an empty view: the walkthrough is what a first
+ * screen is for, and the chat view is a tap away for whoever wants it. This
+ * file once said the extension was pruned, which would have sent anyone
+ * weighing the default off after a pruning step that does not exist, so the
+ * premise is pinned by a case of its own.
  *
- * Three things have to hold together, and this file covers all three because
+ * Four things have to hold together, and this file covers all four because
  * only the first of them used to, while the bar stayed open on the device.
  *
  * 1. A clean install carries `workbench.secondarySideBar.defaultVisibility`.
@@ -45,6 +50,8 @@ import java.io.File
  *    read the record and never consult the default again. The bundled welcome
  *    extension corrects the record once per workspace; that call is the third
  *    check here.
+ * 4. The view has a provider. Read from the gate that holds the shipped tree to
+ *    it rather than from the tree, which a JVM run need not have fetched.
  *
  * Runs the real writer rather than asserting on the string it embeds, the way
  * `PythonLocatorDefaultTest` and `TerminalShellPathTest` do: the point is the
@@ -88,8 +95,34 @@ class FirstRunEditorDefaultsTest {
         val written = settingsText()
         assertTrue(
             written.contains(""""workbench.secondarySideBar.defaultVisibility": "hidden""""),
-            "the first screen gives a large share of a phone-width window to a chat view " +
-                "whose provider is pruned from this build:\n$written",
+            "the first screen gives roughly 45 percent of a phone-width window to the " +
+                "chat view, beside the walkthrough it opened with:\n$written",
+        )
+    }
+
+    /**
+     * The premise the reason above rests on. If Copilot stops shipping the bar
+     * is empty and the reason for hiding it is a different one, which is worth
+     * being told by a red case rather than by a reader who trusted the comment.
+     */
+    @Test
+    fun `the chat view this default hides has a provider`() {
+        val gate = File("../../scripts/verify-server-tree.py")
+        check(gate.isFile) {
+            "${gate.absolutePath} not found; a case reading it would pass by looking at nothing"
+        }
+
+        // The REQUIRED list alone, not the whole file: the gate also names the
+        // extension's licence path outside that list, in a read that is not a
+        // failure when the file is absent, and the self-test names it too. A
+        // whole-file search stayed green with both REQUIRED entries deleted.
+        val required = gate.readText().substringAfter("REQUIRED = [", "").substringBefore("\n]")
+        assertTrue(required.isNotEmpty()) { "verify-server-tree.py no longer has a REQUIRED list" }
+        assertTrue(
+            required.contains("\"extensions/copilot/node_modules/@github/copilot/sdk/index.js\""),
+            "the server tree is no longer required to carry the Copilot extension, so " +
+                "the chat view has no provider and the reason this file gives for hiding " +
+                "the secondary side bar is stale",
         )
     }
 

@@ -16,12 +16,13 @@ import java.security.MessageDigest
  *
  * `app/build.gradle.kts` names the repository paths to copy. [Notices.BUNDLED]
  * names the asset basenames to open. `MainActivity.showLicensesDialog` opens
- * them. Rename `docs/LEGAL_NOTICES.md`, or drop a `from(...)` line, and the
- * build stays green, the APK still installs, and the licences dialog quietly
- * comes up half empty on a device. There is no compiler relationship between the
- * three, which is what this test supplies. Nor is there one behind the buttons
- * that open those dialogs, so the calls are held here as well: a document nothing
- * on screen reaches is packaged and undelivered.
+ * them. Rename `docs/LEGAL_NOTICES.md`, or drop a line from the task's document
+ * list, and the build stays green, the APK still installs, and the licences
+ * dialog quietly comes up half empty on a device. There is no compiler
+ * relationship between the three, which is what this test supplies. Nor is
+ * there one behind the buttons that open those dialogs, so the calls are held
+ * here as well: a document nothing on screen reaches is packaged and
+ * undelivered.
  *
  * It supplies it only because the build script is declared an input to the test
  * task. These tests read `build.gradle.kts` through the file system, which Gradle
@@ -43,29 +44,35 @@ class NoticesTest {
     private val buildScript = File("build.gradle.kts")
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
+    /** The body of the bundleNotices task, ended on a closing brace in the first column. */
+    private fun taskBody(): String {
+        val task = buildScript.readText().substringAfter("(\"bundleNotices\") {", "")
+        assertFalse(task.isEmpty(), "bundleNotices task is gone from build.gradle.kts")
+        return task.substringBefore("\n}")
+    }
+
     /**
-     * The `from(File(repoRoot, "..."))` arguments of the bundleNotices task.
+     * The entries of the bundleNotices task's `val documents = listOf(...)`.
      *
      * Found by name, not by task type. The type has an assertion of its own
      * below, and a parse anchored on it would answer a change of type with
      * "the task is gone", which is a different defect and the wrong one to fix.
      *
-     * Anchored to the start of a line, with only whitespace allowed in front.
-     * `build.gradle.kts` is Kotlin, so `//` disables a line here exactly as it
-     * does anywhere else, and a substring search reads a commented-out
-     * `from(...)` as a document the build copies. That is the shape this whole
-     * file exists to refuse: the list below would go on agreeing with
-     * [Notices.BUNDLED] while the Sync copied one document fewer and the dialog
-     * came up short on a device. Every `from(...)` in the task begins its own
-     * line, so the anchor costs nothing.
+     * Each entry is anchored to the start of a line, with only whitespace
+     * allowed in front. `build.gradle.kts` is Kotlin, so `//` disables a line
+     * here exactly as it does anywhere else, and a substring search reads a
+     * commented-out entry as a document the build copies. That is the shape
+     * this whole file exists to refuse: the list below would go on agreeing
+     * with [Notices.BUNDLED] while the Sync copied one document fewer and the
+     * dialog came up short on a device. Every entry begins its own line, so
+     * the anchor costs nothing.
      */
     private fun copiedPaths(): List<String> {
-        val script = buildScript.readText()
-        val task = script.substringAfter("(\"bundleNotices\") {", "")
-        assertFalse(task.isEmpty(), "bundleNotices task is gone from build.gradle.kts")
-        val body = task.substringBefore("\n}")
-        return Regex("""(?m)^\s*from\(File\(repoRoot,\s*"([^"]+)"\)\)""")
-            .findAll(body).map { it.groupValues[1] }.toList()
+        val list = Regex("""(?m)^\s*val documents = listOf\(([^)]*)\)""")
+            .find(taskBody())?.groupValues?.get(1)
+        assertNotNull(list, "bundleNotices no longer lists its documents as `val documents = listOf(...)`")
+        return Regex("""(?m)^\s*"([^"]+)",?\s*$""")
+            .findAll(list!!).map { it.groupValues[1] }.toList()
     }
 
     @Test
@@ -88,11 +95,19 @@ class NoticesTest {
     @Test
     fun `what the copy writes is packaged, and something makes the copy run`() {
         val script = buildScript.readText()
-        val body = script.substringAfter("(\"bundleNotices\") {", "")
-            .substringBefore("\n}")
+        val body = taskBody()
         val destination = Regex("""(?m)^\s*into\(layout\.buildDirectory\.dir\("([^"]+)"\)\)""")
             .find(body)?.groupValues?.get(1)
         assertNotNull(destination, "bundleNotices names no destination directory")
+
+        // The list is what the task copies. Parsing the list and not the copy
+        // would let the two part company: a `from(...)` naming something else
+        // leaves every assertion on the list green over an APK that ships it.
+        assertTrue(
+            Regex("""(?m)^\s*from\(\s*documents\s*\)""").containsMatchIn(body),
+            "bundleNotices does not copy its `documents` list, so what this file " +
+                "checks is not what the APK carries."
+        )
 
         // Copying the documents is not packaging them. The destination has to be
         // an assets source directory or they land in build/ and stop there,
@@ -148,6 +163,36 @@ class NoticesTest {
                 .containsMatchIn(script),
             "bundleNotices is not a Sync, so a document removed or renamed stays " +
                 "in the notices directory and ships from any incremental build."
+        )
+    }
+
+    @Test
+    fun `a document that is missing fails the copy rather than shortening it`() {
+        // Sync and Copy both skip a from() that does not exist without a word,
+        // so a checkout with a licence text moved aside reaches a signed AAB
+        // with every packaging gate green, and Notices.readOne opens that
+        // entry of the chooser on its missing-document marker. The sha256 pins
+        // below would say so, but the test task is not in the packaging graph:
+        // a local bundleRelease never runs them. The guard has to be in the
+        // task.
+        //
+        // Read as text, like everything else here: a unit test cannot execute
+        // a build-script task. What is asserted is that the task's own action
+        // walks the same list the copy reads and throws on a member that is
+        // not a file. Line-anchored, because a commented-out guard is no guard.
+        val body = taskBody()
+        val guard = Regex("""(?m)^\s*doFirst\s*\{""").find(body)
+        assertNotNull(guard, "bundleNotices has no doFirst, so a missing source is skipped silently")
+        val action = body.substring(guard!!.range.first)
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*documents\.filterNot\s*\{\s*it\.isFile\s*}""").containsMatchIn(action),
+            "bundleNotices' doFirst does not test each of `documents` with isFile, so " +
+                "a missing one is not what it refuses"
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*throw GradleException\(""").containsMatchIn(action),
+            "bundleNotices' doFirst throws nothing, so a missing document is reported " +
+                "at most as a log line and the build stays green"
         )
     }
 

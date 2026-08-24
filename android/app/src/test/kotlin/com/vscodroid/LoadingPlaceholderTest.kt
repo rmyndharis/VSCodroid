@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -91,6 +92,38 @@ class LoadingPlaceholderTest {
         // the dark background is the whole point of showing it at all.
         assertTrue(source.contains("background:#1e1e1e")) {
             "the loading page no longer sets the dark background it exists to show"
+        }
+    }
+
+    /**
+     * The sentence on it, and the one on the renderer-crash page, are resources.
+     *
+     * A literal written into Kotlin is the same in every locale for ever, and
+     * these two were the only sentences the app showed that way: the first
+     * screen of every cold start, and the page telling the user why the editor
+     * stopped coming back. Both pages are assembled from markup in this file,
+     * which is why the gate over widget calls never saw them.
+     */
+    @Test
+    fun `the sentences on both placeholder pages come from the resource table`() {
+        val code = SourceScan.withoutComments(source)
+        val strings = File("src/main/res/values/strings.xml").readText()
+
+        listOf("server_starting", "error_renderer_crash_loop").forEach { name ->
+            assertTrue(strings.contains("<string name=\"$name\">")) {
+                "strings.xml no longer defines $name, so the page interpolating it " +
+                    "cannot be built"
+            }
+            assertTrue(code.contains("R.string.$name")) {
+                "MainActivity.kt no longer reads R.string.$name; the sentence has gone " +
+                    "back to being a literal, or the page has lost it"
+            }
+        }
+        listOf("Starting server", "closed unexpectedly").forEach { words ->
+            assertFalse(code.contains("\"$words") || code.contains(" $words")) {
+                "'$words' is written into MainActivity.kt as a literal again, where no " +
+                    "translation can reach it"
+            }
         }
     }
 }

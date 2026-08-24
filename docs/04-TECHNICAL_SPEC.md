@@ -370,6 +370,9 @@ and has never heard of the variable. `child_process.exec()` and make's default r
 
 **`VSCODROID_EXEC_TABLE` answers exactly the cases `BASH_ENV` cannot.** It names a tab-separated
 table mapping a toolchain command to the absolute path of the binary or script that implements it,
+plus one row per manifest environment variable (`\t<variable>\t<value>`, an empty command field)
+that the trampoline applies with `setenv` for any variable the caller does not already have, so a
+toolchain installed while the server runs reaches tasks and `make` without a restart. Both are
 written by `ToolchainManager.regenerateExecTableLocked` beside the env file. The reader is
 `libexec-trampoline.so`, a small C program in `nativeLibraryDir` that
 `scripts/build-exec-trampoline.sh` compiles: `usr/libexec/tcbin` holds one symlink per command

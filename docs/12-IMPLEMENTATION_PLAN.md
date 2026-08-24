@@ -1548,7 +1548,7 @@ android/app/src/main/assets/
     ├── bradlc.vscode-tailwindcss/
     ├── vscodroid.vscodroid-welcome-1.0.0/
     ├── vscodroid.vscodroid-saf-bridge-1.0.0/
-    └── vscodroid.vscodroid-process-monitor-1.1.0/
+    └── vscodroid.vscodroid-process-monitor-1.2.0/
 ```
 
 **Implementation steps**:

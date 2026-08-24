@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -38,6 +39,16 @@ import java.io.File
  *    navigated to without waiting for a hop`; nothing else.
  *  - returning `segment` instead of `tail` from [treeUriLabel] reddens `the
  *    placeholder name is the folder, not the whole tree path`.
+ *  - deleting the `deviceFolderOpens.lock()` line reddens `device folder opens
+ *    run one at a time`; moving `dialog.show()` back above it reddens that case
+ *    and `a stale adoption is decided under the lock and before the watcher is
+ *    touched`, and moving the `adoptionIsStale` decision above it reddens the
+ *    second alone.
+ *
+ * The opens are serialised as well as hopped, and the cases at the end read that
+ * off the same body. Two syncs running through the one engine at once ended with
+ * its single watcher on whichever finished last, and for an adoption, which never
+ * navigates, that could be a folder the page had already left.
  */
 class DeviceFolderOpenThreadTest {
 
@@ -300,5 +311,94 @@ class DeviceFolderOpenThreadTest {
         assertEquals("primary:", treeUriLabel("primary:"))
         assertEquals("", treeUriLabel(""))
         assertEquals("", treeUriLabel(null))
+    }
+
+    @Test
+    fun `device folder opens run one at a time`() {
+        val lock = opened.indexOfFirst { it.contains("deviceFolderOpens.lock()") }
+        val unlock = opened.indexOfLast { it.contains("deviceFolderOpens.unlock()") }
+        val shown = opened.indexOfFirst { it.contains("dialog.show()") }
+        val marked = opened.indexOfFirst { it.contains("syncingFolder = uri") }
+        val cleanup = opened.indexOfLast { it.contains("} finally {") }
+
+        assertTrue(lock >= 0) {
+            "openSafFolder no longer takes the open lock, so two syncs can run through " +
+                "the one engine at once and its single watcher ends on whichever " +
+                "finished last, which for an adoption can be a folder the page has left"
+        }
+        assertTrue(unlock > cleanup && cleanup > 0) {
+            "the lock is not released in the finally, so a failed or cancelled open " +
+                "holds it for the life of the activity and no folder can be opened again"
+        }
+        assertTrue(shown > lock) {
+            "the progress dialog is shown before this open's turn, stacked over the one " +
+                "still reporting the previous sync"
+        }
+        assertTrue(marked in 0 until lock) {
+            "the syncing marker is set after the lock rather than before it. The two " +
+                "page-finished callbacks a switch produces arrive before any turn could, " +
+                "and the second has to find it set or it queues the same sync again"
+        }
+    }
+
+    @Test
+    fun `a stale adoption is decided under the lock and before the watcher is touched`() {
+        val lock = opened.indexOfFirst { it.contains("deviceFolderOpens.lock()") }
+        val decided = opened.indexOfFirst { it.contains("adoptionIsStale(") }
+        val previous = opened.indexOfFirst { it.contains("previouslyWatched = watchedSafFolder") }
+        val shown = opened.indexOfFirst { it.contains("dialog.show()") }
+        val stopped = opened.indexOfFirst { it.contains("safManager.stopFileWatcher()") }
+
+        assertTrue(decided > lock && lock >= 0) {
+            "the adoption is judged before its turn, against a page that may still move " +
+                "while it waits, or not judged at all"
+        }
+        assertTrue(decided < shown && decided < stopped) {
+            "a stale adoption gets as far as showing its dialog or stopping the watcher " +
+                "on the folder the page is actually on"
+        }
+        assertTrue(previous > lock) {
+            "the previous watcher is read when the open is asked for rather than when " +
+                "its turn comes, so a failure restores the folder that was watched " +
+                "before the open ahead of it ran"
+        }
+    }
+
+    /**
+     * The decision itself, which is pure and so needs no reading of the source.
+     *
+     * Mirror names because that is what a JVM test can supply: `android.net.Uri`
+     * can be neither built nor mocked here, which is the same reason
+     * `shouldRestorePreviousWatcher` compares text.
+     */
+    @Test
+    fun `an adoption whose folder is on screen and unwatched runs`() {
+        assertFalse(adoptionIsStale(navigate = false, watchedMirror = null, openMirror = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+        assertFalse(adoptionIsStale(navigate = false, watchedMirror = "0f0f0f0f0f0f", openMirror = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+    }
+
+    @Test
+    fun `an adoption is skipped once the page has moved to another folder`() {
+        // The open ahead navigated, or the workbench opened a third folder. Syncing
+        // now would take the only watcher off the folder on screen.
+        assertTrue(adoptionIsStale(navigate = false, watchedMirror = null, openMirror = "0f0f0f0f0f0f", mirror = "a1b2c3d4e5f6"))
+        // A page on no mirror at all is not on this one either.
+        assertTrue(adoptionIsStale(navigate = false, watchedMirror = null, openMirror = null, mirror = "a1b2c3d4e5f6"))
+    }
+
+    @Test
+    fun `an adoption is skipped when the folder is already watched`() {
+        // The open ahead was for the same folder: a second sync under a fresh stop
+        // would only re-copy what is there.
+        assertTrue(adoptionIsStale(navigate = false, watchedMirror = "a1b2c3d4e5f6", openMirror = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+    }
+
+    @Test
+    fun `a requested open is never stale`() {
+        // It navigates to its folder when it finishes, so the page is on it by
+        // construction, and reopening the folder already open is how a user pulls
+        // fresh content down.
+        assertFalse(adoptionIsStale(navigate = true, watchedMirror = "a1b2c3d4e5f6", openMirror = "0f0f0f0f0f0f", mirror = "a1b2c3d4e5f6"))
+        assertFalse(adoptionIsStale(navigate = true, watchedMirror = null, openMirror = null, mirror = "a1b2c3d4e5f6"))
     }
 }

@@ -54,12 +54,14 @@ job-level `if:` on one job. Deleting that line is a one-character-looking edit
 whose consequence is invisible until a dispatched run has published.
 
 So: in a workflow declaring `workflow_dispatch` alongside at least one other
-trigger, a job whose token can write to this repository must be gated on a
-specific `github.event_name`, and that gate must not name `workflow_dispatch`
-at all. An allowlist, in other words, and `!= 'workflow_dispatch'` is refused
-even though it is correct as written: a denylist admits the next trigger added
-to the workflow without anyone deciding to, and this is the line whose quiet
-loosening the rule exists to prevent.
+trigger, a job whose token can write to this repository must be gated on
+`github.event_name == '<event>'`, that gate must not name `workflow_dispatch`
+at all, and no `||` may stand beside the test. An allowlist, in other words,
+and `!= 'workflow_dispatch'` is refused even though it is correct as written:
+a denylist admits the next trigger added to the workflow without anyone
+deciding to, and this is the line whose quiet loosening the rule exists to
+prevent. `!= 'schedule'` and `== 'push' || true` are refused for the same
+reason; both name the event and neither holds a dispatched run back.
 
 The subject is the token scope rather than the step, because a rule that
 recognised publishing by naming `softprops/action-gh-release`, or by grepping
@@ -112,6 +114,26 @@ except ModuleNotFoundError:
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
 PINNED = re.compile(r"@[0-9a-f]{40}$")
+# The one shape of gate the fourth rule accepts: the event named, by equality.
+ALLOWLIST_GATE = re.compile(r"github\.event_name\s*==\s*'[a-z_]+'")
+
+
+def top_level_or(expr: str) -> bool:
+    """Whether `||` appears in `expr` outside every pair of parentheses.
+
+    `||` binds loosest of all in GitHub's expression language, so one outside
+    the parentheses turns whatever allowlist stands beside it into an
+    alternative to it: `github.event_name == 'push' || true` names the event
+    and admits everything. Inside parentheses it is somebody else's disjunction
+    (`== 'push' && (startsWith(a) || startsWith(b))`) and the allowlist still
+    holds over the whole. Innermost groups are removed until none are left,
+    which is enough because the language has no other bracketing.
+    """
+    while True:
+        inner = re.sub(r"\([^()]*\)", "", expr)
+        if inner == expr:
+            return "||" in expr
+        expr = inner
 
 
 def steps_of(doc):
@@ -196,23 +218,68 @@ def ungated_writers(path, doc):
             continue
         writers += 1
         gate = str(job.get("if") or "")
-        # The event has to be named, and workflow_dispatch must not appear at
-        # all -- an allowlist (`== 'push'`), never a denylist
-        # (`!= 'workflow_dispatch'`). Both read as correct today and they part
-        # company the moment a third trigger is added above: the allowlist keeps
-        # refusing everything it does not name, while the denylist admits the
-        # new one silently, which is the shape of edit this rule exists for.
-        if "github.event_name" not in gate or "workflow_dispatch" in gate:
+        # The event has to be named by equality, workflow_dispatch must not
+        # appear at all, and no `||` may stand beside the test -- an allowlist
+        # (`== 'push'`), never a denylist (`!= 'workflow_dispatch'`, or
+        # `!= 'schedule'`, which names the event and holds nothing back). Both
+        # read as correct today and they part company the moment a third
+        # trigger is added above: the allowlist keeps refusing everything it
+        # does not name, while the denylist admits the new one silently, which
+        # is the shape of edit this rule exists for. It was a substring test
+        # for `github.event_name`, which `!= 'schedule'` and `== 'push' || true`
+        # both satisfy while admitting a dispatched run.
+        if (not ALLOWLIST_GATE.search(gate) or "workflow_dispatch" in gate
+                or top_level_or(gate)):
             bad.append(
                 f"{path.name}: job {job_name} can write to this repository "
                 f"(contents: write), and the workflow can be started by hand "
                 f"({', '.join(others)} and workflow_dispatch). Its job-level "
                 f"`if:` is {gate!r}, which does not hold a dispatched run back. "
-                f"Gate it on github.event_name, or drop the write scope; a "
-                f"github.ref test cannot stand in, because a dispatch can be "
-                f"aimed at a tag ref"
+                f"Gate it on `github.event_name == '<event>'` with no `||` "
+                f"beside it, or drop the write scope; a github.ref test cannot "
+                f"stand in, because a dispatch can be aimed at a tag ref"
             )
     return bad, writers
+
+
+def self_test() -> int:
+    """Hand the fourth rule the gates it exists to refuse, and two it must admit.
+
+    release.yml's gate is correct, so the refusal has no workflow in the tree
+    to fire on, and a rule that has stopped firing prints what a clean tree
+    prints. Each refused shape here was one the rule once admitted.
+    """
+    def workflow(gate):
+        return {"on": {"push": {"tags": ["v*"]}, "workflow_dispatch": None},
+                "permissions": {"contents": "write"},
+                "jobs": {"publish": {"if": gate, "steps": []}}}
+
+    refused = (
+        "",
+        "startsWith(github.ref, 'refs/tags/v')",
+        "github.event_name != 'workflow_dispatch'",
+        "github.event_name != 'schedule' && startsWith(github.ref, 'refs/tags/v')",
+        "github.event_name == 'push' || true",
+        "github.event_name == 'push' || github.event_name != 'schedule'",
+    )
+    admitted = (
+        "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+        "github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') "
+        "|| startsWith(github.ref, 'refs/tags/server-'))",
+    )
+    for gate in refused:
+        bad, _ = ungated_writers(pathlib.Path("self-test.yml"), workflow(gate))
+        if not bad:
+            print(f"  FAIL   self-test: {gate!r} was admitted as a dispatch gate")
+            return 1
+    for gate in admitted:
+        bad, _ = ungated_writers(pathlib.Path("self-test.yml"), workflow(gate))
+        if bad:
+            print(f"  FAIL   self-test: {gate!r} was refused: {bad[0]}")
+            return 1
+    print(f"  ok     self-test: {len(refused)} denylist gates refused, "
+          f"{len(admitted)} allowlist gates admitted")
+    return 0
 
 
 def main() -> int:
@@ -278,4 +345,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(self_test() if sys.argv[1:] == ["--self-test"] else main())

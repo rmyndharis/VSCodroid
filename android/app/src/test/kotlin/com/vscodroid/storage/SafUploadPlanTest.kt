@@ -159,6 +159,30 @@ class SafUploadPlanTest {
         assertTrue(plan.truncated, "a file below the cap was left behind and the user is owed the notice")
     }
 
+    /**
+     * A caller can say which entries it is going to act on, and only those spend the
+     * cap; the walk still passes through everything else to reach them. The stranded
+     * pass needs both halves: a mirror of two thousand files the device already has
+     * used to exhaust the cap before the one file it lacked was reached.
+     */
+    @Test
+    fun `entries the caller does not count do not spend the cap`(@TempDir tmp: File) {
+        val root = File(tmp, "proj").apply { mkdirs() }
+        repeat(5) { File(root, "a$it.txt").writeText("$it") }
+        File(root, "deep").mkdirs()
+        File(root, "deep/stranded.md").writeText("only here")
+        File(root, "z.md").writeText("only here too")
+
+        val plan = SafSyncEngine.uploadPlan(root, limit = 2) { it.name.endsWith(".md") }
+
+        assertEquals(
+            listOf("deep/stranded.md", "z.md"),
+            plan.entries.map { it.relativeTo(root).path }.sorted(),
+            "the entries the caller declined spent the cap before the counted ones were reached",
+        )
+        assertFalse(plan.truncated, "exactly the cap in counted entries is not a truncation")
+    }
+
     @Test
     fun `machine-temporary files are not uploaded`(@TempDir tmp: File) {
         // The same filter shouldWriteBack applies to single-file events. The

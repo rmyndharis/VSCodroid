@@ -239,4 +239,45 @@ class SplashLifetimeTest {
                 "route out of onCreate calls"
         }
     }
+
+    /**
+     * The foreground hold is taken by the instance that unpacks, and by nothing
+     * waiting for it.
+     *
+     * The hold is released in a `finally`, on the argument that the unpack has
+     * no suspension point so cancellation is only observed once it has returned.
+     * That is true of the instance running the unpack and false of a second
+     * Splash parked on the setup lock, which a locale change mid-extraction or
+     * MainActivity's hand-off creates: parking suspends, so destroying the
+     * waiter throws it out of the lock at once, and a hold it had taken before
+     * `runSetup` was given back while the first instance was still writing. The
+     * service answers that by leaving the foreground and stopping.
+     *
+     * So the hold has to be taken from inside `runSetup`, which calls back only
+     * from the instance holding the lock with work to do. The behavioural half
+     * is pinned in FirstRunSetupHoldTest; this is the wiring.
+     *
+     * NEGATIVE CONTROL: move `holdProcessForSetup()` back above `runSetup` on a
+     * line of its own and the second assertion goes red.
+     */
+    @Test
+    fun `the setup hold is taken inside the lock by the instance that unpacks`() {
+        val run = body("runSetupWithRetry")
+        assertTrue(run.isNotEmpty()) { "runSetupWithRetry is empty; this test is measuring nothing" }
+
+        val holds = run.filter { it.contains("holdProcessForSetup()") }
+        assertEquals(1, holds.size) {
+            "the hold is taken from ${holds.size} places in runSetupWithRetry:\n" +
+                "${holds.joinToString("\n")}\nOne of them will be a waiter's."
+        }
+        assertTrue(holds.single().contains("runSetup")) {
+            "the hold is taken outside runSetup, so a second Splash parked on the " +
+                "setup lock takes one too, and its finally gives it back while the " +
+                "first instance is still writing:\n${holds.single()}"
+        }
+        assertTrue(run.any { it.contains("releaseSetupHold()") }) {
+            "nothing gives the hold back, so the service stays in the foreground " +
+                "with nothing to serve"
+        }
+    }
 }

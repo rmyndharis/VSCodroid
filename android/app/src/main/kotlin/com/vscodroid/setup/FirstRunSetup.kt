@@ -157,14 +157,30 @@ class FirstRunSetup(
         getCurrentVersionCode(),
     )
 
-    suspend fun runSetup(): SetupResult = setupMutex.withLock {
-        // Two Splash instances can exist at once (noHistory + standard
-        // launchMode), each calling this from its own lifecycleScope. The body
-        // is blocking I/O that never checks for cancellation, so cancelling the
-        // loser does nothing: serialize instead, and let whoever waited find
-        // the work already done. The winner's markSetupComplete() flips
-        // isFirstRun() before the lock is released.
+    /**
+     * @param beforeUnpack called once, with the lock held, by the instance that
+     *   is about to do the work, and never by one that waited only to find it
+     *   done. Where SplashActivity takes its foreground hold: taken before the
+     *   lock, the hold belonged to the waiter too, and a waiter is the one
+     *   caller here that CAN be cancelled, because `Mutex.lock` suspends. A
+     *   config change during the unpack creates a second Splash that parks
+     *   here, and destroying that one threw it out of the lock with the unpack
+     *   still writing, so its `finally` gave back a hold the winner was relying
+     *   on. Handing the hold to whoever reaches this line keeps the release
+     *   with the write.
+     */
+    suspend fun runSetup(beforeUnpack: () -> Unit = {}): SetupResult = setupMutex.withLock {
+        // Two Splash instances can exist at once, each calling this from its
+        // own lifecycleScope: MainActivity hands a VIEW launch back here while
+        // a launcher-task Splash may be mid-setup, and a config-change relaunch
+        // creates the replacement while the unpack the old instance started is
+        // still running. The body is blocking I/O that never checks for
+        // cancellation, so cancelling the loser does nothing: serialize
+        // instead, and let whoever waited find the work already done. The
+        // winner's markSetupComplete() flips isFirstRun() before the lock is
+        // released.
         if (!isFirstRun()) return@withLock SetupResult.SUCCESS
+        beforeUnpack()
         runSetupLocked()
     }
 
@@ -2702,7 +2718,17 @@ claude() {
         val abandoned = installed
             .filter { it in bundled && unpackWasAbandoned(File(extensionsDir, it)) }
             .toSet()
-        val toExtract = bundledDirsToExtract(installed, bundled.toList(), abandoned)
+        // And which fetched ids the user has removed, so they are not unpacked
+        // into a directory nothing would list. The manifest reconcile below
+        // already declines to relist such an id, on the same two facts: it was
+        // bundled before, and no entry names it now. Unpacking it anyway wrote
+        // 29 MiB for the Python extension alone, unlisted, that only a version
+        // bump ever swept, and the bump then wrote it once more.
+        val manifestFile = File(extensionsDir, "extensions.json")
+        val uninstalled = listedExtensionIds(manifestFile)
+            ?.let { listed -> previouslyBundledIds() - listed }
+            ?: emptySet()
+        val toExtract = bundledDirsToExtract(installed, bundled.toList(), abandoned, uninstalled)
         // One counter across the whole loop, so the bar reflects the step rather
         // than restarting per extension. Its total is what the APK bundles, so a
         // run re-unpacking only some of the directories stops the bar short of
@@ -2796,9 +2822,9 @@ claude() {
             // The other half of the retry, and the half that survives a kill.
             // Everything above answers an unpack that FAILED; nothing answers
             // one that was never allowed to finish. Setup runs in
-            // SplashActivity's scope with no foreground service holding the
-            // process, so a Recents swipe or a low-memory kill during this copy
-            // ends it outright, and the directory extractAssetDir created is
+            // SplashActivity's scope, and the foreground hold it takes makes a
+            // kill during this copy rare rather than impossible: a low-memory
+            // kill still ends it outright, and the directory extractAssetDir created is
             // then the whole of what a later run has to go on: presence, which
             // is the only staleness test a fetched extension gets, reads a few
             // hundred of 3787 files as installed and never touches it again.
@@ -2889,7 +2915,12 @@ claude() {
             // Recorded whether or not anything was found: the debt is discharged
             // by looking, and a device that never had the directory must not go
             // on looking for it at every update either.
-            prefs.edit { putStringSet(KEY_RETIRED_SWEPT, HashSet(sweptAlready + owed)) }
+            //
+            // Committed, as the class header requires of every write here. The
+            // interval between the delete above and this record is exactly the
+            // one a kill lands in, and apply() would have left it in a flush
+            // window the process may not outlive.
+            prefs.edit(commit = true) { putStringSet(KEY_RETIRED_SWEPT, HashSet(sweptAlready + owed)) }
         }
 
         // The server manages this file for marketplace installs, so it is never
@@ -2906,7 +2937,6 @@ claude() {
         // is read later as an extension the user removed.
         val bundledIds = bundledExtensionIds(bundled.toList())
 
-        val manifestFile = File(extensionsDir, "extensions.json")
         if (!manifestFile.exists()) {
             generateExtensionsManifest(extensionsDir, bundled)
             // Recorded on this path too. A fresh install lists everything, so
@@ -2936,12 +2966,43 @@ claude() {
         prefs.getStringSet(KEY_BUNDLED_IDS, emptySet()) ?: emptySet()
 
     /**
+     * The identifiers `extensions.json` lists, or null when it cannot say.
+     *
+     * Null rather than empty for a manifest that is missing or unparseable, and
+     * the direction matters: the one reader subtracts this from the record to
+     * find what the user removed, and an empty answer would make every fetched
+     * extension ever bundled look removed. A manifest the server has not
+     * written yet, or a truncated one [reconcileExtensionsManifest] also gives
+     * up on, says nothing about what the user chose.
+     */
+    private fun listedExtensionIds(manifestFile: File): Set<String>? {
+        if (!manifestFile.isFile) return null
+        return try {
+            val entries = JSONArray(manifestFile.readText())
+            // Lowercased to meet the record: manifestEntryFor writes ids from the
+            // lowercased package.json halves, and VS Code's own gallery ids are
+            // lowercase, but nothing here should depend on the second.
+            (0 until entries.length()).mapNotNullTo(mutableSetOf()) { i ->
+                entries.getJSONObject(i).optJSONObject("identifier")?.optString("id")
+                    ?.takeIf { it.isNotEmpty() }?.lowercase()
+            }
+        } catch (e: Exception) {
+            Logger.d(tag, "Could not read extensions.json, so no bundled extension reads as removed: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * A defensive copy is required: [android.content.SharedPreferences.Editor.putStringSet]
      * documents that the set passed in must not be modified afterwards, and the
      * instance handed back by `getStringSet` must not be modified at all.
      */
     private fun rememberBundledIds(ids: List<String>) {
-        prefs.edit { putStringSet(KEY_BUNDLED_IDS, HashSet(ids)) }
+        // Committed, as the class header requires of every write here: the next
+        // upgrade reads this record to tell an uninstall from a first bundling,
+        // and it is written moments before markSetupComplete() on a run a kill
+        // can end at any line.
+        prefs.edit(commit = true) { putStringSet(KEY_BUNDLED_IDS, HashSet(ids)) }
     }
 
     private fun generateExtensionsManifest(extensionsDir: File, bundledDirs: Array<String>) {
@@ -4046,6 +4107,7 @@ private val RETIRED_FETCHED_IDS = listOf("eamodio.gitlens")
  * claims a given name, so state it once:
  *
  *   [bundledDirsToExtract]      what to unpack -- ours always, theirs if absent
+ *                               and not removed by the user
  *   [supersededExtensionDirs]   older versions of an id STILL bundled
  *   [retiredOwnExtensionDirs]   our own publisher, id no longer bundled
  *   this one                    a fetched id no longer bundled at all
@@ -4214,25 +4276,42 @@ internal fun failedUnpackMustBeRemoved(
  * Python extension alone, re-created on every upgrade. Not unpacking it is the
  * whole remedy: the copy the user chose is the one that runs either way.
  *
+ * A fetched extension is skipped for a second reason: the user removed it.
+ * VS Code's uninstall deletes the directory and the manifest entry together,
+ * so on the next upgrade the directory is absent and presence alone said
+ * "unpack". [bundledIdsToRelist] then declined to list it, on purpose, so the
+ * copy was dead on arrival and nothing swept it, since every sweep leaves a
+ * name this build bundles alone. [uninstalled] carries the ids the caller
+ * derived from the same two facts the relist reads (bundled before, listed by
+ * nothing now), and it is keyed on the id rather than the version because the
+ * relist is: a bump after the uninstall would be unpacked and unlisted just the
+ * same. Ours are never in it, since they are re-unpacked unconditionally and
+ * a removed one of ours is not a case this app has ever handled.
+ *
  * Pure, and takes listings rather than a directory, so the decision is
  * testable without a Context or a tree. `(present, bundled)` in that order, the
  * same as [supersededExtensionDirs] and [retiredOwnExtensionDirs]: all three
  * take two `List<String>` and a swap between them compiles in silence, so the
- * only protection is that there is nothing to remember. [abandoned] is a `Set`
- * rather than a third list of the same type, so it cannot join that swap, and
- * it is defaulted because a caller with nothing to say about wreckage gets the
- * behaviour that was here before it existed.
+ * only protection is that there is nothing to remember. [abandoned] and
+ * [uninstalled] are `Set`s rather than further lists of the same type, so they
+ * cannot join that swap, and both are defaulted because a caller with nothing
+ * to say about wreckage or removals gets the behaviour that was here before
+ * they existed.
  */
 internal fun bundledDirsToExtract(
     present: List<String>,
     bundled: List<String>,
     abandoned: Set<String> = emptySet(),
+    uninstalled: Set<String> = emptySet(),
 ): List<String> {
     val installed = present.mapNotNull(::splitExtensionDir)
     return bundled.filter { dir ->
         if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter true
         if (dir in present && dir !in abandoned) return@filter false
         val (id, version) = splitExtensionDir(dir) ?: return@filter true
+        // Lowercased to meet the record, which manifestEntryFor builds from
+        // the lowercased package.json halves; a real bundled publisher is PKief.
+        if (id.lowercase() in uninstalled) return@filter false
         installed.none { (otherId, otherVersion) ->
             otherId == id && isOlderVersion(version, otherVersion)
         }
@@ -4626,10 +4705,14 @@ internal val PYTHON_STDLIB_NAME = Regex("""^python3\.\d+$""")
  * `extensions.json`, given what the manifest already holds.
  *
  * Two cases arrive here looking exactly alike -- no manifest entry, and a
- * directory that extraction has just (re)created:
+ * directory on disk with a `package.json` in it:
  *
  *  - the user uninstalled a bundled extension. VS Code removes the entry *and*
  *    the directory, so re-listing it would undo that choice on every upgrade.
+ *    [bundledDirsToExtract] now declines to recreate that directory when the
+ *    manifest can be read, so this arm is reached for the copy an earlier
+ *    release already unpacked and left behind, and for a manifest that could
+ *    not be read at extraction time.
  *  - the app began bundling an extension it has never shipped before.
  *
  * [previouslyBundledIds] is the only thing that separates them, which is why the

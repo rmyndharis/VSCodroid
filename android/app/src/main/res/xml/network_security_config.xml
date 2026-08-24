@@ -20,8 +20,21 @@
          and stays HTTPS. What changes is that the platform is no longer the thing
          enforcing that.
 
-         Reachability from other devices is a separate matter: Android's local
-         network permission gates inbound connections from SDK 37 onward, and that
-         needs a manifest permission rather than anything in this file. -->
+         Android's local network permission is a second gate on the same case,
+         not a separate matter. It covers traffic to and from local network
+         addresses in both directions, applied in the networking stack to every
+         API: this app connecting out to a dev server at 192.168.x.x, which is
+         the preview above, as much as a laptop connecting in. The ranges the
+         platform documentation lists as local (link-local, CGNAT, RFC 1918,
+         multicast and broadcast) do not include loopback, so the editor server
+         on 127.0.0.1 is outside it. Opt-in on Android 16 and enforced for apps
+         targeting Android 17, SDK 37, or higher, through a manifest permission
+         rather than anything in this file: android.permission.ACCESS_LOCAL_NETWORK,
+         which first appears in the android-37 platform jar and is absent from
+         android-36. Nothing declares it today and targetSdk is 36. Raising
+         targetSdk means declaring it, requesting it at run time where the user
+         asks to serve on the network, and keeping working when it is refused;
+         scripts/check-local-network-permission.py fails the build on the
+         declaration alone, and build.gradle.kts records the full contract. -->
     <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
 </network-security-config>

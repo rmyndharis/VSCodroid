@@ -3,7 +3,7 @@
 
     check-build-steps.py
 
-Five assertions, all about scripts nobody notices are missing until an app is
+Six assertions, all about scripts nobody notices are missing until an app is
 built without them, or shipped without them having run:
 
   * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
@@ -19,6 +19,9 @@ built without them, or shipped without them having run:
     on purpose;
   * every scripts/test-*.js runs in both lint.yml and release.yml, so a
     self-check cannot be added to the tree and then run by nothing;
+  * lint.yml runs them on the Node major the APK ships, the one
+    build-native-addons.sh pairs the addons against, so a self-check green on
+    a runner is a self-check green on the device's runtime;
   * every scripts/check-*.py is invoked by something -- a workflow, a build
     script or the Gradle build. Not "by both workflows", which is right for the
     self-checks and wrong here: two of the no-argument checkers deliberately run
@@ -79,21 +82,37 @@ RUNS_SELFCHECK = re.compile(r"node\s+scripts/(test-[\w.-]+\.js)")
 # because no rule in this file looked at that family.
 #
 # Deliberately NOT "both lint.yml and release.yml", which is what the .js rule
-# requires. The four no-argument checkers split on purpose:
-#     check-build-steps.py, check-local-network-permission.py   lint + release
-#     check-library-attribution.py, check-welcome-claims.py     build + release
-# The second pair reads the assets tree, which lint.yml does not build -- it
-# writes stubs -- so demanding lint would demand attributing a tree with nothing
-# in it. The others take arguments and are invoked from a script or from Gradle
-# rather than from a workflow at all. So the honest requirement is that something
-# runs them, not which job does.
+# requires. Where a checker runs follows what it reads, and the family does not
+# split evenly: most take no arguments and run from lint.yml and release.yml,
+# but check-library-attribution.py and check-welcome-claims.py read the assets
+# tree, which lint.yml does not build -- it writes stubs -- so they run from
+# build.yml and release.yml instead, and the ones that take arguments are
+# invoked from a download script or from Gradle rather than from a workflow at
+# all. Demanding any one job would fail a checker that is correctly placed
+# elsewhere, so the honest requirement is that something runs each of them.
 RUNNERS_OF_CHECKERS = (".github/workflows/*.yml", "scripts/*.sh",
                        "android/app/build.gradle.kts")
 
-# Both, not either. lint.yml runs on pull_request only and release.yml on tags,
-# so a self-check in just one of them is unrun on half the paths that reach a
-# user -- and a hotfix pushed straight to main and tagged never sees lint at all.
+# Both, not either. lint.yml runs on pull requests and on pushes to main, and
+# release.yml on tags, so a self-check in only one of them is unrun on the path
+# it is absent from -- and the tag path is the one whose output reaches a user.
 SELFCHECK_WORKFLOWS = ("lint.yml", "release.yml")
+
+# The Node the self-checks run under has to be the major that ships. The device
+# runtime is the Termux nodejs-lts that build-native-addons.sh names in
+# NODE_VERSION, and the JavaScript under test (server.js, process-monitor.js,
+# dns-proxy.js and the bundled extensions) runs on nothing else, so a self-check
+# green on another major says nothing about the device: lint.yml ran the nine
+# on 20 while every APK carried 24. The major only, for the reason
+# build-native-addons.sh compares majors: the patch level is Termux's to move.
+#
+# All three workflows that set up Node: lint.yml and release.yml run the nine
+# self-checks, and build.yml and release.yml run the download scripts and
+# build-native-addons.sh through npm, so one major across all of them.
+NODE_MAJOR_SOURCE = ROOT / "scripts/build-native-addons.sh"
+NODE_MAJOR_WORKFLOWS = ("lint.yml", "build.yml", "release.yml")
+SHIPPED_NODE = re.compile(r'^NODE_VERSION="\$\{NODE_VERSION:-(\d+)\.', re.M)
+PINNED_NODE = re.compile(r'node-version:\s*"?(\d+)')
 
 
 class Unreadable(Exception):
@@ -327,6 +346,26 @@ def _main() -> int:
     else:
         print(f"  ok     all {len(selfchecks)} JavaScript self-checks run in "
               f"{' and '.join(SELFCHECK_WORKFLOWS)}")
+
+    shipped = SHIPPED_NODE.search(NODE_MAJOR_SOURCE.read_text())
+    if not shipped:
+        print(f"  FAIL   {NODE_MAJOR_SOURCE.name} no longer names NODE_VERSION; "
+              "the pattern stopped matching")
+        return 1
+    for wf_name in NODE_MAJOR_WORKFLOWS:
+        pinned = PINNED_NODE.findall(executable_lines(WORKFLOWS / wf_name))
+        # Every pin in the file, not the first: the self-checks run in one job
+        # today and a second setup-node on another major would be the drift
+        # this asks about, arriving one job over.
+        wrong = sorted(set(pinned) - {shipped.group(1)})
+        if not pinned or wrong:
+            print(f"  FAIL   {wf_name} sets up Node "
+                  f"{', '.join(wrong) or 'nothing it pins'}, and the APK ships Node "
+                  f"{shipped.group(1)} ({NODE_MAJOR_SOURCE.name} NODE_VERSION). "
+                  f"Pin setup-node there to the major that ships.")
+            failed = True
+        else:
+            print(f"  ok     {wf_name} sets up Node {shipped.group(1)}, the major that ships")
 
     checkers = {p.name for p in (ROOT / "scripts").glob("check-*.py")}
     if not checkers:

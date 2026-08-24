@@ -161,16 +161,51 @@ class ProcessManager(private val context: Context) {
     private var spawnedOntoHeldPort = false
 
     /**
-     * Whether [probeReadiness] has already said that the holder of a port this
-     * start could not claim does not answer as this build.
+     * Whether the process the last [startServer] spawned has still to say it is
+     * listening.
+     *
+     * Set at the spawn and cleared by [startOutputReader] on the line
+     * `server-main.js` prints from its listen callback, [SERVER_LISTENING_LINE],
+     * which reaches this process because `assets/server.js` forks the editor
+     * server with its stdio inherited. While it is set, [probeReadiness] refuses
+     * whatever the port answers, and that is the one ownership test that does not
+     * ask the port. A 200 carrying the right commit proves only that something on
+     * the loopback knows a public value; this line can only have been printed by a
+     * child of ours after its own bind succeeded. Readiness is what carries the
+     * connection token to the port, so the party it is carried to has to be
+     * identified by something a stranger cannot say.
+     *
+     * The window it closes is wider than a restart onto a held port. Binding a
+     * loopback port needs no permission, so a process that takes the remembered
+     * port between the free check in [startServer] and the child's own listen
+     * leaves [spawnedOntoHeldPort] false and used to be handed readiness on a bare
+     * 200. A child that lost that race prints EADDRINUSE instead of this line, and
+     * the start now stays not ready for as long as it does.
+     *
+     * False for an adopted server, which spawned nothing: its ownership is the
+     * note's business, see [portHeldByOurEditorServer].
+     *
+     * Cleared only when the line came from the process that is still the current
+     * one, because a reader draining the previous process's pipe after a restart
+     * would otherwise vouch for a spawn it knows nothing about.
+     *
+     * Volatile for the same reason as the flags above: written on whichever thread
+     * called [startServer] and on the output reader, read on every probe.
+     */
+    @Volatile
+    private var listenUnreported = false
+
+    /**
+     * Whether [probeReadiness] has already said that the port is answering while
+     * the process this start spawned has not reported binding it.
      *
      * The poll asks five times a second for thirty seconds and then goes on
      * asking, so an unthrottled line would be the whole of the log by the end of
      * it while saying nothing the first one did not. Cleared beside
-     * [spawnedOntoHeldPort], which is the value it describes.
+     * [spawnedOntoHeldPort], at the spawn the line would describe.
      */
     @Volatile
-    private var heldPortRefusalLogged = false
+    private var unboundRefusalLogged = false
 
     /**
      * Whether the process the last [startServer] spawned was given a ceiling the
@@ -536,6 +571,12 @@ class ProcessManager(private val context: Context) {
             // than left, because it survives in this instance across attempts and
             // a value left over from a previous one is not about this server.
             spawnedOntoHeldPort = false
+            // Nothing was spawned, so there is no listen to wait for either. The
+            // note vouched for this holder before it was adopted, which is the
+            // ownership test this branch rests on; a flag left set from an
+            // earlier spawn in this instance would refuse readiness to a server
+            // that is serving, and nothing would ever clear it.
+            listenUnreported = false
             // The same reasoning, and a sharper consequence. An adopted server was
             // spawned by a bootstrap that is gone, and it carries whatever ceiling
             // that bootstrap gave it -- which is unknowable from here and is not
@@ -552,23 +593,6 @@ class ProcessManager(private val context: Context) {
             heapOverrideSuspendedNow = false
             startAdoptionWatch()
             return true
-        }
-        // A candidate this start cannot claim is not a port to spawn onto, and on a
-        // first start there is a way out that a restart does not have: nothing is
-        // bound to it yet, so moving costs only the workbench storage the allocator
-        // already logs, while spawning costs a child that wedges on EADDRINUSE
-        // without exiting. This is the cold-start behaviour that has always
-        // shipped, kept rather than changed; what is new above it is that the
-        // remembered port gets asked about before it is abandoned.
-        //
-        // Deliberately ABOVE the reap. A cold start that declines adoption leaves an
-        // orphan of ours where it is, exactly as it does today. Reaping it and
-        // keeping the port would preserve the origin as well, and is a larger
-        // decision than this: the reap below is argued from "the spawn is about to
-        // hit this port", which stops being true the moment we move off it.
-        if (firstStart && !portIsFree) {
-            _port = PortFinder.getOrAllocatePort(context)
-            portIsFree = true
         }
         // An editor server of ours that is alive, holds the port, and is not one this
         // start can adopt is the one shape worth ending before spawning over it. Adoption
@@ -588,13 +612,49 @@ class ProcessManager(private val context: Context) {
         // cannot be shown to be, and the alternative is not "leave the user's editor
         // alone" but a launch that fails for as long as the holder lives, because nothing
         // here can bind the port while it is held and `_port` is re-derived only on the
-        // first start in a process, which is handled above and never reaches here. A
-        // server ended a second early is restarted by the line below; one left alone is
-        // not.
-        var reapedThisStart = false
+        // first start in a process. A server ended a second early is restarted by the
+        // line below; one left alone is not.
+        //
+        // On a first start as well, and ABOVE the move that follows. The move used to
+        // come first, on the reasoning that a cold start had a way out a restart did
+        // not and that the reap was argued from "the spawn is about to hit this port".
+        // What that ordering cost was the orphan itself: an editor server of this
+        // build that took longer than a second to answer `/version` under cold-start
+        // load was declined, the port was abandoned to it, and nothing ever ended it,
+        // so it kept a Node heap and one of the 32 phantom-process slots until the OS
+        // took them back, while the workbench storage keyed to its origin was lost
+        // for nothing. Reaping first is what the restart path has always done with
+        // the same three declines; what is new is only that the cold start no longer
+        // walks away before it gets the chance.
+        //
+        // The reap is subtracted only when the port agrees it is free, because a
+        // signalled pid is not a released socket: the kill returns when the signal
+        // is sent, and the holder can also be a foreign process the reap never
+        // touched, the note naming a wedged child that never bound while someone
+        // else took the port. Answering from the signal alone would call that spawn
+        // healthy while it wedges on EADDRINUSE without exiting, and the
+        // liveness-bounded wait behind [spawnedOntoHeldPort] would never end: the
+        // failure the restart budget used to report, become a "still starting" that
+        // says nothing. The probe is the same loopback bind test [PortFinder]
+        // already answers, and its residual race, a port freed just after it reads
+        // held, is the one the free-at-first-ask path has always accepted. Asked
+        // through [portFreedByReap] rather than once, because after a reap that
+        // race is not residual but the likely answer: see there.
         if (!portIsFree && portHeldByOurEditorServer()) {
-            reapedThisStart =
+            val reaped =
                 reapRecordedEditorServer("not adoptable by this start, for the reason logged above")
+            if (reaped && portFreedByReap()) portIsFree = true
+        }
+        // A candidate this start still cannot claim is not a port to spawn onto, and
+        // on a first start there is a way out that a restart does not have: nothing
+        // is bound to it yet, so moving costs only the workbench storage the
+        // allocator already logs, while spawning costs a child that wedges on
+        // EADDRINUSE without exiting. What reaches here on a cold start is a holder
+        // that is not ours, or a reap whose socket the kernel had not closed inside
+        // the grace; a reap that did free the port keeps it, and the origin with it.
+        if (firstStart && !portIsFree) {
+            _port = PortFinder.getOrAllocatePort(context)
+            portIsFree = true
         }
 
         // Reaching here means the port was free, or was held by something that is
@@ -608,8 +668,8 @@ class ProcessManager(private val context: Context) {
         // routine here, it is what the watchdog's 137 branch exists for --
         // forwards nothing, and `fork()` sets no PDEATHSIG. So the child outlives
         // its parent still holding the port. `assets/process-monitor.js` does not
-        // reap it: it only kills idle language servers, and it runs inside the
-        // parent it would have to outlive.
+        // reap it: it kills nothing, and it runs inside the parent it would have
+        // to outlive.
         //
         // The trap is what that child IS. It is not a stranger and it is not
         // wreckage -- it is a live, healthy editor server, the one the open
@@ -620,15 +680,16 @@ class ProcessManager(private val context: Context) {
         // the life of this instance.
         //
         // What IS wrong is that nothing distinguishes the survivor from a server
-        // this class started. The health probe reads a response code and, on this
-        // path, the build the holder claims to be -- see [probeReadiness] -- so a
-        // survivor of this build satisfies readiness, `NodeService.announceReady`
-        // fires, and the WebView is pointed at it. That much works -- the token
-        // matches, because `server.js` reuses the token file -- which is why
-        // nothing downstream notices. What no longer passes is a holder that is
-        // not this build, which is the party the token must never reach. The cost
-        // is everywhere the app assumes the server it is serving is the one it
-        // spawned:
+        // this class started. The health probe read a response code, so a
+        // survivor satisfied readiness, `NodeService.announceReady` fired, and the
+        // WebView was pointed at it. That much worked -- the token matches,
+        // because `server.js` reuses the token file -- which is why nothing
+        // downstream noticed. It no longer passes: [probeReadiness] now waits for
+        // the process this start spawned to say it is listening, and a spawn that
+        // lost the port never does, so a start onto a held port ends in
+        // CANNOT_BIND rather than in the survivor's readiness. The cost of the
+        // old shape was everywhere the app assumed the server it was serving was
+        // the one it spawned:
         //
         //  - `serverProcess` refers to the process spawned here, not the survivor.
         //    So [stopServer] destroys the wrong one. Stop takes the notification
@@ -697,9 +758,12 @@ class ProcessManager(private val context: Context) {
         // still cannot be killed by this app, because there is no handle to it.
         // [stopServer] says so now instead of destroying the wrong process and
         // reporting success, which is a smaller claim than "Stop works" and a true
-        // one. And the IndexedDB loss on a later cold start is unchanged -- that
-        // happens when a fresh instance finds the port taken and `PortFinder`
-        // moves, and adoption does not reach across process lifetimes.
+        // one. And the IndexedDB loss on a cold start is narrowed rather than
+        // gone: a fresh instance that finds the remembered port held by a
+        // stranger, or by a server of ours whose socket the reap above could not
+        // free in time, still moves with `PortFinder` and takes the origin with
+        // it. What no longer loses it is an orphan of ours that answers too slowly
+        // to adopt, which is now ended and its port kept.
         //
         // The objection that kept adoption out until now was real and had to be
         // answered rather than accepted: an adopted server has no `Process`, so no
@@ -717,21 +781,10 @@ class ProcessManager(private val context: Context) {
         // known: from here on the port is occupied whichever case this is. It is
         // what lets the service tell a slow server from one that will never
         // answer, see [spawnedOntoHeldPort] and `NodeService.awaitLateReadiness`.
-        // The reap is subtracted only when the port agrees it is free, because
-        // a signalled pid is not a released socket: the kill returns when the
-        // signal is sent, and the holder can also be a foreign process the reap
-        // never touched, the note naming a wedged child that never bound while
-        // someone else took the port. Answering from the signal alone would call
-        // that spawn healthy while it wedges on EADDRINUSE without exiting, and
-        // the liveness-bounded wait behind the flag would never end: the failure
-        // the restart budget used to report, become a "still starting" that
-        // says nothing. The probe is the same loopback bind test [PortFinder]
-        // already answers, and its residual race, a port freed just after it
-        // reads held, is the one the free-at-first-ask path has always accepted.
-        // Asked through [portFreedByReap] rather than once, because after a reap
-        // that race is not residual but the likely answer: see there.
-        spawnedOntoHeldPort = !portIsFree && !(reapedThisStart && portFreedByReap())
-        heldPortRefusalLogged = false
+        // A port the reap freed inside its grace has already been folded into
+        // the answer above, and so has a first start's move to a free one.
+        spawnedOntoHeldPort = !portIsFree
+        unboundRefusalLogged = false
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR is a usable directory: Android may clear cache between
@@ -808,6 +861,14 @@ class ProcessManager(private val context: Context) {
                 return false
             }
             serverProcess = spawned
+            // After the process is the current one and before its reader exists,
+            // which is the only order that works: the reader clears this on the
+            // listening line, and only for the process that is current, so a
+            // reader still draining the previous process's pipe finds a different
+            // process here and leaves the flag alone. No probe can slip in ahead
+            // of it, because every probe with this start's epoch begins after
+            // this call returns. See [listenUnreported].
+            listenUnreported = true
             startOutputReader()
             startWatchdog()
             // The source is named, not only the number. A ceiling in a bug report
@@ -1065,18 +1126,17 @@ class ProcessManager(private val context: Context) {
      * which is the case the flag exists for and the reason the grace is short
      * enough to be spent rather than long enough to matter.
      *
-     * What a true answer here switches OFF is worth stating plainly, because it
-     * is an explicitly security-argued guard. [probeReadiness] makes a port this
-     * start could not claim name the build it is before believing it, and
-     * [spawnedOntoHeldPort] is the only thing that turns that on. So a reap that
-     * frees the port leaves readiness willing to carry the connection token to
-     * whoever answers, which is exactly what a port that was free at the first
-     * ask has always done. The same window and the same acceptance, knowingly:
-     * the guard exists for a spawn sitting behind a holder it never displaced,
-     * and a port this start CAN bind is not that. Turning it on for every reap
-     * instead was considered and refused, because it also refuses a tree that
-     * records no commit, where `bundledServerCommit()` is null and every answer
-     * is "not this build".
+     * What a true answer here decides is two things, neither of them the
+     * credential: on a cold start, whether the remembered port is kept or
+     * abandoned to the allocator (see the reap in [startServer]); and on every
+     * start, the verdict the service reads when the start poll gives up,
+     * CANNOT_BIND against merely slow. It no longer decides who may be handed
+     * the connection token: [probeReadiness] waits for
+     * the spawned process itself to report its listen whether the port read held
+     * or free at the spawn, so a reap that frees the port, and a reap that only
+     * looked as if it had, both end up trusting the same evidence. An earlier
+     * shape hung a commit check on [spawnedOntoHeldPort] alone, which made this
+     * grace a security decision as well as a diagnostic one.
      */
     private fun portFreedByReap(): Boolean {
         var waited = 0L
@@ -1145,11 +1205,12 @@ class ProcessManager(private val context: Context) {
      * outright. The two halves therefore still narrow rather than prove, and the
      * note stays the ownership half.
      *
-     * Refusing here is not final and deletes nothing, so a recorded server that
-     * was merely slow to answer is adopted by a later attempt. Being wrong in this
-     * direction costs one spawn that cannot bind, which is what a start onto a
-     * held port did before adoption existed; being wrong in the other costs the
-     * session.
+     * Refusing here is not the end of the recorded server, but the reap that
+     * follows in [startServer] is: a holder of ours that was merely slow to
+     * answer is ended and replaced on the same port rather than adopted by a
+     * later attempt. Being wrong in this direction therefore costs one server
+     * start, a few seconds of a launch the user is already waiting on; being
+     * wrong in the other costs the session.
      */
     private fun recordedServerIsServing(): Boolean {
         // Answered first, because a build that cannot say what it is cannot
@@ -1224,10 +1285,10 @@ class ProcessManager(private val context: Context) {
      *
      * Liveness only, deliberately, which is what [startAdoptionWatch] wants of a
      * heartbeat over a server whose identity was settled when it was adopted.
-     * Which build answered is [probeVersion]'s business, and it is asked by
-     * adoption and by [probeReadiness] on the one path where the holder cannot be
-     * the process this class spawned. An ordinary readiness poll runs every 200 ms
-     * for thirty seconds and has no use for the answer.
+     * Which build answered is [probeVersion]'s business, and only adoption asks
+     * it; [probeReadiness] settles ownership from the spawned process's own
+     * output instead. An ordinary readiness poll runs every 200 ms for thirty
+     * seconds and has no use for the answer.
      */
     fun isServerHealthy(): Boolean = probeVersion() != null
 
@@ -1655,7 +1716,7 @@ class ProcessManager(private val context: Context) {
      * as long as the process lived, and every caller reading it refused a server
      * that was serving perfectly well.
      *
-     * Being that single writer is why the identity question below is asked here
+     * Being that single writer is why the ownership question below is asked here
      * and not in [isServerHealthy]: this answer is what points the WebView at the
      * port, and `MainActivity` builds that URL with the connection token in it.
      * [isServerHealthy] stays the plain liveness probe its own documentation
@@ -1666,37 +1727,37 @@ class ProcessManager(private val context: Context) {
         // function covers the whole of it.
         val epoch = readinessEpoch.get()
         val served = probeVersion() ?: return false
-        // A start that recorded [spawnedOntoHeldPort] already knows the process it
-        // spawned is not what is answering: the editor server it forked printed
-        // EADDRINUSE and, measured, did not exit, so whoever holds the port took
-        // it first. A status code cannot tell that party from ours -- the same gap
-        // [recordedServerIsServing] closes before adoption, and for the same
-        // reason, since binding a loopback port on Android needs no permission.
-        // The cost of being wrong is larger here than there: readiness is what
-        // navigates, and the URL carries the credential that authenticates every
-        // route of the editor server. So on this path the holder names the build
-        // it is before it is believed.
+        // A port answering is not a server of ours answering. Binding a loopback
+        // port on Android needs no permission, and readiness is what navigates:
+        // the URL `MainActivity` builds carries the credential that authenticates
+        // every route of the editor server, so whoever is believed here is handed
+        // it. The guard that stood here asked the holder which build it was, and
+        // that answered the wrong question twice over. The commit `/version`
+        // reports is microsoft/vscode's public tag SHA, [recordedServerIsServing]
+        // says so at length, so a process written to imitate this app passes it;
+        // and it was asked only on a start that recorded [spawnedOntoHeldPort], so
+        // a holder that took the port between the free check and the child's
+        // listen was never asked anything and passed on a bare 200.
         //
-        // Only on this path, deliberately. A start whose port was free at the
-        // spawn has no second party to be confused with, and asking every start
-        // for an identity would refuse to serve a tree that records no commit.
-        // That direction is one adoption can afford, because declining it costs a
-        // spawn; readiness cannot, because it costs the editor.
+        // So the question is put to our own process instead. The editor server
+        // prints [SERVER_LISTENING_LINE] from its listen callback and from nowhere
+        // else, a child that lost the port prints EADDRINUSE and wedges, and
+        // [startOutputReader] clears [listenUnreported] on that line and on no
+        // other evidence. Until then the port's answer is somebody else's whatever
+        // it says. A start that never clears it ends the way a held port always
+        // has: the poll gives up and the service reads [spawnedOntoHeldPort].
         //
-        // The port answering as this build is not proof it is the process we
-        // spawned -- the commit is public, [recordedServerIsServing] says so at
-        // length -- and it does not need to be. What it rules out is the case this
-        // guard exists for, and it deliberately keeps the two starts that reach
-        // here with a server of ours on the port: a reap whose signal freed the
-        // socket a moment after it was asked, and an orphan of this same build
-        // that no note identifies. Both serve the user, and both keep working.
-        if (spawnedOntoHeldPort && served != bundledServerCommit()) {
-            if (!heldPortRefusalLogged) {
-                heldPortRefusalLogged = true
+        // An adopted server spawned nothing and is exempt by construction; the
+        // note vouched for it before it was adopted. And a tree that records no
+        // commit is no longer refused here, which is the case the old guard had to
+        // confine itself to one path to avoid: the line does not depend on one.
+        if (listenUnreported) {
+            if (!unboundRefusalLogged) {
+                unboundRefusalLogged = true
                 Logger.w(
                     tag,
-                    "Port $_port is answering as \"$served\", which is not this build, and " +
-                        "this start could not have bound it; not treating that as ready",
+                    "Port $_port is answering as \"$served\", but the process this start " +
+                        "spawned has not reported binding it; not treating that as ready",
                 )
             }
             return false
@@ -1734,6 +1795,12 @@ class ProcessManager(private val context: Context) {
      * Starts a daemon thread that reads every line from the process stdout/stderr
      * (merged via redirectErrorStream) and forwards it to [onServerOutput] and the
      * debug log.
+     *
+     * It is also where [listenUnreported] is cleared, and that placement is the
+     * whole reason readiness may trust the flag: the line is read off a pipe only
+     * a process this class spawned can write to, so nothing on the port can forge
+     * it. Cleared before [onServerOutput] is invoked, so a consumer told about the
+     * line finds the flag already down.
      */
     private fun startOutputReader() {
         val process = serverProcess ?: return
@@ -1743,6 +1810,13 @@ class ProcessManager(private val context: Context) {
                     reader.lineSequence().forEach { line ->
                         Logger.d(tag, "[node] $line")
                         serverLog.append(line)
+                        // For the current process only. A restart replaces
+                        // `serverProcess` before it raises the flag again, so a
+                        // reader still draining the previous pipe cannot lower it
+                        // for a spawn it knows nothing about.
+                        if (line.contains(SERVER_LISTENING_LINE) && serverProcess === process) {
+                            listenUnreported = false
+                        }
                         onServerOutput?.invoke(line)
                     }
                 }
@@ -1956,6 +2030,26 @@ internal const val EDITOR_PID_FILE = "editor-server.pid"
  * process reads as absent rather than as a match, and the check fails closed.
  */
 internal const val EDITOR_ENTRY_POINT = "server-main.js"
+
+/**
+ * What the editor server prints once its listen has succeeded.
+ *
+ * `server-main.js` builds this line inside its `listen` callback and writes it with
+ * `console.log`, so it exists only after the socket is bound, and it arrives here
+ * because `assets/server.js` forks the child with `stdio: 'inherit'`. A child that
+ * lost the port prints `EADDRINUSE` and never this. [ProcessManager.probeReadiness]
+ * reads it as the one statement about the port that comes from a process of ours
+ * rather than from whoever holds the socket, which is what readiness has to rest
+ * on before the connection token is sent there.
+ *
+ * Upstream text, not ours, so a VS Code bump can change it. If one does, no
+ * spawned start ever becomes ready: the process is alive and bound, the poll gives
+ * up, and `NodeService.awaitLateReadiness` says so at its notice and keeps asking.
+ * That is visible on the first device run after the bump, and
+ * `ServerListeningLineWireTest` reads the packaged tree for the line wherever that
+ * tree has been fetched.
+ */
+internal const val SERVER_LISTENING_LINE = "Extension host agent listening on"
 
 /**
  * Where the packaged server records which build it is, relative to the server
@@ -2213,6 +2307,17 @@ internal fun heapOverrideRaisesCeiling(
  * would look wrong until the device started dying. This repository has been bitten
  * by exactly that blindness before.
  *
+ * The anchor answers only the `//` form, so block comments are removed first.
+ * A key on a line of its own inside a `/* ... */` span starts that line exactly
+ * as a live one does, and the anchor honoured it: a user who blocked out an
+ * experiment to switch it off had the raised ceiling spawned anyway, the start
+ * summary said "user override", and three kills later the card told them a
+ * setting they believed was off had been suspended. The span is removed rather
+ * than parsed around, because the reader wants nothing from inside it, and it is
+ * removed non-greedily so a second comment further down does not swallow the
+ * live key between the two. A comment opener sitting inside a string value is
+ * read as starting one, which is a miss in the safe direction.
+ *
  * A regex over the text rather than a parse, for the reason
  * `FirstRunSetup.refreshManagedPaths` documents at length: parsing the document to
  * re-serialise it would strip the user's comments, escape every slash and turn
@@ -2225,10 +2330,14 @@ internal fun heapOverrideRaisesCeiling(
  * to the derived value is the safe reading of one.
  */
 internal fun heapOverrideFromSettings(content: String): Int? =
-    HEAP_SETTING_PATTERN.find(content)?.groupValues?.get(1)?.toIntOrNull()
+    HEAP_SETTING_PATTERN.find(BLOCK_COMMENT.replace(content, ""))
+        ?.groupValues?.get(1)?.toIntOrNull()
 
 private val HEAP_SETTING_PATTERN =
     Regex("""(?m)^\s*"${Regex.escape(HEAP_SETTING_KEY)}"\s*:\s*(\d+)""")
+
+/** A `/* ... */` span, shortest match, newlines included. */
+private val BLOCK_COMMENT = Regex("""/\*[\s\S]*?\*/""")
 
 /**
  * Whether a user-chosen ceiling has spent its budget and must be ignored.

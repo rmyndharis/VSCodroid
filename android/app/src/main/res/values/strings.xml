@@ -128,6 +128,12 @@
          that was no longer true. -->
     <string name="error_server_gave_up">The development server stopped and could not be restarted. Your files are safe. Trying again usually works; if it does not, close and reopen the app.</string>
     <string name="error_server_retry">Try again</string>
+    <!-- The first screen of every cold start, inside the placeholder page
+         MainActivity draws while the server comes up. -->
+    <string name="server_starting">Starting server…</string>
+    <!-- Shown on the page, with the reload control, once the editor's renderer
+         has died several times in a minute and the app stops reopening it. -->
+    <string name="error_renderer_crash_loop">The editor closed unexpectedly several times in a row, so VSCodroid stopped reopening it. Your files and the server are untouched. Closing some other apps first makes this less likely.</string>
     <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
 
     <!-- About dialog -->

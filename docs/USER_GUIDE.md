@@ -573,7 +573,7 @@ The status bar shows a phantom process count. This tells you how many background
 
 - Click the process count to see a detailed process tree in the Output panel.
 - An idle session costs 5, before you open anything. Add 1 per terminal tab and 1 per running language server.
-- At 8 the monitor warns you, at 14 it reports an error, and both offer **Kill Idle Servers**.
+- At 8 the monitor warns you and at 14 it reports an error; both offer **Show Details**, which marks the language servers that have sat idle for five minutes or more.
 
 ### Quick File Navigation
 
@@ -594,7 +594,7 @@ The status bar shows a phantom process count. This tells you how many background
 ### Saving Battery
 
 - Close terminals you are not using. Each open terminal is a separate bash process.
-- An idle language server is not killed on a timer. Run **VSCodroid: Kill Idle Servers** from the Command Palette to shed them yourself.
+- An idle language server is not killed, by a timer or by hand: its extension restarts it within a second. Disabling the extension that starts it is what frees the slot; **VSCodroid: Show Process Tree** marks the idle ones.
 - Avoid leaving dev servers running in the background when not in use.
 
 ### Keyboard Tips for Touch
@@ -648,10 +648,10 @@ Android 12 and later enforce a system-wide limit of 32 phantom processes (backgr
 | Each language server | 1 |
 
 That is 5 on a cold start with nothing open, which is what the status bar shows
-before you do anything. Idle language servers are shed automatically when the count
-reaches 24, and under critical memory pressure; below that they stay. If you hit
-the limit (other apps compete for the same 32 slots), close unused terminals and
-run **VSCodroid: Kill Idle Servers**.
+before you do anything. Nothing sheds a language server automatically: a killed one
+is restarted by its extension within a second. If you hit the limit (other apps
+compete for the same 32 slots), close unused terminals and disable the extensions
+whose language servers **VSCodroid: Show Process Tree** marks idle.
 
 ### Memory Usage
 
@@ -659,7 +659,7 @@ VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you ma
 
 - Close browser tabs and other apps to free RAM.
 - Limit concurrent terminals to 1-2.
-- Language servers are the biggest memory consumers. Idle ones are shed when Android reports critical memory pressure, or on demand through **VSCodroid: Kill Idle Servers**.
+- Language servers are the biggest memory consumers. Nothing sheds them automatically, because their extensions restart them; disable the extensions you are not using. **VSCodroid: Show Process Tree** marks the idle ones.
 
 ### os.cpus() Returns Empty
 

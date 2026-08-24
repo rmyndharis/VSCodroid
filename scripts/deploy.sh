@@ -24,12 +24,29 @@ fi
 echo "Connected devices:"
 adb devices -l | grep "device " | sed 's/^/  /'
 
-# Build if needed
-if [ ! -f "$APK_PATH" ]; then
+# adb chooses the target from ANDROID_SERIAL and refuses to guess between two,
+# so with an emulator up beside a phone the install below fails with adb's
+# "more than one device/emulator", after the build. Refused here instead,
+# before anything is spent, and with the variable named, since adb honours it
+# without this script doing anything further.
+if [ "$DEVICE_COUNT" -gt 1 ] && [ -z "${ANDROID_SERIAL:-}" ]; then
+    echo "ERROR: $DEVICE_COUNT devices connected and ANDROID_SERIAL is not set."
+    echo "  export ANDROID_SERIAL=<serial from the list above> to choose one."
+    exit 1
+fi
+
+# Always built. Gradle is incremental, so an unchanged tree costs seconds,
+# while building only when the APK was absent installed whatever build was on
+# disk after every source edit, and the edit then looked as though it had no
+# effect. SKIP_BUILD=1 installs the APK as it stands, for one fetched from CI.
+if [ -z "${SKIP_BUILD:-}" ]; then
     echo ""
-    echo "APK not found, building..."
-    cd "$ROOT_DIR/android"
-    ./gradlew assembleDebug
+    echo "Building..."
+    ( cd "$ROOT_DIR/android" && ./gradlew assembleDebug )
+fi
+if [ ! -f "$APK_PATH" ]; then
+    echo "ERROR: no APK at $APK_PATH"
+    exit 1
 fi
 
 # Install

@@ -44,6 +44,15 @@ REQUIRED = [
     # aliases built at runtime resolve into this file, so a tree without it
     # ships a Copilot that renders but cannot send.
     "extensions/copilot/node_modules/@github/copilot/sdk/index.js",
+    # The one component of this tree that is not MIT. @github/copilot ships
+    # under the GitHub Copilot CLI License, which grants redistribution only on
+    # the condition that a copy of the licence travels with the copy, and
+    # NOTICE.md tells the reader the full text ships inside the server tree.
+    # The same .moduleignore that patch 0010 edits decides which of that
+    # package's files survive the build, path by path, so a VS Code bump can
+    # drop this one with nothing in this repository having changed. Presence
+    # is not enough here either; the contents are read further down.
+    "extensions/copilot/node_modules/@github/copilot/LICENSE.md",
 ]
 
 failed = False
@@ -274,6 +283,46 @@ def main(tree):
     if size is not None:
         check(size > 0, "ThirdPartyNotices.txt is not empty", "0 bytes")
 
+    # Presence is checked in REQUIRED; the contents are read for the reason
+    # LICENSE.txt's are. This file is the condition under which the SDK may be
+    # redistributed at all, so a truncated or substituted file under the right
+    # name discharges nothing. Matched on the title and on the operative
+    # condition, not on the title alone: a title is the cheapest thing for a
+    # wrong file to carry. Above the manifest gate, because the claim holds for
+    # a tree of any age.
+    cli_licence = tree / "extensions/copilot/node_modules/@github/copilot/LICENSE.md"
+    terms = None
+    try:
+        if cli_licence.exists():
+            terms = cli_licence.read_text(errors="replace")
+    except OSError as e:
+        check(False, "@github/copilot LICENSE.md is readable", str(e))
+    if terms is not None:
+        check("GitHub Copilot CLI License" in terms
+              and "You include a copy of this License" in terms,
+              "@github/copilot LICENSE.md is the GitHub Copilot CLI License",
+              f"{len(terms)} bytes and not the terms NOTICE.md says ship here")
+
+    # The line readiness waits for. ProcessManager.probeReadiness refuses to call
+    # a spawned start ready until the output reader has seen this sentence,
+    # which server-main.js prints from its listen callback; the text is
+    # upstream's, so a VS Code bump can change it, and the Kotlin side would
+    # then wait for a line nobody prints: every start alive and bound, the poll
+    # giving up, the editor never loaded. ServerListeningLineWireTest asks the
+    # same question of a fetched tree, and is skipped where none is fetched,
+    # which is the CI unit-test job; this runs on every packaged tree.
+    listening = "Extension host agent listening on"
+    server_main = tree / "out/server-main.js"
+    try:
+        prints = listening in server_main.read_text(errors="replace")
+    except OSError as e:
+        prints = False
+        check(False, "out/server-main.js is readable", str(e))
+    else:
+        check(prints, f"server-main.js prints \"{listening}\"",
+              "readiness in ProcessManager waits for that line and no spawned "
+              "start would ever be reported ready; update SERVER_LISTENING_LINE")
+
     # The Mobile CSS block is appended to the packaged workbench.css at server
     # build time, and on 2026-08-15 its content changed (the Accounts/Manage
     # hide was removed) while the idempotency marker stayed the same. The
@@ -496,9 +545,48 @@ def main(tree):
     return 1 if failed else 0
 
 
+def self_test() -> int:
+    """Hand main() a tree missing the Copilot CLI licence, then one carrying it.
+
+    A required path that is never absent in a real tree is a rule whose
+    refusal nobody has seen fire, and a rule that has stopped firing prints
+    what a clean tree prints. The tree here is otherwise empty, so every other
+    check fails too; only the two lines about this file are read.
+    """
+    import contextlib
+    import io
+    import tempfile
+
+    global failed
+    rel = "extensions/copilot/node_modules/@github/copilot/LICENSE.md"
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp)
+        for present, want in ((False, f"FAIL    {rel}"),
+                              (True, "ok      @github/copilot LICENSE.md is the "
+                                     "GitHub Copilot CLI License")):
+            if present:
+                (tree / rel).parent.mkdir(parents=True)
+                (tree / rel).write_text("GitHub Copilot CLI License\n\n"
+                                        "2. Redistribution Rights and Conditions\n"
+                                        "   You include a copy of this License and "
+                                        "retain all applicable notices.\n")
+            out = io.StringIO()
+            failed = False
+            with contextlib.redirect_stdout(out):
+                main(tree)
+            if want not in out.getvalue():
+                print(f"  FAIL   self-test: with the licence "
+                      f"{'present' if present else 'absent'}, no line read {want!r}")
+                return 1
+    print("  ok     self-test: the Copilot CLI licence is required and read")
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        sys.exit(self_test())
     if len(sys.argv) != 2:
-        print("usage: verify-server-tree.py <tree>", file=sys.stderr)
+        print("usage: verify-server-tree.py <tree> | --self-test", file=sys.stderr)
         sys.exit(2)
     root = pathlib.Path(sys.argv[1])
     if not root.is_dir():

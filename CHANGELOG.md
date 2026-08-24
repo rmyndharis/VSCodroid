@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Files served to extension webviews answer byte-range requests, which is what seeking in a media preview needs.
 - The release build can be exercised without publishing one. It cannot publish: the job that writes is gated on the trigger, so a dispatched run reports green having released nothing.
 - A unit-test coverage report, on request: `./gradlew :app:createDebugUnitTestCoverageReport -PvscodroidCoverage`. Nothing gates on the figure and the suite CI runs stays uninstrumented.
+- The storage screen has a Projects row for the workspace; an install that keeps it on shared storage now counts it in the total.
+- Toolchain environment variables reach tasks, `make` recipes and extensions for a toolchain installed while the editor is open; they used to reach only bash until the server restarted.
 
 ### Changed
 - The toolchain picker is offered until you answer it. An interrupted first run used to skip it permanently, leaving the launcher shortcut as the only way to add a language.
@@ -104,6 +106,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging checks that the documented list of bundled binaries matches what ships, so a binary added without its documentation fails the build.
 - The testing document gives the command that measures the suite instead of a figure that goes stale the next time a test is added.
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
+- Kill Idle Servers is removed, along with the automatic kill under memory pressure and at 24 processes: a killed language server is restarted by its extension within a second, so no slot was ever freed.
+- The process tree marks language servers idle after five minutes without CPU and says that disabling the owning extension is what frees a slot.
+- The toolchain picker's Skip is a 48dp button, so a screen reader announces it as a control.
+- The "Starting server..." placeholder and the repeated-crash explanation are string resources, so translations reach them.
+- Build: node-addon-api is fetched with npm pack and pinned by sha256 per addon, like the addon sources.
+- Build: verify-android-elf.py refuses an executable naming a non-Android program interpreter in every mode, not only under --tree.
+- Build: verify-server-tree.py requires the GitHub Copilot CLI licence text in the server tree and checks the listening line readiness waits for.
+- Build: bundleNotices fails the build when a notice or licence text is missing instead of packaging a shorter set.
+- CI: release gates must be an equality on github.event_name with no top-level ||, and each gate script carries a --self-test that lint.yml runs.
+- CI: the workflows set up Node 24, the major the app ships, and check-build-steps.py holds them there.
+- CI: build-vscode-oss.yml builds with a read-only token and publishes from a separate write-scoped job.
+- Tooling: deploy.sh always builds (SKIP_BUILD=1 to install as is) and refuses more than one attached device unless ANDROID_SERIAL is set.
 
 ### Fixed
 - Deleting a folder from the terminal or a script no longer removes files on the device that were never copied into the editor. Such a folder is kept on the device and a notice says so.
@@ -294,6 +308,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Running out of space during setup says how much to free rather than the size of the whole unpack.
 - The process list no longer freezes for the rest of a session when the system reclaims the app's cache directory.
 - The toolchain removal dialog is dismissed on rotation instead of leaking its window.
+- The editor server is trusted only once the process the app started reports that it bound its port, so a stranger holding the port during a restart is no longer handed the connection token for answering with the public commit.
+- A cold start no longer abandons a server of ours that was slow to answer: it is ended and the same port reused, so workbench sign-ins and state keyed to that origin are kept.
+- A heap ceiling commented out with a `/* */` block in settings.json is no longer applied.
+- A file edited on the device and then in the editor before the folder was reopened keeps the device edit beside it as `<name>.device-<time>` instead of overwriting it.
+- Reopening a folder puts every stranded save onto the device in mirrors larger than 2000 entries; the cap counts stranded files, not entries walked.
+- A document whose name holds a tab or line break is no longer recreated on the device after being deleted there, and its mirror can be reclaimed.
+- A save still resolving when a folder is switched no longer writes the previous folder's directories into the next folder's document cache.
+- Cancelling a queued toolchain download on a full device reports it as cancelled rather than as a storage failure.
+- A withdrawn toolchain's leftover Play delivery is reclaimed at launch; up to 179 MB could sit in app storage that no screen counted.
+- Opening a device folder while another is still being copied no longer leaves write-back on the wrong folder; opens run one at a time, and one the page has already left is skipped.
+- The page shown after repeated editor crashes stays up until Reload is tapped, even when the server restarts on its own in the meantime.
+- A second splash screen created during first-run setup no longer releases the foreground hold while the unpack is still writing.
+- A bundled extension the user uninstalled is no longer unpacked again on the next upgrade as an unlisted directory.
+- Extension-record preferences are written synchronously, as every other first-run record already was.
+- Extra key row: a latched Ctrl or Alt is spent when a composing keyboard starts a word on the EditContext path, so the space ending the word is no longer Ctrl+Space.
+- Extra key row: a latched modifier is spent when focus moves into an extension webview or the Simple Browser, so the first character typed back in the editor is inserted rather than run as a chord.
+- An extension host whose client dropped before it finished starting is disposed after the reconnection grace instead of living until the server exits.
+- Copying a bug report from the crash dialog no longer builds it on the main thread.
+- Instrumented server tests follow the port the app recorded instead of probing 13337.
 
 ### Security
 - A page in the editor can no longer hand a link to another app from a frame you never touched; a navigation with no gesture behind it is refused.
@@ -309,6 +342,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bug reports redact credentials named the way a server names them. A rule required the name to start at a word boundary, so NPM_TOKEN, DB_PASSWORD and their family were written out in full.
 - A device folder's path no longer reaches the system log when the folder is opened from the recent list.
 - Content rendered in the editor can no longer steer the address the app fetches when it proxies an editor asset.
+- A page opened in the built-in browser can no longer read the open workspace. Files served to extension webviews are refused unless the request comes from the editor, so such a page can neither run a workspace script nor learn which files exist.
+- Server output kept for bug reports also removes cookie headers, private keys, and credentials inside a JSON body that was quoted into another string.
 
 ## [1.1.0] - 2026-08-19
 

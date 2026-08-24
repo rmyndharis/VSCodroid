@@ -13,8 +13,9 @@ import org.junit.jupiter.api.Test
  * decision is telling them apart:
  *
  *  - the user uninstalled a bundled extension, which removes both its manifest
- *    entry and its directory. Extraction recreates the directory on the next
- *    launch, so re-listing it would undo the uninstall on every app update.
+ *    entry and its directory. Extraction used to recreate the directory on the
+ *    next launch, and a copy an earlier release left that way is still on
+ *    disk, so re-listing it would undo the uninstall on every app update.
  *  - the app started bundling an extension it never shipped before. It also has
  *    no manifest entry, and its directory has also just appeared.
  *

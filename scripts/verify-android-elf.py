@@ -4,8 +4,9 @@
     verify-android-elf.py <file> [--lib-dir DIR]...
     verify-android-elf.py --dir DIR [--lib-dir DIR]...
     verify-android-elf.py --tree DIR
+    verify-android-elf.py --self-test
 
-Three things of one file, named directly or reached by `--dir`, each of which
+Four things of one file, named directly or reached by `--dir`, each of which
 fails the same quiet way at runtime (the file is present, the build is green,
 and the process dies or the addon refuses to load with a message nobody sees):
 
@@ -13,15 +14,22 @@ and the process dies or the addon refuses to load with a message nobody sees):
   * every DT_NEEDED library is one Bionic provides or one we bundle, since a
     glibc or musl dependency has no loader here;
   * every LOAD segment aligned to at least 16 KB, which Android 16 requires and
-    NDK 27 does not do by default.
+    NDK 27 does not do by default;
+  * PT_INTERP, when there is one, names Android's loader. An aarch64 executable
+    naming any other program interpreter came out of a glibc toolchain and
+    nothing on the device can start it, and the second question stopped
+    catching that on its own the day the glibc shim gave every glibc soname a
+    file to resolve to.
 
-`--tree` asks two questions of a whole directory tree: the third above, and
-PT_INTERP, which no single-file run asks at all. An aarch64 executable naming a
-program interpreter other than Android's came out of a glibc toolchain and
-nothing on the device can start it, so it is the one loadability question a tree
-this app merely packages can still be held to. What tree mode is for is written
-at [alignment_sweep]; the short version is that the first two above cannot be
-asked of such a tree without failing it for files that are correct.
+`--tree` asks two of those of a whole directory tree, alignment and PT_INTERP,
+because they are the ones a tree this app merely packages can be held to. What
+tree mode is for is written at [alignment_sweep]; the short version is that
+the first two above cannot be asked of such a tree without failing it for
+files that are correct.
+
+`--self-test` hands verify() a synthetic executable naming a glibc loader and
+two it must accept, since no file this repository places can make the refusal
+fire and a refusal that has stopped firing looks exactly like a clean tree.
 
 Pure Python on purpose: the NDK's readelf is not available everywhere this runs,
 and having one implementation means the addon build and the runtime download
@@ -187,7 +195,7 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     # that tells its reader "the FAIL line above names the file" would be lying.
     # Caught per file so the sweep finishes and still fails.
     try:
-        machine, _e_type, needed, aligns, _interp = read_elf(path)
+        machine, _e_type, needed, aligns, interp = read_elf(path)
     # ValueError covers the two that read_elf can raise out of a corrupt dynamic
     # string table: bytes.index() when a DT_NEEDED offset has no NUL after it, and
     # .decode() on a non-UTF-8 name (UnicodeDecodeError is a ValueError). Those
@@ -222,7 +230,67 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     check(worst >= MIN_ALIGN, f"LOAD segments aligned to {worst:#x}",
           f"Android 16 needs {MIN_ALIGN:#x}")
 
+    # The question --tree asks, and the two modes here did not. The DT_NEEDED
+    # test above used to catch a glibc build on its own, because libc.so.6 was
+    # a name nothing provided; build-glibc-shim.sh now writes libc.so.6,
+    # libdl.so.2, libpthread.so.0 and ld-linux-aarch64.so.1 into usr/lib, and
+    # every download script and the jniLibs sweep pass that directory as a
+    # --lib-dir. An aarch64 executable out of a glibc toolchain therefore
+    # resolves every library it names and fails at exec on the device instead,
+    # with ENOENT for a loader path Android does not have, indistinguishable
+    # from the tool never having been installed. A shared object has no
+    # PT_INTERP and is not the subject. Nothing on disk moves: measured over
+    # jniLibs, assets/usr, both toolchain packs and rg, 306 aarch64 ELF files
+    # and not one naming a loader other than Android's.
+    check(interp is None or interp == ANDROID_INTERP,
+          f"program interpreter is {interp}" if interp
+          else "no program interpreter: a shared object, or static",
+          "a glibc build, which nothing on this device can start")
+
     return not failed
+
+
+def synthetic_elf(interp) -> bytes:
+    """The smallest aarch64 ELF verify() will read: one 16 KB-aligned LOAD, no
+    dynamic section, and a PT_INTERP naming `interp`, or none when it is None."""
+    ehsize, phentsize = 64, 56
+    phnum = 2 if interp else 1
+    data_off = ehsize + phentsize * phnum
+    path = interp.encode() + b"\0" if interp else b""
+    size = data_off + len(path)
+    phdrs = struct.pack("<IIQQQQQQ", PT_LOAD, 5, 0, 0, 0, size, size, MIN_ALIGN)
+    if interp:
+        phdrs += struct.pack("<IIQQQQQQ", PT_INTERP, 4, data_off, data_off, data_off,
+                             len(path), len(path), 1)
+    ehdr = ELF_MAGIC + bytes([2, 1, 1, 0]) + b"\0" * 8 + struct.pack(
+        "<HHIQQQIHHHHHH", 2, EM_AARCH64, 1, 0, ehsize, 0, 0,
+        ehsize, phentsize, phnum, 0, 0, 0)
+    return ehdr + phdrs + path
+
+
+def self_test() -> int:
+    """Hand verify() the executable it exists to refuse, and two it must accept.
+
+    Every real binary this repository places passes, so the refusal has no
+    file in the tree to fire on, and a rule that has stopped firing prints
+    exactly what a clean tree prints.
+    """
+    import tempfile
+
+    cases = (("glibc", "/lib/ld-linux-aarch64.so.1", False),
+             ("android", ANDROID_INTERP, True),
+             ("shared", None, True))
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, interp, expected in cases:
+            path = pathlib.Path(tmp) / f"lib{name}.so"
+            path.write_bytes(synthetic_elf(interp))
+            print(f"  {path.name}")
+            if verify(path, set()) != expected:
+                print(f"  FAIL   self-test: PT_INTERP {interp} was "
+                      f"{'accepted' if expected is False else 'refused'}")
+                return 1
+    print("  ok     self-test: a foreign program interpreter is refused")
+    return 0
 
 
 def alignment_sweep(root: pathlib.Path) -> int:
@@ -388,7 +456,12 @@ def main() -> int:
                     help="check LOAD alignment on every aarch64 ELF under this tree")
     ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
                     help="directory whose libraries ship with the app")
+    ap.add_argument("--self-test", action="store_true",
+                    help="check that a glibc-built executable is refused")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     if args.tree is not None:
         return alignment_sweep(args.tree)
@@ -404,7 +477,8 @@ def main() -> int:
     elif args.file is not None:
         targets = [args.file]
     else:
-        ap.error("give a file, --dir for a directory, or --tree for a whole tree")
+        ap.error("give a file, --dir for a directory, --tree for a whole tree, "
+                 "or --self-test")
 
     bundled = resolvable_names(args.lib_dir)
     if bundled is None:

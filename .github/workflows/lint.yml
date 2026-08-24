@@ -88,12 +88,16 @@ jobs:
           cache-provider: basic
 
       # For the JavaScript self-checks below. Pinned rather than left to
-      # whatever the runner image happens to carry, so the version they run
-      # under is the same one build.yml uses.
+      # whatever the runner image happens to carry, and pinned to the major
+      # the APK ships: the code under test runs on the device under the
+      # Termux nodejs-lts that build-native-addons.sh names in NODE_VERSION,
+      # and nowhere else, so a self-check green on another major says nothing
+      # about the device. It ran on 20 while every APK carried 24, which
+      # check-build-steps.py now refuses.
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: "24"
 
       # Lint only needs compiled Kotlin, not runtime assets.
       # Create minimal directory structure so Gradle does not fail.
@@ -117,6 +121,18 @@ jobs:
       # a step carrying only a name loads cleanly and is rejected at dispatch.
       - name: Check every workflow step is runnable and pinned
         run: python3 scripts/check-workflow-steps.py
+
+      # Three gates whose refusal has no file in the tree to fire on: every
+      # release gate is an allowlist, every bundled executable names Android's
+      # loader, and every server tree carries the Copilot CLI licence. A
+      # refusal that has quietly stopped firing prints exactly what a clean
+      # tree prints, so each one is handed the input it exists to refuse, and
+      # a control it must accept, on every run.
+      - name: Check the gates still refuse what they exist to refuse
+        run: |
+          python3 scripts/check-workflow-steps.py --self-test
+          python3 scripts/verify-android-elf.py --self-test
+          python3 scripts/verify-server-tree.py --self-test
 
       # The same question asked of the build tool itself, which the step above
       # cannot reach: `uses:` pinning covers the actions, and the wrapper

@@ -74,12 +74,9 @@ class ServerHealthTest {
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
 
         // The server typically needs 10-30s. Use 60s timeout.
-        val ready = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
+        val port = ServerReadyHelper.waitForServer(context, timeoutMs = 60_000L)
 
-        assertTrue(
-            "Server should become reachable on a port within 60s",
-            ready
-        )
+        assertTrue(PORT_UNREACHABLE, port != 0)
         scenario.close()
     }
 
@@ -87,19 +84,19 @@ class ServerHealthTest {
     fun server_answersTheReadinessProbe() {
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
 
-        val portReady = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
-        assertTrue(PORT_UNREACHABLE, portReady)
+        val port = ServerReadyHelper.waitForServer(context, timeoutMs = 60_000L)
+        assertTrue(PORT_UNREACHABLE, port != 0)
 
-        val healthy = ServerReadyHelper.healthCheck(13337, timeoutMs = 10_000L)
-        assertTrue("HTTP health check should succeed", healthy)
+        val healthy = ServerReadyHelper.healthCheck(port, timeoutMs = 10_000L)
+        assertTrue("HTTP health check should succeed on port $port", healthy)
         scenario.close()
     }
 
     @Test
     fun server_survivesActivityRecreation() {
         // MainActivity, not SplashActivity, and that is the whole reason this
-        // test could never pass. SplashActivity carries android:noHistory and
-        // finishes itself once setup is done, so by the time recreate() is
+        // test could never pass. SplashActivity finishes itself once setup is
+        // done (launchMain calls finish()), so by the time recreate() is
         // called the scenario has nothing to recreate and ActivityScenario
         // throws NullPointerException from its own null check. Nothing noticed,
         // because nothing runs this suite.
@@ -109,31 +106,34 @@ class ServerHealthTest {
         // written before handing over.
         val scenario = ActivityScenario.launch(MainActivity::class.java)
 
-        val portReady = ServerReadyHelper.waitForPort(13337, timeoutMs = 60_000L)
-        assertTrue(PORT_UNREACHABLE, portReady)
+        val port = ServerReadyHelper.waitForServer(context, timeoutMs = 60_000L)
+        assertTrue(PORT_UNREACHABLE, port != 0)
 
         // Simulate configuration change (rotation)
         scenario.recreate()
         Thread.sleep(3000)
 
         // Server should still be running (it's in a foreground service)
-        val stillHealthy = ServerReadyHelper.healthCheck(13337, timeoutMs = 10_000L)
-        assertTrue("Server should survive activity recreation", stillHealthy)
+        val stillHealthy = ServerReadyHelper.healthCheck(port, timeoutMs = 10_000L)
+        assertTrue("Server should survive activity recreation on port $port", stillHealthy)
         scenario.close()
     }
 
     private companion object {
         /**
-         * These three probe 13337 by literal, while the app allocates through
-         * `PortFinder.getOrAllocatePort()`, which remembers its choice in
-         * SharedPreferences("vscodroid") and moves off 13337 whenever something else
-         * holds it. On such a device the probe fails for a reason that has nothing to
-         * do with the server, so the message says so rather than leaving the reader to
-         * work it out. Read from PortFinder, not measured on a device.
+         * The port is whatever `PortFinder.getOrAllocatePort()` recorded, read back
+         * by `ServerReadyHelper.waitForServer`. A literal 13337 stood here, and on
+         * any device where that port had ever been taken all three cases went red
+         * for a reason that had nothing to do with the server. What is left for
+         * this message is the one case the record cannot cover: the whole scan
+         * range full, so the app fell back to an ephemeral port it deliberately
+         * does not remember. Not measured on such a device.
          */
         const val PORT_UNREACHABLE =
-            "Server never became reachable on port 13337 within 60s. If this device " +
-                "already had 13337 taken, PortFinder will have moved the app to " +
-                "another port and this probe is looking at the wrong one."
+            "Server never became reachable within 60s on the port PortFinder " +
+                "recorded. Either the record is stale or absent, or the scan range " +
+                "13337 to 13400 was full and the app fell back to an ephemeral port it " +
+                "deliberately does not record (the previous value stays in the prefs), " +
+                "which this probe cannot know."
     }
 }

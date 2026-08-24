@@ -216,10 +216,16 @@ internal class ServerLog(private val file: File) {
  * letter welded onto the front of the keyword, because the absence of a boundary
  * there is the same thing that keeps `mytoken=` out; `PGPASSWORD` is the one name
  * of that shape common enough to be listed by hand, and another vendor's spelling
- * of it would need listing too. Widening it further would start eating the
- * diagnostics the file exists for; narrowing what is mirrored in the first place
- * is the other direction, and it would throw away the extension-host output that
- * is often the only account of what went wrong.
+ * of it would need listing too. A private key printed as its own lines, one run
+ * of base64 after another between its `-----BEGIN` and `-----END` markers, is the
+ * bare case too: the markers name it, but the lines between carry no name, and
+ * this runs one line at a time with nothing kept from the line before, since
+ * [ServerLog.append] is handed each line as the drain reads it. Only a key
+ * serialised onto one line, the shape `JSON.stringify` gives it, is caught.
+ * Widening it further would start eating the diagnostics the file exists for;
+ * narrowing what is mirrored in the first place is the other direction, and it
+ * would throw away the extension-host output that is often the only account of
+ * what went wrong.
  */
 internal fun redactSecrets(text: String): String =
     if ('\n' !in text) redactOneLine(text)
@@ -251,6 +257,22 @@ private fun redactOneLine(line: String): String {
  * secret itself in the file. The end of the line is where it stops because
  * [redactSecrets] never hands a pattern more than one line, not because this
  * class excludes a newline. It does not.
+ *
+ * `cookie` and `set-cookie` share the header rule because their value has the
+ * same shape: `name=value; name=value`, every pair of which is something a
+ * server handed out to identify this client, so the whole run goes. An
+ * extension that dumps a failing request prints its headers, and the cookie
+ * line is where a session lands. The editor's own `vscode-tkn` cookie is the
+ * one cookie `redactToken` already reaches, because its pattern is unanchored
+ * and says so; every other cookie on this stream had no rule at all.
+ *
+ * The quote around a name or a value may carry a backslash, `(?:\\?["'])?` and
+ * `\\?"`, because a body that was serialised and then quoted into an error
+ * message arrives with `\"` around every key: `JSON.stringify(err)` where
+ * `err.message` already held a JSON body, which is what a fetch wrapper does
+ * with the response it failed on. Without it the optional quote matched
+ * nothing, the `\s*` met a backslash where the separator had to be, and the
+ * line went to disk whole.
  *
  * The named-key rule reads its keyword as one segment of a name, not as a whole
  * word. `\b` is defined over `[A-Za-z0-9_]`, so an underscore is a word character
@@ -296,14 +318,25 @@ private fun redactOneLine(line: String): String {
  * is one word rather than one line, but is more than the name alone suggests.
  */
 private val SECRET_PATTERNS: List<Pair<Regex, String>> = listOf(
-    Regex("""(?i)(\bauthorization\b\s*["']?\s*[:=]\s*)["']?[^"',}]+""") to "\$1<redacted>",
+    Regex(
+        """(?i)(\b(?:authorization|cookie|set-cookie)\b\s*(?:\\?["'])?\s*[:=]\s*)""" +
+            """(?:\\?["'])?[^"',}]+"""
+    ) to "\$1<redacted>",
     Regex("""(?i)(\b(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}""") to "\$1<redacted>",
     Regex(
         """(?i)((?<![A-Za-z0-9])(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
-            """|auth[_-]?token|client[_-]?secret|pgpassword|password|passwd|secret|token)""" +
-            """(?:[_-][A-Za-z0-9_-]*)?\s*["']?\s*[:=]\s*)""" +
-            """(?:"[^"]*"|'[^']*'|["']?[^\s"',}&]+)"""
+            """|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
+            """|passwd|secret|token)""" +
+            """(?:[_-][A-Za-z0-9_-]*)?\s*(?:\\?["'])?\s*[:=]\s*)""" +
+            """(?:\\?"[^"]*"|\\?'[^']*'|["']?[^\s"',}&]+)"""
     ) to "\$1<redacted>",
+    // A private key serialised onto one line, which is the shape `JSON.stringify`
+    // gives it: the body is base64 and `\n` escapes, hundreds of characters of it
+    // for any real key, so the floor of 40 leaves a diagnostic that merely names
+    // the marker (`expected a -----BEGIN PRIVATE KEY----- header`) alone. Only
+    // private keys; a certificate or a public key dumped by a failing TLS
+    // handshake is the diagnostic, not the secret.
+    Regex("""(-----BEGIN [A-Z ]*PRIVATE KEY-----)[A-Za-z0-9+/=\s\\]{40,}""") to "\$1<redacted>",
     // Vendor-prefixed keys, which are the ones that travel with no name beside
     // them at all: an npm or GitHub token pasted into a URL, or a key echoed by a
     // failing request body.

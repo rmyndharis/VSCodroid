@@ -398,7 +398,9 @@ fun getStorageBreakdown(authToken: String, replyId: String): String
 //
 // Posted against replyId: JSON with per-component disk usage in bytes:
 // {"vscode_server": N, "extensions": N, "user_data": N, "logs": N,
-//  "tools": N, "saf_mirrors": N, "cache": N, "total": N}
+//  "tools": N, "saf_mirrors": N, "projects": N, "cache": N, "total": N}
+// "projects" is the default workspace; it is inside "total" only when it lies
+// outside filesDir (an install that kept it on shared storage).
 //
 // TAKES AS LONG AS THE DISK. Every figure is a directory walk and "total" walks
 // filesDir again on top, so on an install carrying the extracted server tree
@@ -647,7 +649,10 @@ fun generateBugReport(authToken: String): String
 //   build, so the section is present rather than silently empty.
 // Everything read off disk has the connection token replaced wherever it
 // appears as a `tkn=` parameter, and the server log is redacted a second
-// time on the way in so the token never lands in the file at all.
+// time on the way in so the token never lands in the file at all; that pass
+// also removes credential shapes (authorization and cookie headers, bearer
+// tokens, named keys and passwords, vendor-prefixed keys, one-line private
+// keys), including inside a JSON body quoted into another string.
 
 @JavascriptInterface
 fun clearCrashLogs(authToken: String)

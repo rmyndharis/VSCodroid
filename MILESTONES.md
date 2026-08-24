@@ -291,7 +291,7 @@ M6 (Release)   → Play Store release
    - [x] 4 custom VSCodroid extensions:
      - `vscodroid.vscodroid-welcome-1.2.2`, welcome tab with quick actions
      - `vscodroid.vscodroid-saf-bridge-1.4.0`, SAF storage integration
-     - `vscodroid.vscodroid-process-monitor-1.1.0`, phantom process monitoring
+     - `vscodroid.vscodroid-process-monitor-1.2.0`, phantom process monitoring
      - `vscodroid.vscodroid-serve-network-1.1.0`, serve a dev server on the LAN
    - [x] `extensions.json` manifest auto-generated on first run
 
@@ -352,7 +352,7 @@ M6 (Release)   → Play Store release
    - [x] `vscodroid.vscodroid-process-monitor` extension bundled: provides in-VS Code UI
    - [x] Exit code 137 (SIGKILL) handling in `ProcessManager`: detects OOM/phantom kill
    - [x] Extension Host and ptyHost run as `worker_threads.Worker()` (saves 2 phantom process slots)
-   - [x] Idle language servers are shed under a `critical` memory-pressure signal, and again once the process count reaches `RECLAIM_BUDGET` (24) against Android's 32-process limit
+   - [x] Idle language servers are marked in the process tree after five minutes without CPU; nothing kills them, because the owning extension restarts a killed server within a second (measured), so the details view names disabling that extension as what frees a slot
    - FR-EXT-09, "limit concurrent Language Servers to 2-3", is **not implemented**. Nothing caps how many run at once; shedding idle ones after the fact is a different guarantee, and the M4 success criteria below do not cover it.
 
 5. **Storage management** (`StorageManager.kt`, `AndroidBridge.kt`)

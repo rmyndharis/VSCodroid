@@ -123,7 +123,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | FR-EXT-06 | System SHALL support language extensions (syntax, snippets, LSP) | P0 | M1 |
 | FR-EXT-07 | System SHALL support extension settings and configuration | P1 | M1 |
 | FR-EXT-08 | System SHALL bundle essential extensions for offline use | P2 | M3 |
-| FR-EXT-09 | A hard cap on concurrent Language Servers is not implemented, and nothing in the app counts them. What ships instead is reclamation: `assets/process-monitor.js` marks a language server idle after five minutes without a tick of CPU, and sheds the idle ones when Android reports critical memory pressure, when the process count reaches `RECLAIM_BUDGET` (24, against the 32-process phantom limit), or when the user runs **VSCodroid: Kill Idle Servers** | n/a | M4 |
+| FR-EXT-09 | A hard cap on concurrent Language Servers is not implemented, and nothing in the app counts them. What ships instead is visibility: `assets/process-monitor.js` marks a language server idle after five minutes without a tick of CPU and the process tree shows the mark. Nothing kills one, because the owning extension restarts it within a second (measured), so disabling that extension is the one way to free a slot | n/a | M4 |
 
 ### 3.5 Source Control (FR-SCM)
 
@@ -201,7 +201,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|--------|----------|
 | NFR-RES-01 | RAM usage (typical coding session) | < 700 MB | P1 |
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
-| NFR-RES-03 | Phantom process count | 5 with nothing open and 8 with a terminal and two language servers, the `IDLE_BASELINE` and `SOFT_BUDGET` of `assets/process-monitor.js`; the monitor calls it a problem at 14 and sheds idle language servers at 24, against Android's 32 | P0 |
+| NFR-RES-03 | Phantom process count | 5 with nothing open and 8 with a terminal and two language servers, the `IDLE_BASELINE` and `SOFT_BUDGET` of `assets/process-monitor.js`; the monitor warns at 8 and calls it a problem at 14, against Android's 32; nothing sheds a process | P0 |
 | NFR-RES-04 | AAB base module, compressed download | Under Play's 500 MB cap, which `scripts/check-bundle-size.py` refuses a bundle over. Last measured at 270.7 MiB, before the workbench internal bundles were pruned from the server tree, so re-measure from the AAB rather than quoting this. **200 MB is not a cap**: it is the size above which a mobile-data user sees a large-download dialog. The on-demand toolchain ZIPs are 9.9 MB for Ruby and 55.4 MB for Java 17, per `ToolchainRegistry.available`, and draw on Play's separate on-demand budget rather than this one | P1 |
 | NFR-RES-05 | Runtime storage (core extracted) | About 770 MiB, the asset tree that `BuildConfig.EXTRACTED_ASSET_BYTES` is computed from at build time; about 950 MiB with both toolchains installed | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |

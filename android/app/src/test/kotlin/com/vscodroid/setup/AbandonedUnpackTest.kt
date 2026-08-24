@@ -24,9 +24,10 @@ import java.io.File
  *
  * The failure this covers is not an exception. `extractBundledExtensions`
  * already deletes what a failed attempt created and throws, so the retry works.
- * A process kill runs none of that: setup lives in SplashActivity's scope with
- * no foreground service holding it, so swiping the task away or a low-memory
- * kill during the 57 MB extension copy ends the process where it stands. What
+ * A process kill runs none of that: setup lives in SplashActivity's scope, and
+ * the foreground hold it takes makes a kill during the 57 MB extension copy
+ * rare rather than impossible; a low-memory kill still ends the process where
+ * it stands. What
  * it leaves is a directory holding some of an extension, and for one fetched at
  * a pinned version the directory's presence was the whole staleness test. The
  * next run therefore read a few hundred of 3787 files as an install, dropped it

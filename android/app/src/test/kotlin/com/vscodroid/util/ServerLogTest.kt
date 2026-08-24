@@ -474,6 +474,22 @@ class ServerLogTest {
      * everything after its first word. Drop `(?<![A-Za-z0-9])` and the second
      * column's `notasecret=1 mytoken=diagnostic` is redacted instead. Measured:
      * each of the three reddens this case on its own.
+     *
+     * Four more, one per later widening. Put the quote back to a bare `["']?`
+     * in the first and third entries and the three `\"`-quoted rows survive: a
+     * body serialised into an error message arrives with a backslash before
+     * every quote, and the `\s*` then meets that backslash where the separator
+     * has to be. Drop `|cookie|set-cookie` from the first entry and the three
+     * cookie rows survive this function (the `vscode-tkn` one is still taken
+     * by `redactToken` on the append path, which is why it is here as a row
+     * against this function alone). Drop `private[_-]?key|` from the third and the
+     * `private_key:` row survives (the `"privateKey":` row does not, because
+     * its value is a one-line key and the `-----BEGIN` entry takes that on its
+     * own). Drop the `-----BEGIN` entry and the bare one-line key, the one with
+     * no name beside it, survives. The second column holds the
+     * shapes each of those must not eat: a count of cookies, a header named
+     * with no value, a count of keys, a diagnostic that only names the marker,
+     * and a certificate, which is what a failing TLS handshake prints.
      */
     @Test
     fun `the redaction table holds in both directions`() {
@@ -488,6 +504,25 @@ class ServerLogTest {
             "<4242><stderr> DB_PASSWORD=\"correct horse battery staple\"" to "battery staple",
             "<4242><stderr> export MY_SECRET='hunter 2 three'" to "2 three",
             "<4242> using key sk-abcdefghijklmnopqrstuvwxyz" to "sk-abcdefghijklmnopqrstuvwxyz",
+            // A body that was JSON.stringify'd and then quoted into an error
+            // message: every quote carries a backslash.
+            "<4242><stderr> body: \"{\\\"api_key\\\":\\\"AKIAIOSFODNN7EXAMPLE\\\"}\"" to
+                "AKIAIOSFODNN7EXAMPLE",
+            "<4242><stderr> {\\\"authorization\\\":\\\"AKIAIOSFODNN7EXAMPLE\\\"}" to
+                "AKIAIOSFODNN7EXAMPLE",
+            "<4242><stderr> {\\\"password\\\":\\\"hunter2hunter2\\\"}" to "hunter2hunter2",
+            "<4242><stderr> Cookie: session=AKIAIOSFODNN7EXAMPLE; theme=dark" to
+                "AKIAIOSFODNN7EXAMPLE",
+            "<4242><stderr> set-cookie: sid=AKIAIOSFODNN7EXAMPLE; Path=/; HttpOnly" to
+                "AKIAIOSFODNN7EXAMPLE",
+            "<4242><stderr> cookie: vscode-tkn=8f3c1d2e-secret" to "8f3c1d2e-secret",
+            "<4242><stderr> private_key: AKIAIOSFODNN7EXAMPLE" to "AKIAIOSFODNN7EXAMPLE",
+            "<4242><stderr> \"privateKey\": \"-----BEGIN PRIVATE KEY-----\\n" +
+                "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\\n" +
+                "-----END PRIVATE KEY-----\\n\"" to "MIIEvQIBADANBg",
+            "<4242><stderr> Error: bad key \"-----BEGIN RSA PRIVATE KEY-----\\n" +
+                "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\\n" +
+                "-----END RSA PRIVATE KEY-----\"" to "MIIEvQIBADANBg",
         )
         val mustSurvive = listOf(
             "Extension host agent listening on 41003",
@@ -498,6 +533,13 @@ class ServerLogTest {
             "<4242><stderr> SecretStorageService: initialised",
             "<4242> at Tokenizer.scan (/data/user/0/x/tokenizer.js:12:3)",
             "<4242> notasecret=1 mytoken=diagnostic",
+            "<4242> cookies: 3 stored for 127.0.0.1",
+            "<4242> Set-Cookie header missing from the response",
+            "<4242> privateKeys: 2 loaded from ~/.ssh",
+            "<4242><stderr> expected a -----BEGIN PRIVATE KEY----- header",
+            "<4242><stderr> peer certificate \"-----BEGIN CERTIFICATE-----\\n" +
+                "MIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQUFADBaMQswCQYDVQQGEwJJ\\n" +
+                "-----END CERTIFICATE-----\"",
         )
 
         for ((line, secret) in mustGo) {

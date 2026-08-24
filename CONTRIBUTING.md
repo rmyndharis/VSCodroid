@@ -283,7 +283,7 @@ checkouts differed.
 | `download-java.sh` | Downloads OpenJDK 17 + deps from Termux | `toolchain_java/src/main/assets/` |
 | `check-build-steps.py` | Five checks, and the script prints one line per check so the count is readable from a run rather than from here. Three about shell scripts: the documented build sequence, `build-all.sh`, and the two build workflows all still name the same ones, the third pairs `build.yml` against `release.yml`, so a step dropped from the tag path alone is caught. Then every `scripts/test-*.js` runs in both `lint.yml` and `release.yml`, so a self-check cannot be added and then run by nothing; and every `scripts/check-*.py` is invoked by something, which is the answerable question for that family since several take arguments and run from a script or from Gradle. The self-check rule matches an invocation, not a mention, a script named only in a comment does not count. ⚠️ The shell rules match `bash scripts/*.sh` only, so a script a workflow runs with `python3`, or one called from inside another script, is still not covered, those are listed here by hand. The build-vs-release pairing is also one-directional: a script that runs only on the tag path can be dropped from it and nothing notices | exit status |
 | `write-build-manifest.py` | Records what a build resolved: the app's own version, versionCode and commit, the editor version and commit, the server tarball digest, the musl loader's version and checksum, and the version and checksum of every Termux package. The release workflow attaches it to the release, so a published artifact can be traced to the build that produced it without asking the Actions API for a run that will outlive neither. A record, not a lock: superseded packages are dropped upstream, so a pin would break the build on every routine update. `--compare` reports the differences against an earlier manifest and always exits 0 | `build-manifest.txt` |
-| `check-langserver-patterns.py` | Checks the process monitor can recognise the language servers being packaged. A pattern matching nothing is invisible twice: the server keeps running, keeps counting against the phantom-process budget, and the idle-kill never sees it | exit status |
+| `check-langserver-patterns.py` | Checks the process monitor can recognise the language servers being packaged. A pattern matching nothing is invisible twice: the server keeps running, keeps counting against the phantom-process budget, and the process tree shows it as 'other' rather than marking it idle | exit status |
 | `check-patch-fingerprints.py` | Checks a packaged tree carries every patch in `patches/`, using the expectations in `patches/fingerprints.txt`. It also reads back `vscodroid-patches.json`, which `build-vscode-oss.sh` writes into the tree with `--write-manifest`, and compares the sha256 of each patch's diff against this checkout's, so a tree built from different patch text is refused rather than passing on a pattern that still matches. That verdict is reported first, before the rows. Takes the tree as an argument, so the same check can run against a downloaded tarball | exit status |
 | `check-patches-apply.sh` | Fetches the newest stable upstream VS Code tag and applies every patch in `patches/` to it, cumulatively and in glob order, the way `build-vscode-oss.sh` does. Answers what the build cannot: how much of `patches/` survives the NEXT bump, rather than whether it fits the pinned commit. Run weekly by `patch-drift.yml`, and on demand with a tag argument. Applied cumulatively rather than one at a time because two patches touch `remoteExtensionHostAgentServer.ts`, so an independent `--check` would judge the second against source the first was to have changed. ⚠️ Expected to fail between an upstream move and the bump that answers it, so it is not a gate and must not be added to branch protection. Stops at the first failing patch: a later one applying to a tree that never came to exist proves nothing | exit status |
 | `check-welcome-claims.py` | Refuses a welcome screen that names a bundled tool's version, promises a toolchain as "coming soon", or puts an undeclared number in walkthrough prose or an illustration. Those runtimes come from the Termux index at build time, so a number written into the manifest is right until the next rebuild -- it was wrong for two releases, in the illustrations as well as the text | exit status |
@@ -485,8 +485,9 @@ android.app.Activity not mocked" however it is approached. Extraction cannot mak
 a line in there reachable. What it can do is **empty the method until nothing
 worth testing is left inside it**: move the decision out with the data it needs,
 and leave behind only `super`, one call, and the effects that genuinely need the
-platform. `applyMemoryPressure` came out that way, and the comparison bug it
-guards against went from surviving the whole suite to dying against one test.
+platform. `memoryPressureOf` came out of `onTrimMemory` that way, and the
+comparison bug it guards against went from surviving the whole suite to dying
+against one test.
 
 The boundary matters, because this reads like permission to split anything.
 It applies where a test cannot invoke the method: lifecycle callbacks, platform
@@ -559,7 +560,7 @@ Read the triggers from `.github/workflows/` rather than from here if the answer 
 | `lint.yml` | pull requests to `main`, and pushes to `main` | Android Lint, the `check-*.py` gates that read committed sources, `device-test.sh --self-check`, and every `scripts/test-*.js` |
 | `r8.yml` (`Shrinker`) | a Monday 03:00 UTC cron, `workflow_dispatch`, pull requests to `main` touching seven configuration paths, and pushes to `main` touching those or the app Kotlin, resources and manifest | Runs the three release-only gates, R8, the resource shrinker and lintVital, through `:app:optimizeReleaseResources :app:lintVitalRelease`. The pull request list names what *configures* the shrinkers, so a pull request that only adds Kotlin does not trigger it. The push list also names the sources they run over, so such a change reaches a minified build when it lands on main, which every tag passes through; the cron covers a week with no push at all |
 | `release.yml` | a `v*` tag | Builds and signs the APK and AAB, packages the toolchain ZIPs, writes the build manifest and publishes the release |
-| `build-vscode-oss.yml` | `workflow_dispatch` only | Builds Code - OSS from source on an arm64 runner, around half an hour, once per VS Code version, and publishes the tarball every app build fetches |
+| `build-vscode-oss.yml` | `workflow_dispatch` only | Builds Code - OSS from source on an arm64 runner, around half an hour, once per VS Code version, under a read-only token; a second, write-scoped job publishes the tarball every app build fetches |
 | `patch-drift.yml` | a Monday 04:00 UTC cron, and `workflow_dispatch` | Applies `patches/` to the newest upstream stable tag. Expected to fail between an upstream move and the bump that answers it, so it is not a gate and must not be added to branch protection |
 | `pages.yml` | pushes to `main` touching `docs/site/**`, `docs/USER_GUIDE.md`, `docs/PRIVACY_POLICY.md`, `scripts/build-docs-site.py` or the workflow itself, and `workflow_dispatch` | Builds and deploys the documentation site |
 
@@ -602,8 +603,10 @@ Then open `chrome://inspect` in Chrome. Note: the CDP WebSocket connection must 
 ./scripts/deploy.sh
 ```
 
-This installs the debug APK and launches SplashActivity, building the APK first only
-when it is not already there. It does not clear app data, so first-run setup will not
+This builds the debug APK (Gradle is incremental, so an unchanged tree costs seconds;
+`SKIP_BUILD=1` installs whatever is on disk, for an APK fetched from CI), installs it
+and launches SplashActivity. With more than one device attached it refuses unless
+`ANDROID_SERIAL` names one. It does not clear app data, so first-run setup will not
 re-run on an install that has already completed it; use the `pm clear` above for that.
 It starts `com.vscodroid.debug`, which is what `assembleDebug` produces; set `PKG` to
 launch another package. SplashActivity rather than MainActivity, because MainActivity

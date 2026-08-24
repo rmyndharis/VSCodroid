@@ -127,6 +127,71 @@ class ExecTrampolineOnDeviceTest {
     }
 
     /**
+     * A variable the table carries reaches the program the trampoline starts.
+     *
+     * The server's environment is composed once, at start, and a toolchain
+     * installed while it runs is not in it, so a task or a make recipe found
+     * `ruby` through the trampoline and ran it with RUBYLIB unset. Measured on an
+     * API 37 emulator: `LoadError` on `require "json"` from a `"type": "process"`
+     * task while the same probe through bash worked. The table is what an install
+     * regenerates, so the variable travels in it.
+     *
+     * GNU Make reads its environment into variables and `$(info)` prints one at
+     * parse time, with no recipe shell involved, so the payload itself reports
+     * what it was handed.
+     */
+    @Test
+    fun `a variable in the table reaches the program the trampoline starts`() {
+        val probe = File(probeRoot, "probe.mk").apply {
+            writeText("\$(info probe=\$(VSCODROID_PROBE))\nall: ;\n")
+        }
+        table.writeText("\tVSCODROID_PROBE\tset-by-table\nmake\t${payload.absolutePath}\n")
+
+        val result = runByName(
+            "make -f ${probe.absolutePath}",
+            mapOf(
+                "PATH" to tcBin.absolutePath,
+                "VSCODROID_EXEC_TABLE" to table.absolutePath,
+            ),
+        )
+
+        assertEquals("make did not run through the trampoline: ${result.second}", 0, result.first)
+        assertTrue(
+            "the variable in the table never reached the program: ${result.second}",
+            result.second.contains("probe=set-by-table"),
+        )
+    }
+
+    /**
+     * The control, and a rule of its own: a variable the caller already has is
+     * left alone. Bundler sets GEM_HOME for a vendored bundle before it starts
+     * `ruby`, and a person exports one in a terminal; the table fills in what the
+     * caller was never given rather than overriding what it chose.
+     */
+    @Test
+    fun `a variable the caller already has is not overwritten`() {
+        val probe = File(probeRoot, "probe.mk").apply {
+            writeText("\$(info probe=\$(VSCODROID_PROBE))\nall: ;\n")
+        }
+        table.writeText("\tVSCODROID_PROBE\tset-by-table\nmake\t${payload.absolutePath}\n")
+
+        val result = runByName(
+            "make -f ${probe.absolutePath}",
+            mapOf(
+                "PATH" to tcBin.absolutePath,
+                "VSCODROID_EXEC_TABLE" to table.absolutePath,
+                "VSCODROID_PROBE" to "from-the-caller",
+            ),
+        )
+
+        assertEquals("make did not run through the trampoline: ${result.second}", 0, result.first)
+        assertTrue(
+            "the table overrode a variable the caller had set: ${result.second}",
+            result.second.contains("probe=from-the-caller"),
+        )
+    }
+
+    /**
      * A name with no row answers 127 and says why, rather than starting whatever
      * else happens to be reachable. The trampoline must never search PATH.
      */

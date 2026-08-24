@@ -191,13 +191,78 @@ class BundledIdRecordTest {
 
         extractBundledExtensions()
 
-        assertTrue(
-            File(extensionsDir, bundledDir).isDirectory,
-            "the second run did not unpack the bundled copy, so this case proves nothing",
+        // Neither listed nor unpacked. It used to be unpacked and then declined
+        // a listing, which left 29 MiB on disk that nothing loaded and no sweep
+        // named, since every sweep leaves a directory this build bundles alone.
+        assertFalse(
+            File(extensionsDir, bundledDir).exists(),
+            "the second run unpacked an extension the user uninstalled, into a directory " +
+                "no manifest entry will ever name",
         )
         assertFalse(
             manifestFile.readText().contains(id),
             "the extension the user uninstalled was listed again by the next upgrade",
+        )
+    }
+
+    /**
+     * The controls for the skip above: the three ways a bundled directory can be
+     * absent with its id in the record, none of which is an uninstall.
+     */
+    @Test
+    fun `a version bump of an extension still listed is unpacked`() {
+        // The manifest names the id at the older directory, so the id is
+        // listed and the absence of the new directory is the bump, not a
+        // removal.
+        recorded = mutableSetOf(id)
+        val older = "ms-python.python-2026.1.0"
+        val dir = File(extensionsDir, older)
+        assertTrue(dir.mkdirs(), "could not stage the older install")
+        File(dir, "package.json").writeText(pkg("2026.1.0"))
+        manifestFile.writeText(
+            """[{"identifier":{"id":"$id"},"relativeLocation":"$older"}]"""
+        )
+
+        extractBundledExtensions()
+
+        assertTrue(
+            File(extensionsDir, bundledDir).isDirectory,
+            "a version bump of a listed extension was read as an uninstall and skipped",
+        )
+        assertTrue(
+            manifestFile.readText().contains(bundledDir),
+            "the bumped version was unpacked and then not listed",
+        )
+    }
+
+    @Test
+    fun `an id the record has never held is unpacked even with no entry for it`() {
+        // A first bundling: nothing to remove, so nothing was removed.
+        recorded = null
+        manifestFile.writeText("[]")
+
+        extractBundledExtensions()
+
+        assertTrue(
+            File(extensionsDir, bundledDir).isDirectory,
+            "an extension this app had never bundled was read as one the user removed",
+        )
+    }
+
+    @Test
+    fun `a manifest that cannot be read does not read as an uninstall`() {
+        // The safe direction is a copy that may be dead weight, not a skipped
+        // extension. A truncated manifest is also the one the reconcile gives
+        // up on, so nothing downstream would repair the skip.
+        recorded = mutableSetOf(id)
+        manifestFile.writeText("[{\"identifier\":")
+
+        extractBundledExtensions()
+
+        assertTrue(
+            File(extensionsDir, bundledDir).isDirectory,
+            "an unreadable manifest was read as listing nothing, which makes every fetched " +
+                "extension ever bundled look removed",
         )
     }
 }

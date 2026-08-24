@@ -1,9 +1,9 @@
 /**
  * VSCodroid Process Monitor
  *
- * Scans /proc to count and classify descendant phantom processes,
- * writes a JSON snapshot for the status bar extension to read,
- * and kills idle language servers under memory pressure.
+ * Scans /proc to count and classify the processes this app's uid owns, marks
+ * the language servers among them idle once their CPU time has sat still, and
+ * writes a JSON snapshot for the status bar extension to read.
  */
 
 'use strict';
@@ -12,7 +12,26 @@ const fs = require('fs');
 const path = require('path');
 
 const SCAN_INTERVAL_MS = 10_000;
-const IDLE_KILL_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+// How long a language server's CPU time has to sit still before the snapshot
+// reports it idle. Reported, never acted on.
+//
+// This module used to SIGTERM idle servers under critical memory pressure and
+// at 24 processes, and the status bar extension offered the same by hand.
+// Measured on an API 37 emulator: a SIGTERM to cssServerMain was answered by a
+// new cssServerMain under a fresh pid within one second, and the process count
+// never moved. Every server the patterns below name is owned by a client that
+// restarts it the moment it exits, vscode-languageclient's default error
+// handler for the CSS, HTML, JSON, Markdown, ESLint, Tailwind and Python
+// clients and tsserver's own exit handler for TypeScript, and none of those
+// clients' restart caps is reached by a kill every five minutes. The restart
+// was a first sighting here, so the same server went idle again five minutes
+// later and was killed again, for the life of the session, each cycle costing
+// a re-index on a device already short of memory. The only party that can stop
+// one is the extension that starts it, and there is no API for asking it to,
+// so the snapshot says which servers are idle and the details view says that
+// disabling the owning extension is what frees the slot.
+const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 
 // What this app costs when nothing is happening, measured rather than guessed:
 // on a cold start left untouched, /proc under the app's own uid holds the
@@ -40,41 +59,6 @@ const ERROR_BUDGET = 14;
 // Android's system-wide phantom process limit, shared with every other app.
 const HARD_LIMIT = 32;
 
-// The count at which idle language servers are shed without waiting for a
-// memory-pressure signal that may never come.
-//
-// Well above ERROR_BUDGET, which is where the user is told and offered the
-// button, and well below HARD_LIMIT, which is shared with every other app on the
-// device and so is never ours in full. Eight slots of margin is what leaves room
-// for the reclaim to finish before the system starts choosing for us.
-//
-// It escalates faster than the pressure word does, and that is worth knowing
-// before this number moves. A pressure signal is a file that readMemoryPressure
-// consumes, so two escalation steps against one server can be minutes or a
-// lifetime apart; a count is a standing condition, so a server that ignores the
-// SIGTERM is SIGKILLed on the next scan, SCAN_INTERVAL_MS later. Ten seconds of
-// grace is enough for the language servers this reaches, which exit on the
-// signal, and is the price of the count trigger existing at all.
-const RECLAIM_BUDGET = 24;
-// The severities that justify shedding idle language servers, as words written
-// by the Android side. It used to be a number compared with >= against Android's
-// trim levels, which are not ordered by severity: TRIM_MEMORY_UI_HIDDEN is 20
-// and means "the UI is hidden", so every app switch cleared a threshold meant
-// for genuine memory pressure and killed every idle language server.
-const KILL_ON_PRESSURE = new Set(['critical']);
-
-// The file MainActivity.writeMemoryPressure() writes the severity into, and the
-// word it writes there, are two literals on the far side of a language boundary
-// from these. Nothing made them agree: the Kotlin tests compare against the
-// PRESSURE_CRITICAL constant rather than its value, so changing that value to
-// any other word left every one of them green while this set stopped matching
-// and the idle kill stopped firing under real pressure -- a detector that is
-// dead and silent, in an app built around a 32-process limit.
-//
-// Both are exported for scripts/test-process-monitor.js, which reads the Kotlin
-// literals and refuses a disagreement in either direction.
-const PRESSURE_FILENAME = 'vscodroid-memory-pressure';
-
 // Where this app unpacks the editor, and the anchor the chat-backend rule in
 // classify() is written against.
 //
@@ -87,8 +71,8 @@ const PRESSURE_FILENAME = 'vscodroid-memory-pressure';
 // cannot find, which is loud, while moving `server/` elsewhere leaves every
 // __dirname-relative path in server.js working and only stops this rule
 // matching -- and the chat agent's model backend, 226 MB and one of five
-// processes counted against the phantom budget, goes back to 'unknown', outside
-// the idle kill and outside the command that sheds language servers by hand.
+// processes counted against the phantom budget, goes back to 'unknown', shown
+// as 'other' in the tooltip and never marked idle in the details view.
 //
 // Exported for scripts/test-process-monitor.js, which loads a copy of this file
 // from a directory of its own and asks the same question there.
@@ -136,24 +120,24 @@ const LANG_SERVER_PATTERNS = [
     // here because SELinux refuses to execve the .bin shim under filesDir, is
     // eslint.js -- the whole basename plus a Node extension, which is exactly
     // what the bare-word arm accepts. So running ESLint from a terminal or a
-    // task classified it langserver, put it in lsCpuTracker and made it eligible
-    // for SIGTERM, while the server it looked like it covered was already
-    // covered by the entry below.
+    // task was reported as a language server, and once it sat still as an idle
+    // one, while the server it looked like it covered was already covered by
+    // the entry below.
     //
     // 'vscode-eslint' was here and is gone. It reached nothing: that string only
     // ever appeared in the extension's directory name, which stopped being
     // compared when classification moved to argument basenames. Left in place it
     // was worse than inert, because a hyphen puts it on the substring arm, where
     // the only names it can still reach are a user's own: `node
-    // vscode-eslint-shim.js` was classified langserver, tracked, and eligible
-    // for the idle kill.
+    // vscode-eslint-shim.js` was classified langserver and shown to the user as
+    // one.
     'eslintServer',
     // The four bundled with the editor, named as they actually launch. They were
     // 'css-languageserver', 'html-languageserver' and 'json-languageserver',
     // which match nothing: the files are cssServerMain.js, htmlServerMain.js
     // and jsonServerMain.js. So the servers most likely to be running were the
-    // ones the monitor could not see, and the idle-kill never reclaimed them
-    // while they counted against the phantom-process budget.
+    // ones the monitor could not name, while they counted against the
+    // phantom-process budget.
     //
     // Renaming them was not enough on its own, and the second half took another
     // release to find: classify() lower-cases the command line, so a pattern
@@ -185,11 +169,10 @@ const LANG_SERVER_PATTERNS = [
     // un-classified the server it names.
     //
     // Both program names in full, rather than the 'tailwind' they share. A bare
-    // 'tailwind' also names a user's own tailwind.js build script, and being
-    // classified 'langserver' is not cosmetic: it puts a process into
-    // lsCpuTracker and makes it eligible for the idle kill under memory
-    // pressure. Killing a build someone is waiting on is a worse outcome than
-    // failing to reclaim a language server.
+    // 'tailwind' also names a user's own tailwind.js build script, and the label
+    // is what the details view and the advice beside it are built on: a build
+    // someone is waiting on, reported as an idle language server, points them
+    // at an extension that does not own it.
     //
     // Two entries because neither names the other: tailwindModeServer.js is not
     // 'tailwindServer' with an extension on the end.
@@ -202,7 +185,6 @@ const LANG_SERVER_PATTERNS = [
 ];
 
 let outputPath = '';
-let pressurePath = '';
 let myUid = 0;
 let scanTimer = null;
 // Overridable so the suite can point a scan at a fixture. /proc does not exist
@@ -221,7 +203,6 @@ const lsCpuTracker = new Map();
 function start(options) {
     const tmpDir = process.env.TMPDIR || '/tmp';
     outputPath = path.join(tmpDir, 'vscodroid-processes.json');
-    pressurePath = path.join(tmpDir, PRESSURE_FILENAME);
     myUid = process.getuid();
     procRoot = (options && options.procRoot) || '/proc';
 
@@ -305,11 +286,11 @@ function readCpuTime(pid) {
  * A bare word does not name a program wherever it appears: 'eslint' is inside
  * run-eslint.js and eslint.config.js, and 'tsserver' is inside tsserver-log.js,
  * which reaches this via `--out=/tmp/tsserver-log.js` because every argument is
- * tested and not only the one the launcher runs. Being classified 'langserver'
- * is not cosmetic: it puts the process into lsCpuTracker, and five minutes with
- * no CPU movement then make it a SIGTERM the next time Android reports critical
- * memory pressure. So a bare word has to be the whole name, give or take the
- * extension a Node entry point carries.
+ * tested and not only the one the launcher runs. The label is what the user is
+ * shown: five minutes with no CPU movement then report the process as an idle
+ * language server, beside advice that names extensions as what to disable. So
+ * a bare word has to be the whole name, give or take the extension a Node entry
+ * point carries.
  *
  * Patterns carrying a separator, 'rust-analyzer' and 'cssServerMain.js', are
  * specific enough that finding one inside a name means what it says, and they
@@ -379,8 +360,8 @@ function classify(cmdline) {
     // What a process IS gets decided on the basename of each argument; where it
     // happens to live does not. Testing the whole command line made every
     // pattern match its own name inside an unrelated path: 'eslint' matched
-    // /projects/my-eslint-tool/index.js and put a user's build script one idle
-    // period away from SIGTERM, and '/sh' matched /share and /shim. A launcher
+    // /projects/my-eslint-tool/index.js and reported a user's build script as a
+    // language server, and '/sh' matched /share and /shim. A launcher
     // names what it runs in one argument, and the directories above that name
     // are the user's to choose.
     //
@@ -390,14 +371,12 @@ function classify(cmdline) {
     // inside the Android app process (SafSyncEngine) and nothing under assets/
     // is named safsync, so the only string it could ever reach was saf-mirrors,
     // which is the root of the local copy of a folder opened through the SAF
-    // picker and therefore a directory the user chose. The cost was not a label.
-    // A language server whose own program path lies inside a device folder, a
-    // venv interpreter selected there or a workspace tsserver under its
-    // node_modules, returned here before the patterns below were read, so it
-    // never entered lsCpuTracker, never carried an idle verdict, and sat outside
-    // the pressure kill and outside 'Kill Idle Servers' alike while holding one
-    // of the 32 phantom slots. Where a process runs says nothing about what it
-    // is, mirrors included.
+    // picker and therefore a directory the user chose. A language server whose
+    // own program path lies inside a device folder, a venv interpreter selected
+    // there or a workspace tsserver under its node_modules, returned here
+    // before the patterns below were read, so it never entered lsCpuTracker and
+    // never carried an idle verdict while holding one of the 32 phantom slots.
+    // Where a process runs says nothing about what it is, mirrors included.
     const parts = cmd.split(' ').filter(Boolean);
     const names = parts.map((arg) => path.basename(arg));
 
@@ -407,8 +386,8 @@ function classify(cmdline) {
     // 'server-main.js' was labelled 'server' and any path containing
     // 'bootstrap-fork' was labelled 'system', both of which return before
     // LANG_SERVER_PATTERNS is read. A user's own directory was enough to put a
-    // language server outside lsCpuTracker, outside the pressure kill and
-    // outside 'Kill Idle Servers' while it went on holding a phantom slot.
+    // language server outside lsCpuTracker, and so outside the idle verdict,
+    // while it went on holding a phantom slot.
     //
     // The `--type=` argument rather than the string anywhere on the line for the
     // same reason: it is the argument the launcher uses to say what it started,
@@ -437,11 +416,9 @@ function classify(cmdline) {
     // API 37 emulator, signed out, nothing but the Welcome tab open: 226 MB
     // resident, the largest process this app owns after the Android process
     // itself, and one of only five counted against the phantom budget. As
-    // 'unknown' it was in neither reclaim path -- not lsCpuTracker, so the idle
-    // kill could not shed it under critical memory pressure, and not the
-    // 'Kill Idle Servers' command, which filters on this very type. Both exist for
-    // a lazily started, idle-killable server forked by a host, which is what this
-    // is.
+    // 'unknown' it was never in lsCpuTracker, so the details view could not say
+    // it was idle, which for a backend nobody is talking to is the one fact
+    // worth showing.
     //
     // `node_modules/@github/copilot-` on its own is not ours. @github/copilot
     // names eight @github/copilot-<platform> packages as optionalDependencies in
@@ -449,8 +426,8 @@ function classify(cmdline) {
     // their own has that exact fragment under their own node_modules, and a
     // substring over the whole line reaches it. That is the defect that took
     // 'vscode-eslint' out of the list above, in the same shape: the names a loose
-    // needle can still reach are the user's, and this label is what makes a
-    // process eligible for the SIGTERM below.
+    // needle can still reach are the user's, and this label is what the user is
+    // told about the process.
     //
     // So the rule asks for the tree this app unpacks, in the one argument that
     // names the program. REH_ROOT is that tree, derived above from where this
@@ -474,7 +451,6 @@ function classify(cmdline) {
 
 function scan() {
     try {
-        const warnings = [];
         const now = Date.now();
 
         // 1. Read all PIDs from /proc owned by our UID.
@@ -527,44 +503,15 @@ function scan() {
             }
         }
 
-        // Clean up tracked LS that no longer exist
+        // 3. Clean up tracked LS that no longer exist
         for (const pid of lsCpuTracker.keys()) {
             if (!activeLsPids.has(pid)) {
                 lsCpuTracker.delete(pid);
             }
         }
 
-        // 4. Shed idle language servers, on memory pressure or on a count that
-        //    is about to be decided for us.
-        //
-        //    The count half exists because Android's phantom-process killer fires
-        //    on the number of processes and reports no memory pressure first, so
-        //    the pressure word could not warn about the one limit this whole
-        //    module is built around. The numbers below it were published into the
-        //    snapshot and read by nothing that sheds a process: at 30 processes
-        //    the reclaim had never run, and what happened next was Android
-        //    choosing, which takes a bash terminal holding unsaved work as
-        //    readily as an idle server.
-        //
-        //    RECLAIM_BUDGET and not ERROR_BUDGET, deliberately. A notification
-        //    costs nothing if it is premature; a SIGTERM costs a language server
-        //    restart, so the automatic version waits until the alternative is the
-        //    system picking instead. What is eligible is unchanged either way:
-        //    five minutes without a tick of CPU.
-        const pressure = readMemoryPressure();
-        const overBudget = tree.length >= RECLAIM_BUDGET;
-        if (KILL_ON_PRESSURE.has(pressure) || overBudget) {
-            const why = KILL_ON_PRESSURE.has(pressure)
-                ? 'memory pressure'
-                : `${tree.length} processes against a limit of ${HARD_LIMIT}`;
-            const killed = killIdleLangServers(now);
-            for (const k of killed) {
-                warnings.push(`Killed idle language server PID ${k.pid} (${k.cmd}) due to ${why}`);
-                log('warn', warnings[warnings.length - 1]);
-            }
-        }
-
-        // 5. Write snapshot
+        // 4. Write snapshot. Nothing is signalled between the scan and the
+        //    write: see IDLE_THRESHOLD_MS for why a kill here reclaims nothing.
         const snapshot = {
             timestamp: now,
             total: tree.length,
@@ -573,22 +520,19 @@ function scan() {
                 idle: IDLE_BASELINE,
                 soft: SOFT_BUDGET,
                 error: ERROR_BUDGET,
-                reclaim: RECLAIM_BUDGET,
                 hard: HARD_LIMIT,
             },
-            tree,
-            warnings
+            tree
         };
 
         // TMPDIR is cacheDir/tmp, and Android deletes an app's cache directory
         // under storage pressure while the app keeps running, so the directory
-        // this writes into can go mid-session. Both Kotlin writers into that
-        // same path recreate it on the way past (ProcessManager.startServer,
-        // MainActivity.writeMemoryPressure); this one did not, and the write
+        // this writes into can go mid-session. The Kotlin writer into that
+        // same path recreates it on the way past (ProcessManager.startServer);
+        // this one did not, and the write
         // then threw ENOENT into a catch that only logs. Nothing else here
         // recreates it, so the status bar counter, its tooltip and the process
-        // tree all froze on their last snapshot for the life of the server, and
-        // 'Kill Idle Servers' went on SIGTERMing pids read out of it.
+        // tree all froze on their last snapshot for the life of the server.
         //
         // Through a temporary file and a rename, for the same reason server.js
         // writes product.json and the pid note that way. The reader is a
@@ -597,8 +541,8 @@ function scan() {
         // and comes back as JSON that does not parse. The extension answers that
         // by keeping its previous state, which is exactly what it does when the
         // monitor has stopped writing altogether, so the two are indistinguishable
-        // from the side that sends signals off the result. rename(2) replaces the
-        // file in one step: a reader sees the old snapshot or the new one.
+        // from the side that reads it. rename(2) replaces the file in one step:
+        // a reader sees the old snapshot or the new one.
         //
         // One fixed name and not one per pid. This runs every SCAN_INTERVAL_MS in
         // a process the platform SIGKILLs as a matter of routine, so a kill
@@ -622,29 +566,19 @@ function scan() {
 }
 
 /**
- * Whether a tracked language server has gone IDLE_KILL_THRESHOLD_MS without its
- * CPU time moving.
+ * Whether a tracked language server has gone IDLE_THRESHOLD_MS without its CPU
+ * time moving.
  *
- * One definition, two reclaim paths. The pressure kill below applies it here,
- * and the snapshot carries its answer so that the 'Kill Idle Servers' command
- * can apply the same one: that command runs in the extension host, which sees
- * nothing of this process but the JSON file, so before this it filtered on the
- * type alone and SIGTERMed every language server, including the one the user was
- * waiting on. A process whose CPU time could not be read is never tracked, and
- * so is never claimed to be idle.
- *
- * The measurement and nothing else. An unanswered SIGTERM used to short-circuit
- * this to true, which is right for the escalation in [killIdleLangServers] and
- * wrong for everyone else, because scan() publishes this answer as the row's
- * `idle` and that row is what the user-facing command filters on: a server that
- * trapped a SIGTERM and kept running was then advertised as idle for the rest of
- * its life however busy it became, and pressing Kill Idle Servers killed the one
- * the user was waiting on. The override lives where the escalation does.
+ * Decided here because this is the only side that can see it: the status bar
+ * extension runs in the extension host and sees nothing of this process but the
+ * JSON file, so the row carries the answer and the details view prints it. A
+ * process whose CPU time could not be read is never tracked, and so is never
+ * claimed to be idle.
  */
 function isIdle(pid, now) {
     const tracked = lsCpuTracker.get(pid);
     if (!tracked) return false;
-    return now - tracked.lastActive >= IDLE_KILL_THRESHOLD_MS;
+    return now - tracked.lastActive >= IDLE_THRESHOLD_MS;
 }
 
 function trackLangServer(pid, now) {
@@ -652,89 +586,17 @@ function trackLangServer(pid, now) {
     if (cpuTime < 0) return;
 
     const prev = lsCpuTracker.get(pid);
-    // CPU time only ever goes up within one process, so a reading that went
-    // backwards is a different process wearing a recycled pid. It starts over
-    // rather than inheriting its predecessor's record: that record can carry a
-    // SIGTERM this process never received, and the escalation below would then
-    // SIGKILL a server that had just started.
-    if (!prev || cpuTime < prev.cpuTime) {
+    // Any movement is activity. CPU time only ever goes up within one process,
+    // so a reading that went backwards is a different process wearing a
+    // recycled pid, and it starts its idle clock over like any first sighting.
+    if (!prev || cpuTime !== prev.cpuTime) {
         lsCpuTracker.set(pid, { cpuTime, lastActive: now });
-        return;
-    }
-
-    if (cpuTime !== prev.cpuTime) {
-        // CPU time changed: process is active. Spread rather than rebuilt, so
-        // that an unanswered SIGTERM survives the update; see killIdleLangServers.
-        lsCpuTracker.set(pid, { ...prev, cpuTime, lastActive: now });
     }
     // else: cpuTime unchanged, lastActive stays the same (idle)
-}
-
-function killIdleLangServers(now) {
-    const killed = [];
-    // A copied key list rather than the live map: the deletions below happen
-    // inside the loop, and iterating a Map while removing from it is a question
-    // this does not need to have an answer to.
-    for (const pid of [...lsCpuTracker.keys()]) {
-        // Never missing: the list above is a copy of this map's keys, and the
-        // only delete below is of the pid being handled. Read once because both
-        // the eligibility test and the escalation need it.
-        const tracked = lsCpuTracker.get(pid);
-        // A SIGTERM this process has not answered keeps it eligible whatever its
-        // CPU reading says. Answering a signal is itself work: a server that runs
-        // a handler and then does not exit spends CPU doing it, which moves
-        // lastActive on the next scan and would otherwise buy the process another
-        // five minutes every time it refused to go. The record is dropped when
-        // the process really goes, by the cleanup loop in scan(). Read here
-        // rather than inside isIdle, because this is the only place the answer
-        // means "signal it again" rather than "it is doing nothing".
-        if (tracked.termSentAt || isIdle(pid, now)) {
-            // A pid still carrying the last SIGTERM is one that outlived it: the
-            // mark is only ever set by an earlier scan, so at least one scan
-            // interval has passed and the server has had its chance to exit.
-            // Escalate rather than repeat. A second SIGTERM to a process that
-            // ignored the first reclaims nothing, and the idle arm above reaches
-            // this loop only after five minutes without a tick of CPU, while the
-            // device was either under critical memory pressure or within eight
-            // processes of the phantom limit. The other arm is the opposite case
-            // by construction: a process that answered a signal and stayed spent
-            // CPU doing it.
-            const escalate = !!tracked.termSentAt;
-            try {
-                const cmdline = readCmdline(pid);
-                process.kill(pid, escalate ? 'SIGKILL' : 'SIGTERM');
-                killed.push({ pid, cmd: cmdline });
-                // The attempt is recorded rather than forgotten. Deleting here
-                // erased the only evidence that a signal was ever sent, so a
-                // process that survived it was re-tracked by the next scan as a
-                // first sighting and bought itself another five idle minutes,
-                // every time, while the warning above had already told the user
-                // it was killed. Removal belongs to the cleanup loop in scan(),
-                // which drops the pids that really went and runs before this in
-                // the same scan.
-                lsCpuTracker.set(pid, { ...tracked, termSentAt: now });
-            } catch {
-                // Process already gone
-                lsCpuTracker.delete(pid);
-            }
-        }
-    }
-    return killed;
-}
-
-function readMemoryPressure() {
-    const content = readFileQuiet(pressurePath);
-    if (!content) return '';
-    // Delete after reading (one-shot signal)
-    try { fs.unlinkSync(pressurePath); } catch { }
-    return content.trim();
 }
 
 // SCAN_INTERVAL_MS is exported for scripts/test-process-monitor.js alone: the
 // status bar extension decides from its own constant how old a snapshot may be
 // before it stops trusting it, and that bound only holds while this cadence
 // stays under it. Nothing on device reads it.
-module.exports = {
-    start, stop, readMemoryPressure, KILL_ON_PRESSURE, PRESSURE_FILENAME, REH_ROOT,
-    SCAN_INTERVAL_MS,
-};
+module.exports = { start, stop, REH_ROOT, SCAN_INTERVAL_MS };

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 
 /**
  * `ShouldOverwriteMirrorTest` pins the decision. This pins the *call to it*: the guard
@@ -322,6 +323,122 @@ class InitialSyncWiringTest {
             listOf("notes.txt"), writtenDocuments,
             "the newer mirror copy was never offered to the device",
         )
+    }
+
+    /**
+     * The save the watcher never carried, meeting a device edit made BEFORE it.
+     *
+     * The mirror copy is newer, so it wins the comparison and is written over the device
+     * document with `"wt"`; the device edit, made by another app since the last sync,
+     * existed nowhere else. The mirror-side set-aside cannot help, it runs only where the
+     * device wins. The record carries the device time this file had at the last sync, so
+     * a device document reporting any other time has moved since, and its copy is
+     * fetched to a `.device-` name beside the mirror copy before the write.
+     */
+    @Test
+    fun `a device edit made since the last sync is set aside before a newer mirror copy replaces it`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        // Edited on the device by something else first...
+        deviceFolderHolding("notes.txt", "edited on the device", 1_700_000_060_000)
+        // ...and then in the editor, later, with nothing carrying it across.
+        local.writeText("edited in the editor, later")
+        local.setLastModified(1_700_000_120_000)
+        sync()
+
+        assertEquals(
+            listOf("notes.txt"), writtenDocuments,
+            "the newer mirror copy still has to reach the device",
+        )
+        val preserved = File(mirror, "notes.txt${SafSyncEngine.DEVICE_COPY_SUFFIX}1700000060000")
+        assertTrue(
+            preserved.isFile,
+            "the only copy of the device edit was written over; the mirror now holds " +
+                mirror.list()?.sorted(),
+        )
+        assertEquals("edited on the device", preserved.readText())
+    }
+
+    /**
+     * The control that keeps the guard off the ordinary stranded save: a device document
+     * still at the time the record holds for it has not moved, so nothing is fetched and
+     * nothing is set aside. The provider read is paid only where the record shows the
+     * device changed.
+     */
+    @Test
+    fun `a device copy the record vouches for is replaced without a copy left behind`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        openedDocuments.clear()
+        val local = File(mirror, "notes.txt")
+
+        local.writeText("edited in the editor, later")
+        local.setLastModified(1_700_000_120_000)
+        // The same device state, declared again: the fake cursor answers one
+        // enumeration, so a second sync over the first cursor would see an
+        // empty folder rather than an unchanged one.
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+
+        assertEquals(listOf("notes.txt"), writtenDocuments)
+        assertEquals(
+            listOf("notes.txt"), mirror.list()?.sorted(),
+            "a device copy this app had already read was set aside as if it were an edit",
+        )
+        assertEquals(emptyList<String>(), openedDocuments, "the device copy was read for nothing")
+    }
+
+    /**
+     * The device time moved but the bytes did not, which is what this app's own
+     * delivered write-back looks like on a provider with coarse stamps: FAT32
+     * stores whole two-second steps, so the write-back's time lands below the
+     * mirror's, the record still holds the time before it, and the file reads as
+     * a device edit on every reopen after an ordinary save. Setting that aside
+     * would put a duplicate of the user's own file into their folder each time.
+     */
+    @Test
+    fun `a device copy with the same bytes under a new time leaves no copy behind`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        local.writeText("saved in the editor")
+        local.setLastModified(1_700_000_120_900)
+        // The write-back landed, stamped by a provider that keeps whole seconds.
+        deviceFolderHolding("notes.txt", "saved in the editor", 1_700_000_120_000)
+        sync()
+
+        assertEquals(listOf("notes.txt"), writtenDocuments, "the newer mirror copy is still written")
+        assertEquals(
+            listOf("notes.txt"), mirror.list()?.sorted(),
+            "identical bytes under a moved time were kept as a .device- copy",
+        )
+    }
+
+    /**
+     * A device copy that cannot be fetched cannot be set aside, and then the write does
+     * not happen: both sides keep what they have, the mirror stays unvouched, and the
+     * next open tries again. Writing anyway would be the loss the guard exists for.
+     */
+    @Test
+    fun `a device edit that cannot be set aside is not written over`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        deviceFolderHolding("notes.txt", "edited on the device", 1_700_000_060_000)
+        local.writeText("edited in the editor, later")
+        local.setLastModified(1_700_000_120_000)
+        every { resolver.openInputStream(any()) } throws IOException("the provider refused the read")
+        sync()
+
+        assertEquals(
+            emptyList<String>(), writtenDocuments,
+            "the device edit was written over with no copy of it anywhere",
+        )
+        assertEquals("edited in the editor, later", local.readText(), "and the mirror keeps its own")
     }
 
     /**

@@ -1007,6 +1007,25 @@ class ToolchainManager(private val context: Context) {
                         )
                     }
                 }
+                // The packs this build no longer offers, asked about the same
+                // way. [removeRetiredToolchainsSync] reads the install record
+                // and deletes the copy under `usr/`; it never asks Play, so a
+                // delivery a process death left in `filesDir/assetpacks` before
+                // its removal ran outlived the withdrawal: 179 MB for Go,
+                // counted by no pre-flight and offered for removal by no
+                // screen. Released outright rather than installed. Nothing can
+                // be reading the directory, because [install] refuses a name
+                // the registry does not know.
+                RETIRED_TOOLCHAINS.keys.forEach { name ->
+                    val packName = "toolchain_$name"
+                    try {
+                        if (assetPackManager.getPackLocation(packName) == null) return@forEach
+                        Logger.i(tag, "Reclaiming a delivered pack for a retired toolchain: $packName")
+                        releasePack(packName)
+                    } catch (e: Exception) {
+                        Logger.w(tag, "Could not ask Play about $packName: ${e.message}")
+                    }
+                }
             } catch (e: Exception) {
                 Logger.w(tag, "Could not reconcile delivered packs: ${e.message}")
             }
@@ -1556,6 +1575,22 @@ class ToolchainManager(private val context: Context) {
             val extractDir = File(tempDir, packName)
 
             try {
+                // Asked before anything else, the space pre-flight included.
+                // Every other check of this flag sits past the manifest fetch,
+                // so a pack cancelled while queued still spent a request and,
+                // on a stalled connection, up to three read timeouts of it,
+                // with the first-run queue waiting behind. The pre-flight has
+                // to come after it because the pre-flight fails the pack: a
+                // download cancelled while it waited behind another transfer,
+                // on a device short of the reservation, was reported as a
+                // storage failure, a Retry badge and a "not enough space" toast
+                // for a transfer the user had just stopped, and only then as
+                // CANCELED by the finally below.
+                if (download.cancelled) {
+                    Logger.i(tag, "HTTP download cancelled for $packName")
+                    return@execute
+                }
+
                 // Pre-flight disk space check
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
@@ -1569,11 +1604,10 @@ class ToolchainManager(private val context: Context) {
 
                 tempDir.mkdirs()
 
-                // Asked before the first request rather than only after the
-                // download. Every other check of this flag sits past the
-                // manifest fetch, so a pack cancelled while queued still spent
-                // a request and, on a stalled connection, up to three read
-                // timeouts of it -- with the first-run queue waiting behind.
+                // Asked again after the pre-flight: a cancel that lands while the
+                // StatFs above is being read is otherwise not seen until after
+                // the manifest fetch, which is the request this flag exists to
+                // save on a stalled connection.
                 if (download.cancelled) {
                     Logger.i(tag, "HTTP download cancelled for $packName")
                     return@execute
@@ -2528,6 +2562,22 @@ class ToolchainManager(private val context: Context) {
      *   `<command>\t<absolute path of an ELF>`
      *   `<command>\t<absolute path of the interpreter>\t<absolute path of a script>`
      *
+     * and a third for the environment, with an empty command field:
+     *
+     *   `\t<variable>\t<value>`
+     *
+     * The environment travels here as well as in the env file because of when
+     * each reader looks. Bash re-reads `toolchain-env.sh` in every shell; the
+     * server process reads [getAllToolchainEnv] once, at start, and every
+     * non-bash child inherits that snapshot. A toolchain installed while the
+     * server ran therefore had its commands on PATH within the second and its
+     * variables only after the next restart: measured on an API 37 emulator, a
+     * `"type": "process"` task ran the trampoline's `ruby` with RUBYLIB unset, a
+     * load path inside Termux's prefix and `LoadError` on `require "json"`,
+     * while the same probe through bash worked. The empty command field is what
+     * keeps the row harmless to a trampoline built before it existed: a
+     * basename is never empty, so such a reader walks past it.
+     *
      * Absolute, and expanded here rather than written as `$PREFIX/../` the way
      * the env file does. The trampoline is a C program and not a shell; a
      * `$PREFIX` in the table would be a literal path component that does not
@@ -2572,11 +2622,32 @@ class ToolchainManager(private val context: Context) {
         // unreadable, and this file is one of the first things to look at when
         // a command goes missing.
         val rows = LinkedHashMap<String, String>()
+        // Keyed by variable, so a later toolchain wins a collision: the same
+        // outcome sourcing the env file top to bottom gives a redefined export.
+        val envRows = LinkedHashMap<String, String>()
         for (i in 0 until installed.length()) {
             val tc = installed.optJSONObject(i) ?: continue
             val name = tc.optString("name", "unknown")
             val scriptNames = tc.optJSONObject("scriptWrappers")
                 ?.optJSONObject("scripts")?.keys()?.asSequence()?.toSet().orEmpty()
+
+            val env = tc.optJSONObject("env")
+            if (env != null) {
+                for (key in env.keys()) {
+                    val value = expandToolchainValue(env.getString(key))
+                    // A tab or a line break in the name, or a line break in the
+                    // value, is a torn record: the trampoline reads what follows
+                    // as a row of its own. `=` is what setenv itself refuses.
+                    if (key.isEmpty() || key.any { it == '=' || it == '\t' || it == '\n' } ||
+                        '\n' in value
+                    ) {
+                        Logger.w(tag, "No environment row for $name's $key: not a name " +
+                            "the table can carry")
+                        continue
+                    }
+                    envRows[key] = "\t$key\t$value"
+                }
+            }
 
             // Every ELF the manifest names, keyed by its command name, so the
             // script rows below can resolve their interpreter to a real path.
@@ -2617,7 +2688,7 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
-        val body = rows.values.joinToString("\n", postfix = "\n")
+        val body = (envRows.values + rows.values).joinToString("\n", postfix = "\n")
         execTable.parentFile?.mkdirs()
         // Atomic for a reason of its own, not by imitation: a torn line is a
         // truncated path, and the trampoline would refuse it naming a file the
@@ -2628,7 +2699,8 @@ class ToolchainManager(private val context: Context) {
             return
         }
         refreshTrampolineLinks(rows.keys)
-        Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands)")
+        Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
+            "${envRows.size} variables)")
     }
 
     /**
@@ -2726,8 +2798,25 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
+     * A manifest value with its placeholders resolved to this install's paths.
+     *
+     * Shared by the server environment and the exec table, which are two
+     * readers of one promise: a value that expanded differently in the two
+     * would hand a task a different GEM_PATH from the one the terminal beside
+     * it was started with.
+     */
+    private fun expandToolchainValue(value: String): String =
+        value.replace("\$FILESDIR", filesDir).replace("\$HOME", homeDir)
+
+    /**
      * Returns resolved environment variables for all installed toolchains.
      * Used by Environment.kt to include in the Node.js server process env.
+     *
+     * Read once per server start, and that is the limit of what it can do: a
+     * toolchain installed while the server runs is not in the map the server
+     * already has. [regenerateExecTableLocked] writes the same variables into
+     * the trampoline's table for that case, and bash re-reads the env file on
+     * its own.
      */
     fun getAllToolchainEnv(): Map<String, String> {
         val installed = readState()
@@ -2739,10 +2828,7 @@ class ToolchainManager(private val context: Context) {
             val tcEnv = tc.optJSONObject("env") ?: continue
 
             for (key in tcEnv.keys()) {
-                val value = tcEnv.getString(key)
-                    .replace("\$FILESDIR", filesDir)
-                    .replace("\$HOME", homeDir)
-                env[key] = value
+                env[key] = expandToolchainValue(tcEnv.getString(key))
             }
 
             val pathDirs = tc.optJSONArray("pathDirs")

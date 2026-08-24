@@ -43,7 +43,13 @@ object Environment {
         else
             "dumb"
 
-        // Merge toolchain env vars (GOROOT, JAVA_HOME, etc.)
+        // Merge toolchain env vars (JAVA_HOME, RUBYLIB, etc.). Read here once,
+        // at server start, and that is all a non-bash child ever inherits from
+        // this side. A toolchain installed while the server runs reaches those
+        // children through the environment rows
+        // ToolchainManager.regenerateExecTableLocked writes into the
+        // trampoline's table on every install; bash re-reads toolchain-env.sh
+        // on its own.
         val toolchainEnv = getToolchainEnvironment(context)
         val extraPath = toolchainEnv.remove("__TOOLCHAIN_EXTRA_PATH")
         // The trampoline directory sits between the bundled binaries and

@@ -66,17 +66,43 @@ val bundleNotices = tasks.register<Sync>("bundleNotices") {
     description = "Copies the attribution and licence documents into the APK's assets."
 
     val repoRoot = rootProject.projectDir.parentFile
-    from(File(repoRoot, "NOTICE.md"))
-    from(File(repoRoot, "docs/LEGAL_NOTICES.md"))
-    from(File(repoRoot, "licenses/COPYING.GPLv2"))
-    from(File(repoRoot, "licenses/COPYING.GPLv3"))
-    from(File(repoRoot, "licenses/COPYING.LGPLv2.1"))
-    from(File(repoRoot, "licenses/COPYING.LGPLv3"))
+    // One list, read by the copy and by the guard below, so the two cannot
+    // name different documents. The names the app opens are kept beside it:
+    // com.vscodroid.util.Notices lists the same six, and NoticesTest compares
+    // the lists, so a rename here fails the build rather than emptying the
+    // dialog on a device.
+    val documents = listOf(
+        "NOTICE.md",
+        "docs/LEGAL_NOTICES.md",
+        "licenses/COPYING.GPLv2",
+        "licenses/COPYING.GPLv3",
+        "licenses/COPYING.LGPLv2.1",
+        "licenses/COPYING.LGPLv3"
+    ).map { File(repoRoot, it) }
+    from(documents)
     into(layout.buildDirectory.dir("generated/notices"))
 
-    // The names the app opens. Kept beside the copy so a rename here fails the
-    // build rather than emptying the dialog on a device: com.vscodroid.util
-    // .Notices lists the same six, and NoticesTest compares the lists.
+    // A source that is not there fails the build rather than shortening the
+    // copy. Sync and Copy both skip a missing from() without a word, which is
+    // the measurement recorded above: with COPYING.GPLv3 removed the task ran
+    // and reported success. NoticesTest pins every one of these by sha256, but
+    // the test task is not in the packaging graph, so a local bundleRelease or
+    // scripts/build-aab.sh on a checkout with one moved aside reaches a signed
+    // AAB with every packaging gate green, and Notices.readOne then opens that
+    // entry of the licence chooser on its missing-document marker. For the
+    // LGPL-3.0 text that is the one copy a device that installed Ruby has of
+    // the terms GMP ships under.
+    doFirst {
+        val missing = documents.filterNot { it.isFile }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "bundleNotices: ${missing.joinToString { it.relativeTo(repoRoot).path }} " +
+                    "missing from the repository. The licences dialog would ship " +
+                    "without it, and the GPL and LGPL require the text to travel " +
+                    "with the binaries."
+            )
+        }
+    }
 }
 
 android {
@@ -806,10 +832,10 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
  * exists for: the file is present, the build is green, and the feature the addon
  * backs is simply missing on the devices that ship today.
  *
- * Two of the three questions the script can ask: LOAD alignment, which decides
+ * Two of the four questions the script can ask: LOAD alignment, which decides
  * whether the file maps at all on Android 16, and PT_INTERP, which decides
  * whether an aarch64 executable came out of a toolchain whose loader exists
- * here. The third, DT_NEEDED, is deliberately not asked. The tree is packaged
+ * here. DT_NEEDED is deliberately not asked. The tree is packaged
  * rather than built here, so it legitimately holds payloads for other platforms
  * and dependencies nothing loads, and asking that question of it would fail a
  * correct build; the script's `alignment_sweep` names both cases and the

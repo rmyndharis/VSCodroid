@@ -96,7 +96,11 @@ temporary directory, and is executed directly by `node`.
 | Welcome | That the walkthrough and side bar markers are written only after the command they record actually ran | `scripts/test-welcome.js` |
 
 **Run**: all nine, one `node` invocation each, in the `Check the bundled
-JavaScript runtime` step of `lint.yml`, and again in `release.yml`.
+JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,
+the major the APK ships (`check-build-steps.py` holds the pins there). `lint.yml`
+also runs the `--self-test` entry points of `check-workflow-steps.py`,
+`verify-android-elf.py` and `verify-server-tree.py`, which hand each gate the
+input it exists to refuse, since no file in the tree can.
 
 **What is enforced**: the suites themselves. A single failing test fails the job.
 No workflow reads a coverage figure, no threshold exists, and none is planned.
@@ -144,7 +148,7 @@ run covers the whole set and none of it is scheduled.
 | **KeyRowAccessibilityInstrumentedTest** | The extra key row's screen-reader surface: content descriptions, the state a latched modifier and the alternates layer announce, that a key and an alternate each call themselves a button, that every key clears 48dp at each width the row is paged for (320, 360, 411 and 448dp), and the trackpad's one action per arrow | arm64 device |
 | **TextEntryInstrumentedTest** | That `virtualKeyboardEvents` types what the row asks it to, against the device's real `KeyCharacterMap`: every typeable key and alternate resolves to presses that produce it, `{` is pressed with Shift held, and every press carries the virtual-keyboard device id and a current timestamp | arm64 device |
 | **GestureTrackpadTouchInstrumentedTest** | Multi-pointer `MotionEvent`s on the trackpad: a second finger taking over does not jump the caret, and an untracked finger lifting does not end the drag | arm64 device |
-| **ExecTrampolineOnDeviceTest** | The kernel policy no JVM test can ask about: a payload under `filesDir` cannot be executed directly, the trampoline runs the same payload by bare name, and an unknown name fails with a reason. The direct-execve control is asserted first, so a device that never denied anything fails loudly rather than passing for the wrong reason | arm64 device |
+| **ExecTrampolineOnDeviceTest** | The kernel policy no JVM test can ask about: a payload under `filesDir` cannot be executed directly, the trampoline runs the same payload by bare name, an unknown name fails with a reason, an environment row in the table reaches the program, and a variable the caller already has is not overwritten. The direct-execve control is asserted first, so a device that never denied anything fails loudly rather than passing for the wrong reason | arm64 device |
 
 **Framework**: AndroidJUnit4 + Espresso + UI Automator (JUnit 4, on device)
 

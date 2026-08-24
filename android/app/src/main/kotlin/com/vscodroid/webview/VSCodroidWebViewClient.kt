@@ -1248,6 +1248,7 @@ class VSCodroidWebViewClient(
                     resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder()),
                     headerValue(headers, "Origin"),
                     headerValue(headers, "Range"),
+                    headerValue(headers, "Referer"),
                 )
             }
 
@@ -1298,7 +1299,8 @@ class VSCodroidWebViewClient(
          */
         private fun interceptResourceRequest(
             uri: Uri, host: String, port: Int,
-            resourceRoots: List<String>, origin: String?, rangeHeader: String?
+            resourceRoots: List<String>, origin: String?, rangeHeader: String?,
+            referer: String? = null,
         ): WebResourceResponse? {
             // The scheme half of the host label is the whole of what this reads
             // out of it. The authority half went with the two arms below that
@@ -1359,6 +1361,40 @@ class VSCodroidWebViewClient(
                 // `Resource not found` below already made the same trade.
                 if (origin != null && !isOurOrigin(origin, port)) {
                     Logger.d(TAG, "Resource refused, foreign origin: $origin")
+                    return notFound("Access denied")
+                }
+                // And the requests that carry no `Origin` at all, which is the
+                // half the gate above cannot see: `<img>`, `<link>` and a classic
+                // `<script src>` are no-cors and send none. That half was left to
+                // `Cross-Origin-Resource-Policy`, and MEASURED on an API 37
+                // emulator (Chrome 149 WebView) the header does not close it: a
+                // page served from `http://10.0.2.2:8877`, opened in the bundled
+                // Simple Browser, loaded a workspace `.js` through `<script src>`
+                // and a workspace `.png` through `<img>` while the response
+                // carried `same-site`. The same WebView DOES enforce the header on
+                // an ordinary network response (a no-cors fetch of one carrying
+                // `same-origin` throws), so what fails is the check being applied
+                // to a response synthesised by `shouldInterceptRequest` at all.
+                // The header stays, because it is correct and costs nothing the
+                // day that changes; it is simply not what closes this.
+                //
+                // `Referer` is, because it is the one signal that reaches here and
+                // names the document that asked. Measured at this gate, over the
+                // first run, the walkthrough, the markdown preview and the Simple
+                // Browser: every legitimate no-cors load carried
+                // `https://<uuid>.vscode-cdn.net/`, and the attack carried
+                // `http://10.0.2.2:8877/`.
+                //
+                // Absent counts as foreign, and that is not caution: a page sets
+                // `<meta name="referrer" content="no-referrer">` and the request
+                // arrives here with no `Referer` at all, measured, still reading
+                // the workspace. A rule that fell open on absent would be one
+                // attribute away from useless. The cost is a legitimate no-cors
+                // load that suppresses its own referrer, which nothing bundled
+                // does; a CORS-mode load (module scripts, fonts) is unaffected
+                // either way, since it carries an `Origin` and is answered above.
+                if (origin == null && !isOurReferer(referer, port)) {
+                    Logger.d(TAG, "Resource refused, foreign referer: $referer")
                     return notFound("Access denied")
                 }
                 // Local file resource: serve directly from filesystem.
@@ -1473,13 +1509,23 @@ class VSCodroidWebViewClient(
                 // own `localResourceRoots` inside the service worker, which patch
                 // 0005 disables, so restoring that scoping is a change to the
                 // request shape and to the patch, not to this map.
-                val cors = if (origin == null) emptyMap<String, String>() else mapOf(
-                    "Access-Control-Allow-Origin" to origin,
-                    // Two origins may ask for one path, so the answer is not a
-                    // property of the URL alone and a cache keyed on the URL would
-                    // hand the second asker the first one's header.
-                    "Vary" to "Origin",
-                )
+                //
+                // The header the echo cannot carry is the one for the request
+                // that sends no `Origin`. A no-cors load is opaque to the page
+                // that made it, and opaque is not inert: a `.js` under the open
+                // workspace goes out as `application/javascript`, so a remote
+                // page in the bundled Simple Browser can name it in
+                // `<script src>` and run it in its own realm, where every global
+                // it defines is that page's to read; and `<img onerror>` against
+                // a guessed path tells the same page which files exist, a miss
+                // being a 404 and a hit a 200. `Cross-Origin-Resource-Policy` is
+                // the one check a no-cors response is meant to be put through, and
+                // measured on this WebView it is not applied to a response
+                // synthesised here at all -- see the referer gate above, which is
+                // what actually refuses that page. It comes from
+                // [resourceHeaders], whose comment says why `same-site` and not
+                // `same-origin`, and why no `nosniff` beside it.
+                val headers = resourceHeaders(origin)
 
                 // Ranges are answered rather than refused, and media is why. The
                 // Chromium media loader asks for one as soon as the user drags a
@@ -1507,7 +1553,7 @@ class VSCodroidWebViewClient(
                     }
                     return WebResourceResponse(
                         mimeType, null, 206, "Partial Content",
-                        cors + mapOf(
+                        headers + mapOf(
                             "Accept-Ranges" to "bytes",
                             "Content-Range" to "bytes ${range.first}-${range.last}/$length",
                             "Content-Length" to (range.last - range.first + 1).toString(),
@@ -1518,7 +1564,7 @@ class VSCodroidWebViewClient(
 
                 return WebResourceResponse(
                     mimeType, null, 200, "OK",
-                    cors + mapOf(
+                    headers + mapOf(
                         "Accept-Ranges" to "bytes",
                         "Content-Length" to length.toString(),
                     ),
@@ -1704,6 +1750,100 @@ class VSCodroidWebViewClient(
             isWorkbenchOrigin(origin, port) ||
                 (origin.startsWith("https://") && origin.endsWith(".vscode-cdn.net") &&
                     !origin.endsWith(".$RESOURCE_AUTHORITY"))
+
+        /**
+         * Whether [referer] names a document of ours, for the no-cors requests
+         * that carry no `Origin` for [isOurOrigin] to judge.
+         *
+         * Null is false, deliberately and load-bearingly: a page suppresses its
+         * own referrer with one `<meta name="referrer" content="no-referrer">`,
+         * and measured on device the request then reaches the gate with no
+         * `Referer` and read the workspace anyway. Falling open on absent would
+         * make the rule an attribute away from useless.
+         *
+         * The resource authority is accepted here and refused by [isOurOrigin],
+         * and the asymmetry is deliberate. There the value is an `Origin` on a
+         * request a document at that authority *made*, which is the escalation
+         * that comment describes. Here it is the address of a stylesheet or a
+         * document already served from it, whose own `url(...)` subresources
+         * carry it as their referrer. Accepting it widens nothing a foreign page
+         * can reach: a page cannot set its referrer to another origin, only trim
+         * or drop it, and a dropped one is refused above.
+         *
+         * The origin is taken by cutting at the third `/`, which is all an
+         * absolute URL's origin ever is, rather than by parsing: a `Referer` is
+         * always an absolute URL with no userinfo (the spec strips it), and a
+         * value that is neither is not one of ours whatever it is.
+         */
+        internal fun isOurReferer(referer: String?, port: Int): Boolean {
+            val value = referer ?: return false
+            val scheme = value.substringBefore("://", "")
+            if (scheme != "http" && scheme != "https") return false
+            val origin = "$scheme://" + value.substringAfter("://").substringBefore('/')
+            return isWorkbenchOrigin(origin, port) ||
+                (origin.startsWith("https://") && origin.endsWith(".vscode-cdn.net"))
+        }
+
+        /**
+         * The headers that say who may use a file served off the filesystem, for
+         * a request from [origin] or from none.
+         *
+         * A value rather than a map built inline, because a `WebResourceResponse`
+         * cannot be constructed under the stub `android.jar` and its header map
+         * can be observed nowhere: this is the one thing about that response a
+         * test can read, and `ResourceHeadersTest` reads it.
+         *
+         * `Access-Control-Allow-Origin` echoes the asker, and only when there is
+         * one; the caller's comment records why `*` was wrong and why the echo
+         * cannot be narrowed to the workbench alone. `Vary: Origin` goes with
+         * it, because two origins may ask for one path and a cache keyed on the
+         * URL would hand the second asker the first one's header.
+         *
+         * `Cross-Origin-Resource-Policy: same-site`, which this WebView does not
+         * enforce on a response `shouldInterceptRequest` synthesises: measured, a
+         * foreign page still read a workspace file through `<script src>` while
+         * this header was on the response, and the same WebView refused an
+         * ordinary network response carrying `same-origin`. What refuses that page
+         * is the referer gate in [interceptResourceRequest]. The header stays
+         * because it is correct, costs nothing, and is what the platform will
+         * honour the day it applies the check here.
+         *
+         * The difference from `same-origin` is every extension webview. A webview document lives at
+         * `https://<uuid>.vscode-cdn.net`, its content frame is `fake.html` on
+         * that same origin under `allow-same-origin`, and its `<img>`, `<link>`,
+         * classic `<script src>` and `<video>` all name this authority: another
+         * origin on the same site, because `vscode-cdn.net` is on no public
+         * suffix list (checked against the public suffix data the npm `psl`
+         * package ships, which carries Microsoft's other entries such as
+         * `azurewebsites.net` and `cloudapp.net` as a positive control and no
+         * rule for `vscode-cdn.net`). `same-origin` would refuse all of them and
+         * every webview would render without its stylesheet. Module scripts and
+         * fonts are CORS-mode whatever their origin and are judged by the echo
+         * instead: the policy reaches only a request that sent no `Origin`,
+         * which is the one the gate serves on purpose. The workbench,
+         * `http://127.0.0.1:<port>`, is cross-site to this authority, and
+         * nothing read from the bundle loads a no-cors subresource from it
+         * there: `vscode-resource` addresses are minted for webview content,
+         * and the workbench reaches extension files through its own server.
+         * That last point is read, not measured, so an extension that did it
+         * would show up as a webview asset that stopped loading.
+         *
+         * No `X-Content-Type-Options: nosniff`, on purpose. The policy above is
+         * what refuses the remote page; nosniff would add nothing against it
+         * and would cost every file whose extension [MIME_TYPES] does not know:
+         * such a file goes out as `application/octet-stream`, and the WebView's
+         * opaque-response blocking refuses a nosniff response of that type for
+         * an `<img>` or `<audio>` it cannot sniff, where without the header it
+         * sniffs and renders. The bundled media preview loads `.bmp`, `.avif`
+         * and `.oga` that way.
+         */
+        internal fun resourceHeaders(origin: String?): Map<String, String> {
+            val policy = mapOf("Cross-Origin-Resource-Policy" to "same-site")
+            return if (origin == null) policy else mapOf(
+                "Access-Control-Allow-Origin" to origin,
+                "Vary" to "Origin",
+            ) + policy
+        }
 
         /**
          * The value of the [name] request header, whatever case it arrived in.
@@ -1981,14 +2121,18 @@ class VSCodroidWebViewClient(
             "png" to "image/png",
             "jpg" to "image/jpeg",
             "jpeg" to "image/jpeg",
+            "jpe" to "image/jpeg",
             "gif" to "image/gif",
             "webp" to "image/webp",
+            "bmp" to "image/bmp",
+            "avif" to "image/avif",
             "ico" to "image/x-icon",
             "mp4" to "video/mp4",
             "webm" to "video/webm",
             "mp3" to "audio/mpeg",
             "wav" to "audio/wav",
             "ogg" to "audio/ogg",
+            "oga" to "audio/ogg",
             "woff2" to "font/woff2",
             "woff" to "font/woff",
             "ttf" to "font/ttf",

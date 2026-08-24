@@ -90,15 +90,20 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
-    <!-- Skip link -->
-    <TextView
+    <!-- Skip button. A real Button at 48dp, like Continue above it and Cancel on
+         the next screen, and it was a wrap_content TextView with a click
+         listener: about 35dp tall, so under the touch target, and announced by
+         TalkBack as text rather than as a control. It is the one screen that
+         decides whether the toolchain offer is ever repeated. -->
+    <Button
         android:id="@+id/skipButton"
+        style="@style/Widget.Material3.Button.TextButton"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:layout_marginBottom="16dp"
         android:alpha="0.6"
-        android:padding="8dp"
         android:text="@string/picker_skip"
+        android:textAllCaps="false"
         android:textColor="@color/colorOnSurface"
         android:textSize="14sp"
         app:layout_constraintBottom_toBottomOf="parent"

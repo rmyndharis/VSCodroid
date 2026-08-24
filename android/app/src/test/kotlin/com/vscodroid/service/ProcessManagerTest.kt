@@ -1797,23 +1797,24 @@ class ReadinessWithdrawalCallSiteTest {
 }
 
 /**
- * Readiness when the port was already taken at the spawn.
+ * Readiness for a start that spawned a process, and what the port's answer is
+ * worth before that process says it is listening.
  *
- * The pair this covers is `spawnedOntoHeldPort` and the credential. A start that
- * recorded the flag knows the process it spawned cannot be what is on the port:
- * the editor server it forked prints EADDRINUSE and, measured, does not exit. Any
- * answer from that port therefore comes from somebody else, and readiness is not
- * an idle question about it: it is what points the WebView at the port, and
- * `MainActivity` builds that URL with the connection token in it. A bare 200 was
- * the whole test, which is the test `recordedServerIsServing` already refused to
- * accept for adoption, on the reasoning that binding a loopback port on Android
- * needs no permission at all.
+ * Readiness is not an idle question: it is what points the WebView at the port,
+ * and `MainActivity` builds that URL with the connection token in it. Binding a
+ * loopback port on Android needs no permission, so whatever holds the port when
+ * the probe asks is handed the credential if the probe believes it. A bare 200 was
+ * the whole test once; then a start that recorded `spawnedOntoHeldPort` asked the
+ * holder which build it was, which is the public `microsoft/vscode` commit and so
+ * something an imitator answers, and a holder that took the port between the free
+ * check and the child's listen was never asked at all.
  *
- * The two directions are both here on purpose. A guard that simply refused every
- * start that saw a held port would satisfy the first case and break the two that
- * matter to a working user: a reap whose signal freed the socket a moment after
- * the port was asked, and an orphan of this same build that no note identifies.
- * Both of those are serving, and both keep working.
+ * What the probe now waits for is the line `server-main.js` prints from its own
+ * listen callback, read off the spawned process's pipe. A child that lost the port
+ * prints EADDRINUSE instead. The fixtures below stand in for the child with a
+ * script that prints that line, or with `/bin/echo`, which prints the command
+ * line and nothing else; the stub on the port is the same either way, because
+ * the point is that the stub's answer is not what decides.
  */
 class HeldPortReadinessTest {
 
@@ -1823,6 +1824,18 @@ class HeldPortReadinessTest {
     private lateinit var manager: ProcessManager
     private lateinit var contextMock: Context
     private var stub: StubServer? = null
+
+    /**
+     * Counted down when the spawned process's listening line has been read, or
+     * null when the fixture's child does not print one.
+     *
+     * The watchdog latch the spawn helpers already wait on is not enough here:
+     * `waitFor()` returns when the process exits, and the reader thread may still
+     * be behind it on the pipe. The flag under test is lowered by that reader
+     * before it invokes `onServerOutput`, so waiting on the callback is waiting on
+     * the flag.
+     */
+    private var listening: CountDownLatch? = null
 
     /** What the packaged tree records, and so what `/version` answers here. */
     private val commit = "a5b500951314efd502d07465bd138dfbd714a960"
@@ -1870,6 +1883,25 @@ class HeldPortReadinessTest {
         StubServer(status, reports).also { stub = it; manager.portField = it.port }
 
     /**
+     * Makes the spawned child print what `server-main.js` prints once it is bound,
+     * in place of `/bin/echo`, which prints the command line and nothing else.
+     *
+     * A script rather than a stubbed argument, so the line is on the pipe the
+     * way the real one is: on its own, from the child's stdout, after the spawn.
+     */
+    private fun childReportsListening() {
+        val node = File(tempDir, "node.sh").apply {
+            writeText("#!/bin/sh\necho '$SERVER_LISTENING_LINE 1'\n")
+            setExecutable(true)
+        }
+        every { Environment.getNodePath(any()) } returns node.path
+        listening = CountDownLatch(1)
+        manager.onServerOutput = { line ->
+            if (line.contains(SERVER_LISTENING_LINE)) listening?.countDown()
+        }
+    }
+
+    /**
      * Spawns onto the port the stub is holding, and waits for the spawned process
      * to be reaped before returning.
      *
@@ -1879,14 +1911,30 @@ class HeldPortReadinessTest {
      * that has nothing to do with the probe.
      */
     private fun spawnOntoHeldPort() {
-        val exited = CountDownLatch(1)
-        manager.onServerCrashed = { exited.countDown() }
-        assertTrue(manager.startServer(), "the spawn must happen or nothing here is under test")
-        assertTrue(exited.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
+        spawn()
         assertTrue(
             manager.spawnedOntoHeldPort(),
             "the fixture must be a spawn onto a held port, or the guard is not reached",
         )
+    }
+
+    /** Starts on a port nothing holds, and waits for the spawn to be reaped. */
+    private fun spawnOnFreePort() {
+        spawn()
+        assertFalse(
+            manager.spawnedOntoHeldPort(),
+            "the fixture must be a start onto a free port, or it tests the other branch",
+        )
+    }
+
+    private fun spawn() {
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "the spawn must happen or nothing here is under test")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
+        listening?.let {
+            assertTrue(it.await(5, TimeUnit.SECONDS), "the listening line never reached the reader")
+        }
     }
 
     @Test
@@ -1914,56 +1962,123 @@ class HeldPortReadinessTest {
     }
 
     @Test
-    fun `a server of this build on that port is ready, held port or not`() {
-        // The complement, and the reason the guard asks for an identity rather
-        // than refusing outright. Kills: narrowing the guard to
-        // `if (spawnedOntoHeldPort)`. Two real starts land exactly here -- a reap
-        // whose signal released the socket just after the port was asked, and an
-        // orphan of this build that no note names -- and in both the user has a
-        // working editor on that port. Refusing them ends the launch in
-        // CANNOT_BIND and, when the holder outlives the retries, in the terminal
-        // state, with a healthy server sitting right there.
+    fun `a holder answering as this build is not ready before the spawned process binds`() {
+        // Kills: restoring the commit comparison as the whole of the held-port
+        // guard. The commit `/version` reports is microsoft/vscode's public tag
+        // SHA, so a process that binds the remembered port during a restart's
+        // backoff and answers it is indistinguishable from ours by that test, and
+        // readiness would send it the token. The child spawned here is `/bin/echo`,
+        // which never prints the listening line, exactly as a child that lost the
+        // port never does.
         serving(200, reports = commit)
+        spawnOntoHeldPort()
+
+        assertFalse(
+            manager.probeReadiness(),
+            "a holder that knows a public commit has proved nothing about who it is",
+        )
+        assertFalse(manager.isReady(), "and nothing may record it as ready")
+        assertFalse(
+            runBlocking { manager.waitForReady(timeoutMs = 300, pollIntervalMs = 25) },
+            "the whole poll must reach the same answer, or CANNOT_BIND is never reached",
+        )
+    }
+
+    @Test
+    fun `a server the spawned process reports bound is ready, held port or not`() {
+        // The complement, and the reason the guard waits rather than refusing a
+        // held port outright. Kills: turning the guard into `if
+        // (spawnedOntoHeldPort) return false`. One real start lands exactly here,
+        // a reap whose signal released the socket just after the port was asked,
+        // and the user has a working editor on that port. Refusing it ends the
+        // launch in CANNOT_BIND with a healthy server sitting right there.
+        //
+        // The stub answers as a stranger on purpose: once our own process has
+        // said it is listening, what the port says about itself is not consulted.
+        serving(200, reports = stranger)
+        childReportsListening()
         spawnOntoHeldPort()
 
         assertTrue(
             manager.probeReadiness(),
-            "a holder answering as this build is the server the user is already using",
+            "a port our own process reports bound is the server the user is about to use",
         )
         assertTrue(manager.isReady(), "and that has to be recorded for the main thread")
     }
 
     @Test
-    fun `a start that had its port to itself is not asked for an identity`() {
-        // Kills: dropping `spawnedOntoHeldPort &&` from the guard, which would
-        // make every readiness poll an identity test. That direction is the one
-        // adoption can afford and readiness cannot: declining adoption costs a
-        // spawn, while refusing readiness costs the editor, and a tree that
-        // records no commit would then never start at all.
-        //
-        // The port is moved after the start rather than before it, because what
-        // is under test is the flag the start recorded and not what is listening:
-        // a free port at the spawn means there is no second party for the answer
-        // to have come from.
+    fun `a start that had its port to itself is ready once its own process reports binding`() {
+        // Kills: asking the port for an identity on every start, which would refuse
+        // to serve a tree that records no commit. The port is moved after the start
+        // rather than before it, because what is under test is what the spawned
+        // process said and not what is listening: the stub here answers as a
+        // stranger and is believed anyway.
         manager.portField = PortFinder.findAvailablePort()
+        childReportsListening()
         spawnOnFreePort()
         val elsewhere = StubServer(200, stranger).also { stub = it }
         manager.portField = elsewhere.port
 
         assertTrue(
             manager.probeReadiness(),
-            "a start that owned its port answers to nobody about which build it is",
+            "a start whose process reported its listen answers to nobody about which build it is",
+        )
+    }
+
+    @Test
+    fun `a start that had its port to itself is not ready on a stranger's answer alone`() {
+        // The window the held-port flag never covered. The port read free at the
+        // spawn, so `spawnedOntoHeldPort` is false, and a process that binds it
+        // in the second or two before the child's own listen holds it when the
+        // probe asks: the child prints EADDRINUSE, the holder answers 200, and a
+        // guard keyed on the flag hands the holder the token on that 200 with no
+        // question asked. Kills: gating the wait on `spawnedOntoHeldPort`.
+        manager.portField = PortFinder.findAvailablePort()
+        spawnOnFreePort()
+        val squatter = StubServer(200, commit).also { stub = it }
+        manager.portField = squatter.port
+
+        assertFalse(
+            manager.probeReadiness(),
+            "a 200 from a port the spawned process has not reported binding is somebody else's",
+        )
+        assertFalse(manager.isReady(), "and nothing may record it as ready")
+    }
+
+    @Test
+    fun `a listening line from an earlier process does not vouch for the next one`() {
+        // Kills: raising the flag once at construction instead of at every spawn.
+        // This instance lives across restarts, so a line printed by the server
+        // that just died would otherwise stand for the replacement while the port
+        // is held by whoever took it in the backoff. The identity guard in the
+        // reader (`serverProcess === process`) is not reached here: the first
+        // child's line is fully consumed before stopServer, and the second child
+        // prints none, so no reader ever lowers the flag for a process that is
+        // not current. That guard has no test; it would need a seam that holds a
+        // reader mid-pipe across a restart.
+        manager.portField = PortFinder.findAvailablePort()
+        childReportsListening()
+        spawnOnFreePort()
+        manager.stopServer()
+
+        every { Environment.getNodePath(any()) } returns "/bin/echo"
+        listening = null
+        serving(200, reports = commit)
+        spawnOntoHeldPort()
+
+        assertFalse(
+            manager.probeReadiness(),
+            "the previous process's listen is not evidence about this one",
         )
     }
 
     @Test
     fun `a build that cannot say what it is trusts nobody on a port it could not bind`() {
-        // Kills: making the comparison fail open when the tree records no commit,
-        // for instance `bundledServerCommit()?.let { served != it } == true`. With
-        // no commit of our own there is nothing that tells the holder from us,
-        // which is the same fail-closed direction `recordedServerIsServing`
-        // already takes for adoption, and the cost is bounded: the run ends in
-        // CANNOT_BIND, which the service reports and retries.
+        // A tree with no commit used to be the case the held-port guard had to
+        // fail closed on, because the commit was its only evidence. It is not
+        // evidence any more, and this pins that the absence of one does not open
+        // anything: the holder answers, the spawned `/bin/echo` never reports a
+        // listen, and the run ends in CANNOT_BIND as it would with a commit.
         File(tempDir, "server/$REH_PRODUCT_FILE").delete()
         serving(200, reports = commit)
         spawnOntoHeldPort()
@@ -1975,15 +2090,21 @@ class HeldPortReadinessTest {
         )
     }
 
-    /** Starts on a port nothing holds, and waits for the spawn to be reaped. */
-    private fun spawnOnFreePort() {
-        val exited = CountDownLatch(1)
-        manager.onServerCrashed = { exited.countDown() }
-        assertTrue(manager.startServer(), "the spawn must happen or nothing here is under test")
-        assertTrue(exited.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "the fixture must be a start onto a free port, or it tests the other branch",
+    @Test
+    fun `a tree that records no commit still becomes ready once its own process binds`() {
+        // The control for the case above, and the property the old guard could
+        // not have: readiness does not depend on the packaged tree naming a commit,
+        // because the evidence comes from the spawned process and not from the
+        // port. Kills: any fail-closed branch on `bundledServerCommit()` in the
+        // readiness path.
+        File(tempDir, "server/$REH_PRODUCT_FILE").delete()
+        serving(200, reports = "")
+        childReportsListening()
+        spawnOntoHeldPort()
+
+        assertTrue(
+            manager.probeReadiness(),
+            "a process that reported its own listen needs no commit to be believed",
         )
     }
 }
@@ -2300,6 +2421,69 @@ class AdoptionTest {
         // is not adopted` gives: a timeout here would report a stuck watchdog and
         // send the reader to the wrong file, so the assertions naming the defect go
         // first.
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `a cold start ends a recorded server it declines and keeps the port the reap frees`() {
+        // The first start used to move off the remembered port before the reap
+        // ran, so an editor server of this build that answered `/version` too
+        // slowly for the one-second probe, which a loaded device manages at cold
+        // start, was declined and then left where it was: a Node heap and one of
+        // the 32 phantom-process slots held until the OS took them back, and the
+        // workbench storage keyed to the origin abandoned for nothing.
+        //
+        // Built the way `the first start in a process adopts...` is built, with
+        // the port left at zero and remembered in preferences, because the move
+        // under test only exists on that path. The port question is driven by
+        // hand for the reason `a start onto a port the reap just freed...` gives:
+        // held at the first ask, free once the reap has run.
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = StubServer(null).also { stub = it }
+        remember(holder.port)
+        recordEditorServer(pid = 7311, port = holder.port)
+        val asked = intArrayOf(0)
+        mockkObject(PortFinder)
+        every { PortFinder.isPortAvailable(holder.port) } answers { asked[0]++ > 0 }
+        // 41234 is outside the scan range, so a move is unmistakable in the failure.
+        every { PortFinder.getOrAllocatePort(any()) } returns 41234
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertEquals(0, manager.port, "the fixture must start from a manager that has never held a port")
+        assertTrue(manager.startServer())
+
+        assertEquals(listOf(7311), killed, "a declined server of ours must be ended, not abandoned")
+        assertEquals(
+            holder.port, manager.port,
+            "and a port the reap freed is kept, with the origin the workbench's storage is keyed to",
+        )
+        assertFalse(manager.spawnedOntoHeldPort(), "a port this start freed itself is free")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @Test
+    fun `a cold start that ends a recorded server still moves when the port stays held`() {
+        // The other half: ending the recorded process does not release a socket
+        // somebody else is holding, and a note can name a wedged child that never
+        // bound while a foreign process took the port. The stub keeps the port
+        // through the reap, which is what that looks like, so the cold start has to
+        // fall back to the move it has always made, and the spawn must not be
+        // recorded as doomed, because the port it goes to is free by construction.
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = StubServer(null).also { stub = it }
+        remember(holder.port)
+        recordEditorServer(pid = 7311, port = holder.port)
+
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer())
+
+        assertEquals(listOf(7311), killed, "the recorded server is ended before the port is given up")
+        assertNotEquals(holder.port, manager.port, "a port still held after the reap is not spawned onto")
+        assertFalse(manager.spawnedOntoHeldPort(), "the port moved to is free by construction")
         assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
     }
 
@@ -3248,6 +3432,41 @@ class HeapOverrideReaderTest {
             }
         """.trimIndent()
         assertNull(heapOverrideFromSettings(doc), "a commented-out example was honoured")
+    }
+
+    @Test
+    fun `a key inside a block comment is not honoured`() {
+        // The other comment form, and the one the anchor does not see: a key on a
+        // line of its own inside `/* ... */` starts that line exactly as a live
+        // one does. A user who blocked out an experiment to switch it off got the
+        // raised ceiling anyway, a start summary saying "user override", and after
+        // three kills a card telling them a setting they believed was off had been
+        // suspended. 8192 for the reason the case above gives.
+        val doc = """
+            {
+                /*
+                "vscodroid.server.heapCeilingMb": 8192,
+                */
+                "extensions.verifySignature": false,
+            }
+        """.trimIndent()
+        assertNull(heapOverrideFromSettings(doc), "a key inside a block comment was honoured")
+    }
+
+    @Test
+    fun `a block comment elsewhere does not hide a live key`() {
+        // The control for the case above, and the reason the span is matched
+        // shortest-first: a greedy `/\*.*\*/` over a document with two comments
+        // eats everything between the first `/*` and the last `*/`, the live key
+        // included, and the user silently gets the derived ceiling.
+        val doc = """
+            {
+                /* the derived value was too small for this workspace */
+                "vscodroid.server.heapCeilingMb": 1024,
+                /* "extensions.verifySignature": false, */
+            }
+        """.trimIndent()
+        assertEquals(1024, heapOverrideFromSettings(doc))
     }
 
     @Test

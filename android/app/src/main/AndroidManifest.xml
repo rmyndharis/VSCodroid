@@ -69,10 +69,10 @@
              toolchain_picker_shown stays false and the picker is unreachable for
              the life of that install, because it is only offered inside the
              isFirstRun() branch. The second cost is worse and needs no timing
-             argument: with the activity finished the process holds no component
-             at all, and it is in the middle of writing out ~810 MB. Reclaimed
-             there, the next launch starts the extraction from zero, since
-             extractAssetFile has no skip-if-present branch.
+             argument: with the activity finished, the only thing holding the
+             process through the ~810 MB write is the setup hold NodeService
+             takes for it (SplashActivity.holdProcessForSetup), and a kill there
+             still costs whatever the interrupted file was.
 
              Nothing is left in the back stack by dropping it: launchMain() calls
              finish() on every route that reaches MainActivity, and the one screen

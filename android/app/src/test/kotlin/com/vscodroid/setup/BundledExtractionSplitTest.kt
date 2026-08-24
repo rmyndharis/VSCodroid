@@ -327,6 +327,57 @@ class BundledExtractionSplitTest {
         assertEquals(listOf(fetchedIcons), bundledDirsToExtract(present = bundled, bundled = present))
     }
 
+    /**
+     * A fetched extension the user removed is not unpacked again.
+     *
+     * VS Code's uninstall deletes the directory with the manifest entry, so on
+     * the next upgrade the directory is absent and presence alone answered
+     * "unpack". `bundledIdsToRelist` then declined to list it, deliberately, and
+     * no sweep removes a name this build bundles: 29 MiB of Python extension,
+     * unlisted, until a version bump swept it and wrote it once more.
+     *
+     * NEGATIVE CONTROL: drop the `uninstalled` test from the filter and this
+     * names the Python directory.
+     */
+    @Test
+    fun `a fetched extension the user removed is not unpacked again`() {
+        assertTrue(
+            bundledDirsToExtract(
+                present = emptyList(),
+                bundled = listOf(fetchedPython),
+                uninstalled = setOf("ms-python.python"),
+            ).isEmpty(),
+            "an extension the user uninstalled was unpacked into a directory nothing lists",
+        )
+    }
+
+    @Test
+    fun `the removal is read against the lowercased id`() {
+        // The record is built from package.json's lowercased halves, and a real
+        // bundled publisher is PKief.
+        assertTrue(
+            bundledDirsToExtract(
+                present = emptyList(),
+                bundled = listOf(fetchedIcons),
+                uninstalled = setOf("pkief.material-icon-theme"),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `a removal names one id and leaves every other bundled extension alone`() {
+        // Ours are re-unpacked unconditionally whatever the set says, and a
+        // fetched id not in it is unpacked exactly as before.
+        assertEquals(
+            listOf(ourMonitor, fetchedIcons),
+            bundledDirsToExtract(
+                present = emptyList(),
+                bundled = listOf(ourMonitor, fetchedIcons, fetchedPython),
+                uninstalled = setOf("ms-python.python", "vscodroid.vscodroid-process-monitor"),
+            ),
+        )
+    }
+
     @Test
     fun `a retired id is owed a sweep until one has run`() {
         assertEquals(listOf("eamodio.gitlens"), retiredIdsToSweep(emptySet()))

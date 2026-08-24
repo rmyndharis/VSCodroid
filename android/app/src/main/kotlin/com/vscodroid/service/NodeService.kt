@@ -791,7 +791,9 @@ class NodeService : Service() {
      * connection token, which made every probe against it wrong while the server
      * was serving perfectly. The same change one endpoint over leaves a process
      * that is alive, bound and serving while [ProcessManager.probeReadiness]
-     * answers false forever.
+     * answers false forever; so does a VS Code bump that rewords the listening
+     * line that probe waits for (`SERVER_LISTENING_LINE`), which
+     * `verify-server-tree.py` checks the packaged tree for at build time.
      *
      * The interval widens rather than the loop ending, which bounds the cost
      * without bounding the time: two seconds while an answer is still plausible,

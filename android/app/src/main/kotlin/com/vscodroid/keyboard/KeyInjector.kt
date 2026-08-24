@@ -189,6 +189,12 @@ class KeyInjector(
      * own `NativeEditContext` reads `beforeinput` for `insertParagraph` for exactly
      * that reason.
      *
+     * Two inputs reach the page with no `beforeinput` at all, and each gets a hook
+     * of its own below so the latch is still spent: a composition on the
+     * EditContext path, which Chromium reports to the `EditContext` object and
+     * never to the element, and typing inside a frame, which no event in this
+     * document can see.
+     *
      * Call once after the page finishes loading.
      */
     fun setupModifierInterceptor() {
@@ -237,8 +243,10 @@ class KeyInjector(
                     // acting on it: no preventDefault, so the page's own
                     // insertion is untouched, and the only change is that the
                     // latch does not outlive the character it was meant for.
-                    // Nothing else clears it while the keyboard is up, and a
-                    // latch that survives no longer produces nothing: injectKey
+                    // The only other things that clear it while the keyboard is
+                    // up are the two hooks below, for a composition and for
+                    // focus entering a frame, and a latch that survives no
+                    // longer produces nothing: injectKey
                     // resolves it into a DIFFERENT character, so a Shift the
                     // user has forgotten turns a later tap on `/` into `?`,
                     // `;` into `:` and `[` into `{`. Ctrl and Alt are cleared
@@ -354,6 +362,66 @@ class KeyInjector(
                     mod.alt = false;
                     mod.shift = false;
                 }, true);
+
+                // A composing IME on the EditContext edit path. Chromium reports
+                // a composition to the EditContext object alone: compositionstart,
+                // then a textupdate per keystroke, and the element receives no
+                // beforeinput for any of it, where the textarea path reports the
+                // same keystrokes as insertCompositionText, which the branch
+                // above spends. A latch that survives the first composed
+                // character attaches to the first one the IME commits outright,
+                // which is the space that ends the word: the space was cancelled
+                // and Ctrl+Space opened suggestions in its place.
+                //
+                // compositionstart rather than compositionend, because it is the
+                // earliest signal and the one the textarea path already spends
+                // at: the character is the page's from its first update, and
+                // however the IME then closes the composition, by committing the
+                // word or the space after it, the latch is already gone. A
+                // latch held to compositionend would show Ctrl over characters
+                // the page had already inserted. The EditContext is read off the
+                // focused element's editContext attribute, which is where the
+                // workbench attaches it, and hooked once per object. The element
+                // focused when this installs is hooked as well: the editor is
+                // usually focused before this runs and would otherwise wait for
+                // the next focus change.
+                function hookComposition(el) {
+                    var ec = el && el.editContext;
+                    if (!ec || ec.__vscodroid_hooked) return;
+                    ec.__vscodroid_hooked = true;
+                    ec.addEventListener('compositionstart', function() {
+                        var mod = window.__vscodroid;
+                        mod.ctrl = false;
+                        mod.alt = false;
+                        mod.shift = false;
+                    });
+                }
+                document.addEventListener('focusin', function(e) {
+                    hookComposition(e.target);
+                }, true);
+                hookComposition(document.activeElement);
+
+                // Focus moving into a frame. An event never leaves the document
+                // it fires in, so what is typed in a frame is out of the
+                // listener's reach whatever its origin, and every frame the
+                // workbench opens, extension webviews, the Simple Browser and
+                // notebook output among them, is served from the vscode-cdn.net
+                // origin and cannot be entered from here either. Chromium fires
+                // blur on the window whose frame loses focus, with activeElement
+                // already answering with the frame's element, and that is the
+                // one signal this document gets. No chord can follow the focus,
+                // so the latch is spent: standing, it attached to the first
+                // character typed back in the editor. A blur for any other
+                // reason, the app losing the window or a popup taking it, leaves
+                // activeElement where it was and passes through.
+                window.addEventListener('blur', function() {
+                    var active = document.activeElement;
+                    if (!active || active.tagName !== 'IFRAME') return;
+                    var mod = window.__vscodroid;
+                    mod.ctrl = false;
+                    mod.alt = false;
+                    mod.shift = false;
+                });
             })();
         """.trimIndent()
 
