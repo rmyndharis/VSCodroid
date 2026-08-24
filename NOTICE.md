@@ -174,7 +174,6 @@ Downloaded from Open VSX at build time (`scripts/download-extensions.sh`):
 
 | Extension | ID | License |
 |-----------|----|---------|
-| Material Icon Theme | PKief.material-icon-theme | MIT |
 | Prettier | esbenp.prettier-vscode | MIT |
 | Python | ms-python.python | MIT |
 | ESLint | dbaeumer.vscode-eslint | MIT |

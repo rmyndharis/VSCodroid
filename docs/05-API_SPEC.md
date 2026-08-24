@@ -1042,7 +1042,6 @@ on first run:
 flowchart TD
   ROOT["assets/extensions/"] --> T["5 from Open VSX, fetched at build time"]
   ROOT --> O["4 first-party, source in git"]
-  T --> T1["PKief.material-icon-theme"]
   T --> T2["esbenp.prettier-vscode"]
   T --> T3["ms-python.python"]
   T --> T4["dbaeumer.vscode-eslint"]

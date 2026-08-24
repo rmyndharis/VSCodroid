@@ -1540,7 +1540,6 @@ android/app/src/main/kotlin/com/vscodroid/
 ```
 android/app/src/main/assets/
 └── extensions/
-    ├── pkief.material-icon-theme/
     ├── esbenp.prettier-vscode/
     ├── dbaeumer.vscode-eslint/
     ├── ms-python.python/

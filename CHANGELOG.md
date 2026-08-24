@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The testing document gives the command that measures the suite instead of a figure that goes stale the next time a test is added.
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 - Kill Idle Servers is removed, along with the automatic kill under memory pressure and at 24 processes: a killed language server is restarted by its extension within a second, so no slot was ever freed.
+- Material Icon Theme is no longer bundled. It was 5.9 MB that nothing enabled: no default setting selected it, so it shipped inactive unless the user picked it. Install it from the Extensions view to keep using it.
 - The process tree marks language servers idle after five minutes without CPU and says that disabling the owning extension is what frees a slot.
 - The toolchain picker's Skip is a 48dp button, so a screen reader announces it as a control.
 - The "Starting server..." placeholder and the repeated-crash explanation are string resources, so translations reach them.

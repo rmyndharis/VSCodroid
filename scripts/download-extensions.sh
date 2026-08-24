@@ -81,7 +81,6 @@ apply_tree_rewrites() {
 # moving afterwards. Bump the version and the digest together; the published
 # value is still fetched below and a disagreement fails the build.
 EXTENSIONS=(
-    "PKief.material-icon-theme@5.37.0#ade9adefe3909cea92aed52850ddd00975d1dc1b62fe558831f6fb8b88f7c3ce"
     "esbenp.prettier-vscode@12.4.0#fb730ea4306d09cdc0a3aaa9e9baae28058cc97a4fbfce8b056b377a0639a9fe"
     "ms-python.python@2026.4.0#232aeafb01f069824fdd92d3e628c1c442bbcfa1d3cc945ff97076340bb2b4a6"
     "dbaeumer.vscode-eslint@3.0.34#ca5334d46f6a39079e751ef4601bfc9f86bc3a46483e87291ec609239d161308"
