@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: August 23, 2026**
+**Last Updated: August 24, 2026**
 
 ## Summary
 
@@ -56,7 +56,7 @@ Not every one of these connections is one you asked for, which is why this secti
 
 If an extension asks you to sign in (to GitHub, for example), the app hands that extension's authorisation URL to your device's browser, and the sign-in happens there rather than inside the app. VSCodroid never sees your password: it is typed into the provider's own page in the browser.
 
-What comes back is a single opaque value that the editor itself issued and is waiting for. The app passes it to the editor page without reading, parsing or storing it, and without sending it anywhere. It is accepted only while a sign-in is plausibly in flight: the app records when it last opened a browser, and a callback arriving outside a ten-minute window from that moment is discarded rather than delivered, so another app on your device cannot inject one at will.
+What comes back is a single opaque value that the editor itself issued and is waiting for. The app reads only the request number it names and the address it carries, and passes that address to the editor page without storing it or sending it anywhere. It is accepted only for a sign-in this app started: every sign-in carries a request number of its own, the app records that number when it opens the browser, and a callback is delivered only if it names a recorded number and arrives within ten minutes of that sign-in's launch. A callback for a sign-in the app never launched is discarded however recently a browser was opened, so another app on your device cannot inject one at will.
 
 Any tokens the editor keeps afterwards are stored locally in the app's private storage on your device.
 
@@ -125,7 +125,7 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 
 The following data is stored locally on your device within the app's private sandbox:
 
-- **Your project files**: Stored in the app's own area of device storage (`Android/data/com.vscodroid/files/projects`, which other apps cannot read and which Clear Data wipes), or in a folder you granted access to
+- **Your project files**: Stored in the app's private internal storage on a new install (which other apps cannot read and which Clear Data wipes), or in a folder you granted access to. An install that already kept its projects in the app's own area of shared storage (`Android/data/com.vscodroid/files/projects`) keeps them there; new installs no longer use that location because shared storage cannot hold the symbolic links that tools such as `npm install` write
 - **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. So a second copy of that folder exists inside the app for as long as it stays open to you, and it is removed when you uninstall or clear app data along with everything else. Nothing about the copy leaves the device (it is excluded from backup), but you should know it is made
 - **Editor settings and preferences**: Stored locally as JSON configuration files
 - **Installed extensions**: Downloaded from Open VSX and stored locally

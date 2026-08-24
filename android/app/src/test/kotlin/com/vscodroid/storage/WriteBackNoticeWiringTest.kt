@@ -135,6 +135,23 @@ class WriteBackNoticeWiringTest {
         )
     }
 
+    @Test
+    fun `MainActivity asks to be told when a deleted directory was kept on the device`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onDirectoryKeptOnDevice\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for a directory kept on the device, so a delete " +
+                "that was declined to save an unread archive says nothing about it",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_directory_kept\b""").containsMatchIn(source),
+            "the notice does not name the string that says the device, not the app, " +
+                "holds the files",
+        )
+    }
+
     /**
      * The throttle belongs to the manager, so one refusing provider is one notice.
      *

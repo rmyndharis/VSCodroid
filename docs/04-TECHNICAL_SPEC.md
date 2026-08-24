@@ -89,12 +89,13 @@ the server cannot run without, against Bionic, with the NDK:
 ```bash
 # node-pty        -> node_modules/node-pty/build/Release/pty.node
 # @parcel/watcher -> node_modules/@parcel/watcher/build/Release/watcher.node
+# @vscode/sqlite3 -> node_modules/@vscode/sqlite3/build/Release/vscode-sqlite3.node
 #
 # Linked with -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
 # OUTPUT_ROOT defaults to android/app/src/main/assets/vscode-reh
 ```
 
-Both land inside the packaged `vscode-reh` tree, **not** in `jniLibs/`. That works because SELinux
+All three land inside the packaged `vscode-reh` tree, **not** in `jniLibs/`; `@vscode/spdlog` is replaced by a JavaScript implementation rather than recompiled. That works because SELinux
 denies `execve` under the app's data directory but not `dlopen`, so an addon is loadable from
 `filesDir` even though a binary there cannot be executed. Each addon's version is checked against
 the `package.json` the server was built with, since an addon compiled for a different Node ABI
@@ -211,7 +212,7 @@ own prefix and every session dies with "no suitable socket path".
 // app/build.gradle.kts
 android {
     namespace = "com.vscodroid"
-    compileSdk = 36
+    compileSdk = 37             // compile-time only; what the platform applies is targetSdk
 
     defaultConfig {
         applicationId = "com.vscodroid"
@@ -625,6 +626,8 @@ flowchart TD
   P --> P13["0013 shorten the reconnection grace when a client is connected"]
   P --> P14["0014 menus: dismiss a submenu only on a real scroll"]
   P --> P15["0015 menubar: stay open when only the keyboard resized"]
+  P --> P16["0016 sidebar: sash travel on narrow viewports"]
+  P --> P17["0017 menus: ignore a pan that started in a submenu"]
 ```
 
 Five of these are load-bearing in ways their titles understate:
@@ -738,8 +741,8 @@ ToolchainInfo(
     packName = "toolchain_ruby",
     displayName = "Ruby",
     shortLabel = "Ruby",
-    description = "Ruby with irb, gem, bundler",
-    estimatedSize = 34_000_000,   // unpacked, what the free-space gate uses
+    descriptionRes = R.string.toolchain_ruby_description,   // "Ruby with irb, gem, bundler"
+    estimatedSize = 36_000_000,   // unpacked, what the free-space gate uses; 35.7 MB measured
     downloadSize = 9_900_000,     // the ZIP, what the picker quotes to the user
     downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
 )

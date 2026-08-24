@@ -82,6 +82,11 @@ class SafUnfetchedDocumentTest {
         every { DocumentsContract.createDocument(any(), any(), any(), any()) } answers {
             uris.getOrPut("doc:" + lastArg<String>()) { mockk(relaxed = true) }
         }
+        // Needed by the directory cases: a mocked static with no answer throws, and
+        // `deleteFromSaf` swallows the throw, so a control asserting the delete went
+        // through would be asserting on a call that never completed.
+        every { DocumentsContract.deleteDocument(any(), any()) } returns true
+        every { DocumentsContract.renameDocument(any(), any(), any()) } returns mockk(relaxed = true)
 
         resolver = mockk(relaxed = true)
         val context = mockk<Context>(relaxed = true)
@@ -135,6 +140,275 @@ class SafUnfetchedDocumentTest {
     private fun deliver(event: Int, entry: String) {
         engine.handleMirrorEvent(event, File(mirror, entry), mirror, treeUri)
         engine.runWriteBackLoop { false }
+    }
+
+    /** inotify's "the entry this event is about is a directory", as the kernel sends it. */
+    private val isDirFlag = 0x40000000
+
+    /** One entry as the provider lists it. */
+    private data class Entry(
+        val name: String,
+        val size: Long = 64,
+        val isDirectory: Boolean = false,
+    )
+
+    /**
+     * A device folder with structure, for the cases that turn on where a document is.
+     *
+     * [deviceHolding] answers the same one row under every parent, which cannot
+     * describe a directory holding a file: the walk would find the file again inside
+     * itself, for ever. [tree] maps a parent's document id to the entries directly
+     * under it, with `root` as the tree's own. Every file reads as the same short
+     * contents, and only ones under [SafSyncEngine.MAX_FILE_SIZE] are ever read.
+     */
+    private fun deviceTree(tree: Map<String, List<Entry>>) {
+        every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
+            val parent = secondArg<String>()
+            mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:$parent" }
+        }
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val parent = firstArg<Uri>().toString().removePrefix("children:")
+            cursorOver(tree[parent].orEmpty())
+        }
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream("device contents".toByteArray())
+        }
+    }
+
+    private fun cursorOver(entries: List<Entry>): Cursor {
+        var row = -1
+        return mockk<Cursor>(relaxed = true) {
+            every { moveToNext() } answers { ++row < entries.size }
+            every { getColumnIndexOrThrow(any()) } answers {
+                when (firstArg<String>()) {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                    DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                    else -> 3
+                }
+            }
+            every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+            every { isNull(any<Int>()) } returns false
+            every { getString(0) } answers { "doc:${entries[row].name}" }
+            every { getString(1) } answers { entries[row].name }
+            every { getString(2) } answers {
+                if (entries[row].isDirectory) DocumentsContract.Document.MIME_TYPE_DIR
+                else "text/plain"
+            }
+            every { getLong(3) } answers { entries[row].size }
+            every { getLong(4) } returns 1_700_000_000_000
+        }
+    }
+
+    /** A `docs` directory whose only document is one the sync will not read. */
+    private val docsHoldingUnread = mapOf(
+        "root" to listOf(Entry("docs", isDirectory = true)),
+        "doc:docs" to listOf(Entry("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)),
+    )
+
+    /**
+     * Deleting a directory in the editor, as inotify reports it: the mirror entry is
+     * already gone when the event arrives, and the flag is the only thing left that
+     * says it was a directory.
+     */
+    private fun deleteDirectory(relativePath: String) {
+        File(mirror, relativePath).deleteRecursively()
+        deliver(FileObserver.DELETE or isDirFlag, relativePath)
+    }
+
+    /**
+     * The same skip, one level up. The document is never in the mirror, so the editor
+     * shows its directory as empty; the user deletes the directory; and the delete
+     * that reaches the device is `deleteDocument` on a directory document, which takes
+     * the archive with it. The file guard tests the directory's own path, which no
+     * skip ever records, so nothing stood in the way.
+     */
+    @Test
+    fun `a directory holding a document the sync never read is kept on the device`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(docsHoldingUnread)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deleteDirectory("docs")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(
+            listOf("docs"),
+            kept,
+            "the directory was kept, or deleted, without the user being told which",
+        )
+    }
+
+    /**
+     * The control that keeps the case above honest: a directory the sync read whole
+     * is deleted on the device when it is deleted in the editor, and nothing is said.
+     * A guard matching on anything other than a child of this directory fails here.
+     */
+    @Test
+    fun `a directory the sync read whole is deleted from the device`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("docs", isDirectory = true)),
+                "doc:docs" to listOf(Entry("notes.md")),
+            )
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deleteDirectory("docs")
+
+        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
+        assertTrue(kept.isEmpty(), "a delete that went through was announced as kept: $kept")
+    }
+
+    /** The unread document sits two levels down; the ancestor is still what holds it. */
+    @Test
+    fun `a directory is kept for a document the sync never read at any depth`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("docs", isDirectory = true)),
+                "doc:docs" to listOf(Entry("sub", isDirectory = true)),
+                "doc:sub" to listOf(Entry("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)),
+            )
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deleteDirectory("docs")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("docs"), kept, "a nested unread document did not keep its ancestor")
+    }
+
+    /**
+     * `docs` is a prefix of `docs2` as a string and not as a path. A guard comparing
+     * without the separator would keep `docs` for a document that lives under `docs2`,
+     * and the user would be told their empty directory holds files.
+     */
+    @Test
+    fun `a sibling whose name merely starts the same does not keep the directory`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(
+            mapOf(
+                "root" to listOf(
+                    Entry("docs", isDirectory = true),
+                    Entry("docs2", isDirectory = true),
+                ),
+                "doc:docs" to listOf(Entry("notes.md")),
+                "doc:docs2" to listOf(Entry("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)),
+            )
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deleteDirectory("docs")
+
+        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
+        assertTrue(kept.isEmpty(), "docs was kept for a document under docs2: $kept")
+    }
+
+    /**
+     * The set is a memory of what this sync could not read, not a fact about the
+     * device. When the directory is no longer there, there is nothing to keep, and the
+     * delete goes through exactly as it did before the guard existed.
+     */
+    @Test
+    fun `a directory the device no longer holds is not kept`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(docsHoldingUnread)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        // The directory, archive and all, was deleted on the device between the sync
+        // and the event.
+        deviceTree(mapOf("root" to emptyList()))
+        deleteDirectory("docs")
+
+        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
+        assertTrue(
+            kept.isEmpty(),
+            "a directory the device had already lost was announced as kept: $kept",
+        )
+    }
+
+    /**
+     * A rename arrives as a MOVED_FROM and a MOVED_TO, and the first half is a delete
+     * to everything but the pairing. A directory with an unread document in it has to
+     * keep renaming as one provider move, because that move is the one path that
+     * carries the document to the new name; a guard that refused the MOVED_FROM would
+     * leave the pair unclaimed, the new name built from a mirror that never held the
+     * document, and the old name standing on the device with it.
+     */
+    @Test
+    fun `renaming a directory that holds a document the sync never read still renames it`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(docsHoldingUnread)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        engine.handleMirrorEvent(
+            FileObserver.MOVED_FROM or isDirFlag, File(mirror, "docs"), mirror, treeUri
+        )
+        deliver(FileObserver.MOVED_TO or isDirFlag, "archive")
+
+        verify(exactly = 1) {
+            DocumentsContract.renameDocument(any(), uris.getValue("doc:docs"), "archive")
+        }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertTrue(kept.isEmpty(), "half of a rename was announced as a kept directory: $kept")
+    }
+
+    /**
+     * A claimed rename moves the unread document to the new name on the device, so the
+     * memory of it has to move too: kept at the old path, the guard stopped answering
+     * for the directory the moment it was renamed, and `rm -r` on the new name sent the
+     * archive to `deleteDocument`.
+     */
+    @Test
+    fun `a renamed directory still keeps the document the sync never read`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(docsHoldingUnread)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        engine.handleMirrorEvent(
+            FileObserver.MOVED_FROM or isDirFlag, File(mirror, "docs"), mirror, treeUri
+        )
+        deliver(FileObserver.MOVED_TO or isDirFlag, "archive")
+        // The device now lists the archive under its new name.
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("archive", isDirectory = true)),
+                "doc:archive" to listOf(Entry("big.zip", size = SafSyncEngine.MAX_FILE_SIZE + 1)),
+            )
+        )
+
+        deleteDirectory("archive")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("archive"), kept, "the rename left the unread memory at the old name")
+    }
+
+    /**
+     * A provider that cannot be asked is not a provider that said "gone". The delete is
+     * `deleteDocument` on a subtree the set says holds an unread document, so an
+     * unanswered lookup keeps; the cost of keeping wrongly is one stale directory.
+     */
+    @Test
+    fun `a directory is kept when the provider cannot say whether it still holds it`() {
+        val kept = mutableListOf<String>()
+        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        deviceTree(docsHoldingUnread)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        every { resolver.query(any(), any(), any(), any(), any()) } throws
+            IllegalStateException("the provider is gone")
+
+        deleteDirectory("docs")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("docs"), kept, "an unanswerable provider was read as \"gone\"")
     }
 
     /**

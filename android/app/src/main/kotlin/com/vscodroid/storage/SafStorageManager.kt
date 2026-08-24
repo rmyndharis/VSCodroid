@@ -112,8 +112,31 @@ class SafStorageManager(context: Context) {
      * and the throttle confines it to the first instant of each interval, so a race test
      * would have reported the shape this replaced as green.
      */
-    internal fun claimAnnouncement(now: Long, last: Long): Boolean =
-        shouldAnnounce(now, last) && lastFailureAnnouncedAt.compareAndSet(last, now)
+    internal fun claimAnnouncement(
+        now: Long,
+        last: Long,
+        stamp: AtomicLong = lastFailureAnnouncedAt,
+    ): Boolean = shouldAnnounce(now, last) && stamp.compareAndSet(last, now)
+
+    /**
+     * Told when a directory deleted in the editor was kept on the device.
+     *
+     * Forwarded for the reason the others are. Throttled like [onWriteBackFailed] and
+     * unlike the two below, because one deletion is not one directory: `rm -r` reports
+     * the deepest directory first, and every ancestor of a kept document is kept in
+     * turn, so deleting `docs/a/b` with an unread archive at the bottom is three
+     * notices back to back. On a stamp of its own rather than [lastFailureAnnouncedAt],
+     * so the burst cannot swallow a write-back failure landing inside the same
+     * interval, nor be swallowed by one.
+     */
+    fun onDirectoryKeptOnDevice(announce: (File) -> Unit) {
+        syncEngine.onDirectoryKeptOnDevice = { dir ->
+            val last = lastKeptAnnouncedAt.get()
+            if (claimAnnouncement(SystemClock.elapsedRealtime(), last, lastKeptAnnouncedAt)) {
+                announce(dir)
+            }
+        }
+    }
 
     /**
      * Told when a folder opened without every document reaching the mirror.
@@ -139,6 +162,7 @@ class SafStorageManager(context: Context) {
     }
 
     private val lastFailureAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
+    private val lastKeptAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
 
     // -- Permission Management --
 

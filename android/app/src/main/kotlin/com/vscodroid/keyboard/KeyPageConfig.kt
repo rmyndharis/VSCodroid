@@ -92,11 +92,11 @@ object KeyPages {
     val defaults: List<KeyPage> = listOf(
         // Page 1: Essential coding keys
         KeyPage(listOf(
-            KeyItem.Button("Tab", "Tab", R.string.key_desc_tab),
-            KeyItem.Button("Esc", "Escape", R.string.key_desc_escape),
-            KeyItem.Button("Ctrl", "Ctrl", R.string.key_desc_ctrl, isToggle = true),
-            KeyItem.Button("Alt", "Alt", R.string.key_desc_alt, isToggle = true),
-            KeyItem.Button("Shift", "Shift", R.string.key_desc_shift, isToggle = true),
+            KeyItem.Button("tab", "Tab", R.string.key_desc_tab),
+            KeyItem.Button("esc", "Escape", R.string.key_desc_escape),
+            KeyItem.Button("ctrl", "Ctrl", R.string.key_desc_ctrl, isToggle = true),
+            KeyItem.Button("alt", "Alt", R.string.key_desc_alt, isToggle = true),
+            KeyItem.Button("shift", "Shift", R.string.key_desc_shift, isToggle = true),
             KeyItem.GesturePad,
             KeyItem.Button("{}", "{", R.string.key_desc_curly_braces,
                 alternates = listOf(
@@ -177,8 +177,8 @@ object KeyPages {
             KeyItem.Button("F10", "F10", R.string.key_desc_f10),
             KeyItem.Button("F11", "F11", R.string.key_desc_f11),
             KeyItem.Button("F12", "F12", R.string.key_desc_f12),
-            KeyItem.Button("Home", "Home", R.string.key_desc_home),
-            KeyItem.Button("End", "End", R.string.key_desc_end),
+            KeyItem.Button("home", "Home", R.string.key_desc_home),
+            KeyItem.Button("end", "End", R.string.key_desc_end),
             KeyItem.Button("PgUp", "PageUp", R.string.key_desc_page_up),
             KeyItem.Button("PgDn", "PageDown", R.string.key_desc_page_down),
         )),

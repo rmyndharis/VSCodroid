@@ -67,7 +67,9 @@ the last run was filtered. The instrumented layer in the pyramid is the same
 kind of claim and is read the same way, from the source rather than from
 here: `grep -rn "@Test" android/app/src/androidTest --include="*.kt" | wc -l`,
 which counts annotations and so equals the number of executed tests only
-while nothing there is parameterised or `@Ignore`d.
+while nothing there is parameterised or `@Ignore`d. The one written record of
+that figure, `android/app/src/androidTest/README.md`, is held to the same grep
+by `scripts/check-instrumented-inventory.py`, which lint runs.
 
 A test that needs a filesystem builds its tree under a JUnit `@TempDir` rather
 than touching the checkout.
@@ -259,7 +261,7 @@ that matters most is **Rule shape**.
 | Settings restore | Restored app keeps its machine-scoped settings. `createDefaultSettings()` writes only when the file is absent, so a restored copy is kept rather than overwritten | Uninstall → restore backup → verify settings |
 | Sensitive exclusion: SSH keys | `~/.ssh/` is absent from the payload. The key is generated without a passphrase, so this is the exclusion with real consequences | Inspect backup payload, verify absent |
 | Sensitive exclusion: connection token | `home/.vscodroid/data/token` is absent. It sits one directory from the included path, which is the near miss the allowlist exists to survive | Inspect backup payload, verify absent |
-| Workspace exclusion | The `external` domain (which holds the projects directory, `Android/data/<pkg>/files/projects`) and `filesDir/saf-mirrors` are both absent | Inspect backup payload, verify absent |
+| Workspace exclusion | `filesDir/projects` (the workspace on a new install), the `external` domain (which holds `Android/data/<pkg>/files/projects` on an install that kept it) and `filesDir/saf-mirrors` are all absent | Inspect backup payload, verify absent |
 | Preferences exclusion | The `sharedpref` domain is absent. Restoring `setup_version` onto a device with an empty `filesDir` would make the app skip extraction and start a server that is not there | Inspect backup payload, verify absent |
 | Rule shape | `backup_rules.xml` still matches the `<cloud-backup>` section of `data_extraction_rules.xml`. No supported device reads the first file, but it is the floor if `minSdk` ever drops to 30 | Diff the two files |
 | Post-update backup compatibility | Backup/restore still works after app update | Backup on version N, restore on N+1 |
@@ -277,7 +279,7 @@ flowchart TD
   PR["Pull request, and every push to main"] --> BUILD["build.yml: Build job (ubuntu-latest)"]
   BUILD --> B1["Fetch the Code - OSS server release built from MIT source"]
   BUILD --> B2["Fetch Node from Termux nodejs-lts, plus Termux tools, npm, Python, extensions, musl loader"]
-  BUILD --> B3["Build native addons (pty.node, watcher.node) and the glibc shim"]
+  BUILD --> B3["Build native addons (pty.node, watcher.node, vscode-sqlite3.node) and the glibc shim"]
   BUILD --> B4["assembleDebug"]
 
   PR --> TEST["build.yml: Unit Tests job (ubuntu-latest)"]
@@ -286,7 +288,7 @@ flowchart TD
 
   PR --> LINT["lint.yml: Lint job"]
   LINT --> L1["./gradlew lint, plus the committed baseline check"]
-  LINT --> L2["node scripts/test-*.js (8 self-checks)"]
+  LINT --> L2["node scripts/test-*.js (9 self-checks, one per script)"]
   LINT --> L3["python3 scripts/check-*.py repository gates"]
   LINT --> L4["git apply --stat on every patch, and device-test.sh --self-check"]
 

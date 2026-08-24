@@ -544,8 +544,10 @@ class AndroidBridge(
      * two routes had different rules and the workbench chooses the route: VS Code
      * sends "Open in Browser" through `window.open`, which `MainActivity` relays
      * to this method, while an ordinary link navigation reaches
-     * `VSCodroidWebViewClient.shouldOverrideUrlLoading` and has never been
-     * filtered. Same click, same URL, two outcomes, one of them silent.
+     * `VSCodroidWebViewClient.shouldOverrideUrlLoading`, which filtered nothing.
+     * Same click, same URL, two outcomes, one of them silent. Both routes now
+     * refuse exactly one address, this app's own `vscodroid://callback`, for the
+     * reason given at the refusal below; nothing else is judged on either.
      *
      * The session token above still gates the call, and that is a different
      * question: it asks whether the caller is our own page, not whether the

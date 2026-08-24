@@ -407,17 +407,17 @@ class KeyRowAccessibilityTest {
 
         @Test
         fun `every latched modifier is named, in the order the keys sit in`() {
-            assertEquals("Ctrl", latchedModifierLabel(ctrl = true, alt = false, shift = false))
-            assertEquals("Alt", latchedModifierLabel(ctrl = false, alt = true, shift = false))
-            assertEquals("Shift", latchedModifierLabel(ctrl = false, alt = false, shift = true))
+            assertEquals("ctrl", latchedModifierLabel(ctrl = true, alt = false, shift = false))
+            assertEquals("alt", latchedModifierLabel(ctrl = false, alt = true, shift = false))
+            assertEquals("shift", latchedModifierLabel(ctrl = false, alt = false, shift = true))
             assertEquals(
-                "Ctrl+Alt+Shift",
+                "ctrl+alt+shift",
                 latchedModifierLabel(ctrl = true, alt = true, shift = true),
                 "the cue has to name all of them: Ctrl+Shift+P and Ctrl+P are different " +
                     "commands, and the row can hold both modifiers at once",
             )
             assertEquals(
-                "Ctrl+Shift",
+                "ctrl+shift",
                 latchedModifierLabel(ctrl = true, alt = false, shift = true),
                 "the order follows the keys on page 1, so the cue reads the way the row " +
                     "does rather than the way the arguments happen to be listed",

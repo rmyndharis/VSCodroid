@@ -242,12 +242,13 @@ Two locations, and the difference matters to a user rather than only to a reader
 | Tree                                                                | Where                                                                        |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | Settings, secrets, the server tree, bundled runtimes, installed toolchains, and the mirrors of folders opened through SAF | App-private internal storage, `/data/data/com.vscodroid/`. No other app can read it |
-| The default workspace, `projects/`                                  | App-specific **external** storage, `getExternalFilesDir(null)/projects` (`Environment.getProjectsDir`), which falls back to internal storage only when there is no external volume |
+| The default workspace, `projects/`                                  | Internal storage, `filesDir/projects`, on a new install. An install that already has `getExternalFilesDir(null)/projects` keeps it (`Environment.getProjectsDir`): shared storage cannot hold a symbolic link, which is what broke `npm install` there, but moving an existing install's files behind the user's back is not a fix |
 
 Android 11 closed `Android/data` to other apps and to the system Files app, and `minSdk` here is 33,
-so the second row is not shared storage in the pre-Android-11 sense. What survives is MTP over USB
-and a few OEM file managers, which is enough that a user can lose the projects tree from outside the
-app, and enough that "app-private" is the wrong word for it. Clear Data wipes it either way.
+so an install still on the shared-storage location is not sharing in the pre-Android-11 sense. What
+survives there is MTP over USB and a few OEM file managers, which is enough that such a user can lose
+the projects tree from outside the app, and enough that "app-private" is the wrong word for that
+location. Clear Data wipes both.
 
 - Both trees are protected by Android's Linux-based file permissions
 - Encrypted at rest by Android full-disk encryption (enabled by default on modern devices)
@@ -291,7 +292,7 @@ If a malicious extension is reported:
 | WebView CSP headers                    | Chrome DevTools Network tab                                        | Every release |
 | APK signature verification             | `apksigner verify`                                                 | Every release |
 | Dependency vulnerability scan          | `npm audit`, `safety check` (Python)                               | Weekly        |
-| Binary provenance                      | Checked where a binary enters the tree, not where it ships, and by three different anchors. Termux and Alpine packages resolve through their own signature chains (`scripts/verify-termux-index.sh`). The Node tarball, its headers and the fetched VSIXes are pinned to a sha256 written in the fetching script, as are the `node-pty`, `@parcel/watcher` and `@vscode/sqlite3` sources `scripts/build-native-addons.sh` compiles, each with `node-addon-api` pinned to an exact version. The Code - OSS server tarball is checked against the digest its GitHub Release carries, which `fetch-vscode-oss.sh` refuses to proceed without; that anchors it to the release rather than to this repository. The Gradle distribution is the one link with no digest at either end: `gradle-wrapper.properties` names a `distributionUrl` and no `distributionSha256Sum` | Every download |
+| Binary provenance                      | Checked where a binary enters the tree, not where it ships, and by three different anchors. Termux and Alpine packages resolve through their own signature chains (`scripts/verify-termux-index.sh`). The Node tarball, its headers and the fetched VSIXes are pinned to a sha256 written in the fetching script, as are the `node-pty`, `@parcel/watcher` and `@vscode/sqlite3` sources `scripts/build-native-addons.sh` compiles, each with `node-addon-api` pinned to an exact version. The Code - OSS server tarball is checked against the digest its GitHub Release carries, which `fetch-vscode-oss.sh` refuses to proceed without; that anchors it to the release rather than to this repository. The Gradle distribution is pinned by the `distributionSha256Sum` in `gradle-wrapper.properties`, which the wrapper checks before unpacking, and `lint.yml` refuses a tree whose wrapper carries none | Every download |
 | Bundled ELF integrity                  | `scripts/verify-android-elf.py` checks 16 KB page alignment and refuses any `DT_NEEDED` that Bionic does not provide and this app does not bundle. Each download script runs it on what it fetches; at packaging the Gradle sweep covers every binary in `jniLibs/arm64-v8a` and prints how many it checked, and the ~53 libraries under `assets/usr/lib` are read only as resolution sources there, having been checked when they were downloaded | Download, and packaging for `jniLibs` |
 | Storage permission scope               | Attempt to read/write outside app directory                        | Every release |
 | AndroidBridge token enforcement        | Call bridge methods with a wrong or absent token, verify rejected  | Every release |

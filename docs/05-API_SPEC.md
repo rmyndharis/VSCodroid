@@ -273,8 +273,14 @@ fun openExternalUrl(url: String, authToken: String): String  // note: token LAST
 // Returns the empty string when it opened, and otherwise the reason it did not,
 // which the relay forwards to the user unchanged. Three reasons exist: the
 // session token was stale, no installed app took the intent, or Android refused
-// the launch outright, which is what a `file://` URL gets. The URL itself is
-// never judged: there is no scheme or host filter on this path, so a LAN address,
+// the launch outright, which is what a `file://` URL gets. One destination is
+// judged before anything else happens: this app's own `vscodroid://callback`
+// (`isExtensionCallback`) is refused, with the third sentence naming its
+// scheme, and refused before any request id is armed. Its VIEW filter is
+// exported, so launching it would deliver a sign-in payload of the caller's
+// choosing straight into `MainActivity.onNewIntent`; the WebView's own
+// navigation route in `VSCodroidWebViewClient.shouldOverrideUrlLoading` refuses
+// it the same way. Nothing else is filtered by scheme or host, so a LAN address,
 // a custom scheme and a typo are all simply handed to Android.
 //
 // CALLERS MUST COMPARE AGAINST THE EMPTY STRING. Success is the falsy value, so
@@ -1036,7 +1042,7 @@ flowchart TD
   T --> T3["ms-python.python"]
   T --> T4["dbaeumer.vscode-eslint"]
   T --> T5["bradlc.vscode-tailwindcss"]
-  O --> O1["vscodroid.vscodroid-saf-bridge (the 9 VSCodroid: commands)"]
+  O --> O1["vscodroid.vscodroid-saf-bridge (the 10 VSCodroid: commands)"]
   O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
   O --> O3["vscodroid.vscodroid-process-monitor"]
   O --> O4["vscodroid.vscodroid-serve-network (dev-server preview)"]

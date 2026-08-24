@@ -22,6 +22,7 @@ import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -47,6 +48,11 @@ import org.junit.jupiter.api.Test
  *
  * Change the rule here and the cases below invert; that is the point of them
  * being written down rather than assumed.
+ *
+ * One address is refused, and it is not a destination: `vscodroid://callback`
+ * is this app's own sign-in relay, and handed to `startActivity` it comes
+ * straight back through the exported filter. Both exits refuse it, and the
+ * cases after the pinned rule say why an allow-list is still not what that is.
  *
  * A word on how far the asymmetry goes, because the obvious reading overstates
  * it. Handing `intent://…` here is NOT the intent-redirection hazard it looks
@@ -122,6 +128,17 @@ class ExternalUrlHandoffTest {
          * anything at all, whatever key it might have chosen.
          */
         const val LAUNCHED_AT = 1_700_111L
+
+        /**
+         * This app's own sign-in relay, shaped as a page would forge it: the
+         * payload names a request, and the address carries the same id where
+         * `authRequestIdsIn` reads it, so a hand-off that armed before it judged
+         * would open the window for exactly the id the payload then posts to.
+         */
+        const val OWN_CALLBACK_REQUEST_ID = "911"
+        const val OWN_CALLBACK =
+            "vscodroid://callback?data=%7B%22id%22%3A%22911%22%2C%22uri%22%3A%22x%22%7D" +
+                "&vscode-reqid=911"
     }
 
     /** Set by the client's retry callback, so a case can ask whether it fired. */
@@ -168,7 +185,7 @@ class ExternalUrlHandoffTest {
     @AfterEach
     fun handBackArmedRequests() {
         AuthTabWindow.disarm(
-            listOf(SIGN_IN_REQUEST_ID, UNSOLICITED_REQUEST_ID, DOCS_NUMBER)
+            listOf(SIGN_IN_REQUEST_ID, UNSOLICITED_REQUEST_ID, DOCS_NUMBER, OWN_CALLBACK_REQUEST_ID)
         )
     }
 
@@ -190,6 +207,10 @@ class ExternalUrlHandoffTest {
         mockkObject(Logger)
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.e(any(), any(), any()) } answers { logged += secondArg<String>() }
+        // Recorded as well as stubbed: the refusal of this app's own callback
+        // logs here, and the real `Log.w` on the stub android.jar throws.
+        every { Logger.w(any(), any()) } answers { logged += secondArg<String>() }
+        every { Logger.w(any(), any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.d(any(), any()) } just Runs
 
         mockkConstructor(Intent::class)
@@ -313,6 +334,71 @@ class ExternalUrlHandoffTest {
         val handled = client.shouldOverrideUrlLoading(view, request("intent", "scan", -1))
         verify(exactly = 1) { context.startActivity(any()) }
         assertTrue(handled)
+    }
+
+    /**
+     * The one address this route refuses, and the case above is its control:
+     * a custom scheme still leaves, so this is not a filter on destinations.
+     * `vscodroid://callback` is not a destination in another app but this app's
+     * own front door. Its VIEW filter is exported and BROWSABLE, so handing it
+     * to `startActivity` delivers it straight back to `MainActivity`, and the
+     * arming that precedes every main-frame launch would first open the window
+     * that delivery is judged against. One navigation, chosen by a page, both
+     * opens the relay and posts to it.
+     *
+     * The bridge refuses the same address, and the workbench cannot reach the
+     * bridge with it at all: `injectWindowOpenOverride` routes only http and
+     * https there, and the workbench's own opener assigns `location.href` for
+     * every other scheme, which arrives here on the main frame.
+     *
+     * NEGATIVE CONTROL: remove the callback test in `shouldOverrideUrlLoading`
+     * and this goes red on the launch and on the arming.
+     */
+    @Test
+    fun `this app's own sign-in callback is refused rather than handed over`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "callback", -1, OWN_CALLBACK)
+        )
+
+        assertTrue(handled, "the WebView was left to navigate to this app's own callback")
+        verify(exactly = 0) { context.startActivity(any()) }
+        assertNull(
+            AuthTabWindow.armedAt(OWN_CALLBACK_REQUEST_ID),
+            "the page chose which vscodroid://callback this app will accept, and the " +
+                "launch then posted it: the relay was opened and used in one step",
+        )
+        assertTrue(announced.isEmpty(), "a refusal is not a failed hand-off: announced $announced")
+        // The payload is the page's, so the log says that a callback was refused
+        // and nothing of what it carried.
+        val line = logged.lastOrNull().orEmpty()
+        assertTrue(line.isNotEmpty(), "the refusal was not logged at all, so nothing was checked")
+        assertFalse(
+            line.contains(OWN_CALLBACK_REQUEST_ID) || line.contains("data="),
+            "a forged payload reached a shipping log line: $line",
+        )
+    }
+
+    /**
+     * The same from a frame this app does not vouch for, with the gesture that
+     * gets a non-http subframe past the rule above it. The frame test keeps a
+     * subframe from arming, so what a tapped link in the simple browser could
+     * still do was post a payload of the remote site's choosing for an id a
+     * real sign-in had in flight. The refusal sits on both frames for that
+     * reason, and this case is what measures the subframe half.
+     */
+    @Test
+    fun `a tapped subframe link to this app's own callback launches nothing`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request(
+                "vscodroid", "callback", -1, OWN_CALLBACK,
+                fromMainFrame = false, withGesture = true,
+            ),
+        )
+
+        assertTrue(handled, "the WebView was left to navigate to this app's own callback")
+        verify(exactly = 0) { context.startActivity(any()) }
+        assertNull(AuthTabWindow.armedAt(OWN_CALLBACK_REQUEST_ID))
     }
 
     /**

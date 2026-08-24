@@ -17,6 +17,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.authRequestIdsIn
+import com.vscodroid.isExtensionCallback
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import java.io.ByteArrayInputStream
@@ -804,6 +805,33 @@ class VSCodroidWebViewClient(
                 )
                 return true
             }
+        }
+        // The one destination this method judges, on either frame, and refused
+        // ahead of the arming below rather than merely left unarmed. Same test
+        // and same order as `AndroidBridge.openExternalUrl`, and the two exits
+        // are meant to stay in step.
+        //
+        // `vscodroid://callback` is this app's own sign-in relay. Its VIEW filter
+        // is exported and BROWSABLE, so handing one to `startActivity` delivers
+        // it straight back into `MainActivity.onNewIntent`, and a main-frame
+        // launch arms the ids the address carries first: one navigation would
+        // both open the window and post the callback that window judges. The
+        // launch alone is the other half, and the frame test below does not
+        // cover it: a subframe arms nothing, but a tapped link in the simple
+        // browser still posted a payload of the remote site's choosing for an id
+        // a real sign-in had in flight.
+        //
+        // Both routes here are ones the bridge never sees. `injectWindowOpenOverride`
+        // sends only http and https to the bridge, and the workbench's own opener
+        // assigns `location.href` for every other scheme, so an extension calling
+        // `openExternal` on this address navigates the main frame to it. Nothing
+        // legitimate is lost: a sign-in returns by the browser firing the filter,
+        // never by this WebView navigating to the app's own scheme. Logged
+        // without the address, for the reason [urlLogLabel] gives, and here the
+        // query is a payload someone forged.
+        if (isExtensionCallback(url.scheme, url.host)) {
+            Logger.w(tag, "Refused to open this app's own sign-in callback")
+            return true
         }
         // Empty until this launch arms something, and then the ids to take back
         // if the launch throws. Same shape as `AndroidBridge.openExternalUrl`,

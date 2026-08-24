@@ -219,6 +219,12 @@
         <item quantity="one">Not enough free space: a file could not be copied into the editor. It is unchanged in the device folder.</item>
         <item quantity="other">Not enough free space: %1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
     </plurals>
+    <!-- A directory deleted in the editor that was left standing in the device folder,
+         because it holds documents that never reached the editor and deleting the
+         directory would have taken them with it. Names the device as where the files
+         are: the local copy is gone, so saf_write_back_failed's "the only copy is
+         inside VSCodroid" would be backwards here. -->
+    <string name="saf_directory_kept">%1$s was kept in the device folder: it holds files that were never copied into the editor. Delete it there if you no longer need them.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

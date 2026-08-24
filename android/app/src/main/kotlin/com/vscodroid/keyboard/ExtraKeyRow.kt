@@ -574,9 +574,10 @@ class ExtraKeyRow @JvmOverloads constructor(
  * The modifiers latched right now, drawn as one label, or null for none.
  *
  * The names are key labels rather than language, on the same terms as
- * [KeyItem.Button.label]: "Ctrl" is what is written on the key the user pressed,
- * and a translated badge would name a key the row does not have. The sentence a
- * screen reader hears is the one resource this needs, and the caller resolves it.
+ * [KeyItem.Button.label]: "ctrl" is what is written on the key the user pressed,
+ * lower case like a hardware keyboard's legends, and a translated badge would
+ * name a key the row does not have. The sentence a screen reader hears is the
+ * one resource this needs, and the caller resolves it.
  *
  * Split out of [ExtraKeyRow] for the reason [pressedState] is split out of
  * [ExtraKeyButton]: the row is a `View` whose initialiser reaches resources on
@@ -584,9 +585,9 @@ class ExtraKeyRow @JvmOverloads constructor(
  */
 internal fun latchedModifierLabel(ctrl: Boolean, alt: Boolean, shift: Boolean): String? {
     val held = buildList {
-        if (ctrl) add("Ctrl")
-        if (alt) add("Alt")
-        if (shift) add("Shift")
+        if (ctrl) add("ctrl")
+        if (alt) add("alt")
+        if (shift) add("shift")
     }
     return if (held.isEmpty()) null else held.joinToString("+")
 }

@@ -64,6 +64,7 @@ class ActivityRetentionTest {
         "safManager.onWriteBackFailed {",
         "safManager.onUploadIncomplete {",
         "safManager.onDocumentsNotCopied {",
+        "safManager.onDirectoryKeptOnDevice {",
     )
 
     @Test

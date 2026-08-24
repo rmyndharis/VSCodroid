@@ -15,7 +15,7 @@ of that is how this repository works. There is no submodule and no `.gitmodules`
 `develop` branch, no `scripts/download-vscode-server.sh`, no `server/lib/`, and no script
 under `scripts/` or workflow under `.github/` invokes yarn. The server is built from MIT
 Code - OSS source by `.github/workflows/build-vscode-oss.yml` with the unified diffs in
-`patches/` applied by `git apply` (fifteen today, and the script globs the directory rather
+`patches/` applied by `git apply` (seventeen today, and the script globs the directory rather
 than carrying a list), and app builds fetch the result with `scripts/fetch-vscode-oss.sh`.
 The week-by-week schedule in
 [`12-IMPLEMENTATION_PLAN.md`](./12-IMPLEMENTATION_PLAN.md) still describes that older build,

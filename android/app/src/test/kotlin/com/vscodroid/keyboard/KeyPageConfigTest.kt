@@ -23,14 +23,14 @@ class KeyPageConfigTest {
         fun `contains Tab key`() {
             val tab = page.items.filterIsInstance<KeyItem.Button>().find { it.value == "Tab" }
             assertNotNull(tab, "Page 1 should contain Tab")
-            assertEquals("Tab", tab!!.label)
+            assertEquals("tab", tab!!.label)
         }
 
         @Test
         fun `contains Escape key`() {
             val esc = page.items.filterIsInstance<KeyItem.Button>().find { it.value == "Escape" }
             assertNotNull(esc, "Page 1 should contain Escape")
-            assertEquals("Esc", esc!!.label)
+            assertEquals("esc", esc!!.label)
         }
 
         @Test

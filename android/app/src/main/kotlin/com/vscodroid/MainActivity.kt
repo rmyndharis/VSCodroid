@@ -548,7 +548,7 @@ class MainActivity : AppCompatActivity() {
         // that was a destroyed Activity and its whole inflated view tree, on a
         // device this app is trying to leave memory on.
         safManager = SafStorageManager(applicationContext)
-        // Read into locals for the same reason, and used by all three notices below:
+        // Read into locals for the same reason, and used by all four notices below:
         // a lambda that says `this@MainActivity`, `getString` or `runOnUiThread`
         // captures the Activity and hands it straight back to the engine. The
         // notices themselves have to survive, because the drain they report on is
@@ -609,6 +609,20 @@ class MainActivity : AppCompatActivity() {
                         count,
                         count,
                     ),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+
+        // A directory deleted in the editor that stayed on the device, because it
+        // holds documents the sync never copied in and deleting it would have taken
+        // them. Its own wording again: the mirror copy is gone, so "the only copy is
+        // inside VSCodroid" would be exactly backwards.
+        safManager.onDirectoryKeptOnDevice { dir ->
+            toMainThread.post {
+                Toast.makeText(
+                    appContext,
+                    appContext.getString(R.string.saf_directory_kept, dir.name),
                     Toast.LENGTH_LONG,
                 ).show()
             }

@@ -504,7 +504,7 @@ class KeyRowAccessibilityInstrumentedTest {
             assertEquals(
                 "a latched Ctrl reaches no node a screen reader stops on, so a user who " +
                     "has swiped away from page 1 is told the page and not the modifier",
-                context.getString(R.string.key_page_indicator_held, 1, pageCount, "Ctrl"),
+                context.getString(R.string.key_page_indicator_held, 1, pageCount, "ctrl"),
                 held,
             )
         }
@@ -554,7 +554,7 @@ class KeyRowAccessibilityInstrumentedTest {
             assertEquals(
                 "the resized row still reports the page count it was built with, so every " +
                     "key on it is dividing a window it was not sized for",
-                context.getString(R.string.key_page_indicator_held, 1, after.size, "Ctrl"),
+                context.getString(R.string.key_page_indicator_held, 1, after.size, "ctrl"),
                 held,
             )
 

@@ -117,7 +117,7 @@ M6 (Release)   → Play Store release
    - [x] Web client served by VS Code REH server (bundled in same assets)
 
 3. **File system**
-   - [x] App-external workspace directory (`/storage/emulated/0/Android/data/<pkg>/files/projects`)
+   - [x] Workspace directory: `filesDir/projects` on a new install; an install that already had `/storage/emulated/0/Android/data/<pkg>/files/projects` keeps it (`Environment.getProjectsDir`)
    - [x] Welcome project created on first run (`FirstRunSetup.createWelcomeProject`)
    - [x] File explorer works via VS Code
 
@@ -425,7 +425,7 @@ M6 (Release)   → Play Store release
 
 4. **Language Picker UI** (`SplashActivity.kt`, `ToolchainActivity.kt`, `ToolchainPickerAdapter.kt`)
    - [x] First-run UI: "What do you code in?" with language checkboxes (`SplashActivity.showToolchainPicker()`, `layout_toolchain_picker.xml`)
-   - [x] Toolchains screen for adding/removing languages post-install (`ToolchainActivity` with MANAGER mode, `activity_toolchain.xml`). Reached by long-pressing the launcher icon and choosing **Manage toolchains**; there is no Settings entry, the activity is not exported, and `SplashActivity.publishToolchainShortcut()` is what makes it reachable at all
+   - [x] Toolchains screen for adding/removing languages post-install (`ToolchainActivity` with MANAGER mode, `activity_toolchain.xml`). Reached by long-pressing the launcher icon and choosing **Manage toolchains** (`SplashActivity.publishToolchainShortcut()`), or from the Command Palette entry **VSCodroid: Manage Toolchains**, which the bundled SAF bridge extension sends as the `openToolchainSettings` bridge command; there is no Settings entry and the activity is not exported
    - [x] Download progress UI, error handling, retry (`SplashActivity.startDownloads()`, `layout_toolchain_progress.xml`, `Action.RETRY/CANCEL`)
    - [x] Size display per toolchain before download (`ToolchainPickerAdapter` shows `~${formatSize(info.estimatedSize)}`)
 
@@ -435,7 +435,7 @@ M6 (Release)   → Play Store release
 - [x] ptyHost runs as worker_thread (additional phantom process saved)
 - [x] On-demand toolchains delivered via Play Asset Delivery (Go, Ruby, Java)
 - [x] ToolchainManager handles full lifecycle (install, uninstall, env vars, symlinks)
-- [x] Language Picker UI works during first-run and from the launcher icon's **Manage toolchains** shortcut (`SplashActivity` + `ToolchainActivity`)
+- [x] Language Picker UI works during first-run, from the launcher icon's **Manage toolchains** shortcut and from the Command Palette (`SplashActivity` + `ToolchainActivity`)
 
 ### Estimated Effort: 3-4 weeks
 

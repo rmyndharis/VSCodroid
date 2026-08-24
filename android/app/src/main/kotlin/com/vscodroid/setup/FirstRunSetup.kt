@@ -633,13 +633,15 @@ class FirstRunSetup(
     /**
      * Recreates the projects directory if it has gone.
      *
-     * Alone among the directories above, this one lives in app-external storage
-     * -- /storage/emulated/0/Android/data/<pkg>/files/projects -- which some routes
-     * outside the app can still reach (MTP over USB, a few OEM managers) and
-     * which Clear Data wipes outright. Android 11 closed Android/data to the
-     * system Files app and to other apps, so this is narrower than the "shows up
-     * in every file manager" it used to say, and still enough to lose it. The rest are under filesDir, where nothing outside the app can
-     * reach them, so they only ever need creating. This one needs repairing.
+     * Alone among the directories above, this one can live outside filesDir: an
+     * install that already had its projects on shared storage
+     * (/storage/emulated/0/Android/data/<pkg>/files/projects) keeps them there,
+     * which some routes outside the app can still reach (MTP over USB, a few OEM
+     * managers) and which Clear Data wipes outright. A new install gets
+     * filesDir/projects, because shared storage cannot hold a symbolic link and
+     * npm dies on the first one; Environment.getProjectsDir decides which. The
+     * rest are under filesDir, where nothing outside the app can reach them, so
+     * they only ever need creating. This one can need repairing.
      *
      * Creating it once per version was not enough. isFirstRun() gates on
      * versionName or versionCode, so a folder deleted after setup stayed missing
@@ -2316,7 +2318,7 @@ claude() {
         val homeDir = File(context.filesDir, "home")
         val projectsDir = Environment.getProjectsDir(context)
 
-        // ~/projects -> app-external projects dir (convenience symlink)
+        // ~/projects -> the projects dir, wherever this install keeps it (convenience symlink)
         val link = File(homeDir, "projects")
         // Asked before anything is removed, and that order is the point. It used
         // to sit below the delete, so a link whose target had moved was unlinked

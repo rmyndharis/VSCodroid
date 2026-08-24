@@ -92,7 +92,8 @@ class SafSyncEngine(private val context: Context) {
      * a 60 MB archive becomes whatever was just typed.
      *
      * Absolute paths, like the upload journal's entries and for the same reason:
-     * one engine serves every folder in turn.
+     * one engine serves every folder in turn. Files only: a directory is never
+     * recorded, so a question about one is answered by prefix, in [handleMirrorEvent].
      */
     private val unfetched = ConcurrentHashMap.newKeySet<String>()
 
@@ -1738,6 +1739,17 @@ class SafSyncEngine(private val context: Context) {
     internal var onUploadIncomplete: (File, Int, Boolean) -> Unit = { _, _, _ -> }
 
     /**
+     * Told when a directory deleted in the editor was left standing on the device,
+     * because it still holds documents this sync never copied in.
+     *
+     * Its own seam for the reason [onDocumentsNotCopied] has one: [onWriteBackFailed]
+     * says the app holds the only copy, and here the opposite is true. The mirror copy
+     * is gone, the device holds the only one, and a notice worded the other way would
+     * send the user looking inside the app for files that are safe where they are.
+     */
+    internal var onDirectoryKeptOnDevice: (File) -> Unit = {}
+
+    /**
      * How much room is left where the mirror lives.
      *
      * A seam because no JVM test can make a real filesystem answer that it is full, and
@@ -1757,8 +1769,9 @@ class SafSyncEngine(private val context: Context) {
      * Declines to write [localFile] out, because the device holds a document under that
      * name this sync never read, and says so once per file.
      *
-     * Both refusal sites come through here, and the message living in one place is what
-     * keeps them saying the same thing: [createOneInSaf] asks the same question while
+     * Both file-level refusal sites come through here, and the message living in one
+     * place is what keeps them saying the same thing: [createOneInSaf] asks the same
+     * question while
      * walking into a directory, and no JVM test can reach it, because delivering a
      * directory event builds a `FileObserver` and its static initializer needs native
      * code. One of them is the only thing holding the two together.
@@ -1766,6 +1779,8 @@ class SafSyncEngine(private val context: Context) {
      * The notice is [onWriteBackFailed]'s and it fits: the file did not reach the device
      * folder, and the copy inside the app is the only one of it that exists. What the
      * device holds under that name is a different document, which is why this refuses.
+     * The directory guard does not come through here, because for it the opposite is
+     * true; see [keepUnreadDirectory].
      */
     private fun refuseUnreadDocument(localFile: File, describedAs: String) {
         Logger.w(
@@ -1788,6 +1803,24 @@ class SafSyncEngine(private val context: Context) {
      */
     private fun announceLost(localFile: File) {
         if (refusalsAnnounced.add(localFile.absolutePath)) onWriteBackFailed(localFile)
+    }
+
+    /**
+     * Declines to delete the device directory at [relativePath], because it holds
+     * documents this sync never read, and says so.
+     *
+     * Not through [refuseUnreadDocument]: that one announces on [onWriteBackFailed],
+     * whose wording says the app holds the only copy, and here the app holds none.
+     * Not through [refusalsAnnounced] either: a directory is deleted once per deletion,
+     * and a user who recreates it and deletes it again is owed the notice again.
+     */
+    private fun keepUnreadDirectory(localFile: File, relativePath: String) {
+        Logger.w(
+            tag,
+            "Not deleting $relativePath from the device: it holds documents this sync " +
+                "never read",
+        )
+        onDirectoryKeptOnDevice(localFile)
     }
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
@@ -1983,6 +2016,30 @@ class SafSyncEngine(private val context: Context) {
             uploadClaims.forEach {
                 if (it.path.startsWith(old)) it.path = new + it.path.removePrefix(old)
             }
+        }
+    }
+
+    /**
+     * Moves the unread-document memory under [from] to [to], for the same rename.
+     *
+     * The provider move that a claimed rename becomes carries the documents this sync
+     * never read to the new name, and the guards that keep them safe look them up by
+     * mirror path: [handleMirrorEvent]'s directory guard by prefix, and the file guard
+     * by the exact name. Left at the old path, both stopped answering the moment the
+     * rename landed, so `mv docs archive` followed by `rm -r archive` sent
+     * `deleteDocument` for a directory the set knew held an unread archive.
+     *
+     * Not under [uploadJournalLock]: the set is its own concurrent structure, nothing
+     * reads it and the journal together, and the entries are replaced one by one, so a
+     * reader on the observer thread sees each path at the old name or the new one and
+     * never at neither.
+     */
+    private fun renameUnfetchedUnder(from: File, to: File) {
+        val old = from.absolutePath + File.separator
+        val new = to.absolutePath + File.separator
+        for (path in unfetched.filter { it.startsWith(old) }) {
+            unfetched.add(new + path.removePrefix(old))
+            unfetched.remove(path)
         }
     }
 
@@ -2721,9 +2778,14 @@ class SafSyncEngine(private val context: Context) {
         // When nothing claims it the record expires and the device keeps a stale copy
         // under the old name, and that copy is durable, not merely untidy: reopening the
         // folder copies it back down, so the old name reappears in the editor beside the
-        // new one, and an unclaimed move leaves one more of them every time. Deleting it
-        // in the editor propagates, because an outright delete arrives as DELETE and is
-        // still acted on; nothing removes it on the user's behalf.
+        // new one, and an unclaimed move leaves one more of them every time. Nothing
+        // removes it on the user's behalf, and the Explorer's own Delete does not
+        // either: measured on an API 37 emulator, the workbench deletes a folder by
+        // renaming it into its temporary directory first, so what arrives here is
+        // this MOVED_FROM, the pair never comes, and the device keeps the folder. An
+        // outright DELETE for a directory comes from a real unlink, `rm -r` in the
+        // terminal, `git clean`, a build script, and is acted on below unless the
+        // directory holds documents this sync never read.
         if (isDirectory && (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_FROM) {
             dropVanished { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
             synchronized(vanishedLock) {
@@ -2737,6 +2799,42 @@ class SafSyncEngine(private val context: Context) {
                     "rename claims it"
             )
             return
+        }
+
+        // An outright delete of a directory, which on a directory document is
+        // `deleteDocument` taking everything beneath it on the device. The mirror is
+        // not all of it: a child skipped for size, or one whose copy failed, was never
+        // in the mirror, so the editor showed the directory without it, the user
+        // deleted what they could see, and the device lost a 60 MB archive nothing on
+        // screen had mentioned. The guard above cannot see this one: it tests the
+        // directory's own path, and [unfetched] holds files only.
+        //
+        // Below the MOVED_FROM hold rather than above it, deliberately. A directory
+        // with unread children is renamed by the same event pair as any other, and
+        // the hold is what turns the pair into one provider move, which is the one
+        // path that carries those children to the new name. Refusing the MOVED_FROM
+        // would have left the pair unclaimed: the new name created from the mirror
+        // without them, the old one standing on the device with them. Only an
+        // outright DELETE therefore reaches here as a directory.
+        //
+        // The provider is asked for the reason the file guard asks it: the set is a
+        // memory, and the directory may have been deleted on the device since, in
+        // which case there is nothing left to keep. Only a provider that positively
+        // answers "gone" lets the delete through. The file guard folds a failed
+        // lookup into "not held", and there that costs a duplicate name; here it would
+        // cost `deleteDocument` on a subtree the set says holds an unread document, so
+        // a provider that cannot answer keeps. The separator is appended so
+        // `docs` does not answer for `docs2`, and any depth below counts. One scan of
+        // a set that is normally empty, on the observer thread; the binder walk is
+        // paid only on a match.
+        if (type == SyncType.DELETE && isDirectory) {
+            val below = localFile.absolutePath + File.separator
+            if (unfetched.any { it.startsWith(below) } &&
+                providerHoldsDirectory(safTreeUri, relativePath) != false
+            ) {
+                keepUnreadDirectory(localFile, relativePath)
+                return
+            }
         }
 
         // Resolve the SAF URI for this file via its relative path, except where
@@ -2811,7 +2909,10 @@ class SafSyncEngine(private val context: Context) {
         // the lines, which is why [UploadClaim] carries a path rather than being found by
         // one: a writer that released the name it opened with would leave the moved line
         // standing for a write that landed.
-        if (renamedFrom != null) renameUploadsUnder(File(rootDir, renamedFrom), localFile)
+        if (renamedFrom != null) {
+            renameUploadsUnder(File(rootDir, renamedFrom), localFile)
+            renameUnfetchedUnder(File(rootDir, renamedFrom), localFile)
+        }
         // Resolved after the claim rather than when the directory vanished, so that the
         // provider is only asked on the events that turn out to be renames. Null means
         // the device has no document under the old name, there is nothing to rename and
@@ -2885,6 +2986,51 @@ class SafSyncEngine(private val context: Context) {
      * against deletions the provider performed. A decision that turns on the
      * device *not* holding a name has to ask the device.
      */
+    /**
+     * Whether the device still holds a directory at [relativePath]: true, false, or null
+     * when the provider could not be asked.
+     *
+     * [providerHoldsDocument] folds a query that threw, or a cursor the provider would
+     * not give, into "not held", which suits its caller: the cost of being wrong there
+     * is a duplicate name. The directory guard in [handleMirrorEvent] cannot take that
+     * answer, because for it "not held" means the delete goes through, and the delete
+     * is `deleteDocument` on a subtree the sync knows it never fully read. So this walk
+     * reports the three cases apart, and the guard treats only a positive "gone" as
+     * permission.
+     */
+    private fun providerHoldsDirectory(treeUri: Uri, relativePath: String): Boolean? {
+        var currentDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        for (segment in relativePath.split("/")) {
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, currentDocId)
+            val next = try {
+                context.contentResolver.query(
+                    childrenUri,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                    ),
+                    null, null, null
+                )?.use { cursor ->
+                    val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    var found: String? = null
+                    while (cursor.moveToNext()) {
+                        if (cursor.getString(nameIndex) == segment) {
+                            found = cursor.getString(idIndex)
+                            break
+                        }
+                    }
+                    found ?: return false
+                } ?: return null
+            } catch (e: Exception) {
+                Logger.d(tag, "Lookup of $segment under $currentDocId failed: ${e.message}")
+                return null
+            }
+            currentDocId = next
+        }
+        return true
+    }
+
     private fun providerHoldsDocument(treeUri: Uri, relativePath: String): Boolean {
         var currentDocId = DocumentsContract.getTreeDocumentId(treeUri)
         for (segment in relativePath.split("/")) {

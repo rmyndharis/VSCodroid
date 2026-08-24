@@ -92,7 +92,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|----------|-----------|
 | FR-FS-01 | System SHALL provide a file explorer panel showing workspace files | P0 | M1 |
 | FR-FS-02 | System SHALL support create, rename, delete, move operations on files and folders | P0 | M1 |
-| FR-FS-03 | System SHALL default the workspace to `getExternalFilesDir(null)/projects`, app-specific external storage, falling back to `filesDir/home/projects` when no external volume is mounted (`Environment.getProjectsDir`). Both are app-private in the sense that matters here, no storage permission reaches either; both are also wiped by Clear Data, and the external one is reachable over MTP on some devices | P0 | M0 |
+| FR-FS-03 | System SHALL default the workspace to `filesDir/projects`, internal storage, on a new install, and SHALL keep `getExternalFilesDir(null)/projects` for an install that already has that directory or whose `~/projects` link points there (`Environment.getProjectsDir`). Shared storage cannot hold a symbolic link, which broke `npm install` there. Both are app-private in the sense that matters here, no storage permission reaches either; both are wiped by Clear Data, and the shared-storage one is reachable over MTP on some devices | P0 | M0 |
 | FR-FS-04 | System SHALL support opening folders as workspace root | P0 | M1 |
 | FR-FS-05 | System SHALL support multi-root workspaces | P2 | M2 |
 | FR-FS-06 | System SHOULD support accessing files from external storage via SAF | P2 | M4 |

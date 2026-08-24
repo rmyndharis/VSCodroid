@@ -496,22 +496,27 @@ flowchart TD
   B5 --> B5b["server.js, process-monitor.js, platform-fix.js, dns-proxy.js"]
   B5 --> B5c["editor-server.pid (pid and port of the running server)"]
   B --> B6["saf-mirrors/ (one hash-named local copy per granted device folder)"]
+  B --> B7["projects/ (default workspace on a new install)"]
   A --> C["lib/ (nativeLibraryDir, read-only)"]
   C --> C1["libnode.so"]
   C --> C2["libpython.so"]
   C --> C3["..."]
   A --> D["cache/ (clearable)"]
   D --> D1["webview/"]
-  E["/storage/emulated/0/Android/data/com.vscodroid/files/"] --> E1["projects/ (default workspace)"]
+  E["/storage/emulated/0/Android/data/com.vscodroid/files/"] --> E1["projects/ (kept only by an install that already had it)"]
 ```
 
-**The default workspace is not under `/data/data`.** `Environment.getProjectsDir` returns
-`getExternalFilesDir(null)/projects` and falls back to `filesDir/home/projects` only when the
-external volume is unavailable. It is app-specific storage either way, so it needs no
-permission and no other app can browse it (Android 11 closed `Android/data`), but two
-consequences follow from the location: MTP over USB and a few OEM file managers can still
-reach it, and Clear Data wipes it. Work that has to survive either belongs in a folder
-opened through the SAF picker.
+**The default workspace is `filesDir/projects` on a new install.** `Environment.getProjectsDir`
+answers that path unless the install already has a `projects` directory under
+`getExternalFilesDir(null)`, or its `~/projects` link still points there, in which case that
+directory is kept: `.bashrc` bakes `PROJECTS_DIR` in when it is first written, so moving an
+existing install's workspace would leave every terminal starting somewhere the editor is not.
+Shared storage stopped being the default because it is served through FUSE, which does not
+implement `symlink(2)`, so `npm install` failed there on the first package shipping an
+executable (npm writes `node_modules/.bin/<name>` as a link). Neither location needs a
+permission and no other app can browse either (Android 11 closed `Android/data`), and Clear
+Data wipes both; the shared-storage one is also reachable over MTP and by a few OEM file
+managers. Work that has to survive either belongs in a folder opened through the SAF picker.
 
 ---
 
@@ -570,7 +575,7 @@ there, Extension Host output included. Nothing writes `exthost.log` under any na
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | Android app | Kotlin, compiled to JVM target 17 | The version AGP 9.3.1 brings (`agp` in `android/gradle/libs.versions.toml`) |
-| Build system | Gradle (Kotlin DSL), pinned by the wrapper | 9.5.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
+| Build system | Gradle (Kotlin DSL), pinned by the wrapper and its `distributionSha256Sum` | 9.7.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
 | UI framework | Android View + WebView | API 33-36 |
 | Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0, the version `remote/.npmrc` `target` names at the pinned VS Code tag |
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.133.0 (pinned in the `VSCODE_VERSION` file at the repo root) |

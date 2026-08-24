@@ -762,24 +762,34 @@ If the app shows a white screen after opening:
 
 > **Clearing app data deletes every project in `~/projects/`.**
 >
-> Android's Clear Data removes the app's external files directory as well as its
-> internal storage, and `~/projects/` lives in the first of those. Nothing is
-> backed up, and on Android 11 and later that directory is not reachable from
-> most file managers, so the files cannot be recovered afterwards.
+> On a new install `~/projects/` is inside the app's internal storage, which
+> Clear Data wipes along with everything else, and nothing is backed up. An
+> install from before 1.2.0 that already had a projects directory in the app's
+> area of shared storage (`Android/data/com.vscodroid/files/projects`) keeps
+> using it, and Clear Data wipes that too. New installs stopped using that
+> location because shared storage cannot hold a symbolic link, so `npm install`
+> failed there on the first package that ships an executable.
 
 Rescue anything unsaved first. Which route is open to you depends on whether the
 editor still works, and on a white screen it does not:
 
-**If the editor will not open**, the only routes are from a computer, because
-every in-app route needs the editor. With USB debugging on:
+**If the editor will not open**, nothing outside the app reaches a new install's
+projects: internal storage is not exposed over USB or MTP, and `adb pull` cannot
+read it from a release build. What is left:
 
-```
-adb pull /storage/emulated/0/Android/data/com.vscodroid/files/projects
-```
+- A debug build is readable with `adb shell run-as com.vscodroid.debug`, and its
+  projects can be copied out from there. The release builds refuse `run-as`.
+- An install that still keeps its projects on shared storage can be read as
+  before, with USB debugging on:
 
-Some devices also expose that path over MTP when plugged in, so a file manager on
-the computer can copy it. Both work while the app is unusable, which is the
-situation this section is about.
+  ```
+  adb pull /storage/emulated/0/Android/data/com.vscodroid/files/projects
+  ```
+
+  Some devices also expose that path over MTP when plugged in.
+
+Everything else needs the editor, which is why the routes below are worth taking
+before a screen goes white rather than after.
 
 **If the editor does open** and you are clearing data for some other reason, two
 in-app routes exist:

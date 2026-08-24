@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The toolchain picker is offered until you answer it. An interrupted first run used to skip it permanently, leaving the launcher shortcut as the only way to add a language.
 - Packaging now checks every bundled binary is 16 KB page aligned, so a build that could not load on Android 16 fails at build time instead of on a device.
 - Toolchain cards now quote sizes in the same unit as the rest of the app, so a card and the storage screen no longer disagree by five percent.
-- The editor now opens with the chat panel closed on a phone, so the walkthrough and the file tree are not squeezed into half the width on a first run.
+- The secondary side bar, which holds the chat view, starts closed on every install, new or upgraded, so a phone-width editor is not half covered on a first run.
 - The process counter no longer shows a warning on an untouched install. Its threshold sat exactly on what the app costs when idle, so it was always lit.
 - Download outcome messages and the About dialog's unknown-version wording are now translatable; both were written in code and stayed English in every language.
 - Long-press alternates now carry spoken, translatable names, so a screen reader can tell the apostrophe from the backtick instead of reading the bare glyph.
@@ -42,7 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - About 4.8 MB comes off the download: the base module shipped a second copy of the workbench bundle that nothing loaded.
 - Toolchain installs record Java 17 at its measured unpacked size, so the storage checks and the card no longer understate it by about 9 MB.
 - Idle toolchain file work threads are released, so repeated launches no longer leave one parked per launch for the life of the process.
-- New installs open with the secondary side bar closed, so a phone-width editor is not half covered by a chat view this build has no provider for.
 - The splash icon is no longer announced by a screen reader, which repeated the app name already rendered as text directly below it.
 - The start summary in the log and in bug reports now names the requested heap ceiling and says clamped only when the value was actually reduced.
 - Bug reports always carry a server-log section, saying explicitly when no server output was recorded instead of dropping the section without a word.
@@ -50,8 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging now refuses a build whose bundled binaries are incomplete, so a toolchain command cannot reach a device resolving to a file that was never produced.
 - The privacy policy now lists the two permissions the manifest merger adds from libraries, matching what the Play Store listing shows, and a check holds it to the manifest that ships.
 - The privacy policy now describes the sign-in callback window as the app enforces it: matched against the specific sign-in that produced it, not against the last browser launch.
+- The privacy policy and the user guide say a new install keeps its projects in internal storage, and the guide's rescue routes no longer point at a path a new install does not use.
 - The document-date and plain-punctuation checks now run on pull requests and on tags alike, so a documentation change no longer surfaces its first failure as an aborted release.
 - The process monitor's status bar no longer shows an internal identifier where a readable label belongs, and drops an entry for a process type the editor stopped creating.
+- The extra key row's legends are lower case, `tab`, `esc`, `ctrl`, `alt`, `shift`, `home` and `end`, the way a hardware keyboard prints them; `F1` to `F12`, `PgUp` and `PgDn` are unchanged.
 - The Gradle distribution is pinned to its published digest, and a build without one is refused. It was the only thing entering the build with nothing checking it.
 - The instrumented tests are compiled at tag time as well, so a tag cut from a branch that reached no other workflow cannot ship a suite that does not build.
 - The instrumented suite's own README is held to the sources it describes; its test count had been wrong twice.
@@ -72,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The security document no longer lists two permissions the manifest has never declared, and now separates what this app declares from what the manifest merger adds on top.
 - The key row is documented as the five pages it is, with no arrow buttons: a drag on the gesture trackpad is how a finger moves the cursor.
 - The user guide says extraction repeats after an app update rather than happening only once, and names the nineteen colour themes that ship instead of claiming none do.
-- The technical specification matches the code on WebView settings, the app version, and the 27 environment variables the server process actually receives.
+- The technical specification matches the code on WebView settings, the app version, and the 28 environment variables the server process receives before any toolchain adds its own.
 - The backup test rows name the path that is really in the payload, and add the connection token and preferences as the near misses worth checking.
 - Development no longer needs a physical device in the requirements document: an arm64 emulator works, which is what the contributor guide already said.
 - A note in the implementation plan rendered as four full-width headings, because its lines began with `#` outside a code block.
@@ -84,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Two documents said the server build clones VS Code at the tag in `VSCODE_VERSION`. It checks out the commit in `VSCODE_COMMIT`, so a moved tag cannot be followed silently.
 - The toolchain check now reads the design documents too, and no longer skips a whole line because it mentions Google Play, which is how the sentences describing toolchain delivery went unread.
 - The shrinker runs on pushes to main, not only on pull requests, so a configuration change reaches a minified build the same day.
-- The build moves to Android Gradle plugin 9.3.1 and Gradle 9.5.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
+- The build moves to Android Gradle plugin 9.3.1 and Gradle 9.7.1, which turns on optimized resource shrinking. Play flagged the old configuration for memory and performance.
 - Kotlin now comes from the Android Gradle plugin rather than a separate plugin, so the compiler is 2.2.10 and the version catalog no longer names one.
 - 97 unused Material and AndroidX resources no longer ship: the date and time pickers, the navigation drawer, fragment transitions and the legacy notification templates.
 - A toolchain pack that ships a library its manifest does not list now fails the build, instead of redistributing it with no licence notice.
@@ -103,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 
 ### Fixed
+- Deleting a folder from the terminal or a script no longer removes files on the device that were never copied into the editor. Such a folder is kept on the device and a notice says so.
+- A page can no longer navigate the editor to the app's own `vscodroid://callback` and have it accepted as a finished sign-in. The link route now refuses that address, as the browser route already did.
 - The primary side bar can be resized on a phone in portrait. Its minimum and its reachable maximum were the same number, so the divider had nowhere to travel and dragging it did nothing.
 - Dragging inside an open submenu scrolls it instead of closing it. The gesture reached the menu behind it as well, and a menu that scrolls dismisses the submenu anchored to it.
 - Menu dividers are drawn as lines again, not as blank bands. The touch-target floor applied to them too, which added about 400px to the File menu and is most of why it ran off the screen.
@@ -137,7 +140,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The copied crash report is marked sensitive, so Android no longer draws a preview of the server log and crash text over the editor.
 - The storage and device-folder screens no longer time out on installs with many files: the commands that walk the disk now get a deadline that fits.
 - Refusals the bridge shows in the editor, a link that would not open or a folder copy still in use, moved to string resources so they can be translated.
-- Every install, new or upgraded, now opens with the secondary side bar closed, so a phone-width editor is not half covered by a chat view with no provider.
 - Settings files written before this release now gain the secondary side bar default, which previously reached clean installs only and left every upgraded device on the upstream layout.
 - A workspace whose saved layout still opens the chat view is corrected once, on the next launch. Opening the bar yourself is remembered and is never undone again.
 - The process list now names the program behind each entry, so several rows no longer read identically as the bundled Node runtime and its heap setting.
