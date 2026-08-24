@@ -408,14 +408,36 @@ object Environment {
      * from nativeLibraryDir -- the one directory an app may execute from -- and
      * mmaps the CLI out of filesDir itself.
      *
-     * It is named as claudeCode.claudeProcessWrapper directly rather than through
-     * a shim, because resolveClaudeBinary() passes the resolved binary path as the
-     * wrapper's first argument, which is already how a loader expects to be
-     * called. The glibc build the marketplace would otherwise serve cannot be
-     * loaded at all: its startup calls set_robust_list and rseq, and Android's
-     * app seccomp filter kills the process for either. Patch 0009 is what makes
-     * the marketplace hand over the musl build instead.
+     * The glibc build the marketplace would otherwise serve cannot be loaded at
+     * all: its startup calls set_robust_list and rseq, and Android's app seccomp
+     * filter kills the process for either. Patch 0009 is what makes the
+     * marketplace hand over the musl build instead.
+     *
+     * This is no longer what `claudeCode.claudeProcessWrapper` names, though it
+     * was: see [getClaudeLauncherPath], which has to put the seccomp shim into
+     * the environment before the loader starts anything.
      */
+    /**
+     * What `claudeCode.claudeProcessWrapper` names, and what starts the CLI.
+     *
+     * The extension hands the wrapper the CLI as its first argument, which is
+     * musl's loader's own calling convention, so the loader used to be named
+     * here directly. It cannot be any more: the CLI's runtime calls
+     * `epoll_pwait2`, which bionic exposes only from android15, and on android13
+     * and android14 an app making it is killed rather than refused. The shim
+     * that answers that call has to be in `LD_PRELOAD` before the loader starts
+     * the binary, and a setting holds a path rather than an environment, so a
+     * launcher sits in between and sets it. See `scripts/claude-launch.c`.
+     *
+     * Deliberately not set in the server's own environment. Every child would
+     * inherit it, and most of them are Bionic rather than musl; the shim
+     * interposes `sigaction` against musl's structure layout, which is not
+     * Bionic's, so a Node process that picked it up would translate signal
+     * dispositions wrongly. It belongs to this one process tree.
+     */
+    fun getClaudeLauncherPath(context: Context): String =
+        "${context.applicationInfo.nativeLibraryDir}/libclaude-launch.so"
+
     fun getMuslLoaderPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libldmusl.so"
 

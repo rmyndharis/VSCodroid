@@ -1069,6 +1069,10 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
 // unit-test and R8 jobs write a placeholder tree that has no binaries to require.
 val requiredJniLibs = listOf(
     "libbash.so",
+    // Both halves of what starts the Claude Code CLI. Missing, the extension
+    // spawns a path that is not there; and a launcher whose LD_PRELOAD names a
+    // shim that is not there fails in musl's loader before the CLI runs at all.
+    "libclaude-launch.so",
     "libexec-trampoline.so",
     "libgit.so",
     "libgit-remote-curl.so",
@@ -1077,6 +1081,7 @@ val requiredJniLibs = listOf(
     "libnode.so",
     "libpython.so",
     "libripgrep.so",
+    "libseccomp-shim.so",
     "libssh.so",
     "libssh-keygen.so",
     "libtmux.so",
@@ -1086,6 +1091,7 @@ val requiredJniLibs = listOf(
 // command that fixes it rather than sending the reader to read three scripts.
 val jniLibProducers = mapOf(
     "libbash.so" to "scripts/download-termux-tools.sh",
+    "libclaude-launch.so" to "scripts/build-claude-shim.sh",
     "libexec-trampoline.so" to "scripts/build-exec-trampoline.sh",
     "libgit.so" to "scripts/download-termux-tools.sh",
     "libgit-remote-curl.so" to "scripts/download-termux-tools.sh",
@@ -1094,6 +1100,7 @@ val jniLibProducers = mapOf(
     "libnode.so" to "scripts/download-node.sh",
     "libpython.so" to "scripts/download-python.sh",
     "libripgrep.so" to "scripts/fetch-vscode-oss.sh",
+    "libseccomp-shim.so" to "scripts/build-claude-shim.sh",
     "libssh.so" to "scripts/download-termux-tools.sh",
     "libssh-keygen.so" to "scripts/download-termux-tools.sh",
     "libtmux.so" to "scripts/download-termux-tools.sh",

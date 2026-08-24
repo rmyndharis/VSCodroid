@@ -2186,9 +2186,11 @@ __vscodroid_symlink_note() {
     private fun claudeBashFunction(): String = """
 
 # claude: the CLI the Claude Code extension brings with it. Started through
+# libclaude-launch.so, which puts the seccomp shim into LD_PRELOAD and then execs
 # musl's loader: the CLI is a musl binary under filesDir, which SELinux will not
-# execve but will let a loader map. libldmusl.so is found on PATH, which already
-# includes nativeLibraryDir.
+# execve but will let a loader map, and its runtime calls a syscall Android does
+# not allow before android15 (see the message below). Both are found on PATH,
+# which already includes nativeLibraryDir.
 claude() {
     local cli="" c
     # An update can leave two versioned directories side by side, which made the
@@ -2204,24 +2206,21 @@ claude() {
         echo "claude: install the Claude Code extension first" >&2
         return 127
     fi
-    libldmusl.so "${'$'}cli" "${'$'}@"
-    # 159 is 128+31, the shell's way of saying the process was killed by SIGSYS.
-    # Android's app seccomp filter admits exactly the syscalls bionic exposes in
-    # SYSCALLS.TXT, and epoll_pwait2 (441) was added there in Android 15: it is
-    # absent from the android13 and android14 branches and present from
-    # android15. A syscall outside that list is a kill rather than the ENOSYS a
-    # runtime could fall back from, so the CLI dies the moment its event loop
-    # starts. Measured to match: it dies on Android 13 and runs on Android 17,
-    # same binary and loader, and a CLI four months older behaves identically.
-    # Nothing here can widen that filter, so the one useful thing is to say what
-    # happened rather than leave "Bad system call" as the whole account.
+    libclaude-launch.so "${'$'}cli" "${'$'}@"
+    # 159 is 128+31, the shell's way of saying the process was killed by SIGSYS,
+    # which is what an app gets for a syscall bionic does not expose. The CLI's
+    # runtime calls epoll_pwait2, absent from SYSCALLS.TXT until android15, and
+    # libseccomp-shim.so answers exactly that call so the CLI runs on the older
+    # releases too. Reaching here therefore means the shim did not do its work --
+    # it failed to load, or the runtime found a second call nobody has emulated --
+    # and a bare "Bad system call" would say neither.
     local status=${'$'}?
     if [ "${'$'}status" -eq 159 ]; then
-        echo "claude: Claude Code needs Android 15 or newer here. Its runtime" >&2
-        echo "        calls epoll_pwait2, which Android only added to the list an" >&2
-        echo "        app may use in Android 15, and a call outside that list is" >&2
-        echo "        killed rather than refused. No VSCodroid setting changes" >&2
-        echo "        it; the filter belongs to the platform." >&2
+        echo "claude: the CLI was killed for a system call this Android does not" >&2
+        echo "        allow, which libseccomp-shim.so is supposed to answer. Check" >&2
+        echo "        that it sits beside libclaude-launch.so in the app's native" >&2
+        echo "        library directory; if it does, the runtime is asking for a" >&2
+        echo "        call the shim does not cover yet." >&2
     fi
     return ${'$'}status
 }
@@ -2244,7 +2243,7 @@ claude() {
             settingsFile.readText(),
             Environment.getTerminalShellPath(context),
             Environment.getGitPath(context),
-            Environment.getMuslLoaderPath(context),
+            Environment.getClaudeLauncherPath(context),
         ) ?: return
 
         // Atomic because this file is the user's, not ours -- it carries their
@@ -2655,7 +2654,7 @@ claude() {
                 "python.defaultInterpreterPath": "${context.filesDir.absolutePath}/usr/bin/python3",
                 "python.locator": "js",
                 "python.useEnvironmentsExtension": false,
-                "claudeCode.claudeProcessWrapper": "${Environment.getMuslLoaderPath(context)}",
+                "claudeCode.claudeProcessWrapper": "${Environment.getClaudeLauncherPath(context)}",
                 "launch": {
                     "version": "0.2.0",
                     "configurations": [

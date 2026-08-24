@@ -107,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The testing document gives the command that measures the suite instead of a figure that goes stale the next time a test is added.
 - Packaging refuses a release whose bundled extension tree failed to build, which previously deleted the extension and reported success.
 - Kill Idle Servers is removed, along with the automatic kill under memory pressure and at 24 processes: a killed language server is restarted by its extension within a second, so no slot was ever freed.
-- `claude` in a terminal now says that Claude Code needs Android 15 or newer instead of leaving bash's bare "Bad system call": its runtime calls `epoll_pwait2`, which Android added to the list an app may use in Android 15, and a call outside that list is killed. No setting here can change it.
+- Claude Code works on Android 13 and 14 again. Its runtime calls `epoll_pwait2`, which an app may only use from Android 15, and the kernel stops the process there; VSCodroid now answers that call with `epoll_pwait` so sign-in and everyday use work on the older releases too.
 - Material Icon Theme is no longer bundled. It was 5.9 MB that nothing enabled: no default setting selected it, so it shipped inactive unless the user picked it. Install it from the Extensions view to keep using it.
 - The process tree marks language servers idle after five minutes without CPU and says that disabling the owning extension is what frees a slot.
 - The toolchain picker's Skip is a 48dp button, so a screen reader announces it as a control.

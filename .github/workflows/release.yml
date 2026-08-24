@@ -462,6 +462,11 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: bash scripts/build-exec-trampoline.sh
 
+      - name: Build the Claude Code seccomp shim
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-claude-shim.sh
+
       # Runs where the libraries actually exist, which lint.yml is not: it
       # builds stub assets, and a stub tree has nothing to attribute. Berkeley
       # DB shipped under AGPL-3.0 for every release before this check existed,

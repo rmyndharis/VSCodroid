@@ -62,6 +62,9 @@ step 9/10 "Building native addons and the compatibility shim..."
 # so it is not subject to the ordering constraint the shim above is.
 "$SCRIPT_DIR/build-exec-trampoline.sh"
 
+# The same, and it can sit here for the same reason: it writes only into jniLibs.
+"$SCRIPT_DIR/build-claude-shim.sh"
+
 step 10/10 "Building the APK..."
 cd "$ROOT_DIR/android"
 if [ ! -f gradlew ]; then

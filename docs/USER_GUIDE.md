@@ -669,27 +669,20 @@ VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you ma
 
 Extensions exclusive to the Microsoft Marketplace (such as Microsoft C/C++ and some other Microsoft-published extensions) are not available on Open VSX. Check Open VSX for community-maintained alternatives. GitHub Copilot Chat is not affected: it ships built in and works on device.
 
-### Claude Code Needs Android 15 or Newer
+### Claude Code Reports "terminated by signal SIGSYS"
 
-The Claude Code extension carries its own program, and that program asks the
-kernel for `epoll_pwait2`. An Android app may only make the system calls the
-platform's C library exposes, and `epoll_pwait2` was added to that list in
-Android 15: it is absent from the Android 13 and Android 14 sources and present
-from Android 15 onward. A call outside the list is not an error the program can
-recover from, because the kernel kills it.
+An Android app may only make the system calls the platform's C library exposes,
+and a call outside that list is not an error a program can recover from: the
+kernel stops it there. The Claude Code extension carries its own program, whose
+runtime asks for `epoll_pwait2`, and that call is on the list only from Android
+15 onward.
 
-So on Android 13 and 14 the sign-in panel reports `Claude Code process
-terminated by signal SIGSYS`, and `claude` in a terminal prints `Bad system
-call`. On Android 15 and newer it runs, sign-in included.
-
-Confirmed on this project's emulators with the same VSCodroid build and the same
-extension version on each: it fails on Android 13 and works on Android 17. An
-extension release four months older fails the same way on Android 13, so this
-follows the Android version rather than the extension.
-
-Nothing in VSCodroid can change it. The filter is installed by Android on every
-app process, an app may only narrow its own, and no setting, permission or
-toolchain affects it.
+VSCodroid answers that one call itself, so sign-in and everyday use work on
+Android 13 and 14 as well. If the panel still reports `Claude Code process
+terminated by signal SIGSYS`, or `claude` in a terminal prints `Bad system
+call`, a newer release of the extension is asking for a call VSCodroid does not
+answer yet. Please report it with your Android version and the extension
+version; there is nothing to change on your side.
 
 ### Extensions That Bundle a Compiled Program
 
