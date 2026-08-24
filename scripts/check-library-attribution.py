@@ -133,9 +133,12 @@ BINARY_MAGIC = (
 #
 # "VSCodroid" as the component means the file is built from this repository's
 # own source and is covered by the root LICENSE; it needs no third-party
-# attribution. Two families qualify. The glibc-shim stubs carry glibc's
-# DT_NEEDED names but contain none of glibc's code, and libexec-trampoline.so is
-# compiled here from scripts/exec-trampoline.c against Bionic alone.
+# attribution. Three families qualify. The glibc-shim stubs carry glibc's
+# DT_NEEDED names but contain none of glibc's code; libexec-trampoline.so is
+# compiled here from scripts/exec-trampoline.c against Bionic alone; and the two
+# Claude Code files are compiled here from scripts/claude-launch.c and
+# scripts/seccomp-shim.c, the second freestanding, so it links against no libc
+# at all -- it is loaded beside musl's and calls the kernel directly.
 LIBRARIES = {
     # --- built here, MIT, no third-party obligation ---
     "libglibc-shim.so": ("VSCodroid", "MIT"),
@@ -150,6 +153,8 @@ LIBRARIES = {
     "ld-linux-aarch64.so.1": ("VSCodroid", "MIT"),
     "libgcc_s.so.1": ("VSCodroid", "MIT"),
     "libexec-trampoline.so": ("VSCodroid", "MIT"),
+    "libclaude-launch.so": ("VSCodroid", "MIT"),
+    "libseccomp-shim.so": ("VSCodroid", "MIT"),
     # --- copyleft: attribution AND a source offer ---
     "libbash.so": ("Bash", "GPL-3.0"),
     "libgit.so": ("Git", "GPL-2.0"),

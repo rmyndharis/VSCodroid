@@ -439,7 +439,11 @@ resolve against them, but contain none of glibc's code; they are built from
 `scripts/glibc-shim.c` and `scripts/gen-glibc-forwarders.py` in this repository and
 are covered by the root `LICENSE`. `libexec-trampoline.so` is excluded for the
 same reason: it is built from `scripts/exec-trampoline.c` here, and it is what
-lets a downloaded toolchain command start from a bare name on `PATH`.
+lets a downloaded toolchain command start from a bare name on `PATH`. So are
+`libclaude-launch.so` and `libseccomp-shim.so`, built here from
+`scripts/claude-launch.c` and `scripts/seccomp-shim.c`; the second is
+freestanding and links against no library at all, so there is nothing in it to
+attribute but this project's own source.
 
 | Component | Licence | Copyleft | Files shipped |
 |---|---|---|---|
