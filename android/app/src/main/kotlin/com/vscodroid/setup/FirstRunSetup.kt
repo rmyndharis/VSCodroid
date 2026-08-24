@@ -2206,20 +2206,22 @@ claude() {
     fi
     libldmusl.so "${'$'}cli" "${'$'}@"
     # 159 is 128+31, the shell's way of saying the process was killed by SIGSYS.
-    # Android's app seccomp filter refuses epoll_pwait2 (syscall 441) on older
-    # releases, and a refused syscall is a kill rather than an ENOSYS the runtime
-    # could fall back from. Measured: the CLI dies that way on Android 13 (API
-    # 33) and runs on Android 17 (API 37), with the same binary and the same
-    # loader, and two CLI versions four months apart behave identically. Nothing
-    # here can widen that filter, so the one useful thing is to say what happened
-    # rather than leave "Bad system call" as the whole account.
+    # Android's app seccomp filter admits exactly the syscalls bionic exposes in
+    # SYSCALLS.TXT, and epoll_pwait2 (441) was added there in Android 15: it is
+    # absent from the android13 and android14 branches and present from
+    # android15. A syscall outside that list is a kill rather than the ENOSYS a
+    # runtime could fall back from, so the CLI dies the moment its event loop
+    # starts. Measured to match: it dies on Android 13 and runs on Android 17,
+    # same binary and loader, and a CLI four months older behaves identically.
+    # Nothing here can widen that filter, so the one useful thing is to say what
+    # happened rather than leave "Bad system call" as the whole account.
     local status=${'$'}?
     if [ "${'$'}status" -eq 159 ]; then
-        echo "claude: this Android version refuses a system call the Claude Code" >&2
-        echo "        runtime needs (epoll_pwait2, 441). Measured: it fails on" >&2
-        echo "        Android 13 and runs on Android 17; where in between that" >&2
-        echo "        changes was not measured. No VSCodroid setting can widen" >&2
-        echo "        the filter, which Android installs on every app process." >&2
+        echo "claude: Claude Code needs Android 15 or newer here. Its runtime" >&2
+        echo "        calls epoll_pwait2, which Android only added to the list an" >&2
+        echo "        app may use in Android 15, and a call outside that list is" >&2
+        echo "        killed rather than refused. No VSCodroid setting changes" >&2
+        echo "        it; the filter belongs to the platform." >&2
     fi
     return ${'$'}status
 }

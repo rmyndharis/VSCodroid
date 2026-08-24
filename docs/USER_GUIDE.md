@@ -669,24 +669,27 @@ VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you ma
 
 Extensions exclusive to the Microsoft Marketplace (such as Microsoft C/C++ and some other Microsoft-published extensions) are not available on Open VSX. Check Open VSX for community-maintained alternatives. GitHub Copilot Chat is not affected: it ships built in and works on device.
 
-### Claude Code Needs a Recent Android
+### Claude Code Needs Android 15 or Newer
 
 The Claude Code extension carries its own program, and that program asks the
-kernel for `epoll_pwait2`. Android refuses system calls an app is not on the list
-for, and a refusal there is not an error the program can recover from: the kernel
-kills it. On a device where that call is refused the sign-in panel reports
-`Claude Code process terminated by signal SIGSYS`, and running `claude` in a
-terminal prints `Bad system call`.
+kernel for `epoll_pwait2`. An Android app may only make the system calls the
+platform's C library exposes, and `epoll_pwait2` was added to that list in
+Android 15: it is absent from the Android 13 and Android 14 sources and present
+from Android 15 onward. A call outside the list is not an error the program can
+recover from, because the kernel kills it.
 
-Measured on this project's own emulators, with the same VSCodroid build and the
-same extension version on both: it fails on Android 13 and works on Android 17.
-Where in between that changes was not measured. Two extension releases four
-months apart behave the same, so this is the platform rather than the extension.
+So on Android 13 and 14 the sign-in panel reports `Claude Code process
+terminated by signal SIGSYS`, and `claude` in a terminal prints `Bad system
+call`. On Android 15 and newer it runs, sign-in included.
+
+Confirmed on this project's emulators with the same VSCodroid build and the same
+extension version on each: it fails on Android 13 and works on Android 17. An
+extension release four months older fails the same way on Android 13, so this
+follows the Android version rather than the extension.
 
 Nothing in VSCodroid can change it. The filter is installed by Android on every
 app process, an app may only narrow its own, and no setting, permission or
-toolchain affects it. On an Android that refuses the call, Claude Code cannot run
-here at all; on a newer one it works, including sign-in.
+toolchain affects it.
 
 ### Extensions That Bundle a Compiled Program
 
