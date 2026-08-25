@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A file changed on the device is no longer replaced by the editor's copy when the sync record cannot account for it. The device version is set aside beside it first, and the write is held back if it cannot be read.
+- Installing a toolchain again after one failed part-way now asks only for the space the copy needs. The check charged for bytes the new copy was about to write over, so a device already holding most of the tree was refused every time.
+- The badge that says a modifier is still held is readable against the row it sits on. It was drawn in the accent blue, which this project's own contrast rule counts as too faint for text that size.
+- The bug report no longer says credentials were removed. It names which shapes are replaced and asks you to check, because a secret that arrives as an ordinary word cannot be told from one.
+
+### Changed
+
+- A patch file whose name the manifest cannot key now fails the build. It was applied to the server tree and then left out of every check that tracks patches.
+
 ## [1.2.0] - 2026-08-24
 
 ### Added
