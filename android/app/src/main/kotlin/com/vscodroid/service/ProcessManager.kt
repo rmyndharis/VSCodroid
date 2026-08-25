@@ -2315,8 +2315,19 @@ internal fun heapOverrideRaisesCeiling(
  * setting they believed was off had been suspended. The span is removed rather
  * than parsed around, because the reader wants nothing from inside it, and it is
  * removed non-greedily so a second comment further down does not swallow the
- * live key between the two. A comment opener sitting inside a string value is
- * read as starting one, which is a miss in the safe direction.
+ * live key between the two.
+ *
+ * Removing a comment means recognising one, and a delimiter is only a delimiter
+ * outside a string. That is not a hypothetical here: the default document this
+ * app writes plants three openers itself, inside the `<node_internals>` globs of
+ * its `launch` block, and no closer at all. `launch` is the last property and the
+ * workbench appends new keys after the last one, so a user's ceiling lands after
+ * all three openers, and the first exclude glob they add on the same settings tab
+ * supplies the closer. Everything between, the ceiling included, then read as one
+ * comment: the start summary said "derived from device RAM" while the settings
+ * editor went on showing the number, and for a value the user had LOWERED the
+ * fallback is the larger of the two. So [STRING_OR_COMMENT] walks strings and
+ * comments together in one left-to-right pass and keeps the strings.
  *
  * A regex over the text rather than a parse, for the reason
  * `FirstRunSetup.refreshManagedPaths` documents at length: parsing the document to
@@ -2330,14 +2341,25 @@ internal fun heapOverrideRaisesCeiling(
  * to the derived value is the safe reading of one.
  */
 internal fun heapOverrideFromSettings(content: String): Int? =
-    HEAP_SETTING_PATTERN.find(BLOCK_COMMENT.replace(content, ""))
-        ?.groupValues?.get(1)?.toIntOrNull()
+    HEAP_SETTING_PATTERN.find(
+        STRING_OR_COMMENT.replace(content) { if (it.value.startsWith("\"")) it.value else "" }
+    )?.groupValues?.get(1)?.toIntOrNull()
 
 private val HEAP_SETTING_PATTERN =
     Regex("""(?m)^\s*"${Regex.escape(HEAP_SETTING_KEY)}"\s*:\s*(\d+)""")
 
-/** A `/* ... */` span, shortest match, newlines included. */
-private val BLOCK_COMMENT = Regex("""/\*[\s\S]*?\*/""")
+/**
+ * A JSON string, a `//` comment, or a block comment, whichever starts first.
+ *
+ * Three arms and each one earns its place. The string arm leads so a delimiter
+ * inside a value is text, which is the whole point. The `//` arm is not
+ * decoration: a line comment is prose, an unbalanced quote in prose is ordinary,
+ * and without an arm of its own that quote opens a "string" that runs to the next
+ * quote in the file, takes the block opener after it inside, and hands a
+ * commented-out ceiling straight back to the anchor. The block arm is
+ * shortest-match, for the reason the reader's own documentation gives.
+ */
+private val STRING_OR_COMMENT = Regex(""""(?:\\.|[^"\\])*"|//[^\n]*|/\*[\s\S]*?\*/""")
 
 /**
  * Whether a user-chosen ceiling has spent its budget and must be ignored.

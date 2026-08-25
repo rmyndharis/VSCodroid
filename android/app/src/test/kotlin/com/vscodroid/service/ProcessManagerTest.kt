@@ -3470,6 +3470,75 @@ class HeapOverrideReaderTest {
     }
 
     @Test
+    fun `a glob in a value does not swallow a live key`() {
+        // The document this app itself writes plants three comment openers, inside
+        // the `<node_internals>` globs of its default `launch` block, and no closer
+        // at all. `launch` is the last property and the workbench appends new keys
+        // after the last one, so the user's key lands after all three openers, and
+        // the first exclude glob they add on the same settings tab supplies the
+        // closer. Everything between, the key included, read as one comment and the
+        // user silently got the derived ceiling, which for a value they had lowered
+        // is the larger of the two numbers. A delimiter inside a string value is
+        // text, and the reader has to know the difference.
+        val doc = """
+            {
+                "launch": {
+                    "version": "0.2.0",
+                    "configurations": [
+                        {
+                            "name": "Attach to Node.js",
+                            "type": "node",
+                            "skipFiles": ["<node_internals>/**"]
+                        }
+                    ]
+                },
+                "vscodroid.server.heapCeilingMb": 1024,
+                "files.exclude": { "**/node_modules": true },
+            }
+        """.trimIndent()
+        assertEquals(1024, heapOverrideFromSettings(doc), "a glob was read as a comment")
+    }
+
+    @Test
+    fun `a stray quote in a line comment does not hide a block comment`() {
+        // The cost of knowing strings from delimiters, and the reason line comments
+        // are recognised too. A `//` comment is prose, so an unbalanced quote in one
+        // is ordinary; left to be read as opening a string it would run to the next
+        // quote in the file, carry the block opener after it inside, and hand the
+        // commented-out key straight back to the anchor. 8192 for the reason the
+        // cases above give.
+        val doc = """
+            {
+                // careful with "this
+                /*
+                "vscodroid.server.heapCeilingMb": 8192,
+                */
+                "extensions.verifySignature": false,
+            }
+        """.trimIndent()
+        assertNull(heapOverrideFromSettings(doc), "a key inside a block comment was honoured")
+    }
+
+    @Test
+    fun `a comment closed early by a glob is a known and accepted miss`() {
+        // The mirror of the case above, pinned here so nobody later reads this suite
+        // as claiming it is closed. It is not a misreading: a block comment ends at
+        // the first closer, quotes inside it notwithstanding, exactly as it does in
+        // C, so a comment carrying an exclude glob has already ended by the time the
+        // key is reached and the document is no longer valid JSONC. A real JSONC
+        // scanner reads it the same way. What keeps it harmless is what keeps every
+        // misreading here harmless: [heapCeilingMb] clamps whatever comes out, and a
+        // value that keeps killing the server spends its budget and is dropped.
+        val doc = """
+            {
+                /* ignore "**/build" for now */
+                "vscodroid.server.heapCeilingMb": 1536,
+            }
+        """.trimIndent()
+        assertEquals(1536, heapOverrideFromSettings(doc))
+    }
+
+    @Test
     fun `a key that is only mentioned inside another value is not honoured`() {
         // The other half of the anchor: a key name appearing mid-line, here inside a
         // string somebody wrote, is not a setting either. On its own line, so the
