@@ -905,8 +905,19 @@ class MainActivity : AppCompatActivity() {
         // Activity: reading `safManager` or `tag` from inside the lambda would
         // capture `this`, and with it the view tree, until the thread returns.
         //
+        // The shutdown rather than the stop, and that is what makes the detachment
+        // safe. The three calls in openSafFolder and restoreWatcherAfterFailure are
+        // serialised against each other by deviceFolderOpens; this one is outside it
+        // on purpose, so it can land in the middle of a start already running on
+        // Dispatchers.IO -- inside its own two-second drain, or inside the mirror
+        // walk -- and neither the mutex nor cancelling the scope can stop that start
+        // finishing afterwards. The shutdown is what the engine has to say "and
+        // nothing starts this again" with: the ordinary stop would be overtaken and
+        // leave observers and a write-back thread on an engine the replacement
+        // Activity, which builds its own manager, cannot reach.
+        //
         // Only half of what that costs was ever here, and the half that was is the
-        // smaller one: this thread ends when stopWatching does, about two seconds.
+        // smaller one: this thread ends when the shutdown does, about two seconds.
         // The manager it names is what outlives the Activity, because the engine
         // leaves the write-back worker running when the drain outruns that wait,
         // which is why the manager is built on the application context and why the
@@ -917,7 +928,7 @@ class MainActivity : AppCompatActivity() {
         if (stopping != null) {
             thread(name = "saf-watch-stop", isDaemon = true) {
                 try {
-                    stopping.stopFileWatcher()
+                    stopping.shutdownFileWatcher()
                 } catch (e: Exception) {
                     Logger.w(logTag, "Stopping the device folder watcher failed: ${e.message}")
                 }
@@ -1243,6 +1254,13 @@ class MainActivity : AppCompatActivity() {
                 // the user's own edits and pushes them onto the user's documents
                 // which is the exact damage the stop before the sync exists to
                 // prevent.
+                //
+                // `SafSyncEngine.shutdown()`, which is what `onDestroy` calls, now
+                // refuses that restart at the engine, so this is no longer the only
+                // thing standing between a cancelled scope and an unstoppable
+                // watcher. It stays because the rest of the handler is still wrong
+                // for a cancellation: a toast and a "sync failed" dialog for an
+                // Activity that is simply going away.
                 //
                 // Guarded because the window may already be gone: dismissing a
                 // dialog whose Activity has been destroyed throws, and an

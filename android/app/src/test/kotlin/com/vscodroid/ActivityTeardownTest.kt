@@ -132,7 +132,8 @@ class ActivityTeardownTest {
         // confined.
         val lines = code(source)
         val calls = lines.withIndex().filter { (_, line) ->
-            line.contains(".startFileWatcher(") || line.contains(".stopFileWatcher(")
+            line.contains(".startFileWatcher(") || line.contains(".stopFileWatcher(") ||
+                line.contains(".shutdownFileWatcher(")
         }
 
         assertEquals(
@@ -160,6 +161,39 @@ class ActivityTeardownTest {
                 "screen. The stop blocks for up to two seconds behind a write-back drain " +
                 "the interrupt cannot cut short, with the sync dialog frozen; the start " +
                 "walks the mirror and registers up to 2048 kernel watches.",
+        )
+    }
+
+    @Test
+    fun `the teardown ends the device folder watcher for good rather than until the next start`() {
+        // The three calls in openSafFolder and restoreWatcherAfterFailure are
+        // serialised against each other by `deviceFolderOpens`; the one here is
+        // outside that mutex on purpose, on a detached thread, so it can run in
+        // the middle of a start that is already inside the engine on
+        // Dispatchers.IO. That start is not cancellable from here and finishes
+        // afterwards, leaving observers and the `saf-writeback` thread on an
+        // engine the replacement Activity cannot reach: it builds its own
+        // manager. Only the shutdown refuses that start; the ordinary stop is
+        // simply overtaken by it.
+        val destroy = code(body("override fun onDestroy()"))
+
+        assertTrue(destroy.any { it.contains(".shutdownFileWatcher()") }) {
+            "onDestroy no longer shuts the device folder watcher down. A plain stop is " +
+                "overtaken by a start already running on Dispatchers.IO, which then " +
+                "leaves a watcher and a write-back thread nothing can ever stop again."
+        }
+
+        // The folder switch must keep the restartable stop: the next folder's
+        // watcher starts on this same engine, and a shutdown there would leave the
+        // user editing a folder nothing writes back.
+        val switching = code(body("private fun openSafFolder(uri: Uri, navigate: Boolean)")) +
+            code(body("private suspend fun restoreWatcherAfterFailure("))
+
+        assertEquals(
+            emptyList<String>(),
+            switching.filter { it.contains(".shutdownFileWatcher(") }.map { it.trim() },
+            "a folder switch shut the engine down instead of stopping it, so the folder " +
+                "opened next is never watched and its saves never reach the device",
         )
     }
 }

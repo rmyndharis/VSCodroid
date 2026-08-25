@@ -905,6 +905,20 @@ class SafStorageManager(context: Context) {
         syncEngine.stopWatching()
     }
 
+    /**
+     * Stops the active file watcher and refuses every later start on this engine. Call
+     * this on destroy; [stopFileWatcher] is the one for a folder switch.
+     *
+     * The difference is whether anything is allowed to follow. This manager belongs to
+     * one Activity and the next one builds its own, so after a teardown no caller can
+     * reach this engine to stop it a second time; a start that was already inside it
+     * when the teardown ran would leave observers and a write-back thread that outlive
+     * the process's ability to end them.
+     */
+    fun shutdownFileWatcher() {
+        syncEngine.shutdown()
+    }
+
     // -- Mirror Directory --
 
     /**

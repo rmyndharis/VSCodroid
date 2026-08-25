@@ -63,6 +63,36 @@ class SafSyncEngine(private val context: Context) {
     @Volatile private var isWatching = false
 
     /**
+     * Held across a whole [startWatching], [stopWatching] or [shutdown].
+     *
+     * The three decide between them whether this engine is live, and each of them takes
+     * several steps to say so: [startWatching] publishes a session, sets [isWatching] and
+     * then registers up to [MAX_WATCHED_DIRECTORIES] watches, and it opens by calling
+     * [stopWatching], which blocks up to [DRAIN_GRACE_MS] joining the previous drain.
+     * Run against each other those interleave, and the outcome is decided by whichever
+     * of the two [isWatching] writes lands last: a stop finishing inside a start's inner
+     * drain leaves observers registered, a worker polling and [isWatching] true, on an
+     * engine whose owner is gone. The Activity serialises its own three calls, but the
+     * one in `onDestroy` runs on a detached thread deliberately outside that mutex, so
+     * the serialisation has to be here, where every caller passes.
+     *
+     * Reentrant, which [startWatching] relies on: it calls [stopWatching] while holding
+     * this, and Java monitors admit the thread that already owns them.
+     */
+    private val lifecycleLock = Any()
+
+    /**
+     * Whether [shutdown] has been called, after which no start is honoured again.
+     *
+     * Ordering the calls is not enough on its own. The Activity's teardown is the last
+     * word about an engine nothing can reach afterwards -- the replacement Activity
+     * builds its own [SafSyncEngine], so its stop cannot reach this one -- and a start
+     * that arrives after it belongs to a coroutine of the Activity that has gone. It is
+     * refused rather than run late, because there is no one left to stop what it starts.
+     */
+    @Volatile private var shutDown = false
+
+    /**
      * One observer per watched directory, keyed by that directory.
      *
      * Holding them here is not only bookkeeping: [FileObserver]'s shared ObserverThread
@@ -1352,28 +1382,41 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Starts watching the mirror directory for changes and syncing them back to SAF.
      * Must be called after [initialSync] completes.
+     *
+     * A no-op once [shutdown] has run; see [shutDown] for why that is a refusal rather
+     * than a start that happens to be late.
      */
     fun startWatching(mirrorDir: File, safUri: Uri) {
-        stopWatching()
+        synchronized(lifecycleLock) {
+            if (shutDown) {
+                Logger.i(
+                    tag,
+                    "Not watching ${mirrorDir.name}: this engine's owner is gone and " +
+                        "nothing could stop the watcher again",
+                )
+                return
+            }
+            stopWatching()
 
-        // Published before any observer exists, because an observer fires into whatever
-        // session is current and this is the one its jobs belong to.
-        val opening = WatchSession()
-        session = opening
-        isWatching = true
-        watchTree(mirrorDir, mirrorDir, safUri)
+            // Published before any observer exists, because an observer fires into whatever
+            // session is current and this is the one its jobs belong to.
+            val opening = WatchSession()
+            session = opening
+            isWatching = true
+            watchTree(mirrorDir, mirrorDir, safUri)
 
-        // Background thread to process this session's write-back queue. Handed over
-        // before it starts, so a stop arriving at once cannot find a null worker for a
-        // thread that is already running.
-        val worker = thread(start = false, name = "saf-writeback", isDaemon = true) {
-            runWriteBackLoop(opening) { opening.running }
+            // Background thread to process this session's write-back queue. Handed over
+            // before it starts, so a stop arriving at once cannot find a null worker for a
+            // thread that is already running.
+            val worker = thread(start = false, name = "saf-writeback", isDaemon = true) {
+                runWriteBackLoop(opening) { opening.running }
+            }
+            opening.worker = worker
+            worker.start()
+
+            val watched = synchronized(watchersLock) { watchers.size }
+            Logger.i(tag, "File watcher started for ${mirrorDir.absolutePath} ($watched directories)")
         }
-        opening.worker = worker
-        worker.start()
-
-        val watched = synchronized(watchersLock) { watchers.size }
-        Logger.i(tag, "File watcher started for ${mirrorDir.absolutePath} ($watched directories)")
     }
 
     /**
@@ -1432,63 +1475,83 @@ class SafSyncEngine(private val context: Context) {
      * Stops the file watcher and drains the write-back queue.
      */
     fun stopWatching() {
-        isWatching = false
-        synchronized(watchersLock) {
-            watchers.values.forEach { it.stopWatching() }
-            watchers.clear()
-        }
-        // The folder being closed keeps the queue its jobs are in, and the folder opened
-        // next gets an empty one, whether or not the drain below finishes in time.
-        val closing = session
-        session = WatchSession()
-        closing.running = false
-
-        // Wake the thread out of its sleep, then wait for it to drain remaining writes.
-        // An idle queue drains in microseconds, so this costs only what there is to lose.
-        val worker = closing.worker
-        closing.worker = null
-        worker?.interrupt()
-        try { worker?.join(DRAIN_GRACE_MS) } catch (_: InterruptedException) {}
-
-        if (worker != null && worker.isAlive) {
-            // Still draining. Emptying the queue from here would throw away exactly the
-            // writes the drain exists to save, and would do it in the case where there
-            // are the most of them: a burst of saves, or one slow provider. The thread
-            // owns this session's queue until it finishes, and nothing else can reach
-            // it: the queue went with the session, so the folder opened next offers its
-            // jobs somewhere this drain never polls. Addressing was never the question.
-            // Two threads polling one queue was: each write opens its document with
-            // "wt", which truncates at open, so the two interleave inside one document.
-            Logger.w(tag, "Write-back still draining after ${DRAIN_GRACE_MS}ms; leaving it to finish")
-        } else {
-            // Anything still here arrived after the drain took its last look, which is
-            // the one window an event observed while the folder was open can still fall
-            // into. Counted rather than dropped in silence: the mirror keeps the file and
-            // the record cannot vouch for it, so nothing is destroyed, but the save is
-            // not on the device and only reopening the folder puts it there. A user
-            // asking why needs this line to exist in a bug report.
-            val dropped = closing.queue.size
-            closing.queue.clear()
-            closing.abandoned = true
-            if (dropped > 0) {
-                Logger.w(tag, "$dropped write-back(s) arrived after the drain ended")
+        synchronized(lifecycleLock) {
+            isWatching = false
+            synchronized(watchersLock) {
+                watchers.values.forEach { it.stopWatching() }
+                watchers.clear()
             }
+            // The folder being closed keeps the queue its jobs are in, and the folder opened
+            // next gets an empty one, whether or not the drain below finishes in time.
+            val closing = session
+            session = WatchSession()
+            closing.running = false
+
+            // Wake the thread out of its sleep, then wait for it to drain remaining writes.
+            // An idle queue drains in microseconds, so this costs only what there is to lose.
+            val worker = closing.worker
+            closing.worker = null
+            worker?.interrupt()
+            try { worker?.join(DRAIN_GRACE_MS) } catch (_: InterruptedException) {}
+
+            if (worker != null && worker.isAlive) {
+                // Still draining. Emptying the queue from here would throw away exactly the
+                // writes the drain exists to save, and would do it in the case where there
+                // are the most of them: a burst of saves, or one slow provider. The thread
+                // owns this session's queue until it finishes, and nothing else can reach
+                // it: the queue went with the session, so the folder opened next offers its
+                // jobs somewhere this drain never polls. Addressing was never the question.
+                // Two threads polling one queue was: each write opens its document with
+                // "wt", which truncates at open, so the two interleave inside one document.
+                Logger.w(tag, "Write-back still draining after ${DRAIN_GRACE_MS}ms; leaving it to finish")
+            } else {
+                // Anything still here arrived after the drain took its last look, which is
+                // the one window an event observed while the folder was open can still fall
+                // into. Counted rather than dropped in silence: the mirror keeps the file and
+                // the record cannot vouch for it, so nothing is destroyed, but the save is
+                // not on the device and only reopening the folder puts it there. A user
+                // asking why needs this line to exist in a bug report.
+                val dropped = closing.queue.size
+                closing.queue.clear()
+                closing.abandoned = true
+                if (dropped > 0) {
+                    Logger.w(tag, "$dropped write-back(s) arrived after the drain ended")
+                }
+            }
+            // docIdCache is deliberately not cleared here. A drain that outlived the wait
+            // still needs the mappings of the folder it is finishing, and [initialSync]
+            // clears the cache itself before anything reads it for the next one.
+            //
+            // The half-renames are cleared, and the difference is that nothing consumes them
+            // after this point: a MOVED_TO of the next folder must not be able to claim a
+            // directory that left the previous one, which would rename a document in a folder
+            // the user has closed.
+            //
+            // Which is the same instant their upload records stop being able to move: a claim
+            // is the only thing that carries a line to the directory's new path. Retired here
+            // rather than left standing, because after this nothing can; see
+            // [consumeStaleUploadsUnder].
+            dropVanished { true }
+            Logger.i(tag, "File watcher stopped")
         }
-        // docIdCache is deliberately not cleared here. A drain that outlived the wait
-        // still needs the mappings of the folder it is finishing, and [initialSync]
-        // clears the cache itself before anything reads it for the next one.
-        //
-        // The half-renames are cleared, and the difference is that nothing consumes them
-        // after this point: a MOVED_TO of the next folder must not be able to claim a
-        // directory that left the previous one, which would rename a document in a folder
-        // the user has closed.
-        //
-        // Which is the same instant their upload records stop being able to move: a claim
-        // is the only thing that carries a line to the directory's new path. Retired here
-        // rather than left standing, because after this nothing can; see
-        // [consumeStaleUploadsUnder].
-        dropVanished { true }
-        Logger.i(tag, "File watcher stopped")
+    }
+
+    /**
+     * Stops the watcher for good: the same teardown as [stopWatching], plus the promise
+     * that no later [startWatching] will undo it.
+     *
+     * For the owner that is going away rather than switching folders. The two differ
+     * only in what may follow: a folder switch stops one watcher and starts the next on
+     * the same engine, while a teardown has no next. A start still on its way when this
+     * runs -- the one in a coroutine of the Activity being destroyed, which is not
+     * cancellable once it is inside the engine -- would otherwise finish afterwards and
+     * leave observers and a drain running on an engine no one holds any more.
+     */
+    fun shutdown() {
+        synchronized(lifecycleLock) {
+            shutDown = true
+            stopWatching()
+        }
     }
 
     // -- Internal: Watch Registration --
