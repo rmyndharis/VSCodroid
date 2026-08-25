@@ -116,8 +116,38 @@ private const val MAX_TRACKED_SIGN_INS = 32
  */
 private val AUTH_REQUEST_ID = Regex("""vscode-reqid(?:=|%(?:25)*3[Dd])(\d+)""")
 
+/**
+ * How many request ids one address may record.
+ *
+ * A bound, not a policy, and it is the record above that needs it. `launches`
+ * keeps the most recent [MAX_TRACKED_SIGN_INS] launches and evicts the eldest to
+ * stay there, while a URL can name as many ids as whoever wrote it cares to
+ * type, and both callers of this function record every id they are handed. So a
+ * single address carrying that many ids pushed out the sign-in the user had open
+ * in the browser at that moment, before any browser was even launched. Its
+ * callback then arrives for an id nothing recorded and is dropped in the log with
+ * no message at all, which leaves the extension waiting for ever on a value
+ * nothing will write.
+ *
+ * Eight rather than one because nobody has surveyed real authorisation addresses
+ * beyond the shapes in `AuthRequestIdTest`, and every one of those names exactly
+ * one request. The figure is generous on purpose: the cost of it being too low
+ * is a sign-in that cannot complete, and the cost of it being too high is only
+ * that fewer such addresses are needed to reach the same eviction.
+ *
+ * Taken off the lazy sequence rather than the finished list, so the scan stops
+ * once it has enough. The whole match runs on the thread the calling page is
+ * blocked on, and the address is that page's to choose.
+ *
+ * It does not close the eviction on its own, and should not be read as doing so.
+ * Enough separate launches still fill the record; what this removes is the
+ * variant that needs one call, no browser and nothing on screen.
+ */
+private const val MAX_AUTH_REQUEST_IDS = 8
+
 internal fun authRequestIdsIn(url: String): List<String> =
-    AUTH_REQUEST_ID.findAll(url).map { it.groupValues[1] }.distinct().toList()
+    AUTH_REQUEST_ID.findAll(url).map { it.groupValues[1] }
+        .distinct().take(MAX_AUTH_REQUEST_IDS).toList()
 
 /**
  * Why [AndroidBridge.openExternalUrl] did not open anything.

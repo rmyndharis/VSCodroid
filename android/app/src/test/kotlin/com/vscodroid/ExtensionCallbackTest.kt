@@ -195,6 +195,39 @@ class AuthTabWindowTest {
     }
 
     @Test
+    fun `a sign-in in flight survives an address naming a crowd of requests`() {
+        // The bound above is what makes this reachable: the record holds the most
+        // recent few launches, so anything able to record launches at will can
+        // push the sign-in the user has open in the browser out of it, and the
+        // callback then arrives for an id nothing recorded and is dropped in the
+        // log with nothing said. One address is enough, because a single one can
+        // name as many request ids as its author cares to type, and both arming
+        // sites read every id an address carries.
+        //
+        // The count is the record's own capacity: with the victim recorded first,
+        // that many further ids evict exactly it. Written so it holds whatever
+        // else this JVM has left in the record: an eviction takes the eldest, so
+        // ids arriving after the sign-in can only push out what arrived before
+        // it.
+        val crowd = (1..32).map { "9300$it" }
+        val address = crowd.joinToString("&") { "vscode-reqid=$it" }
+        try {
+            AuthTabWindow.arm(listOf("900001"), 1_000L)
+
+            AuthTabWindow.arm(authRequestIdsIn(address), 2_000L)
+
+            assertEquals(
+                1_000L, AuthTabWindow.armedAt("900001"),
+                "one address pushed the sign-in actually in flight out of the record. Its " +
+                    "callback comes back to an id nothing launched, is dropped without a " +
+                    "message, and the extension waits for ever on a value nothing will write.",
+            )
+        } finally {
+            AuthTabWindow.disarm(crowd)
+        }
+    }
+
+    @Test
     fun `the record does not grow for the life of the process`() {
         // Entries outlive their own window on purpose, so that a late callback can
         // be told apart from an invented one. Without a bound that is a leak in a
@@ -283,6 +316,21 @@ class AuthRequestIdTest {
         )) {
             assertEquals(emptyList<String>(), authRequestIdsIn(link), "armed by: $link")
         }
+    }
+
+    @Test
+    fun `an address naming more requests than a sign-in ever does is read only so far`() {
+        // Nothing bounded this, and the record the ids go into holds the most
+        // recent few, so one address naming enough of them evicted the sign-in
+        // the user had in flight. Every real shape above names one.
+        //
+        // The ids kept are the first ones the address carries, not the last: an
+        // authorisation address puts the callback it will return to near the
+        // front, and a cap applied to the other end would drop exactly that one
+        // for any address padded after it.
+        val ids = authRequestIdsIn((1..40).joinToString("&") { "vscode-reqid=$it" })
+
+        assertEquals(listOf("1", "2", "3", "4", "5", "6", "7", "8"), ids)
     }
 
     @Test

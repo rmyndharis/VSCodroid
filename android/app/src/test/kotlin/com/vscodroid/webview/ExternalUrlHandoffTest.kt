@@ -646,6 +646,50 @@ class ExternalUrlHandoffTest {
     }
 
     /**
+     * A navigation cannot flush the record of what this app has in flight.
+     *
+     * The record holds the most recent few launches, and an address may name as
+     * many request ids as its author cares to type, so one navigation carrying
+     * enough of them pushed out the sign-in the user had open in the browser.
+     * The callback then comes back for an id nothing recorded, is dropped in the
+     * log with no message, and the extension waits for ever.
+     *
+     * Here rather than only at the bridge, because the two exits read the ids
+     * through the same function and a bound written at one call site leaves the
+     * other unbounded. The main frame is our own page, but the address is not
+     * necessarily ours: `injectWindowOpenOverride` falls through to a plain
+     * navigation and the workbench's own opener assigns `location.href`, so
+     * whatever asked to open a URL chose this string.
+     *
+     * NEGATIVE CONTROL: bound the ids at `AndroidBridge.openExternalUrl` instead
+     * of inside `authRequestIdsIn` and this case goes red while the bridge's own
+     * stays green.
+     */
+    @Test
+    fun `a navigation naming a crowd of requests leaves the sign-in in flight armed`() {
+        val crowd = (1..32).map { "9400$it" }
+        try {
+            client.shouldOverrideUrlLoading(view, request("https", "github.com", -1, SIGN_IN))
+
+            client.shouldOverrideUrlLoading(
+                view,
+                request(
+                    "https", "example.com", -1,
+                    "https://example.com/?" + crowd.joinToString("&") { "vscode-reqid=$it" },
+                ),
+            )
+
+            assertTrue(
+                callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
+                "one navigation pushed the sign-in actually in flight out of the record, so " +
+                    "its callback is refused and nothing tells the user why",
+            )
+        } finally {
+            AuthTabWindow.disarm(crowd)
+        }
+    }
+
+    /**
      * The other half, and the one that keeps this from being a widening: every
      * external link goes through here, and a link to documentation must not put
      * the callback relay within reach of an id nobody asked for.

@@ -597,6 +597,15 @@ exist for a request whose id left this app inside the address it opened;
 because the callback address usually travels as a parameter of the authorisation
 address. A documentation link carries none and arms nothing.
 
+At most the first eight of them, and that bound is on the record rather than on
+the address. The record keeps the most recent 32 launches and drops the eldest to
+stay there, so without a cap a single address naming 32 ids evicted the sign-in
+the user had open in the browser at that moment, whose callback then arrived for
+an id nothing had recorded and was dropped in the log with nothing said. Eight
+because every real authorisation address names exactly one. It bounds what one
+launch can do and not what many can: enough separate launches still fill the
+record.
+
 Neither message carries any part of the callback. The payload arrives through an
 exported filter, so quoting it would be a way to put chosen words in front of a
 user who trusts this app.
