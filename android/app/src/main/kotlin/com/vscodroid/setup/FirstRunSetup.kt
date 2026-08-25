@@ -20,6 +20,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.Certificate
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
 import android.annotation.SuppressLint
 
@@ -599,6 +600,19 @@ class FirstRunSetup(
             createDefaultSettings()
 
             reportProgress("Done!", 100)
+
+            // Before the flag, never after, and the order is the entire point.
+            // markSetupComplete() commits, and a commit fsyncs, so without this
+            // the record certifying an 875 MiB unpack is on the medium while the
+            // unpack itself is still page cache. A power cut there leaves
+            // isFirstRun() false over a tree with holes in it, and nothing on
+            // device checks that tree again: no repair path reads content, and
+            // only Clear Data or an app update re-extracts. See
+            // [flushWritesToMedia] for what this does not buy.
+            //
+            // The user sees this as a pause on "Done!", on Dispatchers.IO,
+            // behind a progress bar already at 100%.
+            flushWritesToMedia()
 
             markSetupComplete()
 
@@ -4563,6 +4577,93 @@ internal fun writeAtomically(
         releaseWriteLock(path, lock)
     }
 }
+
+/**
+ * Waits for what has been written so far to reach the storage medium.
+ *
+ * A barrier, not an atomicity guarantee, and that distinction is the whole of
+ * what this is for. [writeAtomically] already gives each file all-or-nothing
+ * CONTENT through a rename, and that much survives process death: once
+ * `write(2)` and `rename(2)` have returned the kernel owns the bytes, so a force
+ * stop, a low-memory kill or a phantom-process kill cannot take them back. What
+ * none of it survives is power loss or a panic, where the dirty pages die
+ * unwritten.
+ *
+ * That only matters because the completion flag is not symmetric with the
+ * payload it certifies. `SharedPreferences.commit()` writes the XML and then
+ * fsyncs it, `SharedPreferencesImpl.writeToFile` calling `FileUtils.sync`, which
+ * is `getFD().sync()`, so the record saying setup finished is on the medium
+ * while the several hundred MiB it vouches for may be nothing but page cache.
+ * Calling this first orders the run's writes ahead of the flag.
+ *
+ * What it does NOT buy, so that nobody reads it for more than it is:
+ *
+ * - It does not make any single file atomic. That is [writeAtomically]'s rename,
+ *   and it is unchanged.
+ * - It does not make the flush and the flag one event. Power loss DURING this
+ *   call leaves exactly the old ordering, over a window the length of the sync
+ *   rather than the length of the run. It narrows; it does not close.
+ * - It does nothing for a crash in the middle of extraction. The attempt marker
+ *   is committed before the first byte, so a retry still resumes over files this
+ *   never saw.
+ *
+ * `android.system.Os` has no `sync(2)`. Its only three entry points of that
+ * family are `fsync`, `fdatasync` and `msync`, checked against `android.jar` at
+ * compileSdk 37 and against the android-33 sources at minSdk, so a
+ * whole-filesystem barrier has to come from toybox, which has provided
+ * `/system/bin/sync` since Android 6. The in-process alternative is an `fsync`
+ * inside [writeAtomically], which is the same barrier spread over roughly 23,000
+ * extracted files at one journal commit each: minutes added to every cold
+ * install, to close a window measured in seconds.
+ *
+ * Best effort by design. A device that will not run it loses the barrier and
+ * nothing else, leaving the caller exactly where it stood before this existed,
+ * so every failure is logged and none is thrown. The wait is bounded because
+ * `sync(2)` blocks on the whole system's dirty set and not merely on ours, and
+ * no stream is piped: with both outputs discarded the child cannot fill a buffer
+ * nobody is draining and so cannot defeat that bound.
+ */
+internal fun flushWritesToMedia() {
+    val started = System.currentTimeMillis()
+    try {
+        // /dev/null rather than Redirect.DISCARD, which android.jar declares but
+        // the compile bootclasspath does not, so it fails to resolve here.
+        val devNull = File("/dev/null")
+        val sync = ProcessBuilder("/system/bin/sync")
+            .redirectInput(devNull)
+            .redirectOutput(devNull)
+            .redirectError(devNull)
+            .start()
+        if (!sync.waitFor(SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            sync.destroyForcibly()
+            Logger.w(SYNC_TAG, "sync did not return within ${SYNC_TIMEOUT_SECONDS}s; continuing unflushed")
+            return
+        }
+        // Logged either way, and the exit status is why. A device whose policy
+        // refuses the exec, or whose image has no toybox, otherwise loses the
+        // barrier in silence and reads from the outside exactly like one that
+        // flushed.
+        val elapsed = System.currentTimeMillis() - started
+        if (sync.exitValue() == 0) {
+            Logger.i(SYNC_TAG, "Flushed writes to media in ${elapsed}ms")
+        } else {
+            Logger.w(SYNC_TAG, "sync exited ${sync.exitValue()} after ${elapsed}ms; continuing unflushed")
+        }
+    } catch (e: Exception) {
+        Logger.w(SYNC_TAG, "Could not flush writes to media: ${e.message}")
+    }
+}
+
+/** Its own tag, not either caller's: two classes share the one function. */
+private const val SYNC_TAG = "FlushWrites"
+
+/**
+ * Long enough that a real flush of a cold install's tail is never cut short, and
+ * short enough that a stuck one cannot park setup for ever. `sync(2)` waits on
+ * every dirty page on the device, including other apps', so the figure is a
+ * ceiling on someone else's I/O as much as on ours.
+ */
+private const val SYNC_TIMEOUT_SECONDS = 30L
 
 /**
  * PEM-encodes one certificate, in the shape the concatenated bundle is made of.

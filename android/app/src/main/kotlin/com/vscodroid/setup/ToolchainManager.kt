@@ -1343,6 +1343,18 @@ class ToolchainManager(private val context: Context) {
         // Only this tail is held, not the copy above it. The copy moves up to
         // 160 MB and holds nothing anyone else needs; the record is four lines
         // and is what everything else reads.
+        //
+        // Flushed before the record, for the reason [flushWritesToMedia] gives:
+        // the record is the only thing that says these binaries exist, and
+        // repairInstalledToolchainsSync re-checks the tree with isDirectory,
+        // never its contents. A power cut with the record on the medium and the
+        // copy still in page cache leaves a toolchain listed as installed whose
+        // binaries are holes, and nothing later looks. Outside the lock, not
+        // inside: the copy it flushes is already finished here, and a sync waits
+        // on the whole device's dirty set, which is not something to hold a lock
+        // across.
+        flushWritesToMedia()
+
         synchronized(stateLock) {
             val state = readState()
             // Remove any existing entry for this toolchain
