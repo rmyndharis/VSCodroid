@@ -511,16 +511,30 @@ class SafSyncEngine(private val context: Context) {
                         // guard for the symmetric case already exists
                         // ([setAsideDivergedMirror]); this is the same guard facing
                         // the other way, and the one provider read it costs is paid
-                        // only where the record shows the device moved. A copy that
-                        // fails leaves both sides as they are: the mirror keeps its
-                        // edit, unvouched, and the next open tries again.
+                        // wherever the record cannot vouch for the path: where it
+                        // shows the device moved, and where it says nothing at all.
+                        // Silence is the arm below's own leavings, so a file written
+                        // back once pays that read on every open after it, and a
+                        // second mirror edit before the next open fetches this app's
+                        // own older bytes, which differ, and keeps them beside the
+                        // file. That is the known false positive [setAsideDivergedMirror]
+                        // already names for the three other producers of silence.
+                        //
+                        // A copy that fails leaves both sides as they are: the mirror
+                        // keeps its edit, unvouched, and the next open tries again. The
+                        // fetch failing is therefore a deferral, not a loss, but it is a
+                        // deferral of the user's own save and nothing but this log says
+                        // so, which for a persistent cause is indistinguishable from the
+                        // save never happening.
                         val deviceChanged =
                             previouslyRecorded?.let { deviceChangedSinceRecord(it, doc) } == true
                         if (deviceChanged && !setAsideDeviceCopy(doc, localPath)) {
                             Logger.w(
                                 tag,
-                                "Not writing ${doc.relativePath} back: its device copy " +
-                                    "changed since the last sync and could not be set aside",
+                                "Not writing ${doc.relativePath} back: the record cannot " +
+                                    "vouch for its device copy and that copy could not be " +
+                                    "read to set aside, so the mirror keeps the edit and " +
+                                    "the next open tries again",
                             )
                         } else {
                             if (deviceChanged) setAside++
@@ -739,18 +753,39 @@ class SafSyncEngine(private val context: Context) {
      * exactly, which `filesDir` never is; it would cost a spare `.device-` copy per
      * reopen, not a byte.
      *
-     * A record that does not name the path answers false, and that is the pre-existing
-     * behaviour rather than a claim of safety. The record is silent about a path this
-     * app wrote back and never re-read, which is what the caller's own branch leaves
-     * behind, and about a document the device gained under a name the mirror also
-     * gained; nothing on disk tells those two apart, and only the second is a stranger's
-     * bytes. The unusable record, absent or in a format this build cannot read, answers
-     * false for the reason [setAsideDivergedMirror] gives: its silence says nothing.
+     * A record that parses but does not name the path answers **true**, and so does a
+     * line whose time field will not parse. Silence here is not evidence that the device
+     * document is ours: the record is silent about a path this app wrote back and never
+     * re-read, which is exactly what the caller's own write-back branch leaves behind,
+     * and about a document the device gained under a name the mirror also gained.
+     * Nothing on disk tells those apart, and one of them is a stranger's bytes. Answering
+     * false meant the write-back arm disarmed the guard for every later pass over the
+     * same path, so the second foreign edit was destroyed by a `"wt"` open with no copy
+     * kept anywhere.
+     *
+     * True is not free, and the three costs are worth stating because the arm below
+     * manufactures the silence that triggers them. One provider read per affected path
+     * per open, forever, since nothing here re-records the path. A `.device-` copy kept
+     * whenever the bytes differ, which includes the case where the device holds this
+     * app's own earlier push and the mirror has been edited again since: that copy is a
+     * stale duplicate of the user's own file, and it is the same known false positive
+     * [setAsideDivergedMirror] already names for the other three producers of silence.
+     * And a fetch that fails withholds the write-back, which defers the user's save
+     * rather than losing it. False costs the user someone else's edit outright, which is
+     * why true is still the right answer.
+     *
+     * This writes nothing to the record, deliberately. Every fix that adds a line here
+     * is the one [reconcileDeletions] and `SafReconcileDeletionsTest` exist to refuse.
+     *
+     * The unusable record, absent or in a format this build cannot read, still answers
+     * false, at the call site rather than here, for the reason [setAsideDivergedMirror]
+     * gives: its silence says nothing, and a mirror that was never vouched for at all is
+     * not the same claim as one vouched for and then written past.
      */
     private fun deviceChangedSinceRecord(recorded: Set<String>, doc: DocumentInfo): Boolean {
         val prefix = escapeRecordPath(doc.relativePath) + '\t'
-        val line = recorded.firstOrNull { it.startsWith(prefix) } ?: return false
-        val recordedModified = line.split('\t').getOrNull(1)?.toLongOrNull() ?: return false
+        val line = recorded.firstOrNull { it.startsWith(prefix) } ?: return true
+        val recordedModified = line.split('\t').getOrNull(1)?.toLongOrNull() ?: return true
         return recordedModified != doc.lastModified
     }
 

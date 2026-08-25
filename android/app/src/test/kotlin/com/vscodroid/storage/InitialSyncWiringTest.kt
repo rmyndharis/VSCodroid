@@ -618,4 +618,112 @@ class InitialSyncWiringTest {
 
         assertEquals(1_700_000_000_000, File(mirror, "stamped.txt").lastModified())
     }
+
+    /**
+     * The second consecutive pass through the write-back arm.
+     *
+     * Sync 2 pushes and records nothing, so sync 3 finds the record silent about the
+     * path, answers "the device did not change" and truncates it unread.
+     */
+    @Test
+    fun `a second write-back pass still sets a foreign device edit aside`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        // Pass 1: the delivered write-back under a coarse stamp. Empties the record.
+        local.writeText("saved in the editor")
+        local.setLastModified(1_700_000_120_900)
+        deviceFolderHolding("notes.txt", "saved in the editor", 1_700_000_120_000)
+        sync()
+        val recordAfterPass1 =
+            File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).readLines()
+
+        // Pass 2: another app wrote the device document, still stamped below the
+        // mirror, and the editor saved again afterwards.
+        openedDocuments.clear()
+        writtenDocuments.clear()
+        deviceFolderHolding("notes.txt", "changed by another app", 1_700_000_120_500)
+        local.writeText("saved in the editor, again")
+        local.setLastModified(1_700_000_180_000)
+        sync()
+
+        val preserved =
+            File(mirror, "notes.txt${SafSyncEngine.DEVICE_COPY_SUFFIX}1700000120500")
+        assertEquals(listOf("notes.txt"), writtenDocuments, "the newer mirror copy still has to reach the device")
+        assertTrue(
+            preserved.isFile,
+            "the foreign device edit was overwritten with no copy anywhere; mirror now holds " +
+                mirror.list()?.sorted() + ", record after pass 1 was " + recordAfterPass1 +
+                ", opened during pass 2 was " + openedDocuments,
+        )
+        assertEquals("changed by another app", preserved.readText())
+    }
+
+    /**
+     * A record that parsed and does not name the path, meeting a foreign
+     * device edit under the write-back arm. Nothing to carry forward, so this is the
+     * case that separates "answer true on silence" from "carry the old line".
+     */
+    @Test
+    fun `a record silent about the path still sets a foreign device edit aside`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        // The record parses and vouches for nothing: what a sync that kept every file
+        // it saw leaves behind, and what the write-back arm leaves behind too.
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            .writeText(SafSyncEngine.RECORD_HEADER)
+
+        openedDocuments.clear()
+        writtenDocuments.clear()
+        local.writeText("saved in the editor, again")
+        local.setLastModified(1_700_000_180_000)
+        deviceFolderHolding("notes.txt", "changed by another app", 1_700_000_120_500)
+        sync()
+
+        val preserved =
+            File(mirror, "notes.txt${SafSyncEngine.DEVICE_COPY_SUFFIX}1700000120500")
+        assertEquals(listOf("notes.txt"), writtenDocuments, "the newer mirror copy still has to reach the device")
+        assertTrue(
+            preserved.isFile,
+            "the foreign device edit was overwritten with no copy anywhere; mirror now holds " +
+                mirror.list()?.sorted() + ", opened was " + openedDocuments,
+        )
+        assertEquals("changed by another app", preserved.readText())
+    }
+
+    @Test
+    fun `a record line whose time will not parse still sets a foreign device edit aside`() {
+        deviceFolderHolding("notes.txt", "from the device", 1_700_000_000_000)
+        sync()
+        val local = File(mirror, "notes.txt")
+
+        // The third producer of silence, and the one the two cases above leave
+        // uncovered: a line that names the path but carries a time this build
+        // cannot read. A record written by a later format, or one truncated in
+        // the middle of a field, arrives here looking exactly like a vouched
+        // path. It vouches for nothing, and the arm that reads it has to say so.
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            .writeText(SafSyncEngine.RECORD_HEADER + "\nnotes.txt\tnot-a-number\t15\n")
+
+        openedDocuments.clear()
+        writtenDocuments.clear()
+        local.writeText("saved in the editor, again")
+        local.setLastModified(1_700_000_180_000)
+        deviceFolderHolding("notes.txt", "changed by another app", 1_700_000_120_500)
+        sync()
+
+        val preserved =
+            File(mirror, "notes.txt${SafSyncEngine.DEVICE_COPY_SUFFIX}1700000120500")
+        assertEquals(listOf("notes.txt"), writtenDocuments, "the newer mirror copy still has to reach the device")
+        assertTrue(
+            preserved.isFile,
+            "a line this build cannot read was treated as a vouched copy, and the foreign " +
+                "device edit was overwritten with no copy anywhere; mirror now holds " +
+                mirror.list()?.sorted() + ", opened was " + openedDocuments,
+        )
+        assertEquals("changed by another app", preserved.readText())
+    }
 }
