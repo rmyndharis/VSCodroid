@@ -1,8 +1,10 @@
 package com.vscodroid.webview
 
+import com.vscodroid.LogTaint
+import com.vscodroid.SourceScan
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.io.File
 
 /**
  * That opening a device folder does not spell the user's directory into logcat.
@@ -20,100 +22,59 @@ import java.io.File
  * directly and never opens `MainActivity.kt`, so the caller one frame up was
  * outside the population it covers and went on printing the value in full.
  *
+ * Read through `LogTaint`, and that is the substance of this file rather than a
+ * detail of it. The first version of this guard searched the text of
+ * `openSafFolder` for `${'$'}uri`, which is the one spelling the leak had happened to
+ * be written in. A concatenation, a `uri.toString()`, an intermediate local, a
+ * statement the formatter wrapped and a rename of the parameter all walk past a
+ * search like that, and so does the same leak in any of the four other methods
+ * here that are handed a `Uri`. `LogTaint` follows the value instead: every name
+ * a declaration types as `Uri` is a source, taint runs through declarations to a
+ * fixpoint, statements are read whole, and the whole file is in scope, so this
+ * case is about device folders reaching the log rather than about one line.
+ *
  * Source reading, for the reason `DownloadListenerWiringTest` gives: there is no
  * seam. `openSafFolder` shows a dialog, takes a permission and launches a
- * coroutine, none of which a plain JVM test has. Comments are stripped first,
- * because the rule is discussed at length in prose beside the very line it
- * governs and a search over the raw text would be satisfied by the explanation.
+ * coroutine, none of which a plain JVM test has.
  *
  * What this deliberately does not certify: the `Logger.e` calls in the same body
- * pass a `SecurityException` whose own message can quote the URI the provider
- * refused. That is the same defect in a different channel and is not fixed here,
- * so nothing below reads as a clean bill for it.
+ * hand over a `SecurityException`, and nothing on this side can read the message
+ * inside one. That the throwables reaching them are already redacted is held by
+ * `SafFolderPathLoggingTest`, which drives the frames that raise them.
  */
 class SafFolderLogCallSiteTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
-    /** The body of a `private fun name(` declaration, to its closing brace. */
-    private fun body(name: String): String {
-        val start = source.indexOf("private fun $name(")
-        assertTrue(start >= 0) {
-            "$name is gone from MainActivity.kt, so this test is measuring nothing. " +
-                "If it moved or was renamed, point this at the new site rather than deleting it."
-        }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) return source.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of $name in MainActivity.kt")
+    private val opened by lazy {
+        SourceScan.withoutComments(SourceScan.body(source, "private fun openSafFolder("))
     }
-
-    /**
-     * Comments removed, so prose about the rule cannot satisfy a search for the
-     * rule. Both forms, because both disable code, and a block counts as a
-     * comment only where it opens a line.
-     */
-    private fun withoutComments(text: String): String {
-        var inBlock = false
-        return text.lines().joinToString("\n") { raw ->
-            var line = raw
-            if (inBlock) {
-                val close = line.indexOf("*/")
-                if (close < 0) return@joinToString ""
-                inBlock = false
-                line = line.substring(close + 2)
-            }
-            while (line.trimStart().startsWith("/*")) {
-                val open = line.indexOf("/*")
-                val close = line.indexOf("*/", open + 2)
-                if (close < 0) {
-                    inBlock = true
-                    return@joinToString line.substring(0, open)
-                }
-                line = line.substring(0, open) + line.substring(close + 2)
-            }
-            val marker = line.indexOf("//")
-            if (marker >= 0) line.substring(0, marker) else line
-        }
-    }
-
-    private val opened by lazy { withoutComments(body("openSafFolder")) }
 
     @Test
     fun `the body being checked was actually found`() {
         assertTrue(opened.isNotBlank() && opened.contains("persistPermission")) {
             "openSafFolder no longer looks like the function these cases were written " +
-                "against, so both of them are searching an empty string and would pass " +
-                "over anything. Point them at wherever a device folder is opened now."
+                "against, so the ones reading its body are searching an empty string " +
+                "and would pass over anything. Point them at wherever a device folder " +
+                "is opened now."
         }
     }
 
     @Test
-    fun `opening a device folder does not put its tree URI in the log`() {
-        val interpolated = Regex("""\$\{?uri\b""")
-        val leaks = opened.lines()
-            .filter { it.contains("Logger.") && interpolated.containsMatchIn(it) }
-
-        assertTrue(leaks.isEmpty()) {
+    fun `no log statement prints a device folder's tree URI`() {
+        assertEquals(
+            emptyList<String>(), LogTaint.leaks(source.lines()),
             "a SAF tree URI is the user's own directory written out, and these lines " +
                 "ship: Logger.i is not gated on a debuggable build. Name the folder by " +
-                "its mirror digest, which is what persistPermission one line below " +
-                "already does. Found:\n" + leaks.joinToString("\n") { "  ${it.trim()}" }
-        }
+                "its mirror digest, which is what the statement at the top of " +
+                "openSafFolder already does.",
+        )
     }
 
     @Test
     fun `the line still names the folder by its mirror`() {
         val named = opened.lines()
-            .any { it.contains("Logger.") && it.contains("getMirrorDir(uri).name") }
+            .any { it.contains("Logger.") && it.contains("getMirrorDir(") }
 
         assertTrue(named) {
             "nothing in openSafFolder says which folder is being opened, so a bug report " +
@@ -123,5 +84,76 @@ class SafFolderLogCallSiteTest {
                 opened.lines().filter { it.contains("Logger.") }
                     .joinToString("\n") { "  ${it.trim()}" }
         }
+    }
+
+    // --- The reader itself, driven against fixed snippets. ------------------
+    //
+    // The case above points LogTaint at one file, where the only measurable
+    // outcome is "found nothing", and a reader that always finds nothing passes
+    // it. `NavigationTokenLoggingTest` pins the behaviour the tokened URL needs;
+    // these pin the two parts a device folder needs and it does not.
+
+    /** A stand-in for `openSafFolder`, with the log statement swapped in. */
+    private fun openSource(vararg body: String): List<String> =
+        listOf("    private fun openSafFolder(uri: Uri, navigate: Boolean) {") +
+            body + listOf("    }")
+
+    @Test
+    fun `a URI handed in as a parameter is a source`() {
+        // The seed the tokened-URL cases never exercise: every one of them starts
+        // from a `val` initialiser, and a device folder never has one. Drop the
+        // parameter pass and this is the only case that notices.
+        assertTrue(
+            LogTaint.leaks(
+                openSource("""        Logger.i(tag, "Opening the device folder " + uri)"""),
+            ).isNotEmpty(),
+            "a Uri arrives as a parameter, not as a declaration, and the reader did " +
+                "not treat it as a source",
+        )
+    }
+
+    @Test
+    fun `naming the folder by its mirror answers for it, printing it does not`() {
+        // Both directions of the same call, because only one of them is a
+        // reduction. Widen the span this takes out and the leak sitting after it
+        // on the same line is swallowed with it, which is the failure this pins.
+        val reduced = openSource(
+            """        Logger.i(tag, "Opening ${'$'}{safManager.getMirrorDir(uri).name}")""",
+        )
+        val beside = openSource(
+            """        Logger.i(tag, "Opening ${'$'}{safManager.getMirrorDir(uri).name} " + uri)""",
+        )
+
+        assertEquals(emptyList<String>(), LogTaint.leaks(reduced))
+        assertTrue(
+            LogTaint.leaks(beside).isNotEmpty(),
+            "a folder named by its digest cannot answer for the tree URI printed " +
+                "beside it on the same line",
+        )
+        assertEquals(
+            emptyList<String>(), LogTaint.redactedLogs(reduced),
+            "naming a folder by its mirror is not redaction and must not answer the " +
+                "control that asks whether the tokened URL still reaches the log; " +
+                "letting it count there is how that control goes on passing after the " +
+                "statement it was written about has gone",
+        )
+    }
+
+    @Test
+    fun `a mirror named on a line of its own is not the folder that made it`() {
+        // The false accusation a reader that taints by proximity makes here, and
+        // the reason this file uses LogTaint rather than the scan in
+        // `PageSuppliedLoggingTest`: that one taints `mirrorDir` from the sync
+        // call and reddens the safe statement below. `File.name` under
+        // `saf-mirrors` IS the digest; a reader that cannot print it has nothing
+        // left to say and gets narrowed back by whoever it stops.
+        val safe = openSource(
+            """        val mirrorDir = withContext(Dispatchers.IO) {""",
+            """            safManager.syncToLocal(uri) { done, total -> }""",
+            """        }""",
+            """        Logger.i(tag, "Synced " + mirrorDir.name)""",
+        )
+
+        assertEquals(emptyList<String>(), LogTaint.leaks(safe))
     }
 }

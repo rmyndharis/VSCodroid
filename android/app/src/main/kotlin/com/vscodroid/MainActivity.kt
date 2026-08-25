@@ -3975,12 +3975,14 @@ internal sealed interface BindDecision {
  */
 internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
     if (url == null || port <= 0) return false
-    // Named so they collide with nothing else in this file. `TokenTaint`, which
-    // guards this file against logging the connection token, follows taint by
-    // identifier name across the whole file: binding the parsed URL to `uri` or
-    // its host to `host` would mark two unrelated locals as token-bearing and
-    // report four honest log statements as leaks. The conservatism is the point,
-    // so the alias is what has to go.
+    // Named so they collide with nothing else in this file. `LogTaint`, which
+    // guards this file against logging the connection token or a device folder's
+    // tree URI, follows taint by identifier name across the whole file: binding
+    // the parsed URL to `uri` or its host to `host` would mark two unrelated
+    // locals as sensitive and report honest log statements as leaks. A `Uri`
+    // written as a type is a seed there too, so `val uri: Uri` is the same
+    // mistake spelled differently. The conservatism is the point, so the alias
+    // is what has to go.
     val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: return false
     val hostName = parsed.host ?: return false
     return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port
