@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An install that copies a toolchain and then cannot record it no longer leaves the copy behind. Roughly 155 MB stayed with nothing able to name or remove it, on the full disk that caused the failure.
 - A heap ceiling set in settings is read past strings and comments. A glob such as `**/*.log` in an earlier value swallowed the setting, and one commented out could be applied instead.
 - A sign-in waiting for its callback is no longer dropped by a single address naming many requests. The record filled and evicted the entry the sign-in in flight was waiting for, and it hung with no message.
+- First-run setup writes its unpack to the medium before recording the run as finished. Losing power in that window left the app marked set up with the tail of the unpack missing, and nothing looked again.
+- Leaving the editor while a device folder is opening no longer leaves a file watcher running on the folder you closed. It kept writing the mirror back to the device for the rest of the session, and nothing could stop it.
 
 ### Changed
 
