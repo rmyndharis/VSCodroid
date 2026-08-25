@@ -191,7 +191,15 @@ object CrashReporter {
         // The line telling the user what they are about to paste. This section
         // is not the app talking: it carries whatever the editor server and the
         // extension host printed, which is why [redactSecrets] runs over it.
-        sb.appendLine("(server and extension-host output, credentials removed)")
+        // "credentials removed" is what this said, and it is a promise the
+        // scrubber cannot keep: [ServerLog.redactSecrets] matches known shapes,
+        // and a bare secret is structurally indistinguishable from any other
+        // word, which is why widening the patterns is not the fix for the
+        // sentence. Say what is true and leave the user a reason to look.
+        sb.appendLine(
+            "(server and extension-host output; known credential shapes replaced, " +
+                "check before sharing)"
+        )
         val tail = ServerLog(File(Environment.getLogsDir(context), "server.log")).tail(200)
         if (tail.isEmpty()) {
             sb.appendLine("(no server output recorded)")

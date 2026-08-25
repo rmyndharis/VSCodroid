@@ -447,6 +447,16 @@ class CrashReporterTest {
                 "the section does not say whose output it is, and the user is about " +
                     "to paste it somewhere public:\n$report",
             )
+            // The header may not promise more than the scrubber can do. It matches
+            // known shapes, and a bare secret reads like any other word, so a
+            // sentence saying credentials are gone tells the user to stop looking
+            // at exactly the moment they should look. Pinned because it was that
+            // sentence once, and a shorter line is a tempting edit.
+            assertFalse(
+                report.contains("credentials removed"),
+                "the header promises the credentials are gone, which the redaction " +
+                    "cannot guarantee for a shape it does not know:\n$report",
+            )
         }
 
         /**
