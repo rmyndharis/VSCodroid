@@ -39,6 +39,8 @@ class ServerReadinessCallSiteTest {
 
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
+    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+
     /** Source lines with comments dropped, since both methods are named in prose. */
     private fun codeLines(): List<IndexedValue<String>> =
         mainActivity.readLines().withIndex().filterNot { (_, line) ->
@@ -65,27 +67,74 @@ class ServerReadinessCallSiteTest {
         )
     }
 
+    // The two cases below replaced a single count with a floor of two. The floor
+    // was the control for the case above, and it stopped discriminating once a
+    // third `isServerReady()` reached this file: deleting either decision, or
+    // reverting one to the port-only check, still left two tokens for it to
+    // count, so it passed. A count cannot say WHICH decision it counted, and
+    // that is the whole question here. Each decision is now pinned where it
+    // lives, so absence fails by name rather than by arithmetic.
+    //
+    // `SourceScan.body` throws with a sentence when the declaration is gone,
+    // which is the self-blindness this class of test otherwise has: "found
+    // nothing" and "found what I wanted" look identical from the same distance.
+
     @Test
-    fun `both places that decide on the server ask it`() {
-        // A file with neither call would satisfy the test above. This is the
-        // control for it, not a second assertion about the same thing.
-        //
-        // A floor of two rather than of one, and the difference is a real hole
-        // that a threshold of `> 0` left open: there are two decisions here, the
-        // bind-time check and the resume-from-background guard, and reverting
-        // just one of them restores half the defect while leaving both tests
-        // green. Either one alone is enough to put a user in front of a dead
-        // port.
-        //
-        // A floor rather than an exact count, because a third site would be an
-        // ordinary thing to add and should not have to come here first.
-        check(mainActivity.isFile) { "MainActivity.kt not found" }
+    fun `the resume guard asks the readiness question and obeys it`() {
+        val body = SourceScan.withoutComments(
+            SourceScan.body(source, "private fun handleResumeFromBackground()"),
+        )
 
-        val readinessCalls = codeLines().count { (_, line) -> line.contains("isServerReady()") }
-
+        val decisions = Regex("""shouldActOnResume\(""").findAll(body).count()
+        assertEquals(
+            1, decisions,
+            "expected exactly one resume decision inside handleResumeFromBackground(), " +
+                "found $decisions. Two of them split the verdict this case pins, and " +
+                "zero means the guard is gone.",
+        )
         assertTrue(
-            readinessCalls >= 2,
-            "both decisions must ask the readiness question; found $readinessCalls call site(s)",
+            body.contains("shouldActOnResume(nodeService?.isServerReady()"),
+            "the resume decision must be handed the readiness answer. A port that is " +
+                "merely allocated, or a process that is merely alive, reloads the page " +
+                "into a socket nothing is listening on yet.",
+        )
+
+        // The call and the branch are separate mutations: keeping the call and
+        // dropping its `return` leaves this file's token counts untouched and was
+        // one of the mutations the old floor passed.
+        val decidedAt = body.indexOf("shouldActOnResume(")
+        val actedAt = body.indexOf("resumeAction(")
+        assertTrue(
+            actedAt > decidedAt,
+            "resumeAction( no longer follows the resume decision in this body, so the " +
+                "span this case reads for the verdict is not the one that guards it",
+        )
+        assertTrue(
+            body.substring(decidedAt, actedAt).contains("return"),
+            "the resume decision's verdict must be obeyed before resumeAction( is " +
+                "reached; nothing returns between them, so the guard is computed and " +
+                "discarded",
+        )
+    }
+
+    @Test
+    fun `the binding decision is handed the readiness answer`() {
+        val body = SourceScan.withoutComments(
+            SourceScan.body(source, "private fun setupServiceCallbacks()"),
+        )
+
+        val decisions = Regex("""bindDecision\(""").findAll(body).count()
+        assertEquals(
+            1, decisions,
+            "expected exactly one binding decision inside setupServiceCallbacks(), " +
+                "found $decisions",
+        )
+        assertTrue(
+            body.contains("ready = service.isServerReady()"),
+            "the binding decision must be told what the health probe found. Handed " +
+                "`getPort() > 0` instead it navigates the WebView at a port that is " +
+                "allocated but not yet bound, and onReceivedError only logs, so the " +
+                "connection-refused page stays.",
         )
     }
 }
