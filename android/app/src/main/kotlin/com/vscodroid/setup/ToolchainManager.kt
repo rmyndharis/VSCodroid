@@ -1371,19 +1371,23 @@ class ToolchainManager(private val context: Context) {
             // first-run queue moves on, and the card reads "Install" again after
             // the next launch with nothing said.
             if (!writeState(state)) {
-                // ⚠️ The tree copied into `usr/` above is left where it is, and
-                // nothing removes it later. Uninstall works off this manifest, so a
-                // manifest that was never written leaves the files with no record
-                // naming them: roughly the unpacked size, about 155 MB for the Java 17
-                // this ships, that only clearing app data reclaims.
+                // Same reclaim as the copy failure above, because this is the same
+                // event a step later: the record naming the ~155 MB just copied does
+                // not exist, so nothing else can ever find those files. Uninstall
+                // works off this manifest, no card offers a Remove for a toolchain
+                // getInstalledToolchains() cannot name, and the repair pass only
+                // visits records that exist -- clearing app data was the way back.
+                // On the failure this is about, a full disk, they are exactly the
+                // bytes the retry the user is being asked to make needs.
                 //
-                // Not repaired here on purpose. The copy shares `usr/` with the base
-                // install and with other toolchains, so removing it means the
-                // uninstall path's own library bookkeeping rather than a
-                // deleteRecursively, and getting that wrong takes out a library the
-                // app itself loads. Pre-existing, but worth naming now that
-                // [reconcileDeliveredPacks] can reach this line at launch with no
-                // screen watching.
+                // Safe over a reinstall: writeState false means the file still holds
+                // the previous record, so [reclaimPartialCopy] re-reads it, still
+                // sees the toolchain named, and keeps the working copy's files. The
+                // `usr/bin` and `usr/lib` residue stays, for the reason that function
+                // documents: sorting it belongs to the uninstall's library
+                // bookkeeping, which needs the manifest this failure means we could
+                // not write.
+                reclaimPartialCopy(name, manifest)
                 fail(packName, ToolchainFailure.STORAGE)
                 // Play's copy is KEPT, which is the whole of the return value
                 // above. The user is told to free space and try again, and the
@@ -1439,15 +1443,16 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Deletes the tree a copy that threw partway had already written, when
+     * Deletes the tree an install that did not finish had already written, when
      * nothing else lays claim to it.
      *
-     * The install record is written last, so a copy that fails leaves up to the
-     * whole unpacked size -- about 155 MB for the Java 17 that ships today --
-     * under no manifest at all: [getInstalledToolchains] does not name it, the
-     * Toolchains screen offers no Remove for it, [uninstallLocked] has no record
-     * to work from, and the repair pass only visits records that exist. Clearing
-     * app data was the only way back.
+     * The install record is written last, so both ways an install can end after
+     * the copy has started -- the copy throwing, and the record write failing --
+     * leave up to the whole unpacked size, about 155 MB for the Java 17 that
+     * ships today, under no manifest at all: [getInstalledToolchains] does not
+     * name it, the Toolchains screen offers no Remove for it, [uninstallLocked]
+     * has no record to work from, and the repair pass only visits records that
+     * exist. Clearing app data was the only way back.
      *
      * The install root only. The same copy also writes into `usr/bin` and
      * `usr/lib`, which are shared with the base install and with other

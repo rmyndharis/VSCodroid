@@ -384,10 +384,12 @@ class FirstRunSetup(
                     // states: measured is a fact, a subtracted estimate is only
                     // as good as what it can see. The estimate this replaces
                     // came from `toolchains.json`, which knows the installs that
-                    // FINISHED. A copy that died before its record was written
-                    // leaves about 155 MB in `usr/` that nothing names
-                    // (ToolchainManager says so at the line where it happens),
-                    // and `npm install -g` and pip never had a record at all, so
+                    // FINISHED. `ToolchainManager` takes its install root back
+                    // on both failures it can see, but a process killed mid-copy
+                    // reaches neither and leaves up to 155 MB in `usr/` that
+                    // nothing names, the part written into the shared `usr/bin`
+                    // and `usr/lib` is never reclaimed on any exit, and
+                    // `npm install -g` and pip never had a record at all, so
                     // every one of those bytes was credited as a byte the next
                     // unpack writes over. The cap hid it while the bundled part
                     // of `usr/` was complete and stopped hiding it exactly where

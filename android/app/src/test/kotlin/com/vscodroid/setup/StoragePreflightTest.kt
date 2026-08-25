@@ -625,10 +625,11 @@ class StoragePreflightTest {
      * `usr/` is credited for the entries the APK names and for nothing else.
      *
      * The estimate this replaces came out of `toolchains.json`, which records the
-     * installs that FINISHED. `ToolchainManager` says at the line where it
-     * happens that a copy which dies after the tree is written and before the
-     * record is leaves about 155 MB in `usr/` that nothing names, and
-     * `npm install -g` and pip never had a record at all. Every one of those
+     * installs that FINISHED. `ToolchainManager` takes its install root back on
+     * both failures it can see, but a process killed mid-copy reaches neither
+     * and leaves about 155 MB in `usr/` that nothing names, the part written
+     * into the shared `usr/bin` and `usr/lib` is never reclaimed on any exit,
+     * and `npm install -g` and pip never had a record at all. Every one of those
      * bytes was subtracted from nothing and credited as a byte the unpack writes
      * over. The cap kept that harmless while the bundled part of `usr/` was
      * complete, and stopped keeping it harmless exactly where the gate is worth

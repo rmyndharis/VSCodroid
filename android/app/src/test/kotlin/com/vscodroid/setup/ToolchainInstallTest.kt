@@ -362,11 +362,7 @@ class ToolchainInstallTest {
     fun `an install whose record cannot be written reports FAILED rather than COMPLETED`() {
         val pack = File(filesDir, "pack-java").apply { mkdirs() }
         File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
-        // Non-empty, so the cleanup delete() cannot quietly reclaim it and let the
-        // write through, the point is that this write fails.
-        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
+        blockTheRecordWrite()
 
         installFromDirectory(manager(), "toolchain_java", pack)
 
@@ -377,6 +373,91 @@ class ToolchainInstallTest {
         assertFalse(
             File(filesDir, "home/.vscodroid/toolchains.json").exists(),
             "the harness did not block the write, so this test proves nothing",
+        )
+    }
+
+    /**
+     * Occupies the temporary path `writeAtomically` derives from `toolchains.json`,
+     * which is how the rest of this package arranges a record write that fails.
+     *
+     * Non-empty, so the cleanup `delete()` cannot quietly reclaim it and let the
+     * write through; the point is that this write fails.
+     */
+    private fun blockTheRecordWrite() {
+        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
+        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
+        File(blocker, "occupied").writeText("x")
+    }
+
+    /** A pack whose copy runs to the end, so the record write is what fails. */
+    private fun packThatCopiesCleanly(): File {
+        val pack = File(filesDir, "pack-java").apply { mkdirs() }
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(pack, "usr/opt/java/bin").mkdirs()
+        File(pack, "usr/opt/java/bin/java").writeText("payload")
+        return pack
+    }
+
+    /**
+     * The copy is taken back when the record write is what fails, not only when
+     * the copy is.
+     *
+     * The two are the same event a step apart -- a disk that fills up during or at
+     * the end of a copy -- and they left opposite states behind. A copy that threw
+     * reclaimed its tree; a copy that finished and then could not be recorded kept
+     * every byte of it, under no manifest at all: nothing names it, no card offers
+     * to remove it, and the retry the user is told to make has to fit alongside it.
+     */
+    @Test
+    fun `an install whose record cannot be written takes back what it copied`() {
+        blockTheRecordWrite()
+
+        installFromDirectory(manager(), "toolchain_java", packThatCopiesCleanly())
+
+        assertEquals(
+            listOf(AssetPackStatus.FAILED), statuses(),
+            "the install did not fail at the record write, so this proves nothing",
+        )
+        assertEquals(
+            listOf(ToolchainFailure.STORAGE), synchronized(reasons) { reasons.toList() },
+            "an install that ran out of room was not reported as a storage problem",
+        )
+        assertFalse(
+            File(filesDir, "home/.vscodroid/toolchains.json").exists(),
+            "the harness did not block the write, so this test proves nothing",
+        )
+        assertFalse(
+            File(filesDir, "usr/opt/java").exists(),
+            "the copied tree is still there, and nothing names it: no card offers to " +
+                "remove it and no uninstall can find it",
+        )
+    }
+
+    /**
+     * The same direction as the failed reinstall above, at the other exit: a
+     * record write that fails leaves `toolchains.json` holding the previous
+     * record, so the files it names still belong to the install that succeeded.
+     */
+    @Test
+    fun `a failed reinstall keeps the installed tree when the record cannot be written`() {
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"java","installRoot":"usr/opt/java"}]"""
+        )
+        // Part of the working copy that the incoming pack does not carry, so its
+        // survival is the working copy's and not the failed copy's own output.
+        File(filesDir, "usr/opt/java/lib").mkdirs()
+        File(filesDir, "usr/opt/java/lib/rt").writeText("the install that succeeded")
+        blockTheRecordWrite()
+
+        installFromDirectory(manager(), "toolchain_java", packThatCopiesCleanly())
+
+        assertEquals(
+            listOf(AssetPackStatus.FAILED), statuses(),
+            "the install did not fail at the record write, so this proves nothing",
+        )
+        assertTrue(
+            File(filesDir, "usr/opt/java/lib/rt").exists(),
+            "the failed reinstall deleted the tree of the install that is still recorded",
         )
     }
 }

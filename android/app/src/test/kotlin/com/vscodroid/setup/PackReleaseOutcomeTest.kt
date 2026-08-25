@@ -317,29 +317,32 @@ class PackReleaseOutcomeTest {
     /** 8,000,007 bytes: the fattened file plus the "payload" [deliver] writes. */
     private val orphanBytes = 8_000_007L
 
+    /**
+     * The orphan is placed on disk rather than made by a failing install, and the
+     * difference is the whole point of the case.
+     *
+     * A record write that fails now reclaims what it copied, so that exit no longer
+     * leaves one. Two sources still do, and neither has a code path that can clear
+     * them: a process killed partway through the copy, which nothing persists intent
+     * before, and a device already carrying an orphan from a build before the reclaim
+     * existed. For both, the tree is on disk and no record names it, which is exactly
+     * what is built here. Driving a failing install instead would measure the reclaim
+     * and call it the credit.
+     */
     @Test
     fun `an orphaned tree the copy writes over is credited to the space gate`() {
         playHolds("toolchain_java")
         deliver("toolchain_java", "java")
         fattenDelivery("toolchain_java", "java")
 
-        plentyOfRoom()
-        blockTheRecordWrite()
-        val firstOut = Collections.synchronizedList(mutableListOf<Int>())
-        val first = CountDownLatch(1)
-        managerReporting(first, firstOut).reconcileDeliveredPacks()
-        assertTrue(first.await(10, TimeUnit.SECONDS), "the first pass never reported an outcome")
-        assertEquals(
-            listOf(AssetPackStatus.FAILED), firstOut,
-            "the first pass did not fail at the record write, so no orphan was made",
-        )
+        val orphan = File(filesDir, "usr/opt/java/lib").apply { mkdirs() }
+        File(orphan, "rt").writeBytes(ByteArray(8_000_000))
+        File(File(filesDir, "usr/opt/java"), "payload").writeBytes(ByteArray(7))
         assertEquals(
             orphanBytes,
             com.vscodroid.util.StorageManager.dirSize(File(filesDir, "usr/opt/java")),
             "the orphan is not the size this case's arithmetic assumes",
         )
-
-        File(filesDir, "home/.vscodroid/toolchains.json.tmp~").deleteRecursively()
 
         // Strictly between the credited demand (206,000,000 - 8,000,007) and the
         // uncredited one (206,000,000).
