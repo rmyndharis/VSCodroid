@@ -85,7 +85,7 @@ class ExtraKeyRow @JvmOverloads constructor(
      */
     private val modifierBadge = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        setTextColor(context.getColor(R.color.colorExtraKeyActive))
+        setTextColor(context.getColor(R.color.colorPrimaryText))
         // Off, so the height this reports is its line height and nothing else.
         // The container below reserves exactly that, and a font-padding band
         // that varies by typeface would make the reservation wrong.

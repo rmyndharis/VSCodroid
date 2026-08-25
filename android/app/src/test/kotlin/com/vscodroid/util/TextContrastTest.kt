@@ -106,6 +106,8 @@ class TextContrastTest {
     private val themesXml = File("src/main/res/values/themes.xml")
     private val pickerAdapter =
         File("src/main/kotlin/com/vscodroid/setup/ToolchainPickerAdapter.kt")
+    private val extraKeyRow =
+        File("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt")
 
     // -- The WCAG arithmetic --
 
@@ -576,6 +578,66 @@ class TextContrastTest {
             "ToolchainPickerAdapter no longer paints a selected card with " +
                 "colorCardSelected, so the second ground this class measures the card's " +
                 "text against is a colour nothing shows",
+        )
+    }
+
+    /**
+     * That the latch badge beside the page dots can be read on the ground it sits on.
+     *
+     * The one text on the extra key row whose colour is chosen in Kotlin and whose
+     * ground is chosen in the same file, so neither end is in a layout and the walk
+     * above cannot see either. Both ends are read out of the source rather than named
+     * here: naming `colorPrimaryText` would measure this test's memory of the fix, and
+     * the badge is at AA only because it sits on `colorSurface`, so a ground moved to a
+     * key's own `#2D2D2D` takes the same colour to 4.49:1 and has to redden this.
+     *
+     * The window is opened at the badge's declaration because the file sets a text
+     * colour nowhere else today and this must not start passing on some other view's
+     * colour if it ever does.
+     */
+    @Test
+    fun `the latch badge is readable on the ground the row paints under it`() {
+        assertTrue(
+            extraKeyRow.isFile,
+            "${extraKeyRow.path} is not at ${extraKeyRow.absolutePath}; this test would " +
+                "otherwise pass by reading nothing",
+        )
+        val source = extraKeyRow.readText()
+
+        val badgeStart = source.indexOf("modifierBadge = TextView(context).apply {")
+        assertTrue(
+            badgeStart >= 0,
+            "ExtraKeyRow no longer declares `modifierBadge = TextView(context).apply {`, " +
+                "so the window this measures the latch cue in was not found and the " +
+                "colour asserted below is some other view's",
+        )
+
+        // Anchored at the start of a line with a no-slash class, as the picker case
+        // above is: a commented-out call must not satisfy either end.
+        val colorRef = Regex("""(?m)^\s*[^/\n]*setTextColor\(context\.getColor\(R\.color\.(\w+)\)\)""")
+            .find(source, badgeStart)
+            ?.groupValues?.get(1)
+        checkNotNull(colorRef) {
+            "no setTextColor(context.getColor(R.color.…)) follows the modifierBadge " +
+                "declaration, so nothing was measured"
+        }
+
+        val groundRef = Regex("""(?m)^\s*[^/\n]*setBackgroundColor\(context\.getColor\(R\.color\.(\w+)\)\)""")
+            .find(source)
+            ?.groupValues?.get(1)
+        checkNotNull(groundRef) {
+            "ExtraKeyRow paints no background of its own any more, so the ground the " +
+                "badge is measured against is a guess"
+        }
+
+        val ratio = contrast(resolve("@color/$colorRef").first, flatten("@color/$groundRef"))
+        assertTrue(
+            ratio >= AA_NORMAL,
+            "the latch badge: @color/$colorRef on @color/$groundRef measures " +
+                "${ratio.two()}:1, and WCAG AA asks $AA_NORMAL:1 for text this size. " +
+                "It is 11sp, which this file's own rule counts as normal text, and it " +
+                "is the only report that a modifier is still held once the row has " +
+                "been swiped past the page the modifier keys are on",
         )
     }
 
