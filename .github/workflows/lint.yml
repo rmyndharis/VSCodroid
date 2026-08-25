@@ -122,9 +122,10 @@ jobs:
       - name: Check every workflow step is runnable and pinned
         run: python3 scripts/check-workflow-steps.py
 
-      # Three gates whose refusal has no file in the tree to fire on: every
+      # Four gates whose refusal has no file in the tree to fire on: every
       # release gate is an allowlist, every bundled executable names Android's
-      # loader, and every server tree carries the Copilot CLI licence. A
+      # loader, every server tree carries the Copilot CLI licence, and every
+      # patch in patches/ carries a number the manifest can key it by. A
       # refusal that has quietly stopped firing prints exactly what a clean
       # tree prints, so each one is handed the input it exists to refuse, and
       # a control it must accept, on every run.
@@ -133,6 +134,7 @@ jobs:
           python3 scripts/check-workflow-steps.py --self-test
           python3 scripts/verify-android-elf.py --self-test
           python3 scripts/verify-server-tree.py --self-test
+          python3 scripts/check-patch-fingerprints.py --self-test
 
       # The same question asked of the build tool itself, which the step above
       # cannot reach: `uses:` pinning covers the actions, and the wrapper

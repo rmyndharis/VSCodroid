@@ -159,6 +159,39 @@ def diff_body(patch_path):
     return None
 
 
+def patch_names(patches_dir):
+    """Every *.patch in the directory, or None if one of them cannot be keyed.
+
+    The enumeration lives here, once, because it used to live twice: as a list
+    in write_manifest and as an id-keyed dict in main, both filtering on
+    PATCH_ID with no else-branch. build-vscode-oss.sh applies `patches/*.patch`
+    unfiltered, so a file the pattern cannot key was compiled into the shipped
+    tree and then dropped by both sides of the check that exists to notice it.
+    Dropping it is what makes it silent: it appears in neither the manifest nor
+    the row loop, so the run prints only ok lines.
+    """
+    # Leading dots excluded to match the applier, not to be lenient. pathlib's glob
+    # matches a leading-dot name and bash's does not, so `patches/*.patch` in
+    # build-vscode-oss.sh never sees one. Without this, an AppleDouble sidecar
+    # (`._0001-...patch`, which extracting an archive or copying the tree over exFAT
+    # leaves behind) would be refused here as "applied and tracked by nothing" when
+    # the build does not apply it at all, and the refusal reaches every APK through
+    # the packaging gates.
+    paths = sorted(p for p in patches_dir.glob("*.patch") if not p.name.startswith("."))
+    stray = [p.name for p in paths if not PATCH_ID.match(p.name)]
+    if stray:
+        print(f"  FAIL   {stray} in {patches_dir} is applied by "
+              f"build-vscode-oss.sh and tracked by nothing; rename it "
+              f"NNNN-short-description.patch or move it out of patches/")
+        return None
+    if not paths:
+        # An empty left-hand side would make every comparison below vacuously
+        # true.
+        print(f"  FAIL   no patches found in {patches_dir}; the naming changed")
+        return None
+    return [p.name for p in paths]
+
+
 def patch_hashes(patches_dir, names):
     """{patch filename: sha256 of its diff}, or None if the set is not usable.
 
@@ -271,9 +304,8 @@ def check_manifest(tree, patches_dir, names):
 
 def write_manifest(tree, patches_dir):
     """Record in the tree which patch text produced it."""
-    names = [p.name for p in sorted(patches_dir.glob("*.patch")) if PATCH_ID.match(p.name)]
-    if not names:
-        print(f"  FAIL   no patches found in {patches_dir}; the naming changed")
+    names = patch_names(patches_dir)
+    if names is None:
         return 1
     hashes = patch_hashes(patches_dir, names)
     if hashes is None:
@@ -293,16 +325,10 @@ def main(tree, patches_dir):
     if rows is None:
         return 1
 
-    patches = {}
-    for path in sorted(patches_dir.glob("*.patch")):
-        m = PATCH_ID.match(path.name)
-        if m:
-            patches[m.group(1)] = path.name
-
-    # An empty left-hand side would make every comparison below vacuously true.
-    if not patches:
-        print(f"  FAIL   no patches found in {patches_dir}; the naming changed")
+    names = patch_names(patches_dir)
+    if names is None:
         return 1
+    patches = {PATCH_ID.match(name).group(1): name for name in names}
 
     check_manifest(tree, patches_dir, patches.values())
 
@@ -340,8 +366,82 @@ def main(tree, patches_dir):
     return 1 if failed else 0
 
 
+def self_test():
+    """Hand both entry points a directory holding a patch nobody can key.
+
+    Both, separately: restoring the PATCH_ID filter at either one alone leaves
+    the other's mutation alive, and a self-test exercising only main would
+    print green while write_manifest still wrote a manifest omitting a patch
+    the build had already compiled in.
+
+    The negative control is not optional. A refusal that has started firing on
+    everything reads exactly like a refusal that works, so each case is
+    followed by a conforming directory the same call has to accept.
+    """
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    global failed
+    strays = ("foo.patch", "009-foo.patch", "0009_foo.patch")
+    real = sorted(DEFAULT_PATCHES.glob("[0-9][0-9][0-9][0-9]-*.patch"))
+    if len(real) < 2:
+        print(f"  FAIL   self-test: {DEFAULT_PATCHES} holds no conforming patches "
+              f"to build a control from")
+        return 1
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp) / "tree"
+        tree.mkdir()
+        for stray in strays + (None,):
+            src = pathlib.Path(tmp) / ("stray" if stray else "clean")
+            src.mkdir()
+            for p in real:
+                shutil.copy(p, src / p.name)
+            shutil.copy(DEFAULT_PATCHES / "fingerprints.txt", src / "fingerprints.txt")
+            if stray:
+                # Distinct content, not a copy of a real patch. A byte-identical
+                # copy shares its diff hash with the file it came from, so a
+                # refusal could be the collision detector rather than the naming
+                # rule, and the case would pass while measuring the wrong thing.
+                (src / stray).write_text(
+                    "diff --git a/self-test b/self-test\n"
+                    "--- a/self-test\n+++ b/self-test\n"
+                    "@@ -1 +1 @@\n-nothing\n+nothing at all\n"
+                )
+
+            for label, call in (("write_manifest", lambda: write_manifest(tree, src)),
+                                ("main", lambda: main(tree, src))):
+                out = io.StringIO()
+                failed = False
+                with contextlib.redirect_stdout(out):
+                    rc = call()
+                text = out.getvalue()
+                if stray:
+                    if rc == 0 or stray not in text:
+                        print(f"  FAIL   self-test: {label} accepted {stray}, "
+                              f"or never named it (rc={rc})")
+                        return 1
+                else:
+                    # The control only has to get PAST the naming rule. main()
+                    # still judges a real tree it was not given, so its rc is
+                    # not the signal; the absence of a naming refusal is.
+                    if "the naming changed" in text or "tracked by nothing" in text:
+                        print(f"  FAIL   self-test: {label} refused a directory "
+                              f"whose names all conform")
+                        return 1
+            shutil.rmtree(src)
+    failed = False
+    print("  ok     self-test: a patch outside NNNN- is refused by both entry "
+          "points, and a conforming directory is not")
+    return 0
+
+
 if __name__ == "__main__":
     argv = sys.argv[1:]
+    if argv == ["--self-test"]:
+        sys.exit(self_test())
     writing = bool(argv) and argv[0] == "--write-manifest"
     if writing:
         argv = argv[1:]
