@@ -174,13 +174,18 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
   workbench or a `*.vscode-cdn.net` document. An absent `Referer` is refused, because a page
   suppresses its own with one `<meta name="referrer">` and measured still read the workspace
   without it. CORS-mode loads (module scripts, fonts) carry an `Origin` and are judged above.
-- **The resource authority is not trusted to read another resource.** `isOurOrigin` accepts the
-  workbench and a webview document and excludes anything under `*.vscode-resource.vscode-cdn.net`.
-  Without that, an `.html` file under a published root (a checked-out repository, routinely) could
-  be loaded as a document from that authority and then `fetch` every other published file.
-  **Residual, and deliberate:** a navigation carries no `Origin` at all, so such a document can
-  still frame another path on the identical origin and read it back. Closing that needs a test for
-  what the request is for, and the only candidate header has not been measured on this WebView.
+- **The resource authority is not trusted to ask a different origin of ours.** `isOurOrigin`
+  accepts the workbench and a webview document and excludes anything under
+  `*.vscode-resource.vscode-cdn.net`. An `.html` file under a published root (a checked-out
+  repository, routinely) can be loaded as a document from that authority, and this stops it
+  reaching the workbench origin or a webview origin with a CORS-mode request.
+  **Residual, and wider than it used to say here:** the gate sees only requests carrying an
+  `Origin`. A same-origin `fetch` sends none, so a document at that authority asking for another
+  file under another published root is judged by the `Referer` rule instead, which accepts the
+  resource authority on purpose, because a stylesheet served from there is what asks for its own
+  `url(...)` subresources. A navigation carries no origin either, so the same document can frame
+  another path and read it back. Closing either needs a test for what the request is for, and the
+  only candidate header has not been measured on this WebView.
 - **A `*.vscode-cdn.net` request naming a foreign `parentOrigin` is refused.** The webview host page
   takes its parent's origin from its own query string, so a page that can compose a URL could
   otherwise host its script at an origin ending `.vscode-cdn.net`. Asset requests carry no

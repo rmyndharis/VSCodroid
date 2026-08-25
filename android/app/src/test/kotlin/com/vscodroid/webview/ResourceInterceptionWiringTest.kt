@@ -231,11 +231,13 @@ class ResourceInterceptionWiringTest {
      * webview documents come from the `{{uuid}}.vscode-cdn.net` template and the
      * resource authority only ever answers subresources.
      *
-     * The name says `fetch` because that is the whole of what this closes. The
-     * same document can still frame another path on its own origin and read that
-     * one back, since a navigation arrives here with no origin to refuse; the
-     * comment on the gate itself states that residual rather than leaving it to
-     * be discovered.
+     * What this closes is the asking that carries an `Origin`, which is a
+     * CORS-mode request to a different one of our origins. It does not close the
+     * same-origin case: a `fetch` for a sibling path sends no `Origin` at all and
+     * is judged by the `Referer` rule, which accepts this authority on purpose.
+     * Nor a navigation, which carries none either, so the document can frame
+     * another path and read it back. The comment on the gate states both
+     * residuals rather than leaving them to be discovered.
      */
     @Test
     fun `a document at the resource authority cannot fetch another resource`() {

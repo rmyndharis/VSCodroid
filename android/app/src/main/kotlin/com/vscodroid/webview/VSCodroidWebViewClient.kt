@@ -1335,11 +1335,21 @@ class VSCodroidWebViewClient(
                 // difference is easy to overstate. An `.html` file under a
                 // published root, loaded as a document from this authority, runs
                 // its script at an origin ending `.vscode-cdn.net`, and
-                // [isOurOrigin] refusing that authority stops it only from
-                // *asking*: a `fetch` carries an `Origin` and is turned away here.
-                // A navigation carries none, so the same document can frame
-                // another path on the identical origin, be served it by the branch
-                // below, and read it out of `contentDocument` same-origin. That a
+                // [isOurOrigin] refusing that authority turns away the requests
+                // that reach this gate at all: a CORS-mode request carries an
+                // `Origin`, so such a document cannot ask a *different* one of our
+                // origins for anything.
+                //
+                // It does not turn away the sibling it shares an origin with, and
+                // the earlier wording here said it did. A same-origin `fetch`
+                // sends no `Origin` header, so it never reaches this branch; it
+                // falls to the `Referer` rule below, which accepts the resource
+                // authority deliberately, since a stylesheet already served from
+                // there is what asks for its own `url(...)` subresources. Every
+                // published root answers on one authority, so "another file under
+                // another root" is that same origin. A navigation carries no
+                // origin either, so the same document can also frame another path
+                // and read it out of `contentDocument`. That a
                 // frame's own navigation reaches this callback is not a guess:
                 // `pre/index.html` is exactly that, an iframe document the CDN arm
                 // above answers. What it reaches is whatever [MIME_TYPES] renders
@@ -1741,10 +1751,13 @@ class VSCodroidWebViewClient(
          * there: webview documents come from the `{{uuid}}.vscode-cdn.net` template,
          * and the resource authority only ever answers subresources.
          *
-         * It closes the asking rather than the reading, and the caller's comment
-         * records the difference: a navigation reaches this app carrying no
-         * origin at all, so a document served here can still frame another path
-         * on its own origin and read that one back.
+         * It closes the asking that reaches this predicate, which is the asking
+         * that carries an `Origin`: a CORS-mode request to a different one of our
+         * origins. The caller's comment records what it does not close, and it is
+         * wider than framing. A same-origin `fetch` sends no `Origin`, so it is
+         * judged by [isOurReferer], which accepts this authority on purpose; and a
+         * navigation carries none either, so a document served here can frame
+         * another path on its own origin and read that one back.
          */
         internal fun isOurOrigin(origin: String, port: Int): Boolean =
             isWorkbenchOrigin(origin, port) ||

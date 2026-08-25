@@ -57,14 +57,16 @@ class WebviewOriginTrustTest {
      * root can be loaded as a document from
      * `https://file+.vscode-resource.vscode-cdn.net/<path>` and will run: a
      * published root is routinely a checked-out repository. While this answered
-     * true, that document could `fetch` every other file under every root back
-     * through the same arm.
+     * true, that document could reach a different one of our origins, the
+     * workbench or a webview, with a CORS-mode request.
      *
      * What it does not close, since the comment on the gate says so and this
-     * should not say otherwise: the same document can still frame another path
-     * on its own origin, which is a navigation and so carries no origin to
-     * refuse, and read it back same-origin. This shuts the asking, not the
-     * reading.
+     * should not say otherwise: this predicate is handed an `Origin`, and a
+     * same-origin `fetch` sends none, so a request for another file under
+     * another published root never arrives here. It is judged by the `Referer`
+     * rule, which accepts this authority on purpose. A navigation carries no
+     * origin either, so the document can also frame another path and read it
+     * back. This shuts one kind of asking, not the reading.
      */
     @Test
     fun `a document at the resource authority is not ours`() {
