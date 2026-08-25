@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Installing a toolchain again after one failed part-way now asks only for the space the copy needs. The check charged for bytes the new copy was about to write over, so a device already holding most of the tree was refused every time.
 - The badge that says a modifier is still held is readable against the row it sits on. It was drawn in the accent blue, which this project's own contrast rule counts as too faint for text that size.
 - The bug report no longer says credentials were removed. It names which shapes are replaced and asks you to check, because a secret that arrives as an ordinary word cannot be told from one.
+- Deleting a file in the editor now removes it from the device folder even when that copy had never been opened. It was kept, and the notice said the only copy was inside the app, which is the reverse of what happened.
+- An install that copies a toolchain and then cannot record it no longer leaves the copy behind. Roughly 155 MB stayed with nothing able to name or remove it, on the full disk that caused the failure.
+- A heap ceiling set in settings is read past strings and comments. A glob such as `**/*.log` in an earlier value swallowed the setting, and one commented out could be applied instead.
+- A sign-in waiting for its callback is no longer dropped by a single address naming many requests. The record filled and evicted the entry the sign-in in flight was waiting for, and it hung with no message.
 
 ### Changed
 
