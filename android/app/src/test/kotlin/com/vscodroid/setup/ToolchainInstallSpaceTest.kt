@@ -89,6 +89,71 @@ class ToolchainInstallSpaceTest {
         }
     }
 
+    // -- the credit for a tree the copy writes over --
+
+    @TempDir
+    lateinit var filesDir: File
+
+    private fun rootUnder(name: String) = File(filesDir, name).apply { mkdirs() }
+
+    @Test
+    fun `a tree larger than the pack records is credited only what the pack writes back`() {
+        assertEquals(
+            156_000_000L,
+            existingTreeCredit(rootUnder("usr"), filesDir, 156_000_000L) { 900_000_000L },
+            "a swollen directory credited bytes the overwrite never returns",
+        )
+    }
+
+    @Test
+    fun `a smaller tree is credited what is measured`() {
+        assertEquals(
+            8_000_007L,
+            existingTreeCredit(rootUnder("usr"), filesDir, 156_000_000L) { 8_000_007L },
+        )
+    }
+
+    @Test
+    fun `no install root means no credit`() {
+        assertEquals(0L, existingTreeCredit(null, filesDir, 156_000_000L) { 900_000_000L })
+    }
+
+    /**
+     * The credit is the first decision built on the manifest's `installRoot`, and
+     * `File(base, "../..")` resolves outside the base it was joined to. Measuring
+     * there would return the whole app data directory, clamp to the pack's own
+     * size, and leave the gate asking for nothing but the buffer, which is the
+     * refusal switched off rather than relaxed.
+     */
+    @Test
+    fun `a root that resolves outside the base credits nothing`() {
+        val escaped = File(filesDir, "../..")
+        var measured = false
+        assertEquals(
+            0L,
+            existingTreeCredit(escaped, filesDir, 156_000_000L) { measured = true; 900_000_000L },
+        )
+        assertFalse(measured, "the escaped root was walked, which is the cost this refuses")
+    }
+
+    @Test
+    fun `the base itself is inside the base`() {
+        assertEquals(
+            8_000_007L,
+            existingTreeCredit(filesDir, filesDir, 156_000_000L) { 8_000_007L },
+            "a manifest naming the base directly is not an escape",
+        )
+    }
+
+    @Test
+    fun `the credited gate never falls below the buffer`() {
+        val credit = existingTreeCredit(rootUnder("usr"), filesDir, 156_000_000L) { 900_000_000L }
+        assertEquals(
+            SPACE_BUFFER,
+            (packInstallBytes(156_000_000L) - credit).coerceAtLeast(SPACE_BUFFER),
+        )
+    }
+
     // -- what the pre-flight is told a pack unpacks to --
 
     /**

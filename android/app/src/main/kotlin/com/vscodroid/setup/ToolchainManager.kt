@@ -14,6 +14,7 @@ import com.google.android.play.core.assetpacks.model.AssetPackErrorCode
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
 import com.vscodroid.webview.redactToken
 import org.json.JSONArray
 import org.json.JSONObject
@@ -893,7 +894,13 @@ class ToolchainManager(private val context: Context) {
                     "a full device will fail during the copy instead of before it",
             )
         } else {
-            val required = packInstallBytes(unpacked)
+            val credit = existingTreeCredit(
+                deliveredInstallRoot(assetsDir, packName),
+                context.filesDir,
+                unpacked,
+                StorageManager::dirSize,
+            )
+            val required = (packInstallBytes(unpacked) - credit).coerceAtLeast(SPACE_BUFFER)
             val available = StatFs(context.filesDir.absolutePath).availableBytes
             if (available < required) {
                 Logger.e(
@@ -1188,6 +1195,28 @@ class ToolchainManager(private val context: Context) {
             // of the process.
             installsInFlight.remove(packName)
         }
+    }
+
+    /**
+     * The delivered manifest's install root under `filesDir`, best-effort.
+     *
+     * Best-effort and null on anything unexpected, because the authoritative
+     * parse stays where it is, in [installFromDirectoryHoldingPack]: a malformed
+     * manifest must still report CORRUPT from there rather than change the space
+     * gate's answer here.
+     */
+    private fun deliveredInstallRoot(assetsDir: File, packName: String): File? = try {
+        val manifestFile = File(assetsDir, "$packName.json")
+        if (!manifestFile.exists()) {
+            null
+        } else {
+            JSONObject(manifestFile.readText()).optString("installRoot", "")
+                .takeIf { it.isNotEmpty() }
+                ?.let { File(context.filesDir, it) }
+        }
+    } catch (e: Exception) {
+        Logger.w(tag, "Could not read the install root from $packName's manifest", e)
+        null
     }
 
     /**
@@ -3303,6 +3332,35 @@ internal fun packUnpackedBytes(packName: String): Long? =
  */
 internal fun packInstallBytes(unpackedBytes: Long): Long =
     unpackedBytes + SPACE_BUFFER
+
+/**
+ * Bytes already on disk under an install root that the copy will write over.
+ *
+ * `copyTo(overwrite = true)` deletes the destination before opening the output
+ * stream, so an overwrite of an identical tree allocates nothing net. Clamped at
+ * [recordedBytes] because a directory can hold more than the pack will write
+ * back, and a credit for those bytes is space the copy never returns.
+ */
+internal fun existingTreeCredit(
+    root: File?,
+    within: File,
+    recordedBytes: Long,
+    measure: (File) -> Long,
+): Long {
+    if (root == null) return 0
+    // A root that resolves outside [within] credits nothing. `..` escapes
+    // File(base, relative) while an absolute string is re-nested under it, so this
+    // rejects the one form that reaches outside. The manifest comes from a signed
+    // pack rather than an attacker, and uninstallLocked and reclaimPartialCopy
+    // already build the same File and delete through it, so this is not a last line
+    // of defence. It is that a credit is the first DECISION taken on that string:
+    // measuring the whole app data directory would clamp to the pack's own size and
+    // leave the gate asking for nothing but the buffer.
+    val base = runCatching { within.canonicalFile }.getOrNull() ?: return 0
+    val resolved = runCatching { root.canonicalFile }.getOrNull() ?: return 0
+    if (!generateSequence(resolved) { it.parentFile }.any { it == base }) return 0
+    return minOf(recordedBytes, measure(resolved)).coerceAtLeast(0)
+}
 
 /**
  * Copies a tree, refusing rather than shrugging when a directory cannot be read.
