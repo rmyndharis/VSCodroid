@@ -1930,15 +1930,21 @@ class SafSyncEngine(private val context: Context) {
     internal var onUploadIncomplete: (File, Int, Boolean) -> Unit = { _, _, _ -> }
 
     /**
-     * Told when a directory deleted in the editor was left standing on the device,
-     * because it still holds documents this sync never copied in.
+     * Told when something deleted in the editor was left standing on the device,
+     * because it holds content this sync never copied in: a directory holding such a
+     * document, or the document itself.
      *
      * Its own seam for the reason [onDocumentsNotCopied] has one: [onWriteBackFailed]
      * says the app holds the only copy, and here the opposite is true. The mirror copy
      * is gone, the device holds the only one, and a notice worded the other way would
      * send the user looking inside the app for files that are safe where they are.
+     *
+     * The flag is what the sentence turns on and it cannot be recovered downstream:
+     * the entry is already unlinked when the event arrives, so nothing left on disk
+     * can be asked whether it was a directory. "It holds files that never reached the
+     * editor" is the right sentence for one case and false for the other.
      */
-    internal var onDirectoryKeptOnDevice: (File) -> Unit = {}
+    internal var onKeptOnDevice: (file: File, isDirectory: Boolean) -> Unit = { _, _ -> }
 
     /**
      * How much room is left where the mirror lives.
@@ -1970,8 +1976,8 @@ class SafSyncEngine(private val context: Context) {
      * The notice is [onWriteBackFailed]'s and it fits: the file did not reach the device
      * folder, and the copy inside the app is the only one of it that exists. What the
      * device holds under that name is a different document, which is why this refuses.
-     * The directory guard does not come through here, because for it the opposite is
-     * true; see [keepUnreadDirectory].
+     * A refused delete does not come through here, because for it the opposite is
+     * true; see [keepUnread].
      */
     private fun refuseUnreadDocument(localFile: File, describedAs: String) {
         Logger.w(
@@ -1997,21 +2003,25 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Declines to delete the device directory at [relativePath], because it holds
-     * documents this sync never read, and says so.
+     * Declines to delete what the device holds at [relativePath], because it is, or it
+     * holds, a document this sync never read, and says so.
      *
      * Not through [refuseUnreadDocument]: that one announces on [onWriteBackFailed],
      * whose wording says the app holds the only copy, and here the app holds none.
-     * Not through [refusalsAnnounced] either: a directory is deleted once per deletion,
-     * and a user who recreates it and deletes it again is owed the notice again.
+     * Not through [refusalsAnnounced] either, and that is the second half of the same
+     * point: something is deleted once per deletion, and a user who recreates it and
+     * deletes it again is owed the notice again. Spending that budget here also costs
+     * the notice its owner needs, since the next save of a recreated name is refused
+     * as a write and is the one occasion on which "the only copy is inside VSCodroid"
+     * is both true and urgent.
      */
-    private fun keepUnreadDirectory(localFile: File, relativePath: String) {
+    private fun keepUnread(localFile: File, relativePath: String, isDirectory: Boolean) {
         Logger.w(
             tag,
-            "Not deleting $relativePath from the device: it holds documents this sync " +
+            "Not deleting $relativePath from the device: it holds content this sync " +
                 "never read",
         )
-        onDirectoryKeptOnDevice(localFile)
+        onKeptOnDevice(localFile, isDirectory)
     }
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
@@ -2922,9 +2932,19 @@ class SafSyncEngine(private val context: Context) {
 
         if (!shouldWriteBack(relativePath, isDirectory)) return
 
-        // Placed here rather than in the four write-back branches: this covers
-        // CREATE, MODIFY, DELETE and both halves of a move in one statement, and
-        // stops the job being queued at all.
+        // Placed here rather than in the write-back branches: this covers CREATE,
+        // MODIFY and the arriving half of a move in one statement, and stops the job
+        // being queued at all.
+        //
+        // A delete is excluded and handled below instead, and the exclusion is the
+        // whole of why the type is read here at all. Both refusals are correct and
+        // they are correct for opposite reasons: a refused write leaves the edit
+        // inside the app, a refused delete leaves the document on the device and
+        // nowhere else. Answering for a delete here said the first sentence about
+        // the second situation, sending the user into the app after a file the app
+        // had never held, and spent that path's one refusal notice on it, so the
+        // save that came afterwards, the one that really did stay inside the app,
+        // was silent for the rest of the session.
         //
         // The provider is asked rather than trusted from the set alone, because
         // the set is a memory of what this sync could not read and the document
@@ -2936,7 +2956,8 @@ class SafSyncEngine(private val context: Context) {
         // outer one is not a duplicate: it is what keeps [providerHoldsDocument] off
         // the common path. [createOneInSaf] needs no such guard, because there the
         // provider's answer is already in hand.
-        if (localFile.absolutePath in unfetched &&
+        if (type != SyncType.DELETE &&
+            localFile.absolutePath in unfetched &&
             writeWouldReplaceUnreadDocument(
                 localFile.absolutePath,
                 providerHoldsDocument(safTreeUri, relativePath),
@@ -2992,13 +3013,22 @@ class SafSyncEngine(private val context: Context) {
             return
         }
 
-        // An outright delete of a directory, which on a directory document is
-        // `deleteDocument` taking everything beneath it on the device. The mirror is
-        // not all of it: a child skipped for size, or one whose copy failed, was never
-        // in the mirror, so the editor showed the directory without it, the user
-        // deleted what they could see, and the device lost a 60 MB archive nothing on
-        // screen had mentioned. The guard above cannot see this one: it tests the
-        // directory's own path, and [unfetched] holds files only.
+        // A delete the device holds the only copy of, at either level.
+        //
+        // On a directory document `deleteDocument` takes everything beneath it on the
+        // device, and the mirror is not all of it: a child skipped for size, or one
+        // whose copy failed, was never in the mirror, so the editor showed the
+        // directory without it, the user deleted what they could see, and the device
+        // lost a 60 MB archive nothing on screen had mentioned. A file arrives here for
+        // the same reason one step down: what the user deleted in the editor was a
+        // mirror entry that was never the document, and the document on the device is
+        // the only copy of itself.
+        //
+        // Matched by prefix for a directory, since a directory holds what is under it
+        // and [unfetched] holds files only, and by exact path for a file, since its own
+        // path is the only one that names it. The separator is appended so `docs` does
+        // not answer for `docs2`, and any depth below counts; on the file side
+        // exactness is what stops an unread `notes.md.bak` from keeping `notes.md`.
         //
         // Below the MOVED_FROM hold rather than above it, deliberately. A directory
         // with unread children is renamed by the same event pair as any other, and
@@ -3006,24 +3036,27 @@ class SafSyncEngine(private val context: Context) {
         // path that carries those children to the new name. Refusing the MOVED_FROM
         // would have left the pair unclaimed: the new name created from the mirror
         // without them, the old one standing on the device with them. Only an
-        // outright DELETE therefore reaches here as a directory.
+        // outright DELETE therefore reaches here as a directory. A file has no pair to
+        // protect, so both halves of its delete, the unlink and the move away, reach
+        // this and are kept the same way.
         //
-        // The provider is asked for the reason the file guard asks it: the set is a
-        // memory, and the directory may have been deleted on the device since, in
+        // The provider is asked for the reason the write guard asks it: the set is a
+        // memory, and the document may have been deleted on the device since, in
         // which case there is nothing left to keep. Only a provider that positively
-        // answers "gone" lets the delete through. The file guard folds a failed
+        // answers "gone" lets the delete through. The write guard folds a failed
         // lookup into "not held", and there that costs a duplicate name; here it would
-        // cost `deleteDocument` on a subtree the set says holds an unread document, so
-        // a provider that cannot answer keeps. The separator is appended so
-        // `docs` does not answer for `docs2`, and any depth below counts. One scan of
-        // a set that is normally empty, on the observer thread; the binder walk is
-        // paid only on a match.
-        if (type == SyncType.DELETE && isDirectory) {
-            val below = localFile.absolutePath + File.separator
-            if (unfetched.any { it.startsWith(below) } &&
-                providerHoldsDirectory(safTreeUri, relativePath) != false
-            ) {
-                keepUnreadDirectory(localFile, relativePath)
+        // cost `deleteDocument` on the one copy the set says nothing else has, so
+        // a provider that cannot answer keeps. One scan of a set that is normally
+        // empty, on the observer thread; the binder walk is paid only on a match.
+        if (type == SyncType.DELETE) {
+            val holdsUnread = if (isDirectory) {
+                val below = localFile.absolutePath + File.separator
+                unfetched.any { it.startsWith(below) }
+            } else {
+                localFile.absolutePath in unfetched
+            }
+            if (holdsUnread && providerHolds(safTreeUri, relativePath) != false) {
+                keepUnread(localFile, relativePath, isDirectory)
                 return
             }
         }
@@ -3178,18 +3211,20 @@ class SafSyncEngine(private val context: Context) {
      * device *not* holding a name has to ask the device.
      */
     /**
-     * Whether the device still holds a directory at [relativePath]: true, false, or null
-     * when the provider could not be asked.
+     * Whether the device still holds anything at [relativePath]: true, false, or null
+     * when the provider could not be asked. Type-agnostic, because it walks display
+     * names, which is what the delete guard needs: it asks the same question of a
+     * directory and of the document inside one.
      *
      * [providerHoldsDocument] folds a query that threw, or a cursor the provider would
      * not give, into "not held", which suits its caller: the cost of being wrong there
-     * is a duplicate name. The directory guard in [handleMirrorEvent] cannot take that
+     * is a duplicate name. The delete guard in [handleMirrorEvent] cannot take that
      * answer, because for it "not held" means the delete goes through, and the delete
-     * is `deleteDocument` on a subtree the sync knows it never fully read. So this walk
+     * is `deleteDocument` on content the sync knows it never read. So this walk
      * reports the three cases apart, and the guard treats only a positive "gone" as
      * permission.
      */
-    private fun providerHoldsDirectory(treeUri: Uri, relativePath: String): Boolean? {
+    private fun providerHolds(treeUri: Uri, relativePath: String): Boolean? {
         var currentDocId = DocumentsContract.getTreeDocumentId(treeUri)
         for (segment in relativePath.split("/")) {
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, currentDocId)

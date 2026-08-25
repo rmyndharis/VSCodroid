@@ -658,17 +658,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // A directory deleted in the editor that stayed on the device, because it
-        // holds documents the sync never copied in and deleting it would have taken
-        // them. Its own wording again: the mirror copy is gone, so "the only copy is
-        // inside VSCodroid" would be exactly backwards.
-        safManager.onDirectoryKeptOnDevice { dir ->
+        // Something deleted in the editor that stayed on the device, because deleting
+        // it would have taken content the sync never copied in. Its own wording again:
+        // the mirror copy is gone, so "the only copy is inside VSCodroid" would be
+        // exactly backwards. Two sentences rather than one, because a directory was
+        // kept for what is inside it and a document was kept for what it is, and the
+        // engine has to say which: the entry is already unlinked by the time the event
+        // arrives, so nothing here can ask the disk.
+        safManager.onKeptOnDevice { kept, isDirectory ->
+            val message = appContext.getString(
+                if (isDirectory) R.string.saf_directory_kept else R.string.saf_document_kept,
+                kept.name,
+            )
             toMainThread.post {
-                Toast.makeText(
-                    appContext,
-                    appContext.getString(R.string.saf_directory_kept, dir.name),
-                    Toast.LENGTH_LONG,
-                ).show()
+                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
             }
         }
 

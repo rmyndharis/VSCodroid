@@ -135,20 +135,32 @@ class WriteBackNoticeWiringTest {
         )
     }
 
+    /**
+     * One seam, two sentences. A directory is kept for what is inside it and a
+     * document is kept for what it is, so the second wording is named here as
+     * separately as the capped upload is above: the directory sentence says the thing
+     * holds files that never reached the editor, which of a single document is simply
+     * false, and a user told that goes looking inside a file.
+     */
     @Test
-    fun `MainActivity asks to be told when a deleted directory was kept on the device`() {
+    fun `MainActivity asks to be told when a delete was declined to save the device copy`() {
         assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
         val source = activity.readText()
 
         assertTrue(
-            Regex("""(?m)^\s*safManager\.onDirectoryKeptOnDevice\s*\{""").containsMatchIn(source),
-            "nothing wires the notice for a directory kept on the device, so a delete " +
+            Regex("""(?m)^\s*safManager\.onKeptOnDevice\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for what was kept on the device, so a delete " +
                 "that was declined to save an unread archive says nothing about it",
         )
         assertTrue(
             Regex("""(?m)^\s*[^/\n]*saf_directory_kept\b""").containsMatchIn(source),
             "the notice does not name the string that says the device, not the app, " +
                 "holds the files",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_document_kept\b""").containsMatchIn(source),
+            "a single kept document is announced in the wording for a directory, which " +
+                "tells the user their file holds files",
         )
     }
 

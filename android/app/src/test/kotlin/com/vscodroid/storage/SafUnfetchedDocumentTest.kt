@@ -226,7 +226,11 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory holding a document the sync never read is kept on the device`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        val asDirectory = mutableListOf<Boolean>()
+        engine.onKeptOnDevice = { file, isDirectory ->
+            kept.add(file.name)
+            asDirectory.add(isDirectory)
+        }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -238,6 +242,14 @@ class SafUnfetchedDocumentTest {
             kept,
             "the directory was kept, or deleted, without the user being told which",
         )
+        // The flag picks the sentence, and nothing downstream can recover it: the
+        // entry is unlinked before the event arrives, so it cannot be stat'd.
+        assertEquals(
+            listOf(true),
+            asDirectory,
+            "the directory was announced with the wording for a single document, which " +
+                "says the editor never had a copy of a folder",
+        )
     }
 
     /**
@@ -248,7 +260,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory the sync read whole is deleted from the device`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(Entry("docs", isDirectory = true)),
@@ -267,7 +279,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory is kept for a document the sync never read at any depth`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(Entry("docs", isDirectory = true)),
@@ -291,7 +303,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a sibling whose name merely starts the same does not keep the directory`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(
@@ -318,7 +330,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory the device no longer holds is not kept`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -345,7 +357,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `renaming a directory that holds a document the sync never read still renames it`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -370,7 +382,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a renamed directory still keeps the document the sync never read`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         engine.handleMirrorEvent(
@@ -399,7 +411,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory is kept when the provider cannot say whether it still holds it`() {
         val kept = mutableListOf<String>()
-        engine.onDirectoryKeptOnDevice = { kept.add(it.name) }
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         every { resolver.query(any(), any(), any(), any(), any()) } throws
@@ -409,6 +421,180 @@ class SafUnfetchedDocumentTest {
 
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
         assertEquals(listOf("docs"), kept, "an unanswerable provider was read as \"gone\"")
+    }
+
+    /**
+     * The same question one level down, where the answer used to be the opposite of
+     * the truth. A document the sync could not read leaves the mirror without it and
+     * its path in the set; the user deletes the name they can see in the editor; and
+     * the delete has to be declined for the reason the directory above is declined,
+     * because `deleteDocument` here takes the only copy of the document.
+     *
+     * What was wrong was not the refusal but the sentence. The guard that refuses
+     * writes sat above the event type and answered for the delete as well, so the
+     * user was told the only copy was inside VSCodroid at the moment the app held
+     * none of it.
+     */
+    @Test
+    fun `a document the sync never read is kept on the device when the editor deletes it`() {
+        val kept = mutableListOf<String>()
+        val asDirectory = mutableListOf<Boolean>()
+        val lost = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, isDirectory ->
+            kept.add(file.name)
+            asDirectory.add(isDirectory)
+        }
+        engine.onWriteBackFailed = { lost.add(it.name) }
+        deviceHolding("notes.md", size = 64, readable = false)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deliver(FileObserver.DELETE, "notes.md")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(
+            listOf("notes.md"),
+            kept,
+            "the device document was kept without the user being told where their file is",
+        )
+        assertEquals(
+            listOf(false),
+            asDirectory,
+            "a single document was announced in the wording for a directory, which tells " +
+                "the user their file holds files",
+        )
+        assertTrue(
+            lost.isEmpty(),
+            "a document that is only on the device was announced as one only the app " +
+                "holds, which sends the user looking in the wrong place: $lost",
+        )
+    }
+
+    /**
+     * The same rule the directory arm follows, and the reason this walk is the
+     * three-state one: a provider that cannot be asked has not said "gone". Answering
+     * "not held" for a failed lookup is right where the cost of being wrong is a
+     * duplicate name, and wrong here, where it is `deleteDocument` on the one copy of
+     * a document the editor never had.
+     */
+    @Test
+    fun `a document is kept when the provider cannot say whether it still holds it`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceHolding("notes.md", size = 64, readable = false)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        every { resolver.query(any(), any(), any(), any(), any()) } throws
+            IllegalStateException("the provider is gone")
+
+        deliver(FileObserver.DELETE, "notes.md")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("notes.md"), kept, "an unanswerable provider was read as \"gone\"")
+    }
+
+    /**
+     * The control that keeps the two cases above honest. A document the sync did read
+     * is mirrored, so deleting it in the editor is a deletion of something the device
+     * and the app both have, and it goes through as it always did. A guard widened past
+     * the set fails here.
+     */
+    @Test
+    fun `a document the sync did read is deleted from the device`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceHolding("notes.md", size = 64)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "notes.md").delete()
+        deliver(FileObserver.DELETE, "notes.md")
+
+        verify(exactly = 1) {
+            DocumentsContract.deleteDocument(any(), uris.getValue("doc:notes.md"))
+        }
+        assertTrue(kept.isEmpty(), "a delete that went through was announced as kept: $kept")
+    }
+
+    /**
+     * The other half of a delete, and the one the workbench is measured to send for a
+     * directory: the entry is renamed away rather than unlinked. Both arrive as one
+     * type here, so a guard reading the raw event instead of the type would let this
+     * one through and take the document with it.
+     */
+    @Test
+    fun `a document the sync never read is kept when it is moved away instead`() {
+        val kept = mutableListOf<String>()
+        val lost = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onWriteBackFailed = { lost.add(it.name) }
+        deviceHolding("notes.md", size = 64, readable = false)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deliver(FileObserver.MOVED_FROM, "notes.md")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(
+            listOf("notes.md"),
+            kept,
+            "a move away deleted the document the sync never read",
+        )
+        assertTrue(lost.isEmpty(), "the notice said the app holds the only copy: $lost")
+    }
+
+    /**
+     * `notes.md` is a prefix of `notes.md.bak` as a string and not as a path. The
+     * directory arm above matches by prefix because a directory holds what is under
+     * it; a file has to match its own path exactly, or deleting a document the sync
+     * read whole is refused because an unrelated backup beside it was skipped.
+     */
+    @Test
+    fun `a neighbour whose name merely starts the same does not keep the document`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceTree(
+            mapOf(
+                "root" to listOf(
+                    Entry("notes.md"),
+                    Entry("notes.md.bak", size = SafSyncEngine.MAX_FILE_SIZE + 1),
+                ),
+            )
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "notes.md").delete()
+        deliver(FileObserver.DELETE, "notes.md")
+
+        verify(exactly = 1) {
+            DocumentsContract.deleteDocument(any(), uris.getValue("doc:notes.md"))
+        }
+        assertTrue(kept.isEmpty(), "notes.md was kept for a document named notes.md.bak: $kept")
+    }
+
+    /**
+     * The refusal notice is a budget of one per path per folder open, and it belongs to
+     * the write refusal, whose sentence is only ever said once for a file the editor
+     * keeps saving. A delete spending it costs the save that comes after: the user
+     * recreates the name, saves it, the write is refused because the device still holds
+     * the document under it, and this time "the only copy is inside VSCodroid" is true
+     * and urgent. Nothing said it, until the folder was closed and opened again.
+     */
+    @Test
+    fun `a refused delete leaves the notice the next refused save needs`() {
+        val lost = mutableListOf<String>()
+        engine.onWriteBackFailed = { lost.add(it.name) }
+        deviceHolding("notes.md", size = 64, readable = false)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deliver(FileObserver.DELETE, "notes.md")
+        assertTrue(lost.isEmpty(), "the delete announced a refusal of its own: $lost")
+
+        File(mirror, "notes.md").writeText("typed again, in the editor")
+        deliver(FileObserver.CREATE, "notes.md")
+
+        assertEquals(
+            listOf("notes.md"),
+            lost,
+            "the save that really did stay inside the app was silent, because the " +
+                "delete before it had already spent the one notice for that path",
+        )
     }
 
     /**

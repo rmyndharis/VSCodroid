@@ -119,7 +119,9 @@ class SafStorageManager(context: Context) {
     ): Boolean = shouldAnnounce(now, last) && stamp.compareAndSet(last, now)
 
     /**
-     * Told when a directory deleted in the editor was kept on the device.
+     * Told when something deleted in the editor was kept on the device: the flag says
+     * whether it was a directory holding documents that never reached the editor, or
+     * one such document itself.
      *
      * Forwarded for the reason the others are. Throttled like [onWriteBackFailed] and
      * unlike the two below, because one deletion is not one directory: `rm -r` reports
@@ -128,12 +130,17 @@ class SafStorageManager(context: Context) {
      * notices back to back. On a stamp of its own rather than [lastFailureAnnouncedAt],
      * so the burst cannot swallow a write-back failure landing inside the same
      * interval, nor be swallowed by one.
+     *
+     * Both cases share that stamp, which is a deliberate simplification with a known
+     * ceiling: an `rm -r` whose ancestors are all kept can swallow a kept file landing
+     * inside the same interval. A stamp apiece would close it, at the price of a fifth
+     * seam for a sentence one word different from this one.
      */
-    fun onDirectoryKeptOnDevice(announce: (File) -> Unit) {
-        syncEngine.onDirectoryKeptOnDevice = { dir ->
+    fun onKeptOnDevice(announce: (File, Boolean) -> Unit) {
+        syncEngine.onKeptOnDevice = { file, isDirectory ->
             val last = lastKeptAnnouncedAt.get()
             if (claimAnnouncement(SystemClock.elapsedRealtime(), last, lastKeptAnnouncedAt)) {
-                announce(dir)
+                announce(file, isDirectory)
             }
         }
     }
