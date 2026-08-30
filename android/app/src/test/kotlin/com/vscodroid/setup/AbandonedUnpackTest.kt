@@ -318,7 +318,7 @@ class AbandonedUnpackTest {
      */
     @Test
     fun `the failure branch removes only what nothing else would name again`() {
-        val ours = "vscodroid.vscodroid-saf-bridge-1.4.0"
+        val ours = "vscodroid.vscodroid-saf-bridge-1.5.0"
 
         assertTrue(
             failedUnpackMustBeRemoved(fetched, existedBefore = false, marked = true),

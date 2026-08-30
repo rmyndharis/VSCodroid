@@ -483,6 +483,28 @@ class ResourceRootsInForceTest {
     }
 
     /**
+     * A multi-root workspace is named by its `.code-workspace` file, and a root
+     * is matched by path prefix, so publishing the file publishes only itself.
+     *
+     * Catches: taking the open-workspace value through to the roots unchanged
+     * now that it can be a file. Every resource beside the workspace file would
+     * be refused, and only for a workspace held outside the statically published
+     * trees, which is the case nothing else here covers.
+     */
+    @Test
+    fun `a workspace file publishes the directory holding it`() {
+        val roots = resourceRootsInForce(
+            ROOTS, SENSITIVE, "$FILES/home/projects/app/app.code-workspace"
+        )
+
+        assertTrue(roots.containsAll(ROOTS), "the static roots must survive")
+        assertNotNull(
+            resolveWebviewResource("$FILES/home/projects/app/docs/diagram.png", roots),
+            "a file beside the workspace, which is what the workspace's own roots hold",
+        )
+    }
+
+    /**
      * The one that matters most: the whole chain, from the folder the user
      * opened to the bytes that would be served.
      *

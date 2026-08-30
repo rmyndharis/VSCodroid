@@ -1230,9 +1230,21 @@ class MainActivity : AppCompatActivity() {
 
                 dialog.dismiss()
 
-                // Reload VS Code with the mirror directory
+                // Reload VS Code with the mirror, or with the workspace it holds.
+                // The listing is off the main thread for the reason every other
+                // disk read here is: `MainThreadWatch` installs a policy that
+                // logs one, and `folderOpenTarget` stats each candidate.
                 if (navigate && serverPort > 0) {
-                    navigateToFolder(serverPort, mirrorDir.absolutePath)
+                    val target = withContext(Dispatchers.IO) {
+                        folderOpenTarget(
+                            mirrorDir.absolutePath,
+                            mirrorDir.list()?.asList().orEmpty(),
+                        )
+                    }
+                    if (target != mirrorDir.absolutePath) {
+                        Logger.i(tag, "The granted folder holds a workspace; opening that")
+                    }
+                    navigateToFolder(serverPort, target)
                 }
             } catch (e: CancellationException) {
                 // Not a folder that failed. This Activity is being destroyed and
@@ -2303,12 +2315,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadVSCode(port: Int, folderPath: String? = null) {
+    private fun loadVSCode(port: Int, folderPath: String? = null, fromUrl: String? = null) {
         // Every route here is the user asking for the editor or the editor going
         // up over a page that never refused it, so the refusal is over. The one
         // caller that is neither checks the flag before calling; see onServerReady.
         rendererCrashLoopShown = false
         initBridge(port)
+        // Before the folder chain, because a closed folder is the one state that
+        // chain cannot name and would otherwise fall through to the remembered
+        // folder, reopening the workspace the user had just closed. [fromUrl] is
+        // for the caller whose WebView no longer holds the URL it is asking about,
+        // which is the renderer-crash path: [recreateWebView] builds a new one.
+        emptyWindowUrl(fromUrl ?: webView?.url, port)?.let {
+            Logger.i(tag, "Restoring the closed-folder window rather than a folder")
+            webView?.loadUrl(it)
+            return
+        }
         // onServerReady routes a restart through here without a folder. Falling back
         // to the folder already on screen keeps the user's workspace instead of
         // dropping them back into the default projects directory.
@@ -2387,8 +2409,14 @@ class MainActivity : AppCompatActivity() {
     private fun folderFromUrl(url: String?): String? =
         url?.let { it.toUri() }
             ?.takeIf { it.isHierarchical }
-            ?.getQueryParameter("folder")
-            ?.takeIf { File(it).isDirectory }
+            ?.let {
+                workbenchTarget(
+                    folder = it.getQueryParameter("folder"),
+                    workspace = it.getQueryParameter("workspace"),
+                    isDirectory = { path -> File(path).isDirectory },
+                    isFile = { path -> File(path).isFile },
+                )
+            }
 
     /**
      * Initializes the WebView bridge, security manager, and clients.
@@ -2675,7 +2703,11 @@ class MainActivity : AppCompatActivity() {
     private fun rememberedWorkspaceFolder(): String? = rememberedFolderToReopen(
         remembered = workspacePrefs.getString(KEY_LAST_FOLDER, null),
         mirrorsRoot = Environment.getSafMirrorsDir(this),
-        exists = { File(it).isDirectory },
+        // A directory or a `.code-workspace` file, because both are things the
+        // workbench can be pointed back at and both are now remembered. The test
+        // is still that the path is there: a workspace deleted while the app was
+        // away would otherwise be reopened onto nothing.
+        exists = { File(it).exists() },
         mirrorIsGranted = { safManager.folderForOpenedPath(it) != null },
     )
 
@@ -3537,7 +3569,7 @@ class MainActivity : AppCompatActivity() {
             // Always via loadVSCode so initBridge re-registers on the new WebView;
             // loading the old URL directly would leave it without the bridge. The
             // folder is carried over from the URL the destroyed WebView was showing.
-            loadVSCode(serverPort, folderFromUrl(lastUrl))
+            loadVSCode(serverPort, folderFromUrl(lastUrl), fromUrl = lastUrl)
         }
     }
 
@@ -4258,9 +4290,122 @@ internal fun authCallbackIsExpected(
  * from sending a wrong one.
  */
 internal fun workbenchUrl(port: Int, folderPath: String, token: String?): String {
-    val base = "http://127.0.0.1:$port/?folder=${Uri.encode(folderPath)}"
+    val param = if (folderPath.endsWith(WORKSPACE_FILE_SUFFIX)) "workspace" else "folder"
+    val base = "http://127.0.0.1:$port/?$param=${Uri.encode(folderPath)}"
     return if (token.isNullOrEmpty()) base else "$base&tkn=${Uri.encode(token)}"
 }
+
+/** What the workbench calls a multi-root workspace, in the only place it is spelled. */
+internal const val WORKSPACE_FILE_SUFFIX = ".code-workspace"
+
+/**
+ * What a workbench URL has open, whether that is a folder or a workspace.
+ *
+ * The workbench navigates itself, and it names the two cases with different
+ * query parameters: `folder` for a directory and `workspace` for a
+ * `.code-workspace` file. Reading only `folder` is what made a workspace
+ * invisible to this side, and the cost was not that the URL looked wrong. It was
+ * that [MainActivity.adoptWorkbenchFolder] never ran, so a workspace opened out
+ * of a device-folder mirror got no write-back watcher and every edit stayed in
+ * the mirror, and that the workspace was not remembered, so the next launch
+ * reopened the default projects directory instead.
+ *
+ * Each branch stats what it reads, and for the kind of thing it is. A `folder`
+ * naming a file and a `workspace` naming a directory are both URLs nothing
+ * builds; refusing them keeps a dead or wrong path from pinning the WebView,
+ * which is what the directory test has always been for.
+ *
+ * The predicates are passed rather than called because `File` is unavailable in
+ * a plain JVM test, the same reason [rememberedFolderToReopen] takes its own.
+ */
+internal fun workbenchTarget(
+    folder: String?,
+    workspace: String?,
+    isDirectory: (String) -> Boolean,
+    isFile: (String) -> Boolean,
+): String? = folder?.takeIf(isDirectory) ?: workspace?.takeIf(isFile)
+
+/**
+ * The directory a target stands in: itself for a folder, its parent for a workspace.
+ *
+ * Only the resource interceptor wants this. It publishes the open workspace as a
+ * resource root, and [com.vscodroid.webview.resourceRootsInForce] matches a root
+ * by path prefix, so a root that is a single `.code-workspace` file matches only
+ * that file and every resource beside it is refused. The statically published
+ * roots cover the mirrors and projects trees, so this is the difference only for
+ * a workspace held outside both, which is exactly the case nothing else covers.
+ *
+ * The other two readers of the field want the prefix and get it either way:
+ * `folderForOpenedPath` and `mirrorNameFor` both reduce a path to the mirror
+ * holding it, and a file inside a mirror reduces the same as its directory does.
+ */
+internal fun workspaceDirectoryInForce(path: String?): String? =
+    if (path != null && path.endsWith(WORKSPACE_FILE_SUFFIX)) File(path).parent else path
+
+/**
+ * What to open once a device folder has been granted and synced.
+ *
+ * The Android picker is `ACTION_OPEN_DOCUMENT_TREE` and returns a directory,
+ * never a file, so a workspace on device storage can only ever be reached
+ * through the folder holding it. Nothing joined the two: the folder opened as a
+ * folder, and the `.code-workspace` sitting in it was reachable only by knowing
+ * to find the file in the explorer and press the button on it. That is the gap
+ * behind "I cannot find a way to open an existing workspace", and it is the
+ * shell's to close, because desktop VS Code offers this from code the browser
+ * workbench does not carry (no `contains a workspace file` string exists in the
+ * bundle).
+ *
+ * Exactly one, at the top level, or nothing. Two is a guess, and guessing wrong
+ * is worse than opening the folder the user actually chose, from which either is
+ * one tap away. A directory that merely ends in `.code-workspace` is excluded
+ * because the workbench answers a workspace it cannot read with an empty window
+ * and no message, which is the failure this whole change exists to remove.
+ */
+/**
+ * The URL to reload when the workbench had the folder closed, or null.
+ *
+ * A closed folder is the third thing the workbench can be showing, and it is the
+ * one the folder chain cannot express: [workbenchTarget] answers a path or
+ * nothing, and "no folder, deliberately" is not a path. So every re-navigation
+ * over a closed folder fell through to the remembered folder and put the user
+ * back into the workspace they had just closed. `handleResumeFromBackground`
+ * already sidesteps this by calling `reload()` rather than rebuilding a URL, and
+ * this is the same answer for the paths that do rebuild.
+ *
+ * Returned verbatim and without a token. The workbench was already running, so
+ * the server has turned the token into a cookie that outlives this by a week,
+ * which is the reasoning the resume path states in full. A `folder` or
+ * `workspace` URL is deliberately NOT returned: those the folder chain can name,
+ * and it rebuilds them with a fresh token rather than reloading a stripped one.
+ *
+ * What makes a URL ours is asked of [workbenchUrl] rather than spelled again
+ * here. That keeps the host in exactly one expression, which is the affordance
+ * `the workbench URL is assembled in exactly one place` exists to protect: a
+ * second spelling is what lets the string loaded drift from the string logged,
+ * and it caught this function written the obvious way.
+ */
+internal fun emptyWindowUrl(url: String?, port: Int): String? {
+    if (url == null) return null
+    val ours = workbenchUrl(port, "", null).substringBefore('?')
+    if (!url.startsWith(ours)) return null
+    val query = url.substringAfter('?', "")
+    if (query.isEmpty()) return null
+    val closed = query.split('&').any {
+        it.substringBefore('=') == "ew" && it.substringAfter('=', "") == "true"
+    }
+    return if (closed) url else null
+}
+
+internal fun folderOpenTarget(
+    folderPath: String,
+    names: List<String>,
+    isFile: (String) -> Boolean = { File(it).isFile },
+): String =
+    names.filter { it.endsWith(WORKSPACE_FILE_SUFFIX) }
+        .map { "$folderPath${File.separator}$it" }
+        .filter(isFile)
+        .singleOrNull()
+        ?: folderPath
 
 /**
  * Whether a folder switch that failed should leave the previous folder watched.

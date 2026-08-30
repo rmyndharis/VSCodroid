@@ -20,6 +20,7 @@ import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
+import com.vscodroid.workspaceDirectoryInForce
 import java.io.ByteArrayInputStream
 import java.io.FilterInputStream
 import java.io.File
@@ -196,8 +197,15 @@ private var lastRefusedWorkspace: String? = null
  * See [lastRefusedWorkspace].
  */
 internal fun resourceRootsInForce(
-    published: List<String>, sensitive: List<String>, candidate: String?
+    published: List<String>, sensitive: List<String>, workspaceOrFolder: String?
 ): List<String> {
+    // Normalised here and not at the two suppliers, because both converge on this
+    // and `ServiceWorkerRetentionTest` refuses a supplier written as anything but
+    // `self.get()?....`: wrapping one would either capture the Activity or widen
+    // a check whose own message says not to. A `.code-workspace` names a file,
+    // and a root is matched by path prefix, so publishing the file publishes only
+    // itself and refuses every resource beside it.
+    val candidate = workspaceDirectoryInForce(workspaceOrFolder)
     val workspace = workspaceRootOrNull(candidate, sensitive)
     if (candidate != null && workspace == null) {
         if (candidate != lastRefusedWorkspace) {
