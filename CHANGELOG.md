@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A device folder holding one `.code-workspace` now opens as that workspace. Android's picker can only hand back a folder, so a workspace on device storage was reachable only by finding the file in the explorer and opening it from there.
+- **VSCodroid: Open Recent Folder** is now on the remote indicator in the status bar. Typing its name into the Command Palette was the only way to reach the device folder picker, which is why people could not find it.
+
 ### Fixed
 
+- Edits made in a workspace opened from a device folder now reach the device. Nothing was syncing them back, so they stayed in the app's private copy with nothing on screen to say so.
+- A workspace is reopened on the next launch and survives an editor crash. Both dropped you into the default folder, and opening a workspace file looked like it had loaded an empty project.
+- Closing the folder now survives an editor crash. It reopened the workspace you had just closed.
 - A file changed on the device is no longer replaced by the editor's copy when the sync record cannot account for it. The device version is set aside beside it first, and the write is held back if it cannot be read.
 - Installing a toolchain again after one failed part-way now asks only for the space the copy needs. The check charged for bytes the new copy was about to write over, so a device already holding most of the tree was refused every time.
 - The badge that says a modifier is still held is readable against the row it sits on. It was drawn in the accent blue, which this project's own contrast rule counts as too faint for text that size.
