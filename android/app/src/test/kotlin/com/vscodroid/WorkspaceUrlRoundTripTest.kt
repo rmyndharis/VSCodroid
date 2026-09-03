@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File as JavaFile
 
 /**
  * That a multi-root workspace survives the round trip through the URL.
@@ -56,7 +58,7 @@ class WorkspaceUrlRoundTripTest {
     @Test
     fun `a workspace file is named by the workspace parameter`() {
         assertTrue(
-            workbenchUrl(13337, workspace, token).contains("?workspace="),
+            workbenchUrl(13337, workspace, token, isFile = { true }).contains("?workspace="),
             "the shipped workbench reads `workspace` and `folder` as different things: " +
                 "`folder` builds a folderUri from whatever path it is handed with no " +
                 "file test, so a .code-workspace sent as `folder` opens as a single-root " +
@@ -74,9 +76,24 @@ class WorkspaceUrlRoundTripTest {
     }
 
     @Test
+    fun `a directory named like a workspace is navigated to as a folder`() {
+        assertTrue(
+            workbenchUrl(13337, "$mirror/odd.code-workspace", token, isFile = { false })
+                .contains("?folder="),
+            "the workbench answers a workspace it cannot read with an empty window and " +
+                "no message, and a directory is one of those. `folderOpenTarget` already " +
+                "excludes it where the picker chooses a target; the URL builder is where " +
+                "the choice is actually made, and it decided on the name alone. Nothing " +
+                "corrected it afterwards either: `folderFromUrl` answers null for a " +
+                "`workspace` URL naming a directory, so the folder was neither reopened " +
+                "nor forgotten",
+        )
+    }
+
+    @Test
     fun `the connection token still rides along on a workspace URL`() {
         assertTrue(
-            workbenchUrl(13337, workspace, token).contains("&tkn=$token"),
+            workbenchUrl(13337, workspace, token, isFile = { true }).contains("&tkn=$token"),
             "the server answers a bare Forbidden without it, and a workspace URL is " +
                 "reached by the same navigation as a folder one",
         )
@@ -147,10 +164,63 @@ class WorkspaceUrlRoundTripTest {
     fun `the directory in force for a workspace is the one holding it`() {
         assertEquals(
             "/data/user/0/com.vscodroid/files/saf-mirrors/92f67f007ab2",
-            workspaceDirectoryInForce(workspace),
+            workspaceDirectoryInForce(workspace, isFile = { true }),
             "the resource interceptor publishes this as a root, and a root that is a " +
                 "single file matches only itself: every resource in the workspace would " +
                 "be refused for a workspace held outside the statically published trees",
+        )
+    }
+
+    /**
+     * The one case that exercises the DEFAULT predicates against a real filesystem.
+     *
+     * Every other case here passes its own `isFile`, which is what makes them
+     * readable, and is also a hole: the defaults on `workbenchUrl` and
+     * `workspaceDirectoryInForce` are what production actually runs, and nothing
+     * else reaches them. Weakening one to `{ true }` restores the defect this file
+     * exists to refuse, with every other case in the suite still green.
+     *
+     * A temporary directory rather than a fixture path, because the whole point is
+     * that the real `File.isFile` answers, and it answers false for every
+     * `/data/user/0/...` path on a JVM host.
+     */
+    @Test
+    fun `the default file test reads the real filesystem`(@TempDir dir: JavaFile) {
+        val workspaceFile = JavaFile(dir, "real.code-workspace").apply { writeText("{}") }
+        val lookalikeDirectory = JavaFile(dir, "odd.code-workspace").apply { mkdir() }
+
+        assertTrue(
+            workbenchUrl(13337, workspaceFile.path, token).contains("?workspace="),
+            "a real workspace file must still be named by the workspace parameter when " +
+                "nobody passes a predicate, which is how production calls it",
+        )
+        assertTrue(
+            workbenchUrl(13337, lookalikeDirectory.path, token).contains("?folder="),
+            "and a real directory spelled the same way must not be, which is the whole " +
+                "defect: the editor answers a workspace it cannot read with an empty " +
+                "window and no message",
+        )
+        assertEquals(
+            dir.path,
+            workspaceDirectoryInForce(workspaceFile.path),
+            "the published root for a real workspace file is the directory holding it",
+        )
+        assertEquals(
+            lookalikeDirectory.path,
+            workspaceDirectoryInForce(lookalikeDirectory.path),
+            "and for a real directory it is the directory itself, not its parent, which " +
+                "is what kept every sibling of the opened folder readable",
+        )
+    }
+
+    @Test
+    fun `the directory in force for a directory named like a workspace is itself`() {
+        assertEquals(
+            "$mirror/odd.code-workspace",
+            workspaceDirectoryInForce("$mirror/odd.code-workspace", isFile = { false }),
+            "reducing to the parent is right for a workspace FILE, whose siblings are " +
+                "the workspace's own content. For a directory it published a root one " +
+                "level too high, covering every sibling of the folder the user opened",
         )
     }
 

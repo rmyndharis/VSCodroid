@@ -50,9 +50,12 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   That dialog browses the app's own storage and cannot reach Documents, Downloads
   or an SD card.
 - For a folder anywhere else on the device, tap the remote indicator at the left
-  end of the status bar and choose **VSCodroid: Open Recent Folder**, then
-  **Browse device...**. Android grants access one folder at a time, and the folder
-  is kept in sync both ways for as long as it is open.
+  end of the status bar and choose **VSCodroid: Open Recent Folder**. The first
+  time there are no recent folders, so it offers **Open Folder**, which opens
+  Android's folder picker; after that the same command lists the folders you have
+  granted, with **Browse device...** at the end to add another. Android grants
+  access one folder at a time, and the folder is kept in sync both ways for as
+  long as it is open.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
   folder you granted, because nothing outside that folder is reachable.

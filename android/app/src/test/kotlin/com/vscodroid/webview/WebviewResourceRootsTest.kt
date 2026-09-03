@@ -494,7 +494,12 @@ class ResourceRootsInForceTest {
     @Test
     fun `a workspace file publishes the directory holding it`() {
         val roots = resourceRootsInForce(
-            ROOTS, SENSITIVE, "$FILES/home/projects/app/app.code-workspace"
+            ROOTS, SENSITIVE, "$FILES/home/projects/app/app.code-workspace",
+            // The premise of this case, and it has to be said rather than assumed:
+            // the reduction to the holding directory is for a workspace FILE. A
+            // directory spelled the same way publishes itself, because its
+            // siblings are not the workspace's content.
+            isFile = { true },
         )
 
         assertTrue(roots.containsAll(ROOTS), "the static roots must survive")

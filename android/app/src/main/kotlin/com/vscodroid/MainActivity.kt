@@ -1938,6 +1938,23 @@ class MainActivity : AppCompatActivity() {
             recreateWebView()
             return true
         }
+
+        /**
+         * The same refusal [VSCodroidWebViewClient] makes, for the window this
+         * client owns.
+         *
+         * That window is not a corner: this client is in force from the first
+         * frame until the server reports ready, which `waitForReady` will wait
+         * thirty seconds for, and again after every renderer crash until
+         * [initBridge] installs the real one. An Escape on the placeholder page
+         * is unconsumed by definition, so without this it is handed back to the
+         * platform and can return as a back press, and the app minimises while it
+         * is still starting. See the other override for the mechanism.
+         */
+        override fun onUnhandledKeyEvent(view: WebView, event: KeyEvent) {
+            if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) return
+            super.onUnhandledKeyEvent(view, event)
+        }
     }
 
     /**
@@ -2014,35 +2031,42 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Escape is never reported unhandled, so nothing can turn it into a back press.
+     * Escape is never reported unhandled by the view tree, so nothing can turn it
+     * into a back press by that route.
      *
-     * A key the whole view tree declines is offered to the PRODUCING KEYBOARD's
-     * character map for a fallback action, not to `Generic.kcm`, and some of those
-     * maps still carry `ESCAPE base: fallback BACK`. AOSP ships one:
+     * A key nothing consumed is offered to the PRODUCING KEYBOARD's character map
+     * for a fallback action, not to `Generic.kcm`, and some of those maps still
+     * carry `ESCAPE base: fallback BACK`. AOSP ships one:
      * `Vendor_18d1_Product_5018.kcm`, headed "Key character map for Google Pixel C
      * Keyboard", which is present on a stock API 33 image where `Generic.kcm` and
-     * `Virtual.kcm` both read `base: none`. The BACK synthesised from it carries
-     * `FLAG_FALLBACK`, which nothing above the input pipeline reads, so it reaches
-     * [setupBackNavigation]'s callback as an ordinary back press and minimises the
-     * app in the middle of a keystroke. Reported as issue #385 by a user pressing
-     * Esc to leave vi's insert mode.
+     * `Virtual.kcm` both read `base: none`. The BACK it produces is
+     * indistinguishable from a real one by the time it reaches
+     * [setupBackNavigation]'s callback, which minimises the app.
      *
-     * The page cannot prevent this on its own. xterm cancels the Escape keydown
-     * and writes 0x1b, but the keyup is not cancelled on the same path, and an
-     * unconsumed keyup is enough: it comes back through
-     * `WebViewClient.onUnhandledKeyEvent`, whose platform default re-injects it,
-     * and re-injection is what asks the character map for a fallback.
+     * ⚠️ **This override is only half of it, and not the half that fixes a
+     * terminal.** There are two routes to that fallback and they do not meet.
+     * This one is the route where nothing in the view tree consumed the key, which
+     * is what happens when the WebView does not hold focus; reporting the key
+     * handled here closes it. The route that matters with the workbench focused
+     * runs through `WebViewClient.onUnhandledKeyEvent` instead, and the event it
+     * re-injects is queued with `FLAG_UNHANDLED`, which `deliverInputEvent` sends
+     * to `mSyntheticInputStage` INSTEAD of the stage that would deliver it here.
+     * So this method never sees it, and cannot. That route is closed in
+     * [VSCodroidWebViewClient.onUnhandledKeyEvent], which carries the full
+     * mechanism; the bootstrap client in [bootstrapClient] closes the same route
+     * for the window before the real client is installed.
+     *
+     * Testing `FLAG_FALLBACK` on a BACK here would have covered the second route
+     * on Android 13 and 14 and missed it on 15 and 16: with predictive back
+     * enabled, and it is by default at this app's `targetSdk`,
+     * `NativePreImeInputStage` claims every BACK before the view tree, with no
+     * exemption for a synthesised one.
      *
      * `super` runs first and its answer is kept, so the WebView receives the key
      * exactly as dispatched and the workbench keeps every binding it has for
      * Escape. Only the verdict reported back to the input pipeline widens. Every
      * other key, `KEYCODE_BACK` included, passes through untouched, so the back
      * gesture, the hardware back key and predictive back are unaffected.
-     *
-     * What this gives up deliberately is the Alt and Ctrl fallbacks on the same
-     * key, HOME and MENU. In a terminal Alt+Esc is `ESC ESC`, a real keystroke,
-     * and answering it by sending the user to the home screen is the same defect
-     * wearing a modifier.
      *
      * ⚠️ Not reproducible with `adb shell input keyevent 111`, and neither is the
      * fix: an injected event carries `Virtual.kcm`, whose ESCAPE has no fallback,
@@ -4331,8 +4355,31 @@ internal fun authCallbackIsExpected(
  * retry beats no page, and sending an empty token would be indistinguishable
  * from sending a wrong one.
  */
-internal fun workbenchUrl(port: Int, folderPath: String, token: String?): String {
-    val param = if (folderPath.endsWith(WORKSPACE_FILE_SUFFIX)) "workspace" else "folder"
+internal fun workbenchUrl(
+    port: Int,
+    folderPath: String,
+    token: String?,
+    isFile: (String) -> Boolean = { File(it).isFile },
+): String {
+    // The name is not enough, and [folderOpenTarget] already says why: a
+    // DIRECTORY spelled `*.code-workspace` is a workspace the workbench cannot
+    // read, and it answers one of those with an empty window and no message. That
+    // exclusion was applied where the picker chooses a target and not here, where
+    // the URL is actually built, so such a directory still went out as
+    // `?workspace=`, and it did not stay a one-off: [navigateToFolder] remembers
+    // the folder before it builds the URL, so every later launch reopened the same
+    // empty window. What the URL itself costs is separate and quieter:
+    // [folderFromUrl] answers null for it, so a folder the workbench opens on its
+    // own is never adopted.
+    //
+    // The stat is behind the suffix test, so an ordinary folder pays nothing; the
+    // predicate is passed for the reason every other predicate in this file is,
+    // that these paths do not exist on a JVM test machine.
+    val param = if (folderPath.endsWith(WORKSPACE_FILE_SUFFIX) && isFile(folderPath)) {
+        "workspace"
+    } else {
+        "folder"
+    }
     val base = "http://127.0.0.1:$port/?$param=${Uri.encode(folderPath)}"
     return if (token.isNullOrEmpty()) base else "$base&tkn=${Uri.encode(token)}"
 }
@@ -4381,8 +4428,20 @@ internal fun workbenchTarget(
  * `folderForOpenedPath` and `mirrorNameFor` both reduce a path to the mirror
  * holding it, and a file inside a mirror reduces the same as its directory does.
  */
-internal fun workspaceDirectoryInForce(path: String?): String? =
-    if (path != null && path.endsWith(WORKSPACE_FILE_SUFFIX)) File(path).parent else path
+internal fun workspaceDirectoryInForce(
+    path: String?,
+    isFile: (String) -> Boolean = { File(it).isFile },
+): String? =
+    // Same file test as [workbenchUrl], and here it narrows a published resource
+    // root rather than a URL. A DIRECTORY spelled `*.code-workspace` reduced to
+    // its parent, so the root published for it covered every sibling of the folder
+    // the user opened. Reducing is right for a workspace FILE, whose siblings are
+    // the workspace's own content; for a directory the folder itself is the root.
+    if (path != null && path.endsWith(WORKSPACE_FILE_SUFFIX) && isFile(path)) {
+        File(path).parent
+    } else {
+        path
+    }
 
 /**
  * What to open once a device folder has been granted and synced.

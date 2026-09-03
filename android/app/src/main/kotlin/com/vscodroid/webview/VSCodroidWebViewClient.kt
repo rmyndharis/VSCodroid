@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
@@ -197,7 +198,13 @@ private var lastRefusedWorkspace: String? = null
  * See [lastRefusedWorkspace].
  */
 internal fun resourceRootsInForce(
-    published: List<String>, sensitive: List<String>, workspaceOrFolder: String?
+    published: List<String>, sensitive: List<String>, workspaceOrFolder: String?,
+    // Handed on to [workspaceDirectoryInForce], which reduces a workspace to the
+    // directory holding it only when it really is a file. Passed rather than
+    // called for the reason every predicate in this pair of files is: these paths
+    // do not exist on a JVM test machine, so a real stat there answers no for
+    // every one of them.
+    isFile: (String) -> Boolean = { File(it).isFile },
 ): List<String> {
     // Normalised here and not at the two suppliers, because both converge on this
     // and `ServiceWorkerRetentionTest` refuses a supplier written as anything but
@@ -205,7 +212,7 @@ internal fun resourceRootsInForce(
     // a check whose own message says not to. A `.code-workspace` names a file,
     // and a root is matched by path prefix, so publishing the file publishes only
     // itself and refuses every resource beside it.
-    val candidate = workspaceDirectoryInForce(workspaceOrFolder)
+    val candidate = workspaceDirectoryInForce(workspaceOrFolder, isFile)
     val workspace = workspaceRootOrNull(candidate, sensitive)
     if (candidate != null && workspace == null) {
         if (candidate != lastRefusedWorkspace) {
@@ -1087,6 +1094,47 @@ class VSCodroidWebViewClient(
         Logger.e(tag, "Render process gone! didCrash=${detail.didCrash()}")
         onCrash()
         return true
+    }
+
+    /**
+     * Escape is not handed back to the platform, because handing it back is what
+     * turns it into a back press.
+     *
+     * This callback is where an Escape the page did not consume ends up, and the
+     * default implementation re-injects it: `WebViewClient.onUnhandledKeyEvent`
+     * calls `onUnhandledInputEventInternal`, which calls
+     * `ViewRootImpl.dispatchUnhandledInputEvent`, which queues the event with
+     * `FLAG_UNHANDLED`. `deliverInputEvent` sends anything carrying that flag to
+     * `mSyntheticInputStage` INSTEAD of the view tree, and that stage is the only
+     * caller of `KeyCharacterMap.getFallbackAction` in the framework. Some
+     * keyboards answer `ESCAPE` there with `fallback BACK` (AOSP ships one:
+     * `Vendor_18d1_Product_5018.kcm`, the Pixel C keyboard, which reads
+     * `base: fallback BACK` on a stock API 33 image where `Generic.kcm` reads
+     * `base: none`), so the app minimises in the middle of a keystroke. Read off
+     * android-33, android-35 and android-36.1 sources; the shape is the same in
+     * all three.
+     *
+     * Returning without calling super is therefore the whole fix, and it has to
+     * be here rather than in the Activity: the re-injected event never reaches
+     * `Activity.dispatchKeyEvent`, because the synthetic stage is reached by
+     * skipping the stage that would have delivered it. The Activity's own
+     * override closes the other, disjoint route, where nothing in the view tree
+     * consumed the key at all.
+     *
+     * Nothing is taken from the page. The platform documents this callback as
+     * asynchronous and as firing only for keys the WebView did not consume, and
+     * `WebViewClient` states that "Except system keys, WebView always consumes
+     * the keys in the normal flow", so by the time it runs the workbench has
+     * already had the key and either used it or declined it. What is given up is
+     * the Alt and Ctrl fallbacks the same map defines on Escape, HOME and MENU:
+     * in a terminal Alt+Esc is `ESC ESC`, a real keystroke, and answering it by
+     * leaving for the home screen is the same defect wearing a modifier.
+     *
+     * Every other key is passed on unchanged, so no other fallback is affected.
+     */
+    override fun onUnhandledKeyEvent(view: WebView, event: KeyEvent) {
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) return
+        super.onUnhandledKeyEvent(view, event)
     }
 
     private fun isLocalhost(uri: Uri): Boolean {

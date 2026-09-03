@@ -14,10 +14,12 @@ import javax.xml.parsers.DocumentBuilderFactory
  * Neither one is a feature anybody wrote, and that is the problem. Keys work
  * because nothing in this app takes a key event away from the page: the system
  * dispatches it, the WebView receives it unchanged, and the workbench binds it.
- * Exactly one override stands in that path, `MainActivity.dispatchKeyEvent`,
- * and it delegates to `super` before widening the verdict on Escape alone, so
- * the page still sees every key; the first case below pins both halves of that
- * and refuses any other override anywhere in the tree. The window survives a
+ * Three overrides stand in that path and none of them takes a key from the
+ * page: the Activity delegates to `super` before widening the verdict on Escape
+ * alone, and the two webview clients refuse only Escape, and only once the page
+ * has already declined it, before handing every other key back. The first case
+ * below pins each of those shapes by the ORDER of its statements, and refuses
+ * any further override anywhere in the tree. The window survives a
  * keyboard being plugged in because the manifest claims the keyboard
  * configuration qualifiers, so Android hands the activity a configuration
  * change instead of destroying it and building a new one.
@@ -50,6 +52,10 @@ class HardwareKeyboardTest {
     private val kotlinSources = listOf(File("src/main/kotlin"), File("src/main/java"))
 
     private val manifest = File("src/main/AndroidManifest.xml")
+
+    /** A declaration's body with its comments blanked; see [SourceScan]. */
+    private fun bodyOf(path: String, declaration: String): String =
+        SourceScan.withoutComments(SourceScan.body(SourceScan.read(path), declaration))
 
     /** Every override of [names] under [kotlinSources], as `path:line: text`. */
     private fun overridesOf(vararg names: String): List<String> {
@@ -106,46 +112,84 @@ class HardwareKeyboardTest {
             // asked before the page is given the key, and returning true keeps
             // it, so it swallows a keystroke exactly as the others do.
             "shouldOverrideKeyEvent",
+            // Where an unconsumed key is handed back to the platform, and the only
+            // place the fallback can still be stopped. The default implementation
+            // re-injects the event, and the re-injected copy is queued with
+            // FLAG_UNHANDLED, which the framework routes to the stage that reads
+            // the keyboard's fallback action INSTEAD of to the view tree, so
+            // nothing above it can intervene. An override here is therefore both
+            // the fix below and, left unguarded, a way to swallow every unhandled
+            // key in silence.
+            "onUnhandledKeyEvent",
         )
 
-        // The one override this app has, pinned by path and by body rather than
-        // dropped from the list above: dropping the name would stop guarding it
+        // The three overrides this app has, each pinned by file and by name rather
+        // than dropped from the list above: dropping a name would stop guarding it
         // in every other file, which is most of what this case is for.
         //
-        // It earns the exception by delegating. A key the whole view tree
-        // declines is offered to the producing keyboard's own character map for
-        // a fallback action, and some of those maps still read
-        // `ESCAPE base: fallback BACK`, which arrives at the back callback as an
-        // ordinary press and minimises the app mid-keystroke (issue #385). The
-        // override answers that by keeping `super`'s verdict and widening it for
-        // Escape alone, so the page loses no key.
-        val guardedFile = "src/main/kotlin/com/vscodroid/MainActivity.kt"
-        val allowed = interceptors.filter {
-            it.startsWith("$guardedFile:") && it.contains("dispatchKeyEvent")
-        }
-
-        assertEquals(
-            1, allowed.size,
-            "MainActivity.dispatchKeyEvent is gone. It is the only thing stopping a " +
-                "keyboard whose character map carries `ESCAPE base: fallback BACK` from " +
-                "minimising the app when Esc is pressed, and no page-side fix replaces " +
-                "it: the fallback is synthesised precisely from the key the page did " +
-                "not consume. Overrides found: $interceptors",
+        // They earn the exception between them. A key nothing consumed is offered
+        // to the producing keyboard's own character map for a fallback action, and
+        // some maps still read `ESCAPE base: fallback BACK`, which arrives at the
+        // back callback as an ordinary press and minimises the app mid-keystroke.
+        // There are two routes to that and they do not meet: the Activity closes
+        // the one where the view tree declined the key, and the two clients close
+        // the one the workbench takes, which never reaches the Activity at all.
+        val activity = "src/main/kotlin/com/vscodroid/MainActivity.kt"
+        val client = "src/main/kotlin/com/vscodroid/webview/VSCodroidWebViewClient.kt"
+        val expected = listOf(
+            activity to "dispatchKeyEvent",
+            // The bootstrap client, which owns the whole cold start and every
+            // window after a renderer crash.
+            activity to "onUnhandledKeyEvent",
+            client to "onUnhandledKeyEvent",
         )
 
-        val dispatch = SourceScan.withoutComments(
-            SourceScan.body(SourceScan.read(guardedFile), "override fun dispatchKeyEvent("),
-        )
+        fun sitesFor(file: String, name: String) =
+            interceptors.filter { it.startsWith("$file:") && it.contains("fun $name(") }
 
-        assertTrue(dispatch.contains("super.dispatchKeyEvent(event)")) {
-            "MainActivity.dispatchKeyEvent no longer delegates, so it swallows the key " +
-                "rather than only widening the verdict on it, and the WebView stops " +
-                "seeing Escape at all"
+        val allowed = expected.flatMap { (file, name) -> sitesFor(file, name) }
+
+        for ((file, name) in expected) {
+            assertEquals(
+                1, sitesFor(file, name).size,
+                "$file no longer overrides $name exactly once. Between them these three " +
+                    "are what stop a keyboard whose character map carries " +
+                    "`ESCAPE base: fallback BACK` from minimising the app when Esc is " +
+                    "pressed, and they are not interchangeable: the re-injected event the " +
+                    "clients see never reaches the Activity, and an Escape the view tree " +
+                    "declined never reaches a client. Overrides found: $interceptors",
+            )
         }
-        assertTrue(dispatch.contains("KeyEvent.KEYCODE_ESCAPE")) {
-            "MainActivity.dispatchKeyEvent no longer singles out Escape, so it reports " +
-                "keys handled that the workbench never bound, and the fallbacks those " +
-                "keys rely on stop firing"
+
+        // Pinned by ORDER, not by presence, and the two methods need opposite
+        // orders. A pair of `contains` checks on the Activity is satisfied by
+        // `if (keyCode == KEYCODE_ESCAPE) return true` followed by a `super` call,
+        // which is exactly the swallow the message below warns about.
+        val dispatch = bodyOf(activity, "override fun dispatchKeyEvent(")
+        val delegatesAt = dispatch.indexOf("super.dispatchKeyEvent(event)")
+        val escapeAt = dispatch.indexOf("KEYCODE_ESCAPE")
+
+        assertTrue(delegatesAt >= 0 && escapeAt > delegatesAt) {
+            "MainActivity.dispatchKeyEvent must delegate BEFORE it decides anything " +
+                "about Escape, so that the WebView receives the key exactly as " +
+                "dispatched and only the verdict reported back to the platform widens. " +
+                "Deciding first swallows the key and the workbench never sees it. " +
+                "Found super at $delegatesAt and the Escape test at $escapeAt in: $dispatch"
+        }
+
+        for (file in listOf(activity, client)) {
+            val unhandled = bodyOf(file, "override fun onUnhandledKeyEvent(")
+            val refusesAt = unhandled.indexOf("KEYCODE_ESCAPE")
+            val handsBackAt = unhandled.indexOf("super.onUnhandledKeyEvent(")
+
+            assertTrue(refusesAt >= 0 && handsBackAt > refusesAt) {
+                "$file must refuse Escape BEFORE handing the event back, and must still " +
+                    "hand every other key back. Losing the refusal restores the fallback " +
+                    "that minimises the app; losing the hand-back swallows every other " +
+                    "unhandled key, which is what the ban list above exists to prevent. " +
+                    "Found the Escape test at $refusesAt and super at $handsBackAt " +
+                    "in: $unhandled"
+            }
         }
 
         assertEquals(
