@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -11,9 +12,13 @@ import javax.xml.parsers.DocumentBuilderFactory
  * The two properties a physical keyboard's support rests on.
  *
  * Neither one is a feature anybody wrote, and that is the problem. Keys work
- * because nothing in this app touches a key event: the system dispatches it,
- * the WebView receives it unchanged, and the workbench binds it. The window
- * survives a keyboard being plugged in because the manifest claims the keyboard
+ * because nothing in this app takes a key event away from the page: the system
+ * dispatches it, the WebView receives it unchanged, and the workbench binds it.
+ * Exactly one override stands in that path, `MainActivity.dispatchKeyEvent`,
+ * and it delegates to `super` before widening the verdict on Escape alone, so
+ * the page still sees every key; the first case below pins both halves of that
+ * and refuses any other override anywhere in the tree. The window survives a
+ * keyboard being plugged in because the manifest claims the keyboard
  * configuration qualifiers, so Android hands the activity a configuration
  * change instead of destroying it and building a new one.
  *
@@ -103,8 +108,48 @@ class HardwareKeyboardTest {
             "shouldOverrideKeyEvent",
         )
 
+        // The one override this app has, pinned by path and by body rather than
+        // dropped from the list above: dropping the name would stop guarding it
+        // in every other file, which is most of what this case is for.
+        //
+        // It earns the exception by delegating. A key the whole view tree
+        // declines is offered to the producing keyboard's own character map for
+        // a fallback action, and some of those maps still read
+        // `ESCAPE base: fallback BACK`, which arrives at the back callback as an
+        // ordinary press and minimises the app mid-keystroke (issue #385). The
+        // override answers that by keeping `super`'s verdict and widening it for
+        // Escape alone, so the page loses no key.
+        val guardedFile = "src/main/kotlin/com/vscodroid/MainActivity.kt"
+        val allowed = interceptors.filter {
+            it.startsWith("$guardedFile:") && it.contains("dispatchKeyEvent")
+        }
+
         assertEquals(
-            emptyList<String>(), interceptors,
+            1, allowed.size,
+            "MainActivity.dispatchKeyEvent is gone. It is the only thing stopping a " +
+                "keyboard whose character map carries `ESCAPE base: fallback BACK` from " +
+                "minimising the app when Esc is pressed, and no page-side fix replaces " +
+                "it: the fallback is synthesised precisely from the key the page did " +
+                "not consume. Overrides found: $interceptors",
+        )
+
+        val dispatch = SourceScan.withoutComments(
+            SourceScan.body(SourceScan.read(guardedFile), "override fun dispatchKeyEvent("),
+        )
+
+        assertTrue(dispatch.contains("super.dispatchKeyEvent(event)")) {
+            "MainActivity.dispatchKeyEvent no longer delegates, so it swallows the key " +
+                "rather than only widening the verdict on it, and the WebView stops " +
+                "seeing Escape at all"
+        }
+        assertTrue(dispatch.contains("KeyEvent.KEYCODE_ESCAPE")) {
+            "MainActivity.dispatchKeyEvent no longer singles out Escape, so it reports " +
+                "keys handled that the workbench never bound, and the fallbacks those " +
+                "keys rely on stop firing"
+        }
+
+        assertEquals(
+            emptyList<String>(), interceptors - allowed.toSet(),
             "Hardware keyboard support here IS the absence of these overrides. Every " +
                 "keystroke reaches the WebView exactly as the system dispatched it, " +
                 "and the workbench binds it; an override is a chance to swallow one " +

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pressing Esc on a hardware keyboard no longer sends the app to the background. Some keyboard layouts turn an Escape the page leaves unhandled into a Back press, so leaving vi's insert mode in a terminal minimised the editor mid-keystroke.
 - Edits made in a workspace opened from a device folder now reach the device. Nothing was syncing them back, so they stayed in the app's private copy with nothing on screen to say so.
 - A workspace is reopened on the next launch and survives an editor crash. Both dropped you into the default folder, and opening a workspace file looked like it had loaded an empty project.
 - Closing the folder now survives an editor crash. It reopened the workspace you had just closed.

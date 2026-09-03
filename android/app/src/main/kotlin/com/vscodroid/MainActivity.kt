@@ -21,6 +21,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.text.util.Linkify
+import android.view.KeyEvent
 import android.view.View
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -2010,6 +2011,47 @@ class MainActivity : AppCompatActivity() {
                 moveTaskToBack(true)
             }
         })
+    }
+
+    /**
+     * Escape is never reported unhandled, so nothing can turn it into a back press.
+     *
+     * A key the whole view tree declines is offered to the PRODUCING KEYBOARD's
+     * character map for a fallback action, not to `Generic.kcm`, and some of those
+     * maps still carry `ESCAPE base: fallback BACK`. AOSP ships one:
+     * `Vendor_18d1_Product_5018.kcm`, headed "Key character map for Google Pixel C
+     * Keyboard", which is present on a stock API 33 image where `Generic.kcm` and
+     * `Virtual.kcm` both read `base: none`. The BACK synthesised from it carries
+     * `FLAG_FALLBACK`, which nothing above the input pipeline reads, so it reaches
+     * [setupBackNavigation]'s callback as an ordinary back press and minimises the
+     * app in the middle of a keystroke. Reported as issue #385 by a user pressing
+     * Esc to leave vi's insert mode.
+     *
+     * The page cannot prevent this on its own. xterm cancels the Escape keydown
+     * and writes 0x1b, but the keyup is not cancelled on the same path, and an
+     * unconsumed keyup is enough: it comes back through
+     * `WebViewClient.onUnhandledKeyEvent`, whose platform default re-injects it,
+     * and re-injection is what asks the character map for a fallback.
+     *
+     * `super` runs first and its answer is kept, so the WebView receives the key
+     * exactly as dispatched and the workbench keeps every binding it has for
+     * Escape. Only the verdict reported back to the input pipeline widens. Every
+     * other key, `KEYCODE_BACK` included, passes through untouched, so the back
+     * gesture, the hardware back key and predictive back are unaffected.
+     *
+     * What this gives up deliberately is the Alt and Ctrl fallbacks on the same
+     * key, HOME and MENU. In a terminal Alt+Esc is `ESC ESC`, a real keystroke,
+     * and answering it by sending the user to the home screen is the same defect
+     * wearing a modifier.
+     *
+     * ⚠️ Not reproducible with `adb shell input keyevent 111`, and neither is the
+     * fix: an injected event carries `Virtual.kcm`, whose ESCAPE has no fallback,
+     * and the emulator's own keyboard resolves to `qwerty2.kcm`, which declares no
+     * ESCAPE at all. It takes a real HID keyboard whose map has the line.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val handled = super.dispatchKeyEvent(event)
+        return handled || event.keyCode == KeyEvent.KEYCODE_ESCAPE
     }
 
     private fun requestNotificationPermission() {

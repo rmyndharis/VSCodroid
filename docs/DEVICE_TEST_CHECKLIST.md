@@ -55,6 +55,7 @@
 | KB-15 | Ctrl+Enter from the key row | Put the caret in the MIDDLE of a line, tap Ctrl on the key row, then press Enter on the soft keyboard | A new line opens below and the caret moves to it, leaving the line under the caret unsplit (Insert Line Below). A split line means the latch was spent without being applied: the soft keyboard reports Enter as an edit rather than as a key, so this is a different path from every other row key | | |
 | KB-17 | Latched Ctrl and a composed word on the EditContext path | On a WebView 121 or newer device with Gboard suggestions on (KB-11's check says which path), latch Ctrl on the row, type a word, then space | The word is inserted plainly and the row's Ctrl clears as the word starts; the space is inserted and no suggest widget opens. Latch Ctrl and type `s` with a non-composing commit (suggestions off, or Samsung keyboard) as the control: the file still saves (KB-7) | | |
 | KB-18 | Latched modifier and a frame | Latch Ctrl on the row, tap into a Simple Browser page or an extension webview and type, then tap back into the editor and type `a` | The row's Ctrl clears within a moment of focus entering the frame, and `a` is inserted rather than run as a chord | | |
+| KB-19 | Escape on a hardware keyboard | Connect a BT/USB keyboard, open a terminal, start `vi`, press `i` for insert mode, then press Esc | vi leaves INSERT and the app stays in the foreground. Only hardware answers this row, and unusually it is the key character map rather than the dispatch that has to be real: an injected Escape carries `Virtual.kcm` and the emulator's own keyboard resolves to `qwerty2.kcm`, and neither declares the `ESCAPE base: fallback BACK` that turns the key into a back press. Record the keyboard model, since only some maps carry it | | |
 | KB-16 | Narrow phone paging | On a device or emulator whose portrait width is 360dp or less, bring the keyboard up and swipe through every page. `adb shell wm size` and `adb shell wm density` give the width in dp: pixels times 160, divided by density | There are more pages than the five a 411dp phone shows: six at 360dp, seven at 320dp. Every key still fills a comfortable target, no label is clipped, and the keys appear in the same order, only broken across more pages. The dots say how many there are | | |
 
 ## 4. Screen & Orientation
@@ -230,7 +231,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 18 | | | |
+| Keyboard Input | 19 | | | |
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 12 | | | |
 | Extensions | 6 | | | |
@@ -240,7 +241,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 11 | | | |
-| **Total** | **101** | | | |
+| **Total** | **102** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
