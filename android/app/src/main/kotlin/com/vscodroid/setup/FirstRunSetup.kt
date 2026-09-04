@@ -3723,7 +3723,16 @@ claude() {
             // names a figure up to a megabyte short of what the retry measures,
             // so the user frees exactly what was asked and is refused again by
             // the remainder, with nothing on screen to say why.
-            return (bytes + 1_048_575L) / 1_048_576L
+            //
+            // Decimal, and the label says MB, so the two now agree. This divided
+            // by 1_048_576 and called the result MB, which is the same defect the
+            // rounding above exists to prevent, only smaller and harder to see: a
+            // user who freed the number as their storage screen counts it freed
+            // 4.6% too few bytes and was refused again. Android's own storage UI
+            // has been decimal since API 26, and it is what a user checks against,
+            // so the number has to be in its units rather than the machine's.
+            // ToolchainManager already divides by 1_000_000 for the same word.
+            return (bytes + 999_999L) / 1_000_000L
         }
 
         /**

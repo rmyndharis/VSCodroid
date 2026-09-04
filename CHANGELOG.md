@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The storage message asks for the amount your device actually reports. It was counted in binary megabytes and labelled MB, so freeing exactly what it asked for left you about 5 percent short and refused again.
 - An Escape the editor leaves unhandled is no longer handed back to Android. Some keyboard layouts answer it with a Back press, which sends the app to the background mid-keystroke.
 - Opening a workspace file no longer costs a filesystem check on every resource the editor loads, and a workspace file that is briefly absent while it is saved no longer cuts off every resource beside it.
 - The address of the page is no longer written to the system log on every load. It carried the full path of the folder you had open.

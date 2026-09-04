@@ -734,15 +734,46 @@ class StoragePreflightTest {
         assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
         val required = assetBytes / 2 + largestAssetBytes + slack
         assertEquals(
-            (required - free) / mb,
+            (required - free + 999_999L) / 1_000_000L,
             FirstRunSetup.storageToFreeMb(),
             "the message names the whole demand rather than the shortfall, so a device short " +
-                "by 4 MiB is told to free 70",
+                "by 4 MB is told to free 70",
         )
         assertTrue(
-            FirstRunSetup.storageToFreeMb() < required / mb,
+            FirstRunSetup.storageToFreeMb() < required / 1_000_000L,
             "the shortfall and the demand are the same number here, so this case cannot tell " +
                 "them apart",
+        )
+    }
+
+    /**
+     * The unit the string promises, which neither case above can tell apart.
+     *
+     * `error_storage_full` says MB, the user checks it against Android's storage
+     * screen, and that screen has been decimal since API 26. Dividing by 1 MiB
+     * and calling the answer MB understates the demand by 4.6%, so a user who
+     * frees exactly what was asked is refused again, which is the same failure
+     * the rounding above exists to prevent, only smaller.
+     *
+     * A shortfall chosen so the two units cannot give the same answer: one whole
+     * MiB is 1.048576 MB, which rounds up to 2.
+     */
+    @Test
+    fun `the figure is in the decimal MB the string names`() {
+        stageServerTree(assetBytes / 2)
+        val required = assetBytes / 2 + largestAssetBytes + slack
+        val free = required - mb
+
+        assertEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            runBlocking { setup(free = free).runSetup() },
+        )
+        assertEquals(
+            2L,
+            FirstRunSetup.storageToFreeMb(),
+            "a shortfall of one MiB is 1.05 MB, so this is 2 in the unit the string names " +
+                "and 1 in the unit the machine counts in. Reading 1 here means the figure " +
+                "went back to MiB while the string still says MB",
         )
     }
 
