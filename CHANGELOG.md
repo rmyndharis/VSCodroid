@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-09-04
-
 ### Added
 
 - A device folder holding one `.code-workspace` now opens as that workspace. Android's picker can only hand back a folder, so a workspace on device storage was reachable only by finding the file in the explorer and opening it from there.
@@ -893,8 +891,7 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...HEAD
-[1.3.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...v1.3.0
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...HEAD
 [1.2.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.9...v1.0.0
