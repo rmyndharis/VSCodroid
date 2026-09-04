@@ -198,21 +198,22 @@ private var lastRefusedWorkspace: String? = null
  * See [lastRefusedWorkspace].
  */
 internal fun resourceRootsInForce(
-    published: List<String>, sensitive: List<String>, workspaceOrFolder: String?,
-    // Handed on to [workspaceDirectoryInForce], which reduces a workspace to the
-    // directory holding it only when it really is a file. Passed rather than
-    // called for the reason every predicate in this pair of files is: these paths
-    // do not exist on a JVM test machine, so a real stat there answers no for
-    // every one of them.
-    isFile: (String) -> Boolean = { File(it).isFile },
+    published: List<String>, sensitive: List<String>,
+    /**
+     * Already reduced to a directory by whoever supplied it.
+     *
+     * Reducing needs a `stat`, because a `.code-workspace` is a workspace only
+     * when it is a FILE, and this function runs once per intercepted resource
+     * request. `MainActivity.openWorkspaceRoot` therefore does it once per
+     * navigation and both suppliers hand the answer, which keeps the stat off
+     * this path and keeps a momentarily absent file from silently unpublishing
+     * the root. Reducing here as well would be wrong and not merely wasteful: a
+     * directory whose own name ends in `.code-workspace` would be reduced twice
+     * and publish its parent.
+     */
+    workspaceRoot: String?,
 ): List<String> {
-    // Normalised here and not at the two suppliers, because both converge on this
-    // and `ServiceWorkerRetentionTest` refuses a supplier written as anything but
-    // `self.get()?....`: wrapping one would either capture the Activity or widen
-    // a check whose own message says not to. A `.code-workspace` names a file,
-    // and a root is matched by path prefix, so publishing the file publishes only
-    // itself and refuses every resource beside it.
-    val candidate = workspaceDirectoryInForce(workspaceOrFolder, isFile)
+    val candidate = workspaceRoot
     val workspace = workspaceRootOrNull(candidate, sensitive)
     if (candidate != null && workspace == null) {
         if (candidate != lastRefusedWorkspace) {
@@ -1005,9 +1006,14 @@ class VSCodroidWebViewClient(
         // without going through Kotlin, and then the URL is the only notice
         // there is. A redacted copy would lose the folder on exactly those loads.
         //
-        // This log statement is at `Logger.i`, which is not gated on a debuggable
-        // build, so it was the leak that shipped.
-        Logger.i(tag, "Page loaded: ${redactToken(url)}")
+        // Labelled rather than redacted, because this statement is at `Logger.i`,
+        // which is not gated on a debuggable build. `redactToken` removes the
+        // token and nothing else, so the folder rode out in release logcat on
+        // every load and every folder switch, on a channel READ_LOGS can read.
+        // That is the same reason the refusals inside `interceptResourceRequest`
+        // are at `Logger.d`. The label keeps what this line is for, saying a load
+        // finished, and `onPageLoaded` below still receives the URL whole.
+        Logger.i(tag, "Page loaded: ${urlLogLabel(url)}")
         onPageLoaded(url)
     }
 

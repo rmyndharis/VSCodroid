@@ -213,6 +213,44 @@ class WorkspaceUrlRoundTripTest {
         )
     }
 
+    /**
+     * Where the reduction happens, which no pure function can pin.
+     *
+     * `workspaceDirectoryInForce` needs a `stat`, and the resource interceptor
+     * runs once per request, so the reduction was moved to the one navigation-time
+     * writer and both suppliers hand the result. Nothing else notices if that
+     * moves back: the interceptor would still be handed a path, the roots would
+     * still be a list, and every case above would stay green while a workspace
+     * session paid a `stat` per request and a momentarily absent file silently
+     * unpublished the root.
+     *
+     * Read from the source because the writer is an Activity method and the
+     * suppliers are lambdas closing over its fields, neither of which a plain JVM
+     * test can drive. See [SourceScan] for the ceiling that reading carries.
+     */
+    @Test
+    fun `the workspace root is reduced once at navigation, not per request`() {
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        val writer = SourceScan.withoutComments(
+            SourceScan.body(source, "private fun rememberWorkspaceFolder("),
+        )
+
+        assertTrue(writer.contains("openWorkspaceRoot = workspaceDirectoryInForce(")) {
+            "rememberWorkspaceFolder no longer derives the published root, so either " +
+                "nothing does and a workspace file publishes only itself, or the " +
+                "interceptor went back to reducing per request"
+        }
+
+        val body = SourceScan.withoutComments(source)
+        assertTrue(body.contains("openFolder = { openWorkspaceRoot }")) {
+            "the webview client is handed the unreduced folder again"
+        }
+        assertTrue(body.contains("{ self.get()?.openWorkspaceRoot }")) {
+            "the service worker is handed the unreduced folder again, and it is the " +
+                "entry point that does not go through the client"
+        }
+    }
+
     @Test
     fun `the directory in force for a directory named like a workspace is itself`() {
         assertEquals(

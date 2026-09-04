@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - An Escape the editor leaves unhandled is no longer handed back to Android. Some keyboard layouts answer it with a Back press, which sends the app to the background mid-keystroke.
+- Opening a workspace file no longer costs a filesystem check on every resource the editor loads, and a workspace file that is briefly absent while it is saved no longer cuts off every resource beside it.
+- The address of the page is no longer written to the system log on every load. It carried the full path of the folder you had open.
 - Edits made in a workspace opened from a device folder now reach the device. Nothing was syncing them back, so they stayed in the app's private copy with nothing on screen to say so.
 - A workspace is reopened on the next launch and survives an editor crash. Both dropped you into the default folder, and opening a workspace file looked like it had loaded an empty project.
 - A folder whose own name ends in `.code-workspace` opens as a folder. It was sent to the editor as a workspace, and an unreadable workspace opens an empty window, which every later launch reopened because the folder had already been remembered.

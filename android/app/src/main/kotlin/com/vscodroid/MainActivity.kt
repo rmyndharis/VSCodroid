@@ -324,6 +324,32 @@ class MainActivity : AppCompatActivity() {
     private var openWorkspaceFolder: String? = null
 
     /**
+     * The same place, reduced to the directory the resource interceptor publishes.
+     *
+     * Volatile and written beside [openWorkspaceFolder] by the one writer, for the
+     * same reason: the reader is `shouldInterceptRequest`, which is not on the UI
+     * thread.
+     *
+     * A second field rather than a reduction at the point of use, and the field
+     * above says why in its own words: reducing needs a `stat`, because a
+     * `.code-workspace` is only a workspace when it is a FILE, and the interceptor
+     * runs once per resource request while the workbench issues hundreds during a
+     * cold load. Deriving here pays for it once per navigation.
+     *
+     * Correctness, not only cost. A `stat` on the request path answers for the
+     * filesystem at that instant, so a workspace file momentarily absent, during a
+     * save-replace or a mirror re-sync, would answer "not a file", the reduction
+     * would not happen, and the published root would become the workspace file
+     * itself. A root that is a single file matches only itself, so every resource
+     * beside it would be refused until something navigated again.
+     *
+     * Not folded into [openWorkspaceFolder]: `mirrorNameFor` reads that one and
+     * wants the path the user opened, not its parent.
+     */
+    @Volatile
+    private var openWorkspaceRoot: String? = null
+
+    /**
      * Where the last open workspace is remembered, resolved once.
      *
      * The same file `PortFinder` and `SplashActivity` use, under a key of its
@@ -2588,14 +2614,14 @@ class MainActivity : AppCompatActivity() {
         // than `self.get()?....` for that reason.
         val self = WeakReference(this)
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            port, roots, sensitive, { self.get()?.openWorkspaceFolder }
+            port, roots, sensitive, { self.get()?.openWorkspaceRoot }
         ) { self.get()?.nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
             allowedPort = port,
             resourceRoots = roots,
             sensitiveLocations = sensitive,
-            openFolder = { openWorkspaceFolder },
+            openFolder = { openWorkspaceRoot },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
             // A hand-off that no app accepted used to be indistinguishable from a
@@ -2749,6 +2775,11 @@ class MainActivity : AppCompatActivity() {
      */
     private fun rememberWorkspaceFolder(folderPath: String) {
         openWorkspaceFolder = folderPath
+        // The one `stat` this costs, and the only place it is paid. Above the
+        // early return, because the return only means the preference is already
+        // written; the fields still have to describe the folder being navigated
+        // to, and after a process restart they start out null.
+        openWorkspaceRoot = workspaceDirectoryInForce(folderPath)
         // Written only on a change: this runs on every main-frame load, and the
         // server redirects, so a folder switch alone reaches it twice.
         if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == folderPath) return
