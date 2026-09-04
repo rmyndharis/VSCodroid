@@ -45,6 +45,43 @@ class WorkspaceMemoryTest {
         )
     }
 
+    /**
+     * Nothing but an absolute path is ever reopened.
+     *
+     * The record holds three states now, and one of them means "the user closed
+     * the folder". Which value that is does not matter here; that no non-path
+     * value is ever opened does. The empty string is the case worth naming,
+     * because it is the obvious sentinel and it is a trap: `File("").exists()`
+     * answers **true** and resolves to the process working directory, so a
+     * reader that only asks `exists` opens that directory and publishes it as a
+     * served resource root. Measured on the JDK this suite runs on, which is
+     * where the sentinel was changed from "" to something that cannot be a path.
+     *
+     * The real `exists` is passed on purpose: a stubbed one would make both
+     * cases pass whatever the guard does.
+     */
+    @Test
+    fun `nothing but an absolute path is reopened`() {
+        val real = { it: String -> java.io.File(it).exists() }
+
+        assertNull(
+            rememberedFolderToReopen("", mirrorsRoot, exists = real, { true }),
+            "the empty string resolves to the working directory and would be opened " +
+                "as a folder, and then served as a resource root",
+        )
+        assertNull(
+            rememberedFolderToReopen("vscodroid:closed", mirrorsRoot, exists = real, { true }),
+            "the closed-folder sentinel must never name something to open. An older " +
+                "build reading a preferences file this one wrote takes this route",
+        )
+        assertNull(
+            rememberedFolderToReopen("build", mirrorsRoot, exists = real, { true }),
+            "a relative name that happens to exist beside the process is not the " +
+                "folder anyone opened. This one exists in the module directory the " +
+                "tests run from, which is what makes it worth asserting",
+        )
+    }
+
     @Test
     fun `a folder that is gone is not reopened`() {
         assertNull(
@@ -179,6 +216,23 @@ class WorkspaceMemoryTest {
             "the default projects directory is reached before the remembered folder, so " +
                 "the remembered one can never be used and an Activity rebuilt over a " +
                 "live server still moves the user out of their workspace."
+        }
+
+        // The fourth source, and the only one that answers "nothing, on purpose".
+        // It sits between the other two for a reason each way: a folder still on
+        // screen outranks a close the user has since navigated away from, and a
+        // close outranks a folder that was remembered before it. Read the other
+        // way round, a relaunch after Close Workspace reopens the folder that was
+        // just closed, which is the whole of what this branch exists to stop.
+        val closed = load.indexOf("workspaceWasClosed()")
+        assertTrue(closed >= 0) {
+            "loadVSCode no longer asks whether the user closed the folder, so closing " +
+                "it survives only as long as the WebView does. Found:\n$load"
+        }
+        assertTrue(fromUrl < closed && closed < remembered) {
+            "the closed-folder test is out of order. Ahead of the URL it would override " +
+                "a folder that is open on screen; behind the remembered folder it can " +
+                "never be reached, and the closed folder is reopened on every launch."
         }
     }
 

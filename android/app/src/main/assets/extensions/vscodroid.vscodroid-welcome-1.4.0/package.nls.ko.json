@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid 환영 안내",
+  "description": "VSCodroid 환영 둘러보기",
+  "config.layout.autoHideSideBar": "파일을 열면 사이드 바를 닫습니다. 값을 지정하지 않으면 화면에 맞춰집니다. 파일 트리와 편집기가 나란히 들어가지 않는 화면에서는 켜지고, 들어가는 화면에서는 꺼집니다. 직접 정하려면 여기에서 설정하세요.",
+  "command.welcome.open": "VSCodroid: 환영 화면 열기",
+  "command.welcome.toolsDismissed": "VSCodroid: 도구 단계 완료",
+  "walkthrough.title": "VSCodroid 시작하기",
+  "walkthrough.description": "모바일 개발 환경을 준비하세요",
+  "walkthrough.theme.title": "테마 선택",
+  "walkthrough.theme.description": "취향에 맞는 색 테마를 골라 보세요.\n\n[색 테마 둘러보기](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "개발 도구",
+  "walkthrough.tools.description": "VSCodroid에는 코딩을 시작하는 데 필요한 것이 모두 들어 있습니다.\n\n$(check) **Node.js** + npm: 준비됨\n\n$(check) **Python** + pip: 준비됨\n\n$(check) **Git**: 준비됨\n\n$(check) **make**: 준비됨\n\n**Java 17**과 **Ruby**는 필요할 때 설치할 수 있습니다. 홈 화면에서 VSCodroid 아이콘을 길게 누른 다음 **툴체인 관리**를 선택하세요.\n\n[알겠습니다](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "제대로 된 터미널",
+  "walkthrough.terminal.description": "번들로 들어 있는 모든 도구가 PATH에 있는 완전한 bash 터미널을 열 수 있습니다: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` 는 ``hi`` 를 출력합니다\n\n``python3 -c 'print(\"hi\")'`` 는 ``hi`` 를 출력합니다\n\n``git init demo`` 는 ``Initialized empty Git repository`` 를 출력합니다\n\n[터미널 열기](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "기능을 더 추가하기",
+  "walkthrough.extensions.description": "언어 지원, 테마, 도구는 Open VSX 마켓플레이스에서 확장을 설치해 추가할 수 있습니다.\n\nJavaScript로 작성된 확장은 잘 동작합니다. 데스크톱 Linux용으로 컴파일된 프로그램을 함께 담은 일부 확장은 아무 문제 없이 설치된 뒤 아무 일도 하지 않으며, 화면에 오류도 나타나지 않습니다.\n\n[확장 둘러보기](command:workbench.view.extensions)"
+}

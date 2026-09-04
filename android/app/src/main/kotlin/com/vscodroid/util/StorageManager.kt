@@ -209,9 +209,13 @@ object StorageManager {
 
     /**
      * Returns true if available storage is critically low (<100 MB).
+     *
+     * Decimal, because the caller formats the same quantity with [formatSize] and
+     * prints it beside this warning. A binary threshold under a decimal formatter
+     * lets the toast announce "104.8 MB available" under a sentence that says 100.
      */
     fun isStorageLow(context: Context): Boolean {
-        return getAvailableStorage(context) < 100 * 1_048_576L
+        return getAvailableStorage(context) < 100_000_000L
     }
 
     /**
@@ -328,12 +332,27 @@ object StorageManager {
      * added; these two literals are what has not moved with them. It also made the same code print
      * two different strings on two JDKs, because the CLDR data behind a region
      * moves between releases.
+     *
+     * The divisor is decimal, and this is the one place that decides it for the
+     * whole app: every size a user reads on a native screen comes through here.
+     * `android.text.format.Formatter.formatFileSize` has been SI since API 26 and
+     * this module's `minSdk` is 33, so Settings > Storage, the Files app and the
+     * Play listing are decimal on every device this ships to, and those are the
+     * figures a user checks ours against. `FirstRunSetup.storageToFreeMb` already
+     * answers in the same unit, for the same reason: it asks the user to free an
+     * amount, and asking in a unit their storage screen does not use left them
+     * about 5 percent short of what the app then refused them for.
+     *
+     * Not this function's business, and not to be swept into a units pass: heap
+     * ceilings are mebibytes by V8's and the JVM's own definition, so
+     * `ProcessManager.heapCeilingForDevice`, `CrashReporter` and the
+     * `vscodroid.server.heapCeilingMb` setting keep their 1,048,576 divisors.
      */
     fun formatSize(bytes: Long): String {
         return when {
-            bytes >= 1_073_741_824 -> "%.1f GB".format(Locale.US, bytes / 1_073_741_824.0)
-            bytes >= 1_048_576 -> "%.1f MB".format(Locale.US, bytes / 1_048_576.0)
-            bytes >= 1_024 -> "%.1f KB".format(Locale.US, bytes / 1_024.0)
+            bytes >= 1_000_000_000 -> "%.1f GB".format(Locale.US, bytes / 1_000_000_000.0)
+            bytes >= 1_000_000 -> "%.1f MB".format(Locale.US, bytes / 1_000_000.0)
+            bytes >= 1_000 -> "%.1f KB".format(Locale.US, bytes / 1_000.0)
             else -> "$bytes B"
         }
     }

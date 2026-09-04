@@ -13,11 +13,12 @@ package com.vscodroid
  * Three passes over the text, none of them a Kotlin parser and none pretending to
  * be. [codeView] drops string prose while keeping what a `$` interpolation names,
  * so a message can talk about a token without being one. [statements] gathers a
- * `Logger` call across however many lines it was wrapped onto, by counting
- * parentheses on that same prose-free view, which is what keeps a `" ("` in a
- * message from unbalancing the count. [taintedNames] walks declarations to a
- * fixpoint from the places a sensitive value enters: a [SOURCES] call, and any
- * name a signature or a property declares as a [URI_NAME].
+ * `Logger` call across the lines it was wrapped onto, up to
+ * [MAX_STATEMENT_LINES], by counting parentheses on that same prose-free view,
+ * which is what keeps a `" ("` in a message from unbalancing the count.
+ * [taintedNames] walks declarations to a fixpoint from the places a sensitive
+ * value enters: a [SOURCES] call, and any name a signature or a property declares
+ * as a [URI_NAME].
  *
  * Both seeds are here rather than one per guard on purpose. A guard written from
  * the one spelling that had just been fixed catches that spelling and nothing
@@ -25,7 +26,8 @@ package com.vscodroid
  * intermediate local and a wrapped call all read the same to it, and that adding
  * a source closes every method in the file at once rather than one at a time.
  *
- * Its blind spots are the docstring on [NavigationTokenLoggingTest], and one more
+ * Its blind spots are the docstring on [NavigationTokenLoggingTest], the
+ * one-line-at-a-time declaration read argued for on [taintedNames], and one more
  * that belongs to the text scanning rather than to the design: a double quote
  * written inside an interpolation inside a string, `trim('"')` is one, and
  * MainActivity has it, ends the literal early, because handling it properly
@@ -71,14 +73,42 @@ internal object LogTaint {
      *
      * `getMirrorDir(uri).name` is the six-byte digest a device folder's mirror is
      * called after; `urlLogLabel` is an address cut down to a scheme and a host.
+     * `syncToLocal` is that same digest arriving by the other route: it is
+     * declared `syncToLocal(safUri: Uri, onProgress: (Int, Int) -> Unit): File`
+     * (SafStorageManager.kt), takes the tree URI and answers the mirror directory
+     * it copied into, whose name is the digest `getMirrorDir` answers for the same
+     * URI. So a local declared from the call holds no part of the folder's path,
+     * and printing its `name` is the redaction rather than a hole in it. Written
+     * against that one signature: an overload taking something other than a tree
+     * URI would have to be argued about here before it is added.
+     *
      * The distinction from [REDACTION] is load-bearing and `PageSuppliedLogging`
      * states it too: a tree URI carries no `tkn=`, so wrapping one in
      * `redactToken` satisfies a search for the call and changes nothing about
-     * what ships. Only [leaks] accepts these. [redactedLogs] must not, or the
-     * control it answers stops distinguishing a redacted log statement from a
-     * folder named by its digest.
+     * what ships. Only [leaks] and [reducedLogs] accept these. [redactedLogs]
+     * must not, or the control it answers stops distinguishing a redacted log
+     * statement from a folder named by its digest.
      */
-    private val REDUCTION = listOf("urlLogLabel", "getMirrorDir")
+    private val REDUCTION = listOf("urlLogLabel", "getMirrorDir", "syncToLocal")
+
+    /**
+     * How many lines one `Logger` call may be gathered across.
+     *
+     * A cap rather than a walk to the closing parenthesis, because the count runs
+     * on the prose-free view and the last blind spot in this object's docstring, a
+     * double quote written inside an interpolation, ends a literal early and can
+     * leave that count unbalanced. Uncapped, one such statement swallows the rest
+     * of the file and every name in it is reported as leaked from a single line.
+     * A bounded truncation is the cheaper of the two failures, and what it costs
+     * where it happens is the tail of a message rather than a name: measured
+     * today, 0 of 48 statements in MainActivity.kt reach it, 0 of 17 in
+     * SafStorageManager.kt, and 1 of 69 in SafSyncEngine.kt, a `Logger.i` whose
+     * message is a 16-line `if` with a paragraph of comment inside it. Reading
+     * stops at the twelfth of those lines, so the `else` branch of that message
+     * is not seen. The only name it interpolates is the `doc.relativePath` the
+     * `if` branch prints, which is read, so the truncation costs nothing there.
+     */
+    private const val MAX_STATEMENT_LINES = 12
 
     private val DECLARATION = Regex("""\b(?:val|var)\s+([A-Za-z_]\w*)\s*(?::[^=]*?)?=(.*)""")
     private val INTERPOLATION = Regex("""\$\{[^}]*}|\$[A-Za-z_]\w*""")
@@ -98,10 +128,28 @@ internal object LogTaint {
     }
 
     /** Statements printing a tainted value through the redactor. */
-    fun redactedLogs(source: List<String>): List<String> {
+    fun redactedLogs(source: List<String>): List<String> = logsTreatedBy(source, REDACTION)
+
+    /**
+     * Statements naming a tainted value by something that is not the value.
+     *
+     * The control the device-folder side needs. Asking whether some line of a body
+     * holds both `Logger.` and `getMirrorDir(` answers a different question in two
+     * ways that both matter: a formatter wrapping the statement onto two lines
+     * fails it while nothing about the log has changed, and a reader that has
+     * stopped recognising where a tree URI enters the file passes it while the
+     * guard beside it has gone blind. This asks the reader instead, so the control
+     * and the thing it certifies stand or fall together.
+     *
+     * Separate from [redactedLogs] rather than one call taking a list, because the
+     * two lists must stay apart for the reason [REDUCTION] gives.
+     */
+    fun reducedLogs(source: List<String>): List<String> = logsTreatedBy(source, REDUCTION)
+
+    private fun logsTreatedBy(source: List<String>, calls: List<String>): List<String> {
         val tainted = taintedNames(source)
         return statements(source).filter { st ->
-            redactedArguments(st.raw).any { arg -> tainted.any { mentions(arg, it) } }
+            argumentsOf(st.raw, calls).any { arg -> tainted.any { mentions(arg, it) } }
         }.map { "${it.line}: ${it.raw}" }
     }
 
@@ -162,7 +210,7 @@ internal object LogTaint {
             val whole = StringBuilder()
             var depth = 0
             var j = i
-            while (j < source.size && j - i < 12) {
+            while (j < source.size && j - i < MAX_STATEMENT_LINES) {
                 raw.append(if (isComment(source[j])) "" else source[j].trim()).append(' ')
                 whole.append(code[j]).append(' ')
                 depth += code[j].count { it == '(' } - code[j].count { it == ')' }
@@ -178,6 +226,20 @@ internal object LogTaint {
     /**
      * Names holding a value that came, however indirectly, from a [SOURCES] hit or
      * a [URI_NAME] declaration.
+     *
+     * A declaration is read one line at a time: `val x =` with its value on the
+     * next line is not followed, and neither is the rest of any initialiser a
+     * formatter wrapped. Deliberate, and the most consequential limit here, so it
+     * is written down rather than waiting to be found and "fixed".
+     *
+     * Measured, on the file this reader is pointed at. Reading each right-hand
+     * side to the end of its statement instead pulls in at least a dozen further
+     * names, and one of them is `message`. That one name turns eight correct
+     * statements into reported leaks: every `Logger` line in `MainActivity` that
+     * prints a caught exception's message. The names here are file-scoped, and
+     * that is what makes a word that common unaffordable to follow;
+     * `NavigationTokenLoggingTest` argues the scope and pins this limit as a
+     * case, so the trade stays measured rather than asserted.
      */
     private fun taintedNames(source: List<String>): Set<String> {
         val code = source.filterNot(::isComment).map(::codeView)
@@ -185,9 +247,13 @@ internal object LogTaint {
         for (line in code) {
             for (m in URI_NAME.findAll(line)) names += m.groupValues[1]
         }
-        // Declarations are walked to a fixpoint rather than once in file order, so
-        // that a chain assigned in the other order is still followed.
-        repeat(3) {
+        // Declarations are walked to a fixpoint rather than a fixed number of
+        // passes, so that a chain assigned in the other order is still followed
+        // however many hops long it is. It terminates because `names` only grows
+        // and nothing but an identifier written in this file can enter it.
+        var grew = true
+        while (grew) {
+            val before = names.size
             for (line in code) {
                 for (m in DECLARATION.findAll(line)) {
                     val name = m.groupValues[1]
@@ -198,6 +264,7 @@ internal object LogTaint {
                     if (seeded || derived) names += name
                 }
             }
+            grew = names.size > before
         }
         return names
     }
@@ -239,6 +306,7 @@ internal object LogTaint {
         return out
     }
 
-    private fun redactedArguments(text: String): List<String> =
-        spansOf(text, REDACTION).map { text.substring(it).substringAfter('(').removeSuffix(")") }
+    /** What each call to one of [calls] in [text] was handed. */
+    private fun argumentsOf(text: String, calls: List<String>): List<String> =
+        spansOf(text, calls).map { text.substring(it).substringAfter('(').removeSuffix(")") }
 }

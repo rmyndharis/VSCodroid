@@ -28,13 +28,20 @@ import java.util.Locale
  * on an English phone, and whether the WebView's header follows the app or the
  * system is not something this app controls.
  *
- * The page is the whole of what this reaches, and that is a property of the
- * server rather than a choice made here. `out/server-main.js` resolves its own
- * NLS configuration with `userLocale` hardcoded to "en" and assigns it over
- * `VSCODE_NLS_CONFIG` before reading it, and it builds the extension host's
- * environment through the language-pack machinery, which needs a pack installed
- * in the user data directory. So the strings the server and its extensions log
- * stay English however this resolves, and an earlier version of this file that
+ * The page is not the whole of what this reaches. The resolved name is also the
+ * filename the server's extension scanner appends to `package.nls.`, because
+ * `VSCodroidWebViewClient` sets `_VSCODE_NLS_LANGUAGE` from it and the web
+ * client sends that to `scanExtensions`. A bundle name here is therefore a
+ * filename contract with the bundled extensions' manifests, not only a URL
+ * segment.
+ *
+ * What stays English is a property of the server rather than a choice made here.
+ * `out/server-main.js` resolves its own NLS configuration with `userLocale`
+ * hardcoded to "en" and assigns it over `VSCODE_NLS_CONFIG` before reading it,
+ * and it builds the extension host's environment through the language-pack
+ * machinery, which needs a pack installed in the user data directory. So the
+ * strings the server logs and the messages an extension shows at runtime stay
+ * English however this resolves, and an earlier version of this file that
  * exported the answer to that process was writing to nobody. See
  * `assets/server.js`, which records the same finding beside the line it
  * explains.

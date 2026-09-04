@@ -110,10 +110,18 @@ if (!fs.existsSync(rehEntryPoint)) {
     // decide the language whatever is written into it. `out/server-main.js`
     // resolves its own configuration with `userLocale` and `osLocale` hardcoded
     // to "en" and then assigns the result over this variable, before anything
-    // reads it, so the value here reaches nothing. The extension host is not a
-    // way round it either: the server builds that child's environment from the
-    // language the CLIENT asks for, resolved through the language-pack
-    // machinery, and no language pack is installed here.
+    // reads it, so the value here reaches nothing. The node extension host is
+    // not a way round it either: the server builds that child's environment
+    // through `resolveNLSConfiguration`, which answers `resolvedLanguage: "en"`
+    // without a `languagepacks.json`, so `vscode.env.language` and `vscode.l10n`
+    // stay English there.
+    //
+    // An extension MANIFEST takes a different path and needs no language pack:
+    // `RemoteExtensionsScannerService.scanExtensions` is keyed on the language
+    // the client sends, and reads `package.nls.<language>.json` beside each
+    // `package.json`. That is how the bundled extensions' commands, settings and
+    // walkthrough are translated, and why the bundle names this app resolves are
+    // also filenames those manifests have to match.
     //
     // What the device's language does reach is the page, which gets its strings
     // over HTTP (see nlsCoreBaseUrl above), so the interface is translated and

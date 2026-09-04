@@ -120,6 +120,12 @@ OFFER_FILES = [
     ROOT / "docs/08-RISK_MATRIX.md",
     ROOT / "docs/11-GLOSSARY.md",
     WELCOME / "package.json",
+    # The manifest states the offer as `%walkthrough.tools.description%` and the
+    # sentence itself lives in these, one per shipped language plus an English
+    # base. Line-scanned like every other entry, no parsing: the spellings below
+    # are a Latin-script product name, and it reads the same inside a Japanese
+    # or a Russian sentence as it does in this one.
+    *sorted(WELCOME.glob("package.nls*.json")),
     WELCOME / "media/tools.svg",
 ]
 

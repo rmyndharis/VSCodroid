@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android ブリッジ",
+  "description": "Android に届くコマンド: デバイスのフォルダー、ブラウザー、SSH キー、ストレージ、バージョン情報",
+  "command.openFolderFromDevice": "VSCodroid: デバイスのフォルダーを開く",
+  "command.openRecentFolder": "VSCodroid: 最近使ったフォルダーを開く",
+  "command.openInBrowser": "VSCodroid: ブラウザーで開く",
+  "command.generateSshKey": "VSCodroid: SSH キーを作成",
+  "command.copySshPublicKey": "VSCodroid: SSH 公開キーをコピー",
+  "command.showStorageUsage": "VSCodroid: ストレージ使用状況を表示",
+  "command.manageDeviceFolders": "VSCodroid: デバイスフォルダーのストレージを管理",
+  "command.clearCaches": "VSCodroid: キャッシュを消去",
+  "command.manageToolchains": "VSCodroid: ツールチェーンの管理",
+  "command.about": "VSCodroid: バージョン情報"
+}

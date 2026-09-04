@@ -354,61 +354,123 @@ class SettingsPathsTest {
      * already chose for the other touch platform. Insertion touches a user's
      * document, so what these mostly cover is what must NOT change.
      */
+    /**
+     * The one destructive edit this file makes to a document the user owns.
+     *
+     * The app used to write its preferences into the machine settings file,
+     * which the workbench merges above the user's own settings, so those lines
+     * beat anything the Settings editor wrote. Moving them to the extension's
+     * contributed defaults fixes new installs and nobody else:
+     * `createDefaultSettings` writes only when the file is absent, so an
+     * existing device keeps the override for ever unless the line is taken out.
+     *
+     * Taking a line out of a JSONC file the user also edits is the risky half,
+     * so the prune is deliberately unable to reach anything this app did not
+     * write: the key, the exact value, the document's own first-property indent
+     * and a trailing comma all have to match. These cases are that fence.
+     */
     @Nested
-    inner class SashSize {
+    inner class PrunesMovedDefaults {
+
+        private fun document(vararg lines: String) =
+            "{\n" + lines.joinToString("\n") { "    $it" } + "\n}"
 
         @Test
-        fun `adds the sash size when it is absent`() {
-            val result = refreshManagedPaths(
-                settings(shell, git, args = "[]", sashSize = null), shell, git, wrapper,
+        fun `removes a line the app wrote`() {
+            val before = document(
+                """"workbench.sash.size": 20,""",
+                """"git.path": "$git"""",
             )
 
-            requireNotNull(result) { "a missing sash size must be added" }
-            assertTrue(
-                result.contains(""""workbench.sash.size": 20"""),
-                "sash size not inserted:\n$result",
-            )
-        }
-
-        @Test
-        fun `changes nothing else`() {
-            val before = settings(shell, git, args = "[]", sashSize = null)
-            val result = requireNotNull(refreshManagedPaths(before, shell, git, wrapper))
-
-            // The line is written with the first property's own indentation, so
-            // it is matched rather than spelled out; spelling it out asserted the
-            // indentation of this fixture and not the rule.
-            val stripped = result.lines().filterNot { it.trim().startsWith(""""workbench.sash.size"""") }
-            assertEquals(before, stripped.joinToString("\n"), "more than one line changed")
-        }
-
-        @Test
-        fun `leaves a size the user chose themselves`() {
-            // Presence alone decides, either value: someone who set 4 back meant to.
-            val before = settings(shell, git, args = "[]", sashSize = "8")
-            val result = refreshManagedPaths(before, shell, git, wrapper)
-
-            if (result != null) {
-                assertTrue(
-                    result.contains(""""workbench.sash.size": 8"""),
-                    "the user's size was overwritten:\n$result",
-                )
-                assertTrue(
-                    !result.contains(""""workbench.sash.size": 20"""),
-                    "the managed value was written beside it:\n$result",
-                )
-            }
-        }
-
-        @Test
-        fun `does not add a second key beside the user's own`() {
-            val before = settings(shell, git, args = "[]", sashSize = "8")
-            val result = refreshManagedPaths(before, shell, git, wrapper) ?: before
+            val result = pruneMovedDefaults(before, autoHideSideBar = true)
 
             assertEquals(
-                1,
-                result.split(""""workbench.sash.size"""").size - 1,
-                "the key was written twice:\n$result",
+                document(""""git.path": "$git""""),
+                result,
+                "the app's own preference is still in the file, so it goes on beating " +
+                    "whatever the user sets in Settings",
+            )
+        }
+
+        @Test
+        fun `leaves a value the user changed`() {
+            val before = document(
+                """"workbench.sash.size": 8,""",
+                """"editor.wordWrap": "off",""",
+                """"git.path": "$git"""",
+            )
+
+            assertNull(
+                pruneMovedDefaults(before, autoHideSideBar = true),
+                "a value the user chose was deleted from under them. Only the exact " +
+                    "value this app wrote is removable",
+            )
+        }
+
+        @Test
+        fun `leaves a nested language override alone`() {
+            // A deeper indent, which is the whole guard: `"[markdown]": {` puts
+            // the same key one level in, and it is the user's.
+            val before = "{\n" +
+                "    \"[markdown]\": {\n" +
+                "        \"editor.wordWrap\": \"on\",\n" +
+                "    },\n" +
+                "    \"git.path\": \"$git\"\n}"
+
+            assertNull(
+                pruneMovedDefaults(before, autoHideSideBar = true),
+                "a per-language override was taken out by a rule written for the " +
+                    "top-level key",
+            )
+        }
+
+        @Test
+        fun `removes the device answer the app wrote and not the other one`() {
+            val phone = document(""""vscodroid.layout.autoHideSideBar": true,""")
+            val tablet = document(""""vscodroid.layout.autoHideSideBar": false,""")
+
+            assertEquals(
+                "{\n}",
+                pruneMovedDefaults(phone, autoHideSideBar = true),
+                "the value this device's app wrote is the one to take out",
+            )
+            assertNull(
+                pruneMovedDefaults(tablet, autoHideSideBar = true),
+                "false on a phone is a user who turned it off, and the fallback would " +
+                    "turn it back on for them",
+            )
+        }
+
+        @Test
+        fun `a document whose only brace sits in a comment is left alone`() {
+            // The same refusal insertSetting makes, and it matters more here:
+            // that one declines to ADD a line, this one declines to DELETE one.
+            val before = "// { see docs }\n" +
+                "{\n    \"workbench.sash.size\": 20,\n    \"git.path\": \"$git\"\n}"
+
+            // The document is understood, so the prune runs. The case that must
+            // not is the one with no root brace at all.
+            assertNull(
+                pruneMovedDefaults("// nothing but a comment\n", autoHideSideBar = true),
+                "a document this app cannot find the root of was edited anyway. The write " +
+                    "that follows is atomic, so a wrong guess here takes the user's " +
+                    "settings with it",
+            )
+            assertEquals(
+                "// { see docs }\n{\n    \"git.path\": \"$git\"\n}",
+                pruneMovedDefaults(before, autoHideSideBar = true),
+                "a brace inside a leading comment was taken for the document's own",
+            )
+        }
+
+        @Test
+        fun `a document that never had them costs no write`() {
+            val before = document(""""git.path": "$git"""")
+
+            assertNull(
+                pruneMovedDefaults(before, autoHideSideBar = true),
+                "nothing matched, so there is nothing to write and the file must not be " +
+                    "rewritten for it",
             )
         }
     }
@@ -698,8 +760,12 @@ class SettingsPathsTest {
             )
 
             assertTrue(result.startsWith("$comment\n{"), "the comment moved:\n$result")
+            // Anchored on a key refreshManagedPaths still inserts. It used to be
+            // the secondary side bar's, which is a preference and now ships as a
+            // contributed default, so this control would have gone on passing
+            // while measuring an insertion that no longer happens.
             assertTrue(
-                result.contains(""""workbench.secondarySideBar.defaultVisibility""""),
+                result.contains(""""extensions.verifySignature""""),
                 "nothing was inserted, so the case above proves nothing:\n$result",
             )
         }

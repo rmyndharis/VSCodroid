@@ -60,12 +60,46 @@ class WalkthroughCompletionEventTest {
             ?.sortedBy { it.path }
             ?: emptyList()
 
-    /** One walkthrough step: where it lives, what it links to, how it completes. */
+    /**
+     * One walkthrough step: where it lives, what each rendering of it links to,
+     * how it completes.
+     *
+     * [commandLinks] is keyed on the file the description was read from, because
+     * there are now fourteen of them. A step's prose is a `%key%` in the manifest
+     * and the sentence carrying the button lives in `package.nls.json` and its
+     * thirteen translations, so the button and the completion event can drift
+     * apart in one language and only that one. Comparing the English copy alone
+     * would restore this test's green and leave that case uncovered, which is
+     * strictly worse than the defect it was written for: a step uncompletable in
+     * French is invisible to anyone reading the tree in English.
+     */
     private data class Step(
         val where: String,
-        val commandLinks: Set<String>,
+        val commandLinks: Map<String, Set<String>>,
         val events: List<String>,
     )
+
+    /** `package.nls.json` and its translations beside a manifest, by file name. */
+    private fun bundlesBeside(manifest: File): Map<String, JSONObject> =
+        manifest.parentFile?.listFiles { f -> f.isFile && BUNDLE.matches(f.name) }
+            ?.sortedBy { it.name }
+            ?.associate { it.name to JSONObject(it.readText()) }
+            .orEmpty()
+
+    /**
+     * Every rendering of a manifest string: the literal, or one per bundle
+     * carrying its key.
+     *
+     * A bundle missing the key contributes nothing rather than an empty string,
+     * so a partial bundle is not read here as a step with no button. That gap is
+     * closed by [BundledExtensionNlsTest], which refuses a translation whose key
+     * set differs from the English base at all.
+     */
+    private fun renderings(value: String, bundles: Map<String, JSONObject>): Map<String, String> {
+        val key = PLACEHOLDER.matchEntire(value)?.groupValues?.get(1)
+            ?: return mapOf("package.json" to value)
+        return bundles.filterValues { it.has(key) }.mapValues { (_, bundle) -> bundle.getString(key) }
+    }
 
     private fun ourSteps(): List<Step> {
         val found = mutableListOf<Step>()
@@ -74,6 +108,7 @@ class WalkthroughCompletionEventTest {
                 .optJSONObject("contributes")
                 ?.optJSONArray("walkthroughs")
                 ?: continue
+            val bundles = bundlesBeside(manifest)
             for (w in 0 until walkthroughs.length()) {
                 val walkthrough = walkthroughs.getJSONObject(w)
                 val steps = walkthrough.optJSONArray("steps") ?: continue
@@ -82,10 +117,10 @@ class WalkthroughCompletionEventTest {
                     val events = step.optJSONArray("completionEvents")
                     found += Step(
                         where = "${manifest.parentFile?.name} step '${step.optString("id", "?")}'",
-                        commandLinks = COMMAND_LINK
-                            .findAll(step.optString("description", ""))
-                            .map { it.groupValues[1] }
-                            .toSet(),
+                        commandLinks = renderings(step.optString("description", ""), bundles)
+                            .mapValues { (_, text) ->
+                                COMMAND_LINK.findAll(text).map { it.groupValues[1] }.toSet()
+                            },
                         events = (0 until (events?.length() ?: 0)).map { events!!.getString(it) },
                     )
                 }
@@ -162,16 +197,38 @@ class WalkthroughCompletionEventTest {
             "no onCommand: completion events were found, so this check is inspecting nothing",
         )
 
-        val orphans = commandEvents
-            .filter { (step, event) -> event.removePrefix(COMMAND_EVENT) !in step.commandLinks }
-            .map { (step, event) -> "${step.where}: $event" }
+        // The second control, and the one the translations made necessary. A step
+        // whose description resolves to nothing has an empty map, and the filter
+        // below then reports no orphan for it: the test would go green by
+        // comparing zero descriptions. More than one rendering also means the
+        // translations are genuinely being read and not just the English base.
+        val bundlesRead = commandEvents.flatMap { (step, _) -> step.commandLinks.keys }.toSet()
+        assertTrue(
+            bundlesRead.size > 1,
+            "only $bundlesRead was resolved for the steps that complete on a command, so the " +
+                "translated copies of their buttons were not compared. Each step's description " +
+                "is a %key% resolved out of package.nls.json and its translations; if those " +
+                "are gone, the button exists in one language and this test can only see that " +
+                "one.",
+        )
+
+        val orphans = commandEvents.flatMap { (step, event) ->
+            val command = event.removePrefix(COMMAND_EVENT)
+            step.commandLinks
+                .filterValues { command !in it }
+                .keys
+                .map { "${step.where} in $it: $event" }
+        }
 
         assertEquals(
             emptyList<String>(), orphans,
             "these steps complete on a command their own description does not offer, so the " +
                 "button and the completion event can no longer be wrong together, which is " +
                 "the only reason onCommand: is trusted here. Point the event at the command " +
-                "the step's button runs, or give the step a button that runs it.",
+                "the step's button runs, or give the step a button that runs it. A single " +
+                "bundle named here is a translation that rewrote or dropped the link target, " +
+                "which leaves the step uncompletable in that language alone. Read " +
+                "${bundlesRead.size} rendering(s) of each description.",
         )
     }
 
@@ -235,6 +292,17 @@ class WalkthroughCompletionEventTest {
          * The same class kept a runaway match from crossing a newline.
          */
         val COMMAND_LINK = Regex("""\(command:([^\s)?]+)""")
+
+        /**
+         * `%walkthrough.tools.description%` in a manifest, resolved out of the
+         * bundles. The whole value, never a fragment: that is what the editor's
+         * own substitution walker requires.
+         */
+        val PLACEHOLDER = Regex("""%([^%]+)%""")
+
+        /** `package.nls.json` and `package.nls.<language>.json`, nothing else. */
+        val BUNDLE = Regex("""package\.nls(\.[a-z-]+)?\.json""")
+
         const val COMMAND_EVENT = "onCommand:"
         const val OUR_NAMESPACE = "vscodroid."
     }

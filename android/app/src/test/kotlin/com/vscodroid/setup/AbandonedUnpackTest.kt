@@ -318,7 +318,11 @@ class AbandonedUnpackTest {
      */
     @Test
     fun `the failure branch removes only what nothing else would name again`() {
-        val ours = "vscodroid.vscodroid-saf-bridge-1.5.0"
+        // Only the `vscodroid.vscodroid-` prefix decides this. The version is
+        // here so the fixture reads like a real directory, and is deliberately
+        // one that does not ship, so a version bump cannot send this case
+        // looking for a rename that does not concern it.
+        val ours = "vscodroid.vscodroid-saf-bridge-0.0.0"
 
         assertTrue(
             failedUnpackMustBeRemoved(fetched, existedBefore = false, marked = true),

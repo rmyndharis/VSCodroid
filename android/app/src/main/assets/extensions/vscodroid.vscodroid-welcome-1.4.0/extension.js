@@ -101,9 +101,18 @@ function autoHideSideBar(context) {
             if (!editor) {
                 return;
             }
-            const enabled = vscode.workspace
-                .getConfiguration()
-                .get('vscodroid.layout.autoHideSideBar');
+            // Two keys, and the split is the point. The app owns
+            // `vscodroid.layout.compactScreen`, which is a fact about the
+            // device it cannot express as a static default; the user owns
+            // `vscodroid.layout.autoHideSideBar`, and unset means "follow the
+            // screen". They were one key, written by the app into the settings
+            // file the workbench merges ON TOP of the user's own, so changing
+            // it in Settings did nothing at all.
+            const config = vscode.workspace.getConfiguration();
+            const chosen = config.get('vscodroid.layout.autoHideSideBar');
+            const enabled = chosen === null || chosen === undefined
+                ? config.get('vscodroid.layout.compactScreen') === true
+                : chosen === true;
             if (!enabled) {
                 return;
             }

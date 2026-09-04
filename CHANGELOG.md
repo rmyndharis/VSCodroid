@@ -13,10 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **VSCodroid: Open Recent Folder** is now on the remote indicator in the status bar. Typing its name into the Command Palette was the only way to reach the device folder picker, which is why people could not find it.
 - The editor's interface now follows your phone's language: Chinese (Simplified and Traditional), Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish and Turkish. Nothing to install, and a language nobody has translated the editor into stays English.
 - The app's own screens are translated into those same languages, and Android's per-app language picker now lists them.
+- VSCodroid's own commands, settings and the Get Started walkthrough are translated into the same thirteen languages as the editor.
+- The user guide covers installing an extension from a VSIX file, and what running and debugging does and does not do on the device.
 
 ### Fixed
 
-- A file you changed on the device is no longer overwritten when the app reopens the folder after an upload was cut short. The app took its own record of the unfinished write as proof that nothing else had touched the file, and replaced it.
+- A file you changed on the device is no longer overwritten when the app reopens the folder after an upload was cut short. The app took its own record of the unfinished write as proof that nothing else had touched the file, and replaced it. The check now reads both copies rather than trusting the size the folder provider reports, so a document the interrupted write had emptied is recognised instead of leaving a spare copy of the file in your folder.
+- A setting you change is the one that applies. The app wrote its own preferences into a file the editor ranks above your settings, so changing the theme, word wrap or the minimap in Settings did nothing, with no error to say why. Those are defaults now, and an existing install has the old overrides removed once.
+- A folder you closed stays closed on the next launch. It was only remembered as closed for as long as the editor stayed open.
+- Opening a second window reuses the editor's own window. It handed the editor's address to the device browser, which answered Forbidden, and left a blocked-popup message over the editor.
+- A toolchain install the system stops part-way through no longer leaves its half-copied files behind with nothing able to remove them; the next launch gives the space back.
+- The first-run progress screen no longer reports Failed for a toolchain that another install is already putting in place.
+- Sizes are counted the way your phone counts them. The storage screen, the toolchain cards and the low-storage warning divided by 1,048,576 and wrote MB, while the message asking you to free space used decimal MB, so the same quantity read three ways. Nothing grew: the figures are about 5 percent larger for the same files.
 - The storage message asks for the amount your device actually reports. It was counted in binary megabytes and labelled MB, so freeing exactly what it asked for left you about 5 percent short and refused again.
 - An Escape the editor leaves unhandled is no longer handed back to Android. Some keyboard layouts answer it with a Back press, which sends the app to the background mid-keystroke.
 - Opening a workspace file no longer costs a filesystem check on every resource the editor loads, and a workspace file that is briefly absent while it is saved no longer cuts off every resource beside it.

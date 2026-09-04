@@ -775,6 +775,18 @@ class StoragePreflightTest {
                 "and 1 in the unit the machine counts in. Reading 1 here means the figure " +
                 "went back to MiB while the string still says MB",
         )
+        // The other half of the same sentence, and the only place the two halves
+        // meet: the app asks the user to free MB here and prints MB with
+        // StorageManager.formatSize everywhere else, and for three weeks those
+        // were different units because nothing compared them. Deliberately not a
+        // shared constant. A constant both sides read would move them together,
+        // and neither test would go red.
+        assertEquals(
+            "1.0 MB",
+            com.vscodroid.util.StorageManager.formatSize(1_000_000L),
+            "the amount the app asks a user to free and the amount it shows them " +
+                "have to be the same MB. This fails if either side moves alone",
+        )
     }
 
     /**

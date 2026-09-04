@@ -8,6 +8,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -235,7 +236,16 @@ class WorkspaceUrlRoundTripTest {
             SourceScan.body(source, "private fun rememberWorkspaceFolder("),
         )
 
-        assertTrue(writer.contains("openWorkspaceRoot = workspaceDirectoryInForce(")) {
+        // Read as one line rather than as one contiguous string: the writer also
+        // has to answer the closed-folder case, where the field is null and there
+        // is nothing to reduce, so the assignment is guarded. What matters is
+        // that the assignment and the reduction are the same statement, which a
+        // per-line test says and a substring search cannot.
+        assertTrue(
+            writer.lines().any {
+                it.contains("openWorkspaceRoot =") && it.contains("workspaceDirectoryInForce(")
+            },
+        ) {
             "rememberWorkspaceFolder no longer derives the published root, so either " +
                 "nothing does and a workspace file publishes only itself, or the " +
                 "interceptor went back to reducing per request"
@@ -248,6 +258,117 @@ class WorkspaceUrlRoundTripTest {
         assertTrue(body.contains("{ self.get()?.openWorkspaceRoot }")) {
             "the service worker is handed the unreduced folder again, and it is the " +
                 "entry point that does not go through the client"
+        }
+    }
+
+    /**
+     * That closing the folder is recorded, and recorded from the right URL.
+     *
+     * The workbench closes a folder by navigating its own WebView, so this
+     * callback is the only place Kotlin can learn it happened. Without the
+     * clearing branch the record went on naming the folder the user had closed:
+     * the next launch reopened it, and [MainActivity.openWorkspaceRoot] went on
+     * publishing it as a served resource root for the rest of the session.
+     *
+     * The predicate matters as much as its presence. `isWorkbenchUrl` is host
+     * and port only, so writing the branch against it would forget a live folder
+     * on a bare `/` load, and the symptom (the next launch lands in the projects
+     * directory) looks nothing like the cause.
+     */
+    @Test
+    fun `a closed folder is recorded as closed, from the URL that says so`() {
+        val bridge = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+                "private fun initBridge(",
+            ),
+        )
+
+        assertTrue(bridge.contains("emptyWindowUrl(url, port)")) {
+            "the page-loaded callback no longer asks whether the workbench closed the " +
+                "folder, so the closed state is remembered for as long as the WebView " +
+                "lives and no longer"
+        }
+        assertTrue(bridge.contains("rememberWorkspaceFolder(null)")) {
+            "nothing clears the remembered folder, so closing it and relaunching puts " +
+                "the user back into the folder they closed"
+        }
+    }
+
+    /**
+     * That the editor's own new window stays in the editor.
+     *
+     * The workbench builds a second window's URL from its own origin and
+     * pathname and puts no connection token on it. Handed to the system browser,
+     * which is where every other `window.open` goes, the server answers it
+     * "Forbidden.", and the editor is left under VS Code's own popup-blocked
+     * dialog. A device has one window, so the answer is to navigate in place.
+     *
+     * Read from the source because the override is a JavaScript string evaluated
+     * in a page no JVM test has.
+     */
+    @Test
+    fun `a second window is this window`() {
+        val override = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+                "private fun injectWindowOpenOverride(",
+            ),
+        )
+
+        val sameOrigin = override.indexOf("location.origin")
+        val bridge = override.indexOf("AndroidBridge.openExternalUrl")
+        assertTrue(sameOrigin >= 0) {
+            "window.open no longer tests for our own origin, so the editor's own " +
+                "address goes to the device browser, which is answered Forbidden"
+        }
+        assertTrue(bridge >= 0) {
+            "the bridge call is gone, so an ordinary external link no longer opens"
+        }
+        assertTrue(sameOrigin < bridge) {
+            "the same-origin test now runs after the bridge has already been handed " +
+                "the URL, which is the defect with an extra branch above it"
+        }
+        assertTrue(override.contains("return window")) {
+            "the override answers falsy for a window it did handle, and the caller " +
+                "reads `!!window.open(...)`, so VS Code draws its popup-blocked " +
+                "message over a navigation that is working"
+        }
+    }
+
+    /**
+     * That the workbench still spells the empty window the way this reads it.
+     *
+     * Both halves of the closed-folder work rest on one string the shipped
+     * bundle chooses: `ew=true` on a URL built from `document.location.origin`.
+     * A VS Code bump that renames the parameter, or builds the URL from
+     * somewhere other than our origin, makes [emptyWindowUrl] match nothing and
+     * the same-origin branch match nothing, silently and in both directions.
+     *
+     * Skipped rather than failed when the tree is absent: it is a gitignored
+     * artifact and the unit-test job stubs it, and a silent skip there would read
+     * as a green check of something nothing ran.
+     */
+    @Test
+    fun `the shipped workbench still names the empty window this way`() {
+        val workbench = JavaFile(
+            "src/main/assets/vscode-reh/out/vs/code/browser/workbench/workbench.js",
+        )
+        assumeTrue(
+            workbench.isFile,
+            "no packaged workbench at ${workbench.path}; run scripts/fetch-vscode-oss.sh " +
+                "and scripts/package-assets.sh to check these against the shipped bundle",
+        )
+        val source = workbench.readText()
+
+        assertTrue(source.contains("QUERY_PARAM_EMPTY_WINDOW=\"ew\"")) {
+            "the workbench no longer calls the empty window `ew`, so emptyWindowUrl " +
+                "recognises nothing and a closed folder is forgotten again"
+        }
+        assertTrue(source.contains("document.location.origin}\${document.location.pathname}")) {
+            "the workbench no longer builds a new window's URL from its own origin, so " +
+                "the same-origin branch in injectWindowOpenOverride matches nothing and " +
+                "the address goes back to the device browser"
         }
     }
 
@@ -288,6 +409,41 @@ class WorkspaceUrlRoundTripTest {
             "http://127.0.0.1:13337/?ew=true",
             emptyWindowUrl("http://127.0.0.1:13337/?ew=true", 13337),
         )
+    }
+
+    /**
+     * The other half of that: a cold start has no URL to restore, so it has to
+     * build one.
+     *
+     * Restoring is only available while the page is still there, which covers a
+     * renderer crash and nothing else. A launch after the process died has to
+     * spell the empty window itself, and it has to spell it in the one builder,
+     * with the token: a fresh process holds no `vscode-tkn` cookie, and a
+     * request without one is answered "Forbidden." Building `?folder=` for the
+     * closed state, or dropping the token, both put a page in front of the user
+     * that the server refuses.
+     */
+    @Test
+    fun `the closed state has a URL of its own, with the token`() {
+        assertEquals(
+            "http://127.0.0.1:13337/?ew=true&tkn=$token",
+            workbenchUrl(13337, null, token),
+        )
+    }
+
+    /**
+     * And that the two halves still recognise each other.
+     *
+     * The builder writes the empty window and [emptyWindowUrl] reads it back.
+     * Renaming the parameter on one side alone leaves the crash path unable to
+     * recognise a window this code itself opened, with every other case here
+     * green.
+     */
+    @Test
+    fun `the empty window this builds is the one the crash path restores`() {
+        val built = workbenchUrl(13337, null, "tok")
+
+        assertEquals(built, emptyWindowUrl(built, 13337))
     }
 
     @Test

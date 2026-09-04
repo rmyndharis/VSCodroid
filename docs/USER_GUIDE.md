@@ -12,10 +12,11 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 4. [Extensions](#extensions)
 5. [SSH and Git](#ssh-and-git)
 6. [Web Development](#web-development)
-7. [On-demand Toolchains](#on-demand-toolchains)
-8. [Tips and Tricks](#tips-and-tricks)
-9. [Known Limitations](#known-limitations)
-10. [Troubleshooting](#troubleshooting)
+7. [Running and Debugging](#running-and-debugging)
+8. [On-demand Toolchains](#on-demand-toolchains)
+9. [Tips and Tricks](#tips-and-tricks)
+10. [Known Limitations](#known-limitations)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -283,6 +284,39 @@ VSCodroid uses the [Open VSX](https://open-vsx.org) extension registry. This is 
 
 Extensions are downloaded from Open VSX and persist across app restarts.
 
+### Installing from a VSIX File
+
+Run **Extensions: Install from VSIX...** from the Command Palette
+(**Ctrl+Shift+P**) to install an extension you already hold as a `.vsix` file.
+
+The picker it opens is the editor's own, not Android's. It starts in your home
+folder, lists only files ending in `.vsix`, and reaches only what VSCodroid can
+see: not Downloads, not Documents, not an SD card, for the same reason **File >
+Open Folder** cannot. So bring the file inside first:
+
+1. Download the `.vsix` with the phone's browser.
+2. Run **VSCodroid: Open Folder from Device** and grant the folder it landed in;
+   the file appears in the Explorer. A device folder is copied into the app for
+   as long as it is open, so pick a folder holding little else rather than a
+   Downloads folder with a year of files in it. Files over 50 MB are not carried
+   in at all, so a very large VSIX has to arrive another way.
+3. Open a terminal (**Ctrl+`**), which starts in that folder, and copy it
+   across: `cp name.vsix ~/`.
+4. Run **Extensions: Install from VSIX...**, pick the file, and choose **Reload
+   Now** when the notification offers it.
+
+Signature checking plays no part in this. `extensions.verifySignature` decides
+downloads from Open VSX and nothing else; a VSIX is never checked for a
+signature whatever that setting says. What you do give up is the platform choice
+the marketplace makes for you: VSCodroid asks Open VSX for the Alpine ARM 64
+build of an extension that publishes one per platform, and a file you pick
+yourself gets no such help, so take the `alpine-arm64` one where the extension
+offers it (see [Extensions That Bundle a Compiled
+Program](#extensions-that-bundle-a-compiled-program)). Nothing checks that
+either: a VSIX built for the wrong platform installs, shows as enabled, and does
+nothing. One built for a newer editor is refused outright, with a message naming
+the version.
+
 ### Pre-installed Extensions
 
 These extensions come bundled with VSCodroid:
@@ -505,6 +539,69 @@ See the [Known Limitations](#known-limitations) section for more details.
 
 ---
 
+## Running and Debugging
+
+VSCodroid ships one debug adapter: **js-debug**, the same one desktop VS Code
+uses for JavaScript and TypeScript.
+
+### The Configurations That Are Already There
+
+Three launch configurations are written when the app first sets itself up. They
+belong to VSCodroid rather than to a project, so they are offered for every
+folder you open:
+
+| Configuration | What it is for |
+|---------------|----------------|
+| **Node.js: Run Current File** | Runs the file in the active editor under the debugger |
+| **Attach to Node.js** | Attaches to a Node process you started yourself with `--inspect`, on port 9229 |
+| **NestJS: Debug** | Runs `src/main.ts` through `ts-node`, for a project that already has `ts-node` and `tsconfig-paths` installed |
+
+The shortest route on a touch screen is **Debug: Select and Start Debugging**
+from the Command Palette (**Ctrl+Shift+P**): it lists all three and starts the
+one you pick. The **Run and Debug** icon in the activity bar shows the same
+three in a dropdown with a start button beside it.
+
+Set a breakpoint by tapping the gutter to the left of a line number.
+
+To give a project configurations of its own, open **Debug: Select and Start
+Debugging** and choose **Add Configuration...** at the bottom of the list. That
+creates `.vscode/launch.json` in the folder, and what you put there appears in
+the same list beside VSCodroid's three.
+
+### What Works Today, Measured
+
+Starting a launch configuration on the device does not run your program yet, and
+this is the honest state of it rather than a caveat:
+
+- **Launching in the integrated terminal** (what **Node.js: Run Current File**
+  and **NestJS: Debug** do) fails with `bash: /usr/bin/env: No such file or
+  directory`. The editor builds that command line for any POSIX shell, and
+  Android has no `/usr/bin` at all. The debug session starts and the toolbar
+  appears, so it looks like it is working until you read the terminal.
+- **Attaching** to a process you started yourself is the route that avoids that
+  command line entirely, and is the one to try if you need a debugger today.
+
+Fixing the first properly means a change inside the editor's own server build
+rather than anything in the app, so it is tracked as its own piece of work.
+Until then, `console.log` and the terminal are the working route.
+
+### What Has No Debugger Here At All
+
+- **Python.** The bundled Python extension carries no debugger of its own; it
+  points at Microsoft's separate `ms-python.debugpy`, which VSCodroid does not
+  bundle.
+- **Browsers.** js-debug drives Chrome or Edge through a companion that has to
+  run on the machine you are sitting at, and that companion cannot run here.
+  Debug the server side, and view the page in the preview tab or the device
+  browser.
+- **Everything else.** Ruby and Java are toolchains, not debuggers, and neither
+  ships an adapter. A debug extension written in JavaScript and published on
+  Open VSX may work; one that ships a program compiled for desktop Linux will
+  not (see [Extensions That Bundle a Compiled
+  Program](#extensions-that-bundle-a-compiled-program)).
+
+---
+
 ## On-demand Toolchains
 
 Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers additional languages as on-demand downloads.
@@ -513,8 +610,8 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Ruby 3.4 | ~10 MB | ~36 MB | ruby, gem, irb, bundler, rake |
-| Java 17 (OpenJDK) | ~55 MB | ~156 MB | java, javac, jar, jshell |
+| Ruby 3.4 | 9.9 MB | 36 MB | ruby, gem, irb, bundler, rake |
+| Java 17 (OpenJDK) | 55.4 MB | 156 MB | java, javac, jar, jshell |
 
 ### Installing During First Run
 
@@ -617,6 +714,14 @@ The status bar shows a phantom process count. This tells you how many background
 ---
 
 ## Known Limitations
+
+### Starting a Debug Session
+
+The debug adapter ships and the launch configurations are there, but starting one
+does not run your program on the device yet: the editor builds its terminal
+command around `/usr/bin/env`, which Android does not have. See [Running and
+Debugging](#running-and-debugging) for what that looks like and what to use
+instead.
 
 ### Native npm Packages
 
@@ -786,12 +891,12 @@ into those thirteen languages too. On Android 13 and later they can be set
 separately from the phone, under Settings, Apps, VSCodroid, Language, and the
 editor follows that choice as well.
 
-Two things stay English whatever the phone is set to:
+VSCodroid's own commands, settings and the Get Started walkthrough are
+translated into the same thirteen languages. An extension you install from Open
+VSX carries its own translations if its author wrote any, and English if not.
 
-- Anything an extension contributes: its command titles, its settings
-  descriptions, its messages. An extension carries its own translations, and the
-  bundled ones carry English only, the welcome walkthrough included.
-- The occasional string the translation packs do not cover, roughly one in fifty.
+One thing stays English whatever the phone is set to: the occasional string the
+translation packs do not cover, roughly one in fifty.
 
 Changing the language while VSCodroid is running takes effect on the spot: the
 editor reloads in the new one. What does not change is anything already written,
@@ -804,7 +909,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 805 MB to internal storage. With both toolchains installed, expect around 990 MB. Setup needs about 905 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 805 MB to internal storage. With both toolchains installed, expect around 996 MB. Setup needs about 905 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

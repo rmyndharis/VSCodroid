@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android Köprüsü",
+  "description": "Android'e uzanan komutlar: cihaz klasörleri, tarayıcı, SSH anahtarları, depolama, hakkında",
+  "command.openFolderFromDevice": "VSCodroid: Cihazdan klasör aç",
+  "command.openRecentFolder": "VSCodroid: Son kullanılan klasörü aç",
+  "command.openInBrowser": "VSCodroid: Tarayıcıda aç",
+  "command.generateSshKey": "VSCodroid: SSH anahtarı oluştur",
+  "command.copySshPublicKey": "VSCodroid: SSH ortak anahtarını kopyala",
+  "command.showStorageUsage": "VSCodroid: Depolama kullanımını göster",
+  "command.manageDeviceFolders": "VSCodroid: Cihaz klasörlerinin depolamasını yönet",
+  "command.clearCaches": "VSCodroid: Önbellekleri temizle",
+  "command.manageToolchains": "VSCodroid: Araç zincirlerini yönet",
+  "command.about": "VSCodroid: Hakkında"
+}

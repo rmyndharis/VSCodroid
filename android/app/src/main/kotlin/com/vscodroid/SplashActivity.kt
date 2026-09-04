@@ -527,14 +527,16 @@ class SplashActivity : AppCompatActivity() {
         //
         // Here rather than in onCreate, and the difference is minutes on the one
         // launch that matters. This copies up to 155 MB into the same `usr/` the
-        // first run unpacks 810 MB into, and the two space pre-flights cannot see
+        // first run unpacks 805 MB into, and the two space pre-flights cannot see
         // each other: setup measures usableSpace before extracting, the install
         // measures it before copying, and neither reserves for the other, so both
         // can pass and one then meets ENOSPC. The extraction survives that, it
         // aborts and the retry keeps credit for every byte it wrote. The install
-        // does not: a copy that lands and then cannot write its record leaves the
-        // tree under no manifest, and installFromDirectoryHoldingPack says plainly
-        // that nothing reclaims it.
+        // is worse off: a copy that lands and then cannot write its record leaves
+        // the tree under no manifest. What used to make that permanent was that
+        // nothing on disk named the tree; an install now writes a marker before
+        // it copies, and the launch repair above reclaims what the marker names,
+        // so the space comes back on the next start rather than never.
         //
         // Reached from every route out of onCreate, so it still runs on every
         // launch. A launch whose setup failed skips it, and that costs nothing it
@@ -913,16 +915,26 @@ class SplashActivity : AppCompatActivity() {
                     }
                 }
             }
-            // Anything else ends this pack without installing it. FAILED is the
-            // expected one; CANCELED arrives when the download is cancelled from
-            // the Play notification rather than from this screen, and UNKNOWN and
+            // Anything else ends this pack without installing it, with one
+            // exception the branch below names. FAILED is the expected one;
+            // CANCELED arrives when the download is cancelled from the Play
+            // notification rather than from this screen, and UNKNOWN and
             // NOT_INSTALLED arrive when Play has nothing to report for it.
             else -> {
-                if (status != AssetPackStatus.FAILED) {
-                    Logger.w(tag, "Pack $packName ended at status $status")
+                if (handedToAnotherInstall(status, ToolchainManager.packIsBeingInstalled(packName))) {
+                    // Not a failure, and the row is already telling the truth: it
+                    // reads "Installing...", set by [downloadNext], and an install
+                    // holding this pack is putting it in place right now. So the
+                    // correct repaint is no repaint. Painting "Failed" here told
+                    // the user an install had failed while it was succeeding.
+                    Logger.i(tag, "Pack $packName was handed to an install already running")
+                } else {
+                    if (status != AssetPackStatus.FAILED) {
+                        Logger.w(tag, "Pack $packName ended at status $status")
+                    }
+                    row.statusText.text = getString(R.string.progress_failed)
+                    showResult(row.statusText, R.color.colorError, row.nameText.text.toString())
                 }
-                row.statusText.text = getString(R.string.progress_failed)
-                showResult(row.statusText, R.color.colorError, row.nameText.text.toString())
             }
         }
 
@@ -1099,6 +1111,37 @@ internal fun isTerminalPackStatus(status: Int): Boolean = when (status) {
     AssetPackStatus.REQUIRES_USER_CONFIRMATION -> false
     else -> true
 }
+
+/**
+ * Whether [status] means another install in this process is already putting this
+ * toolchain in place, rather than that the pack failed.
+ *
+ * `UNKNOWN` reaches this screen through the same callback a Play state does, and
+ * it is what `ToolchainManager` reports when it declines a duplicate: the pack is
+ * held by an install that is running right now, which is the opposite of a
+ * failure. The screen reaches that case without anyone trying, because two
+ * managers are live on every launch: the delivered-pack reconcile runs on one
+ * while Continue queues installs on another, so Play answers COMPLETED for a pack
+ * the first one is already copying and the second declines it.
+ *
+ * The status is tested as well as [heldElsewhere], and that is the load-bearing
+ * half. Without it, a genuine FAILED arriving while some other pack happened to
+ * be installing would be swallowed and the row would sit on "Installing..."
+ * saying nothing, which is worse than the wrong word this fixes.
+ *
+ * `ToolchainActivity` tells the same two apart by what it asked for; this screen
+ * has no equivalent, because here every pack was asked for.
+ *
+ * File scope and a plain boolean argument for the reason [isTerminalPackStatus]
+ * has them: this project's unit tests have no Robolectric, so a predicate inside
+ * an Activity cannot be run. The flag is read on the main thread, after the other
+ * install may already have released the pack; that race is lost only in the
+ * microseconds between the loser's decline and the winner's release, against a
+ * copy that runs for tens of seconds, and losing it means today's "Failed", so
+ * the direction a mistake takes is unchanged.
+ */
+internal fun handedToAnotherInstall(status: Int, heldElsewhere: Boolean): Boolean =
+    status == AssetPackStatus.UNKNOWN && heldElsewhere
 
 /**
  * The ticked packs still worth downloading, given what the install record says.

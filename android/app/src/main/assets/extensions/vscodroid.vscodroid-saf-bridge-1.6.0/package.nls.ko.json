@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android 브리지",
+  "description": "Android에 닿는 명령: 기기 폴더, 브라우저, SSH 키, 저장 공간, 정보",
+  "command.openFolderFromDevice": "VSCodroid: 기기에서 폴더 열기",
+  "command.openRecentFolder": "VSCodroid: 최근 폴더 열기",
+  "command.openInBrowser": "VSCodroid: 브라우저에서 열기",
+  "command.generateSshKey": "VSCodroid: SSH 키 만들기",
+  "command.copySshPublicKey": "VSCodroid: SSH 공개 키 복사",
+  "command.showStorageUsage": "VSCodroid: 저장 공간 사용량 보기",
+  "command.manageDeviceFolders": "VSCodroid: 기기 폴더 저장 공간 관리",
+  "command.clearCaches": "VSCodroid: 캐시 지우기",
+  "command.manageToolchains": "VSCodroid: 툴체인 관리",
+  "command.about": "VSCodroid: 정보"
+}

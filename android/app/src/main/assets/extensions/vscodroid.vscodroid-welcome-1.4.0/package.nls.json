@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Welcome",
+  "description": "Welcome walkthrough for VSCodroid",
+  "config.layout.autoHideSideBar": "Close the side bar when you open a file. Left unset it follows the screen: on where the file tree and the editor cannot both fit across it, off where they can. Set it here to decide for yourself.",
+  "command.welcome.open": "VSCodroid: Open Welcome",
+  "command.welcome.toolsDismissed": "VSCodroid: Dismiss Tools Step",
+  "walkthrough.title": "Get Started with VSCodroid",
+  "walkthrough.description": "Set up your mobile development environment",
+  "walkthrough.theme.title": "Choose your theme",
+  "walkthrough.theme.description": "Pick a color theme that suits your style.\n\n[Browse Color Themes](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "Your development tools",
+  "walkthrough.tools.description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js** + npm: ready\n\n$(check) **Python** + pip: ready\n\n$(check) **Git**: ready\n\n$(check) **make**: ready\n\n**Java 17** and **Ruby** install on demand. Touch and hold the VSCodroid icon on your home screen and pick **Manage toolchains**.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "A powerful terminal",
+  "walkthrough.terminal.description": "Open a full bash terminal with every bundled tool on PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` prints ``hi``\n\n``python3 -c 'print(\"hi\")'`` prints ``hi``\n\n``git init demo`` prints ``Initialized empty Git repository``\n\n[Open Terminal](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Extend with more features",
+  "walkthrough.extensions.description": "Install extensions from the Open VSX marketplace for language support, themes, and tools.\n\nExtensions written in JavaScript work. The few that bundle a program compiled for desktop Linux can install without complaint and then do nothing, with no error on screen.\n\n[Browse Extensions](command:workbench.view.extensions)"
+}

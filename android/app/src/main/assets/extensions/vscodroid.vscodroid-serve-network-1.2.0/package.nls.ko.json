@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid 네트워크에 게시",
+  "description": "이 기기에서 실행 중인 개발 서버에 다른 기기가 접속할 수 있는 주소를 보여 줍니다",
+  "command.serveOnNetwork": "VSCodroid: 네트워크에 게시"
+}

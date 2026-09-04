@@ -1,0 +1,105 @@
+{
+  "name": "vscodroid-welcome",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.4.0",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "VSCodroid",
+      "properties": {
+        "vscodroid.layout.autoHideSideBar": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null,
+          "description": "%config.layout.autoHideSideBar%"
+        }
+      }
+    },
+    "configurationDefaults": {
+      "workbench.startupEditor": "none",
+      "workbench.colorTheme": "Default Dark Modern",
+      "workbench.sash.size": 20,
+      "workbench.activityBar.compact": true,
+      "workbench.secondarySideBar.defaultVisibility": "hidden",
+      "editor.wordWrap": "on",
+      "editor.minimap.enabled": false,
+      "terminal.integrated.fontSize": 13
+    },
+    "commands": [
+      {
+        "command": "vscodroid.welcome.open",
+        "title": "%command.welcome.open%"
+      },
+      {
+        "command": "vscodroid.welcome.toolsDismissed",
+        "title": "%command.welcome.toolsDismissed%"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "vscodroid.welcome",
+        "title": "%walkthrough.title%",
+        "description": "%walkthrough.description%",
+        "steps": [
+          {
+            "id": "theme",
+            "title": "%walkthrough.theme.title%",
+            "description": "%walkthrough.theme.description%",
+            "media": {
+              "svg": "media/theme.svg"
+            },
+            "completionEvents": [
+              "onSettingChanged:workbench.colorTheme"
+            ]
+          },
+          {
+            "id": "tools",
+            "title": "%walkthrough.tools.title%",
+            "description": "%walkthrough.tools.description%",
+            "media": {
+              "svg": "media/tools.svg"
+            },
+            "completionEvents": [
+              "onCommand:vscodroid.welcome.toolsDismissed"
+            ]
+          },
+          {
+            "id": "terminal",
+            "title": "%walkthrough.terminal.title%",
+            "description": "%walkthrough.terminal.description%",
+            "media": {
+              "svg": "media/terminal.svg"
+            },
+            "completionEvents": [
+              "onCommand:workbench.action.terminal.new"
+            ]
+          },
+          {
+            "id": "extensions",
+            "title": "%walkthrough.extensions.title%",
+            "description": "%walkthrough.extensions.description%",
+            "media": {
+              "svg": "media/extensions.svg"
+            },
+            "completionEvents": [
+              "onCommand:workbench.view.extensions"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

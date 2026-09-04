@@ -458,11 +458,22 @@ async function main() {
     // asserted, because that inversion satisfies either one on its own.
     const override = extractInjected('injectWindowOpenOverride', 'openExternalUrl');
 
+    // The window carries a `location`, because the override reads one before it
+    // reaches the bridge at all: a second window is this window on a device, and
+    // the workbench builds that URL from its own origin with no connection
+    // token, so handing it to the system browser is answered "Forbidden."
+    const ORIGIN = 'http://127.0.0.1:13337';
+
     function windowOpen(answer, url) {
-        const seen = { bridge: 0, orig: 0 };
+        const seen = { bridge: 0, orig: 0, navigated: null };
         const win = {
             __vscodroid: { authToken: 'test-token' },
             open() { seen.orig++; return 'fell through to the WebView'; },
+            location: {
+                origin: ORIGIN,
+                set href(value) { seen.navigated = value; },
+                get href() { return seen.navigated; },
+            },
         };
         vm.runInNewContext(override, {
             window: win,
@@ -489,6 +500,43 @@ async function main() {
         'the bridge did not open the URL and window.open swallowed the click anyway, so it ' +
         'did nothing and said nothing',
     );
+
+    // The editor asking for a second window. A device has one, so this one is
+    // it: the URL must be navigated in place and must never reach the bridge,
+    // whose localhost branch hands it to the system browser, where the server
+    // answers a request with no connection token "Forbidden." and the editor is
+    // left under VS Code's own popup-blocked message.
+    const ownWindow = windowOpen('', ORIGIN + '/?ew=true');
+    assert.strictEqual(
+        ownWindow.calls.bridge, 0,
+        "the editor's own address was handed to the device browser, which is answered " +
+        'Forbidden because the workbench builds that URL without a connection token',
+    );
+    assert.strictEqual(ownWindow.calls.orig, 0, 'the platform opened a second window as well');
+    assert.strictEqual(
+        ownWindow.calls.navigated, ORIGIN + '/?ew=true',
+        'nothing navigated, so New Window does nothing at all',
+    );
+    assert.ok(
+        ownWindow.result,
+        'the override answered falsy for a window it did handle, and the caller reads ' +
+        '`!!window.open(...)`, so the editor draws a blocked-popup message over a ' +
+        'navigation that is working',
+    );
+
+    // And the other direction, which is what the prefix test protects: a dev
+    // server on another port is a different origin and still belongs to the
+    // browser. Written as a URL that CONTAINS our origin later on, the shape a
+    // substring search would get wrong, blanking the editor mid sign-in.
+    const looksLikeOurs = windowOpen(
+        '', 'https://auth.example.com/authorize?redirect_uri=' + ORIGIN + '/callback',
+    );
+    assert.strictEqual(
+        looksLikeOurs.calls.bridge, 1,
+        'a remote URL naming our origin in its query was navigated in place, so the editor ' +
+        'was replaced by whatever that address serves',
+    );
+    assert.strictEqual(looksLikeOurs.calls.navigated, null, 'the page navigated to a remote URL');
 
     // ---- the commands that answer by reply id ----------------------------
     //
@@ -653,14 +701,18 @@ async function main() {
     const showStorageUsage = commands.get('vscodroid.showStorageUsage');
     assert.ok(showStorageUsage, 'the bundled extension no longer registers vscodroid.showStorageUsage');
 
-    const MB = 1024 * 1024;
+    // Decimal, because that is what formatBytes divides by and what the phone's
+    // own storage screen counts in. A binary fixture here renders 3 GiB as
+    // "3.2 GB" and the sentences below stop matching, which is a test of the
+    // fixture rather than of the screen.
+    const MB = 1000 * 1000;
     // Two rows of 512 MB inside a 3 GB total: the rows add to 1.0 GB, a figure
     // that is neither the total nor any single row, so naming it cannot be
     // satisfied by echoing something already on the screen.
     const breakdown = {
         vscode_server: 512 * MB,
         extensions: 512 * MB,
-        total: 3 * 1024 * MB,
+        total: 3000 * MB,
         clearable: ['cache', 'logs'],
     };
     let offered = null;

@@ -2472,7 +2472,16 @@ class MainActivity : AppCompatActivity() {
             // hop was already being made, and makes that inventory true again.
             val resolved = withContext(Dispatchers.IO) {
                 val connectionToken = nodeService?.getConnectionToken()
-                val folder = rememberedWorkspaceFolder()
+                // The close is asked about before the remembered folder, and both
+                // are behind the URL: a folder still on screen outranks either.
+                // Without the first test the record still named the folder the
+                // user had closed, so a relaunch put them back into it, and the
+                // fix that made a close survive an editor crash only covered the
+                // paths that still had the URL in hand.
+                //
+                // Inside the IO hop because the first read of a preferences file
+                // is disk work; `MainThreadWatch` is what notices when it is not.
+                val folder = if (workspaceWasClosed()) null else rememberedWorkspaceFolder()
                     ?: FirstRunSetup(this@MainActivity).ensureProjectsDir()
                 connectionToken to folder
             }
@@ -2679,9 +2688,19 @@ class MainActivity : AppCompatActivity() {
                 }
             },
             onPageLoaded = { url ->
-                folderFromUrl(url)?.let {
-                    rememberWorkspaceFolder(it)
-                    adoptWorkbenchFolder(it)
+                val opened = folderFromUrl(url)
+                if (opened != null) {
+                    rememberWorkspaceFolder(opened)
+                    adoptWorkbenchFolder(opened)
+                } else if (emptyWindowUrl(url, port) != null) {
+                    // Closing the folder is a navigation the workbench performs on
+                    // itself, so this callback is the only place Kotlin can learn
+                    // it happened. The test is [emptyWindowUrl] and not
+                    // [isWorkbenchUrl]: the second is host and port only, so a bare
+                    // `/` load would forget a folder that is open, and the symptom
+                    // (the next launch drops the user in the projects directory)
+                    // looks nothing like the cause.
+                    rememberWorkspaceFolder(null)
                 }
                 // A main-frame load is a new document, and the document that owed a
                 // download's bytes went with the old one. [recreateWebView] used to
@@ -2780,19 +2799,52 @@ class MainActivity : AppCompatActivity() {
      * the page-loaded callback, or from the navigation this activity is itself
      * performing, and it is read only where there is no URL to read: see
      * [loadVSCode], where it sits after [folderFromUrl] and before the default.
+     *
+     * A null [folderPath] is the user having closed the folder, and it is the one
+     * absence this may be overwritten with. Every other absence must not reach
+     * here: the `data:` placeholder, an error page and a load on some other port
+     * all say nothing about what is open, and clearing on those would forget a
+     * live folder. The caller's test is [emptyWindowUrl], which is the only URL
+     * that positively says no folder is open. Before this took null, the record
+     * outlived the close in both directions: the preference reopened the closed
+     * folder on the next launch, and [openWorkspaceRoot] kept publishing it as a
+     * served resource root for the rest of the session.
+     *
+     * One case is deliberately not covered. A process killed between the close
+     * navigation starting and the page finishing leaves the old folder in the
+     * preference, so the next launch reopens it. That is true of every folder
+     * here, not only of a close: the record is written from the finished load,
+     * and moving it earlier would put a preference write on the interception
+     * path.
      */
-    private fun rememberWorkspaceFolder(folderPath: String) {
+    private fun rememberWorkspaceFolder(folderPath: String?) {
         openWorkspaceFolder = folderPath
         // The one `stat` this costs, and the only place it is paid. Above the
         // early return, because the return only means the preference is already
         // written; the fields still have to describe the folder being navigated
         // to, and after a process restart they start out null.
-        openWorkspaceRoot = workspaceDirectoryInForce(folderPath)
+        //
+        // Null, never the empty string: `canonicalOrNull("")` resolves to the
+        // process working directory, and this field is published as a resource
+        // root, so an empty string here would serve the app's own working
+        // directory to the page.
+        openWorkspaceRoot = folderPath?.let { workspaceDirectoryInForce(it) }
         // Written only on a change: this runs on every main-frame load, and the
         // server redirects, so a folder switch alone reaches it twice.
-        if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == folderPath) return
-        workspacePrefs.edit { putString(KEY_LAST_FOLDER, folderPath) }
+        val stored = folderPath ?: NO_FOLDER
+        if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == stored) return
+        workspacePrefs.edit { putString(KEY_LAST_FOLDER, stored) }
     }
+
+    /**
+     * Whether the last thing the user did was close the folder.
+     *
+     * Asked of the same key [rememberedWorkspaceFolder] reads, so the two cannot
+     * drift, and asked before it: a deliberate close outranks a folder that was
+     * remembered before it.
+     */
+    private fun workspaceWasClosed(): Boolean =
+        workspacePrefs.getString(KEY_LAST_FOLDER, null) == NO_FOLDER
 
     /**
      * The remembered workspace, when reopening it is still the right thing.
@@ -2828,7 +2880,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun navigateToFolder(
         port: Int,
-        folderPath: String,
+        folderPath: String?,
         token: String? = nodeService?.getConnectionToken(),
     ) {
         val wv = webView ?: return
@@ -3298,6 +3350,29 @@ class MainActivity : AppCompatActivity() {
                 window.__vscodroidOpenPatched = true;
                 var orig = window.open;
                 window.open = function(url) {
+                    // The editor asking for a second window, which on a device is
+                    // this one. The workbench builds that URL from its own origin
+                    // and pathname and puts no connection token on it, so handing
+                    // it to the system browser opened a browser showing
+                    // "Forbidden." and left a popup-blocked dialog over the
+                    // editor. Navigating in place is what the workbench already
+                    // does for Close Workspace and Open Folder, on the branch
+                    // where it has a window to reuse.
+                    //
+                    // A prefix test, not a search: an OAuth `redirect_uri` naming
+                    // 127.0.0.1 in its query would match a substring search and
+                    // blank the editor mid sign-in. A dev server on another port
+                    // is a different origin and still reaches the bridge, which
+                    // is the branch openExternalUrl's localhost handling exists
+                    // for.
+                    //
+                    // Returns the window rather than null: the caller reads
+                    // `!!window.open(...)` and draws its own popup-blocked
+                    // message for a falsy answer.
+                    if (url && url.indexOf(window.location.origin + '/') === 0) {
+                        window.location.href = url;
+                        return window;
+                    }
                     if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
                         var t = (window.__vscodroid || {}).authToken;
                         // Only claim the click if the bridge actually opened it.
@@ -4132,6 +4207,26 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LAST_FOLDER = "last_workspace_folder"
 
         /**
+         * What [KEY_LAST_FOLDER] holds once the user has closed the folder.
+         *
+         * Three states in one record rather than a second key that can disagree
+         * with the first: a path is a folder to reopen, this is an empty window
+         * to restore, and the key being absent is a user who has never opened
+         * anything, which still means the projects directory.
+         *
+         * Not the empty string, which is the obvious choice and is unsafe.
+         * `File("").exists()` is **true**: the empty abstract path resolves to the
+         * process working directory, so an empty sentinel reaching
+         * [rememberedFolderToReopen] is answered as a real folder, opened, and
+         * published as a served resource root. Measured on the JDK this builds
+         * with, and the same rule is what makes any relative value dangerous.
+         * This one cannot be a path at all, so every reader that does not know
+         * about it, an older build reading a preferences file this one wrote
+         * included, filters it out through the `exists` it already applies.
+         */
+        private const val NO_FOLDER = "vscodroid:closed"
+
+        /**
          * The control on the renderer-crash page, recognised by [bootstrapClient].
          *
          * Its own scheme-and-host rather than [RETRY_URL] because the two pages
@@ -4646,7 +4741,7 @@ internal fun authCallbackIsExpected(
  */
 internal fun workbenchUrl(
     port: Int,
-    folderPath: String,
+    folderPath: String?,
     token: String?,
     isFile: (String) -> Boolean = { File(it).isFile },
 ): String {
@@ -4664,12 +4759,22 @@ internal fun workbenchUrl(
     // The stat is behind the suffix test, so an ordinary folder pays nothing; the
     // predicate is passed for the reason every other predicate in this file is,
     // that these paths do not exist on a JVM test machine.
-    val param = if (folderPath.endsWith(WORKSPACE_FILE_SUFFIX) && isFile(folderPath)) {
-        "workspace"
-    } else {
-        "folder"
+    //
+    // A null path is the third thing the workbench can be showing, and it is a
+    // state rather than a missing argument: the user closed the folder. The
+    // workbench spells that `?ew=true`, and it has to be spelled here so that a
+    // cold start restoring it goes through the one builder, with the token. The
+    // token is not optional on that path: a fresh process has no `vscode-tkn`
+    // cookie, and the server answers a request without one with "Forbidden."
+    // Sending it is safe because the server strips `tkn` and redirects with every
+    // other query parameter intact.
+    val query = when {
+        folderPath == null -> "ew=true"
+        folderPath.endsWith(WORKSPACE_FILE_SUFFIX) && isFile(folderPath) ->
+            "workspace=${Uri.encode(folderPath)}"
+        else -> "folder=${Uri.encode(folderPath)}"
     }
-    val base = "http://127.0.0.1:$port/?$param=${Uri.encode(folderPath)}"
+    val base = "http://127.0.0.1:$port/?$query"
     return if (token.isNullOrEmpty()) base else "$base&tkn=${Uri.encode(token)}"
 }
 
@@ -4757,7 +4862,7 @@ internal fun workspaceDirectoryInForce(
  */
 internal fun emptyWindowUrl(url: String?, port: Int): String? {
     if (url == null) return null
-    val ours = workbenchUrl(port, "", null).substringBefore('?')
+    val ours = workbenchUrl(port, null, null).substringBefore('?')
     if (!url.startsWith(ours)) return null
     val query = url.substringAfter('?', "")
     if (query.isEmpty()) return null
@@ -4860,7 +4965,13 @@ internal fun rememberedFolderToReopen(
     exists: (String) -> Boolean,
     mirrorIsGranted: (String) -> Boolean,
 ): String? {
-    val path = remembered?.takeIf(exists) ?: return null
+    // Absolute, before anything is asked of the filesystem. `File("")` and every
+    // relative path resolve against the process working directory, and
+    // `File("").exists()` answers true, so a record holding anything but a path
+    // would be reopened as whatever that directory happens to be and then
+    // published as a served resource root. Every value written here is absolute;
+    // anything else is a sentinel or damage, and both mean the default.
+    val path = remembered?.takeIf { it.startsWith("/") }?.takeIf(exists) ?: return null
     SafStorageManager.mirrorNameFor(path, mirrorsRoot) ?: return path
     return path.takeIf { mirrorIsGranted(it) }
 }

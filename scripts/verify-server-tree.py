@@ -25,6 +25,11 @@ MACHINES = {0x3E: "x86-64", AARCH64: "aarch64", 0x28: "arm", 0xF3: "riscv"}
 REQUIRED = [
     "out/server-main.js",
     "product.json",
+    # The only debug adapter this build ships, and the user guide names it. It
+    # arrives from the gulp build rather than from anything in this repository,
+    # so an upstream task-set change could drop it with nothing here having
+    # changed and nothing noticing until a user pressed Run.
+    "extensions/ms-vscode.js-debug/src/extension.js",
     # Moved in 1.133: @vscode/ripgrep became @vscode/ripgrep-universal, which
     # ships one binary per platform instead of one per install.
     "node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg",

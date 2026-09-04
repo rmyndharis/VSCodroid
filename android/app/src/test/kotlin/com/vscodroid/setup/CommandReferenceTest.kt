@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -26,17 +27,55 @@ class CommandReferenceTest {
     private val kotlinDir = File("src/main/kotlin")
     private val stringsFile = File("src/main/res/values")
 
-    /** Every command title contributed by a bundled extension, e.g. "VSCodroid: About". */
+    /**
+     * Every command title contributed by a bundled extension, e.g. "VSCodroid: About".
+     *
+     * Parsed rather than pattern-matched, because a title is now written into the
+     * manifest as `%command.about%` and the English text lives in
+     * `package.nls.json` beside it. A regex over the raw manifest returns an empty
+     * set against that, and an empty set makes every reference in the app look
+     * dangling.
+     *
+     * The ENGLISH base only, deliberately. What this test compares against are
+     * references in `res/values/strings.xml` and in English JavaScript literals,
+     * and those name the English title on purpose: the Command Palette keeps a
+     * translated command findable by its English name, so telling a user to type
+     * it stays correct in every language. Resolving through a translation would
+     * compare an English reference with a French title and report a defect that
+     * is not one.
+     */
     private fun contributedTitles(): Set<String> {
         val dirs = extensionsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
         check(dirs.isNotEmpty()) {
             "No bundled extensions under ${extensionsDir.absolutePath}; this test would " +
                 "otherwise pass by finding nothing to check against"
         }
-        return dirs.flatMap { dir ->
-            val manifest = File(dir, "package.json").takeIf { it.isFile }?.readText().orEmpty()
-            TITLE.findAll(manifest).map { it.groupValues[1] }.toList()
-        }.toSet()
+        val titles = dirs.flatMap { dir ->
+            val manifest = File(dir, "package.json").takeIf { it.isFile }
+                ?: return@flatMap emptyList<String>()
+            val base = File(dir, BASE_BUNDLE).takeIf { it.isFile }?.let { JSONObject(it.readText()) }
+            val commands = JSONObject(manifest.readText())
+                .optJSONObject("contributes")
+                ?.optJSONArray("commands")
+                ?: return@flatMap emptyList<String>()
+            (0 until commands.length()).mapNotNull { i ->
+                val raw = commands.optJSONObject(i)?.optString("title").orEmpty()
+                val key = PLACEHOLDER.matchEntire(raw)?.groupValues?.get(1)
+                    ?: return@mapNotNull raw
+                base?.optString(key)?.takeIf { it.isNotEmpty() }
+            }
+        }.filter { it.startsWith(PREFIX) }.toSet()
+
+        // The control the parse made necessary. A placeholder this cannot resolve
+        // yields nothing, and an empty set turns every reference below into a
+        // dangling one, which reads as a swarm of unrelated failures rather than
+        // as "the titles could not be read".
+        check(titles.isNotEmpty()) {
+            "No command title starting with '$PREFIX' could be read from any bundled " +
+                "manifest. The titles are %key% placeholders resolved out of $BASE_BUNDLE; " +
+                "if that file is missing or its keys were renamed, nothing here can be checked."
+        }
+        return titles
     }
 
     /**
@@ -115,8 +154,14 @@ class CommandReferenceTest {
     }
 
     private companion object {
-        /** `"title": "VSCodroid: About"` in an extension manifest. */
-        val TITLE = Regex(""""title"\s*:\s*"(VSCodroid: [^"]+)"""")
+        /** The prefix that makes a title one of ours, and the palette's grouping. */
+        const val PREFIX = "VSCodroid: "
+
+        /** `%command.about%` as a whole title value, which is what the editor substitutes. */
+        val PLACEHOLDER = Regex("""%([^%]+)%""")
+
+        /** The English base, and the per-key fallback for every translation. */
+        const val BASE_BUNDLE = "package.nls.json"
 
         /**
          * A reference in source text: the name must be QUOTED, which is how it appears

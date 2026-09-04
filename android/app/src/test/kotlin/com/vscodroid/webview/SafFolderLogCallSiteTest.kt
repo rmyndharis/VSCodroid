@@ -30,8 +30,12 @@ import org.junit.jupiter.api.Test
  * search like that, and so does the same leak in any of the four other methods
  * here that are handed a `Uri`. `LogTaint` follows the value instead: every name
  * a declaration types as `Uri` is a source, taint runs through declarations to a
- * fixpoint, statements are read whole, and the whole file is in scope, so this
- * case is about device folders reaching the log rather than about one line.
+ * fixpoint, a statement is read across the lines a formatter wrapped it onto up
+ * to the cap that reader states, and the whole file is in scope, so this case is
+ * about device folders reaching the log rather than about one line. The one limit
+ * worth naming here rather than only there, because the control below is written
+ * so as not to depend on it: a declaration is read one line at a time, so a `val`
+ * whose value sits on the next line carries no taint.
  *
  * Source reading, for the reason `DownloadListenerWiringTest` gives: there is no
  * seam. `openSafFolder` shows a dialog, takes a permission and launches a
@@ -73,16 +77,29 @@ class SafFolderLogCallSiteTest {
 
     @Test
     fun `the line still names the folder by its mirror`() {
-        val named = opened.lines()
-            .any { it.contains("Logger.") && it.contains("getMirrorDir(") }
+        // Asked of the reader rather than of the text, and the difference is what
+        // this control is for. Searching a line for `Logger.` and `getMirrorDir(`
+        // together answers a question about formatting: wrap that one statement
+        // onto four lines and it fails while nothing about the log has changed,
+        // and break the seed that makes a tree URI a source and it passes while
+        // the case above has gone blind and stopped guarding anything. Reading it
+        // through `reducedLogs` ties this control to the same machinery, so the
+        // two fail together or not at all.
+        //
+        // File-scoped, not body-scoped, because that is the scope the reader
+        // works in. MainActivity has exactly one reduced log statement today, the
+        // one at the top of openSafFolder, and `the body being checked was
+        // actually found` is what still says openSafFolder is the right site.
+        val reduced = LogTaint.reducedLogs(source.lines())
 
-        assertTrue(named) {
+        assertTrue(reduced.isNotEmpty()) {
             "nothing in openSafFolder says which folder is being opened, so a bug report " +
                 "can no longer be lined up with one. Redaction here means naming the " +
                 "folder by the digest the rest of the app already calls it by, not " +
                 "deleting the statement. Found:\n" +
                 opened.lines().filter { it.contains("Logger.") }
-                    .joinToString("\n") { "  ${it.trim()}" }
+                    .joinToString("\n") { "  ${it.trim()}" } +
+                "\nReduced statements in the whole file: " + reduced
         }
     }
 
@@ -140,20 +157,40 @@ class SafFolderLogCallSiteTest {
     }
 
     @Test
-    fun `a mirror named on a line of its own is not the folder that made it`() {
+    fun `the sync call is a reduction, so the mirror it returns is not the folder that made it`() {
         // The false accusation a reader that taints by proximity makes here, and
         // the reason this file uses LogTaint rather than the scan in
-        // `PageSuppliedLoggingTest`: that one taints `mirrorDir` from the sync
-        // call and reddens the safe statement below. `File.name` under
-        // `saf-mirrors` IS the digest; a reader that cannot print it has nothing
-        // left to say and gets narrowed back by whoever it stops.
-        val safe = openSource(
+        // `PageSuppliedLoggingTest`: that one has no notion of a reduction and
+        // reads a right-hand side to the end of the statement, so it taints
+        // `mirrorDir` from the sync call and reddens the safe statement below.
+        // `File.name` under `saf-mirrors` IS the digest; a reader that cannot
+        // print it has nothing left to say and gets narrowed back by whoever it
+        // stops.
+        //
+        // Both spellings, because the verdict has to come from the rule and not
+        // from where a formatter put the line break. Read one line at a time, the
+        // wrapped form is clean for a reason that has nothing to do with the sync
+        // call: the declaration ends before it. `syncToLocal` being a reduction
+        // is what makes the one-line form clean too, and deleting that entry is
+        // what this case exists to fail on.
+        val wrapped = openSource(
             """        val mirrorDir = withContext(Dispatchers.IO) {""",
             """            safManager.syncToLocal(uri) { done, total -> }""",
             """        }""",
             """        Logger.i(tag, "Synced " + mirrorDir.name)""",
         )
+        val oneLine = openSource(
+            """        val mirrorDir = safManager.syncToLocal(uri) { done, total -> }""",
+            """        Logger.i(tag, "Synced " + mirrorDir.name)""",
+        )
 
-        assertEquals(emptyList<String>(), LogTaint.leaks(safe))
+        assertEquals(emptyList<String>(), LogTaint.leaks(wrapped))
+        assertEquals(
+            emptyList<String>(), LogTaint.leaks(oneLine),
+            "the verdict on a mirror must come from the reduction rule, not from where " +
+                "the formatter put the line break: a directory named after the digest of " +
+                "a tree URI carries no part of the path that URI spells out, however the " +
+                "call that returned it was laid out",
+        )
     }
 }

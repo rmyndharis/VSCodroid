@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android 橋接",
+  "description": "觸及 Android 的命令：裝置資料夾、瀏覽器、SSH 金鑰、儲存空間、關於",
+  "command.openFolderFromDevice": "VSCodroid: 開啟裝置上的資料夾",
+  "command.openRecentFolder": "VSCodroid: 開啟最近的資料夾",
+  "command.openInBrowser": "VSCodroid: 在瀏覽器中開啟",
+  "command.generateSshKey": "VSCodroid: 產生 SSH 金鑰",
+  "command.copySshPublicKey": "VSCodroid: 複製 SSH 公開金鑰",
+  "command.showStorageUsage": "VSCodroid: 檢視儲存空間用量",
+  "command.manageDeviceFolders": "VSCodroid: 管理裝置資料夾的儲存空間",
+  "command.clearCaches": "VSCodroid: 清除快取",
+  "command.manageToolchains": "VSCodroid: 管理工具鏈",
+  "command.about": "VSCodroid: 關於"
+}

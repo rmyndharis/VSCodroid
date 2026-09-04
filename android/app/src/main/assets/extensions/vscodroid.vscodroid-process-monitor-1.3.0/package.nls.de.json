@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid Prozessmonitor",
+  "description": "Überwacht die Anzahl der Phantomprozesse unter Android",
+  "command.showProcesses": "VSCodroid: Prozessbaum anzeigen",
+  "config.server.heapCeilingMb": "Obergrenze des V8-Heaps für den Editor-Server, in MB. Ohne Wert wird sie aus dem Gerätespeicher abgeleitet (ein Achtel des RAM, zwischen 256 und 768). Sie wirkt beim nächsten Start der App. Ein Wert, den dieses Gerät nicht tragen kann, wird automatisch verringert und nach wiederholten Abstürzen abgeschaltet.\n\nDie Grenze gilt für jedes V8-Isolat im Server einzeln, nicht für alle zusammen: Sie zu erhöhen kostet daher ein Vielfaches der genannten Zahl."
+}

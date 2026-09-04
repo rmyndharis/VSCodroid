@@ -2268,7 +2268,20 @@ claude() {
             Environment.getGitPath(context),
             Environment.getClaudeLauncherPath(context),
         )
-        val updated = settingsWithLayoutDefaults(refreshed ?: current, isCompactScreen())
+        // Once per upgrade, between the two, and only for a device that has an
+        // older build's document: the preferences this app used to write are
+        // taken back out here, and re-running the prune on every launch would
+        // mean re-reading a document that no longer holds any of them.
+        // `getPreviousVersionCode` is written at the end of a completed setup,
+        // so a run that dies before that point prunes again on the next launch,
+        // which is the direction to fail in.
+        val pruned = if (getPreviousVersionCode() < MOVED_DEFAULTS_VERSION_CODE) {
+            pruneMovedDefaults(refreshed ?: current, isCompactScreen())
+        } else {
+            null
+        }
+        val updated = settingsWithLayoutDefaults(pruned ?: refreshed ?: current, isCompactScreen())
+            ?: pruned
             ?: refreshed
             ?: return
 
@@ -2608,25 +2621,26 @@ claude() {
         // session would otherwise run unpinned. See PYTHON_LOCATOR for why
         // neither value is a preference.
         //
-        // The secondary side bar starts hidden, and on a phone that is not a
-        // preference either: it takes roughly 45 percent of the width for a
-        // chat view whose provider this build prunes, and what is beside it
-        // then wraps mid-word.
+        // WHAT IS NOT HERE, and must not come back: the app's own preferences.
+        // The theme, the word wrap, the minimap, the font sizes, the compact
+        // activity bar, the hidden secondary side bar and the startup editor
+        // were all written here and all had to move, because this file is not a
+        // defaults file. The workbench parses it as the REMOTE USER settings and
+        // merges it ON TOP of the user's own settings, so a preference written
+        // here beats the one the user just changed in the Settings editor, which
+        // writes to the local user file. The symptom was a Settings editor that
+        // did nothing, with no error and no marker, on the two settings people
+        // change first.
         //
-        // Writing the key here does not by itself close the bar, however
-        // plainly its name reads. It decides a workspace with no recorded
-        // layout, and by the time this file reaches the web client that
-        // record exists: the workbench starts from a copy of these settings
-        // in browser storage that the first load in a profile has not
-        // written yet, falls back to
-        // upstream's "visibleInWorkspace", opens the bar and stores
-        // `workbench.auxiliaryBar.hidden: false` against the workspace. Every
-        // later load reads the record and never consults the default again.
-        // The bundled welcome extension is what corrects the record, once per
-        // workspace; this is the value it reads to decide whether to.
-        //
-        // Still only a default, and the view's own title menu reverses it, so
-        // a user who opens the bar keeps it open.
+        // They now ship as `contributes.configurationDefaults` in the bundled
+        // welcome extension, which lands in the DEFAULT layer below every user
+        // file, which is what a default is. What stays here is what belongs
+        // here: machine facts (the shell, git, the Claude wrapper, the Python
+        // interpreter), keys only the server reads, and the inert ones named
+        // below. `vscodroid.layout.compactScreen` is the one addition and it is
+        // a machine fact too: nothing in the extension API reports how wide the
+        // window is, so the one process that knows writes it down, and the
+        // extension reads it only when the user has expressed no preference.
         //
         // WHICH KEYS CAN LAND HERE AT ALL, because the answer is not "any of
         // them" and the file gives no sign when one cannot. Two readers open
@@ -2663,17 +2677,7 @@ claude() {
         // no `updateUrl` for anything to ask.
         val defaults = """
             {
-                "workbench.secondarySideBar.defaultVisibility": "hidden",
-                "workbench.sash.size": 20,
-                "workbench.activityBar.compact": true,
-                "vscodroid.layout.autoHideSideBar": ${isCompactScreen()},
-                "workbench.startupEditor": "none",
-                "workbench.colorTheme": "Default Dark Modern",
-                "editor.fontSize": 14,
-                "editor.wordWrap": "on",
-                "editor.minimap.enabled": false,
-                "diffEditor.wordWrap": "on",
-                "terminal.integrated.fontSize": 13,
+                "vscodroid.layout.compactScreen": ${isCompactScreen()},
                 "terminal.integrated.defaultProfile.linux": "bash",
                 "terminal.integrated.profiles.linux": {
                     "bash": {
@@ -2683,7 +2687,6 @@ claude() {
                     }
                 },
                 "git.path": "$nativeLibDir/libgit.so",
-                "terminal.integrated.shellIntegration.enabled": true,
                 "extensions.verifySignature": false,
                 "telemetry.telemetryLevel": "off",
                 "telemetry.enableTelemetry": false,
@@ -3761,10 +3764,8 @@ claude() {
             // by 1_048_576 and called the result MB, which is the same defect the
             // rounding above exists to prevent, only smaller and harder to see: a
             // user who freed the number as their storage screen counts it freed
-            // 4.6% too few bytes and was refused again. Android's own storage UI
-            // has been decimal since API 26, and it is what a user checks against,
-            // so the number has to be in its units rather than the machine's.
-            // ToolchainManager already divides by 1_000_000 for the same word.
+            // 4.6% too few bytes and was refused again. The unit is decided once,
+            // for every screen, in StorageManager.formatSize.
             return (bytes + 999_999L) / 1_000_000L
         }
 
@@ -3807,6 +3808,20 @@ claude() {
          * [ServerTreePivotTest] fails if it moves.
          */
         private const val PIVOT_VERSION_CODE = 11
+
+        /**
+         * The release that stopped writing preferences into the machine
+         * settings file, and the one-shot gate for taking the old ones out.
+         *
+         * A device upgrading from below this runs [pruneMovedDefaults] once;
+         * above it there is nothing to prune, and re-reading the document on
+         * every launch to prove that is work with no outcome. Unlike
+         * [PIVOT_VERSION_CODE], raising this to match a later release is
+         * harmless in itself, but it would run the prune again on devices that
+         * have already been through it, which can only find lines the user has
+         * since chosen to write.
+         */
+        private const val MOVED_DEFAULTS_VERSION_CODE = 14
     }
 }
 
@@ -4050,35 +4065,6 @@ private val CLAUDE_WRAPPER_KEY = Regex(""""claudeCode\.claudeProcessWrapper"\s*:
  * Only its presence matters, either value: someone who turned it back on meant to.
  */
 private val VERIFY_SIGNATURE = Regex(""""extensions\.verifySignature"\s*:""")
-
-/**
- * Whether the user's settings already mention the secondary side bar's default.
- *
- * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives: the bar
- * open is a working window and a user who asked for it meant to.
- */
-private val SECONDARY_SIDE_BAR = Regex(""""workbench\.secondarySideBar\.defaultVisibility"\s*:""")
-
-/**
- * Whether the user's settings already mention the sash size.
- *
- * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
- */
-private val SASH_SIZE = Regex(""""workbench\.sash\.size"\s*:""")
-
-/**
- * Whether the user's settings already mention the compact activity bar.
- *
- * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
- */
-private val ACTIVITY_BAR_COMPACT = Regex(""""workbench\.activityBar\.compact"\s*:""")
-
-/**
- * Whether the user's settings already mention hiding the side bar on open.
- *
- * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
- */
-private val AUTO_HIDE_SIDE_BAR = Regex(""""vscodroid\.layout\.autoHideSideBar"\s*:""")
 
 /**
  * The two settings that route Python environment discovery through `pet`, the
@@ -5061,34 +5047,11 @@ internal fun refreshManagedPaths(
         updated = insertSetting(updated, "extensions.verifySignature", "false")
     }
 
-    // Same reach, and it is the whole point here: v1.1.0 shipped no such key, and
-    // createDefaultSettings() writes only when settings.json is absent, so every
-    // device upgrading into this release would otherwise never see the value at
-    // all. Inserted when absent and never rewritten, in company with
-    // [VERIFY_SIGNATURE].
+    // The secondary side bar and the sash size were backfilled here. Both are
+    // preferences, both now ship as contributed defaults in the bundled welcome
+    // extension, and backfilling either would put the override straight back
+    // into the file [pruneMovedDefaults] just took it out of.
     //
-    // The key is not on its own enough to close the bar, and was never expected
-    // to be: it decides a workspace that has no recorded layout, and the record
-    // is written before this file reaches the web client. What acts on the record
-    // is the bundled welcome extension, once per workspace. This is what gives it
-    // something to read.
-    if (!SECONDARY_SIDE_BAR.containsMatchIn(updated)) {
-        updated = insertSetting(
-            updated,
-            "workbench.secondarySideBar.defaultVisibility",
-            "\"hidden\"",
-        )
-    }
-
-    // Same reach and the same one-way rule. Upstream registers this default as
-    // `isIOS ? 20 : 4`, and Android is in neither branch, so every view divider
-    // in this build is a 4px target for a finger. 20 is the maximum the setting
-    // registers and the value upstream already picked for the other touch
-    // platform, so this is that decision extended rather than a new one.
-    if (!SASH_SIZE.containsMatchIn(updated)) {
-        updated = insertSetting(updated, "workbench.sash.size", "20")
-    }
-
     // Reaches installs that already have a settings.json, which is every device
     // the failure was reported from: createDefaultSettings() writes only when
     // the file is absent, so on its own it would fix nobody who already has one.
@@ -5099,41 +5062,90 @@ internal fun refreshManagedPaths(
 }
 
 /**
- * Fills in the two layout defaults, for installs that never had them.
+ * Holds the one layout fact the editor cannot work out for itself.
  *
- * Both are about width on a phone held upright, where the editor is whatever is
- * left after the two bars beside it. Measured on a 411dp screen: 48px of
- * activity bar, and a side bar that will not go below 170px however far its
- * divider is dragged, leaving the editor 193dp and the welcome text wrapping at
- * three words a line. That is where "the layout is bad" comes from.
+ * `vscodroid.layout.compactScreen` is not a preference and is not offered as
+ * one: it says whether the editor has to share a phone-width window. Nothing in
+ * the extension API reports how wide the window is, so the one process that
+ * knows writes it down, and the bundled welcome extension reads it only where
+ * the user has expressed no preference of their own.
  *
- * `workbench.activityBar.compact` is upstream's own narrow bar, 36px instead of
- * 48px, with all seven icons still shown; measured, not read. What is
- * deliberately NOT used is `workbench.activityBar.location`: both `top` and
- * `bottom` remove the bar's width entirely and, in this build, take every view
- * icon with it (measured at 411dp: `.part.activitybar` 0px wide and zero action
- * items, with only Accounts and Manage moved into the title bar), which would
- * leave the Explorer reachable only through the menu.
+ * Why it matters at all, measured on a 411dp screen: 48px of activity bar and a
+ * side bar that will not go below 170px however far its divider is dragged left
+ * the editor 193dp, with the welcome text wrapping at three words a line. The
+ * two answers to that are upstream's own compact activity bar and closing the
+ * side bar when a file is opened, and both are now contributed defaults rather
+ * than values written over the user.
  *
- * `vscodroid.layout.autoHideSideBar` is read by the bundled welcome extension,
- * which closes the side bar when a file is opened. The extension cannot decide
- * this for itself: nothing in the extension API reports how wide the window is,
- * so the one process that does know, this one, writes the answer down.
- *
- * Inserted when absent and never rewritten, in company with the keys
- * [refreshManagedPaths] backfills: a user who turned either off meant to.
+ * Held rather than inserted-when-absent, which is the opposite of the keys
+ * beside it in [refreshManagedPaths] and is right for the same reason those are
+ * not: a device fact that has gone stale is worse than absent, and there is no
+ * user decision here to keep. The user's decision lives in
+ * `vscodroid.layout.autoHideSideBar`, in their own settings file, where this
+ * function never reaches.
  */
-internal fun settingsWithLayoutDefaults(content: String, autoHideSideBar: Boolean): String? {
+internal fun settingsWithLayoutDefaults(content: String, compactScreen: Boolean): String? =
+    SettingPin("vscodroid.layout.compactScreen", """(?:true|false)""", compactScreen.toString())
+        .applyTo(content)
+        .takeIf { it != content }
+
+/**
+ * The preferences this app used to write into the machine settings file.
+ *
+ * Each pair is a key and the exact raw JSON the app wrote beside it. They moved
+ * to `contributes.configurationDefaults` in the bundled welcome extension, and
+ * moving them there is only half the fix: `createDefaultSettings` writes the
+ * document once and never again, so every device that already has one would
+ * keep the override for ever, and the override is what beats the user's own
+ * setting.
+ *
+ * `vscodroid.layout.autoHideSideBar` is not here because its value is the
+ * device's; [pruneMovedDefaults] takes it as an argument instead.
+ */
+private val MOVED_DEFAULTS = listOf(
+    "workbench.secondarySideBar.defaultVisibility" to "\"hidden\"",
+    "workbench.sash.size" to "20",
+    "workbench.activityBar.compact" to "true",
+    "workbench.startupEditor" to "\"none\"",
+    "workbench.colorTheme" to "\"Default Dark Modern\"",
+    "editor.fontSize" to "14",
+    "editor.wordWrap" to "\"on\"",
+    "editor.minimap.enabled" to "false",
+    "diffEditor.wordWrap" to "\"on\"",
+    "terminal.integrated.fontSize" to "13",
+    "terminal.integrated.shellIntegration.enabled" to "true",
+)
+
+/**
+ * Takes the moved preferences back out of a document this app wrote them into.
+ *
+ * The only destructive edit this app makes to a file the user also owns, so it
+ * is deliberately unable to touch anything it did not write. A line is removed
+ * only when all four of these hold: the key is one of [MOVED_DEFAULTS], the
+ * value is byte-for-byte the one this app wrote, the indentation is the
+ * document's own first-property indent, and the line ends in a comma. A value
+ * the user changed is theirs and stays, and it goes on outranking their local
+ * settings, which is the honest outcome: they set it, in a file the app hands
+ * them, and silently deleting it would be the same defect pointed the other way.
+ * A nested override such as `"[markdown]": { "editor.wordWrap": "off" }` sits at
+ * a deeper indent and cannot be hit.
+ *
+ * Returns null when nothing matched, so a document that never had these keys
+ * costs no write.
+ */
+internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): String? {
+    // Declines rather than guesses when the document is not a shape this app
+    // wrote, for the reason [insertSetting] gives at greater length: leaving a
+    // default in place costs one override, and editing a file this app does not
+    // understand costs the file, because the write that follows is atomic.
+    val brace = rootBraceIndex(content)
+    if (brace < 0) return null
+    val indent = FIRST_PROPERTY.find(content, brace)?.groupValues?.get(1) ?: return null
     var updated = content
-    if (!ACTIVITY_BAR_COMPACT.containsMatchIn(updated)) {
-        updated = insertSetting(updated, "workbench.activityBar.compact", "true")
-    }
-    if (!AUTO_HIDE_SIDE_BAR.containsMatchIn(updated)) {
-        updated = insertSetting(
-            updated,
-            "vscodroid.layout.autoHideSideBar",
-            autoHideSideBar.toString(),
-        )
+    val moved = MOVED_DEFAULTS +
+        ("vscodroid.layout.autoHideSideBar" to autoHideSideBar.toString())
+    for ((key, value) in moved) {
+        updated = updated.replace("\n$indent\"$key\": $value,", "")
     }
     return updated.takeIf { it != content }
 }

@@ -55,7 +55,23 @@ class ExtractionOnDeviceTest {
 
     /** The 29 MB one, so a nearly-full disk is certain to run out inside it. */
     private val fetched = "ms-python.python-2026.4.0"
-    private val own = "vscodroid.vscodroid-process-monitor-1.2.0"
+
+    /**
+     * One of the app's own bundled extensions, found rather than named.
+     *
+     * The directory carries the extension's version, and that version moves
+     * whenever the manifest changes, which it must: the editor caches the
+     * extension scan against the directory listing, so a manifest edited in
+     * place is not read. A literal here therefore rots on a change that has
+     * nothing to do with extraction, and it rots into "asset not found" rather
+     * than into anything that names the real cause.
+     */
+    private val own: String by lazy {
+        val dirs = appContext.assets.list("extensions").orEmpty()
+            .filter { it.startsWith("vscodroid.vscodroid-") }
+        assertTrue("no bundled VSCodroid extension under assets/extensions", dirs.isNotEmpty())
+        dirs.sorted().first()
+    }
 
     private val extensionsDir get() = File(sandbox, "home/.vscodroid/extensions")
 

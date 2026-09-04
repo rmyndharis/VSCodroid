@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -128,6 +129,28 @@ class ToolchainInstallTest {
 
     private fun statuses() = synchronized(events) { events.map { it.second } }
 
+    /** Where an install notes the tree it is about to write, before it writes it. */
+    private fun marker(pack: String = "toolchain_java") =
+        File(filesDir, "home/.vscodroid/toolchain-installing/$pack.json")
+
+    /**
+     * A file of [bytes] length with no bytes actually written.
+     *
+     * `dirSize` sums `File.length()`, so a sparse file measures as the real thing
+     * without a test putting 40 MB through a temporary directory.
+     */
+    private fun sparseFile(path: String, bytes: Long) {
+        val file = File(filesDir, path)
+        file.parentFile?.mkdirs()
+        RandomAccessFile(file, "rw").use { it.setLength(bytes) }
+    }
+
+    /** What the pre-flight refusal says it needs, in the units it prints them in. */
+    private fun refusalNaming(requiredBytes: Long) =
+        "Not enough disk space: 0 MB available, ${requiredBytes / 1_000_000} MB required"
+
+    private val javaUnpacked = ToolchainRegistry.find("toolchain_java")!!.estimatedSize
+
     // ── which route a user gets ──────────────────────────────────────────
 
     @Test
@@ -210,6 +233,80 @@ class ToolchainInstallTest {
         verify(exactly = 0) { packManager.fetch(any()) }
     }
 
+    // ── what the HTTP pre-flight asks for ────────────────────────────────
+
+    /**
+     * A reinstall is charged for what the copy adds, not for the whole tree twice.
+     *
+     * `copyTo(overwrite = true)` deletes each destination file before opening its
+     * output stream, so the copy into `usr/` over an identical tree allocates
+     * nothing net. The Play path has credited that since it could read the
+     * delivered manifest; this path could not, because it gates before the ZIP
+     * carrying the manifest exists, and so refused a device that already held most
+     * of the toolchain the room it plainly had. The record is the witness that IS
+     * available then, and it carries `installRoot`.
+     *
+     * The staging copy stays charged in full, which is why the expected figure
+     * subtracts one tree and not two.
+     */
+    @Test
+    fun `an HTTP reinstall is charged only for what the copy adds`() {
+        installedBy("com.example.sideloader")
+        val alreadyThere = 40_000_000L
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"java","installRoot":"usr/opt/java"}]"""
+        )
+        sparseFile("usr/opt/java/lib/modules", alreadyThere)
+
+        manager().install("toolchain_java")
+
+        assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
+        verify {
+            Logger.e(
+                any(),
+                refusalNaming(toolchainInstallBytes(javaUnpacked) - alreadyThere),
+                any(),
+            )
+        }
+    }
+
+    /**
+     * And a device with nothing recorded is charged for both copies, which is the
+     * figure that was always right for a first install.
+     *
+     * The tree is planted anyway, so a credit taken without asking the record, or
+     * one that defaulted its root to `filesDir`, changes this number rather than
+     * leaving it alone.
+     */
+    @Test
+    fun `a device with no record is charged for both copies`() {
+        installedBy("com.example.sideloader")
+        sparseFile("usr/opt/java/lib/modules", 40_000_000L)
+
+        manager().install("toolchain_java")
+
+        assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked)), any()) }
+    }
+
+    /**
+     * A record naming a different toolchain credits nothing, because the bytes it
+     * names are not the ones this copy will write over.
+     */
+    @Test
+    fun `a record naming another toolchain credits nothing`() {
+        installedBy("com.example.sideloader")
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"ruby","installRoot":"usr/lib/ruby"}]"""
+        )
+        sparseFile("usr/lib/ruby/gems", 30_000_000L)
+
+        manager().install("toolchain_java")
+
+        assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked)), any()) }
+    }
+
     // ── where both routes converge ───────────────────────────────────────
 
     @Test
@@ -243,6 +340,12 @@ class ToolchainInstallTest {
         assertEquals(listOf(AssetPackStatus.COMPLETED), statuses())
         val state = File(filesDir, "home/.vscodroid/toolchains.json").readText()
         assertTrue(state.contains("\"java\""), "the install was reported but not recorded: $state")
+        // The marker an install writes before it copies is removed in the same
+        // `finally` that gives the claim back, so its lifetime is exactly the
+        // claim's. Left behind, it tells the next launch's reclaim that a finished
+        // install is a partial one; the record check saves the files, so this is
+        // the assertion that catches the leak rather than the damage.
+        assertFalse(marker().exists(), "a finished install left its marker behind")
     }
 
     // ── a copy that cannot finish ────────────────────────────────────────
@@ -297,6 +400,7 @@ class ToolchainInstallTest {
             File(filesDir, "home/.vscodroid/toolchains.json").exists(),
             "a copy that failed partway was recorded as an install",
         )
+        assertFalse(marker().exists(), "a failed install left its marker behind")
     }
 
     /**
@@ -374,6 +478,7 @@ class ToolchainInstallTest {
             File(filesDir, "home/.vscodroid/toolchains.json").exists(),
             "the harness did not block the write, so this test proves nothing",
         )
+        assertFalse(marker().exists(), "an install that could not be recorded left its marker")
     }
 
     /**

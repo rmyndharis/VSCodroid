@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid Monitor dei processi",
+  "description": "Controlla il numero di processi fantasma su Android",
+  "command.showProcesses": "VSCodroid: Mostra l'albero dei processi",
+  "config.server.heapCeilingMb": "Limite dell'heap V8 per il server dell'editor, in MB. Se lo lasci vuoto, viene ricavato dalla memoria del dispositivo (un ottavo della RAM, tra 256 e 768). Ha effetto al prossimo avvio dell'app. Un valore più grande di quanto questo dispositivo regga viene ridotto automaticamente, e disattivato dopo arresti anomali ripetuti.\n\nIl limite vale separatamente per ogni isolate V8 del server, non per tutti insieme, quindi alzarlo costa diverse volte quello che dice il numero."
+}

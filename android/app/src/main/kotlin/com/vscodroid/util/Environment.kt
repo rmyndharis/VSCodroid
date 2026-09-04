@@ -262,23 +262,38 @@ object Environment {
      * `remoteAgentEnvironmentImpl.ts:112` hands exactly that to the client as the
      * remote `settingsPath`.
      *
-     * Only REMOTE_MACHINE_SCOPES are taken from it: MACHINE, WINDOW, RESOURCE,
-     * LANGUAGE_OVERRIDABLE, MACHINE_OVERRIDABLE (`configuration.ts:387`). An
-     * APPLICATION-scoped setting is still ignored by the WEB CLIENT here no
-     * matter how correct the path is, which is why Workspace Trust needs the
-     * server's CLI flag.
+     * Only REMOTE_MACHINE_SCOPES are taken from it: MACHINE, APPLICATION_MACHINE,
+     * WINDOW, RESOURCE, LANGUAGE_OVERRIDABLE and MACHINE_OVERRIDABLE, every scope
+     * except APPLICATION. An APPLICATION-scoped setting is still ignored by the
+     * WEB CLIENT here no matter how correct the path is, which is why Workspace
+     * Trust needs the server's CLI flag.
      *
-     * The web client is not the only reader, and the difference decides which
-     * defaults are worth writing. The server builds its own ConfigurationService
-     * on this same file with an empty options object, so it takes every key
-     * whatever the scope: that is why `extensions.verifySignature`, which is
-     * APPLICATION-scoped and which only the server reads, does take effect. A
-     * key that is APPLICATION-scoped AND read only by the workbench cannot be
-     * defaulted from here at all, and the file says nothing when one is dropped.
+     * There are three readers, not two, and the differences decide what may be
+     * written here. The server builds its own ConfigurationService on this same
+     * file with an empty options object, so it takes every key whatever the
+     * scope: that is why `extensions.verifySignature`, which is APPLICATION
+     * scoped and which only the server reads, does take effect. A key that is
+     * APPLICATION-scoped AND read only by the workbench cannot be defaulted from
+     * here at all, and the file says nothing when one is dropped. The third is
+     * `ProcessManager`, which reads `vscodroid.server.heapCeilingMb` out of the
+     * same document before the server starts.
      *
-     * Settings the user edits in the workbench go to IndexedDB in the WebView
-     * instead, and take precedence over this file. That is the right order: these
-     * are defaults, not overrides.
+     * ⚠️ **This is not a defaults file, and this paragraph said it was.** The
+     * workbench parses it as the REMOTE USER settings and merges it ON TOP of the
+     * user's own settings: the consolidated order is default < application <
+     * user-local < THIS FILE < workspace < memory. The user's own settings are
+     * `vscode-userdata:/User/settings.json`, which in a web workbench lives in
+     * the WebView's IndexedDB, so neither this app nor the terminal can see or
+     * repair them. The Settings editor opens on the User tab and writes there, so
+     * a preference written into this file beat whatever the user had just
+     * changed, with no error and only a small "also modified in remote" hint to
+     * show for it.
+     *
+     * So a preference does not belong here. It belongs in
+     * `contributes.configurationDefaults` in the bundled welcome extension, which
+     * lands in the DEFAULT layer below every user file. What belongs here is what
+     * the user has no business overriding and no way to express: paths that move
+     * on every reinstall, keys only the server reads, and facts about the device.
      */
     fun getMachineSettingsPath(context: Context): String =
         "${getUserDataDir(context)}/data/Machine/settings.json"

@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Most do Androida",
+  "description": "Polecenia sięgające do Androida: foldery w urządzeniu, przeglądarka, klucze SSH, pamięć, informacje",
+  "command.openFolderFromDevice": "VSCodroid: Otwórz folder z urządzenia",
+  "command.openRecentFolder": "VSCodroid: Otwórz ostatni folder",
+  "command.openInBrowser": "VSCodroid: Otwórz w przeglądarce",
+  "command.generateSshKey": "VSCodroid: Wygeneruj klucz SSH",
+  "command.copySshPublicKey": "VSCodroid: Skopiuj klucz publiczny SSH",
+  "command.showStorageUsage": "VSCodroid: Pokaż zużycie pamięci",
+  "command.manageDeviceFolders": "VSCodroid: Zarządzaj pamięcią folderów urządzenia",
+  "command.clearCaches": "VSCodroid: Wyczyść pamięci podręczne",
+  "command.manageToolchains": "VSCodroid: Zarządzaj narzędziami",
+  "command.about": "VSCodroid: Informacje"
+}

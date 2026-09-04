@@ -741,4 +741,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 4, 2026._
+_This document was last updated on September 5, 2026._

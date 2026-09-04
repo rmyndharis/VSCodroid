@@ -120,13 +120,11 @@ object ToolchainRegistry {
     fun find(nameOrPack: String): ToolchainInfo? =
         available.find { it.packName == nameOrPack || it.packName == "toolchain_$nameOrPack" }
 
-    // There was a `formatSize` here, dividing by 1,000,000 and writing "MB".
-    // Every other byte figure the app shows divides by 1,048,576 and writes the
-    // same word: the low-storage warning, the first-run pre-flight, the storage
-    // breakdown and the device-folder screen. So "MB" meant one thing on the
-    // toolchain cards and another, 4.9% larger, everywhere the user could
-    // compare it against, with nothing on either screen saying which. The cards
-    // go through [com.vscodroid.util.StorageManager.formatSize] now, like
-    // everything else; [ToolchainCardState.sizeFigures] records why that is the
-    // convention kept.
+    // There was a `formatSize` here, dividing by 1,000,000 and writing "MB"
+    // while every other byte figure the app showed divided by 1,048,576 and
+    // wrote the same word, so "MB" meant one thing on the toolchain cards and
+    // another, 4.9% larger, everywhere the user could compare it against. The
+    // divisor was right and having its own copy of it was not: the cards go
+    // through [com.vscodroid.util.StorageManager.formatSize] now, which is
+    // decimal for every screen at once and says why.
 }

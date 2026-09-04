@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Bienvenida",
+  "description": "Recorrido de bienvenida de VSCodroid",
+  "config.layout.autoHideSideBar": "Cierra la barra lateral al abrir un archivo. Si lo dejas sin valor, sigue a la pantalla: activado donde el árbol de archivos y el editor no caben a la vez, desactivado donde sí caben. Ajústalo aquí para decidirlo tú.",
+  "command.welcome.open": "VSCodroid: Abrir la bienvenida",
+  "command.welcome.toolsDismissed": "VSCodroid: Completar el paso de herramientas",
+  "walkthrough.title": "Primeros pasos con VSCodroid",
+  "walkthrough.description": "Prepara tu entorno de desarrollo móvil",
+  "walkthrough.theme.title": "Elige tu tema",
+  "walkthrough.theme.description": "Elige un tema de color que vaya con tu estilo.\n\n[Explorar temas de color](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "Tus herramientas de desarrollo",
+  "walkthrough.tools.description": "VSCodroid trae todo lo necesario para empezar a programar:\n\n$(check) **Node.js** + npm: listo\n\n$(check) **Python** + pip: listo\n\n$(check) **Git**: listo\n\n$(check) **make**: listo\n\n**Java 17** y **Ruby** se instalan cuando los pides. Mantén pulsado el icono de VSCodroid en la pantalla de inicio y elige **Administrar cadenas de herramientas**.\n\n[Entendido](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "Un terminal de verdad",
+  "walkthrough.terminal.description": "Abre un terminal bash completo con todas las herramientas incluidas en el PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` imprime ``hi``\n\n``python3 -c 'print(\"hi\")'`` imprime ``hi``\n\n``git init demo`` imprime ``Initialized empty Git repository``\n\n[Abrir un terminal](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Amplíalo con más funciones",
+  "walkthrough.extensions.description": "Instala extensiones desde el mercado Open VSX para añadir compatibilidad con lenguajes, temas y herramientas.\n\nLas extensiones escritas en JavaScript funcionan. Las pocas que incluyen un programa compilado para Linux de escritorio se instalan sin protestar y luego no hacen nada, sin ningún error en pantalla.\n\n[Explorar extensiones](command:workbench.view.extensions)"
+}

@@ -160,6 +160,19 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
 | `https://<uuid>.vscode-cdn.net`         | Extension webview documents, answered locally by the interception           |
 | `https://<scheme>+.vscode-resource.vscode-cdn.net` | Subresources of those documents, read off the filesystem         |
 
+- **One arm answers ahead of all of this, and it is on our own origin.** A request to
+  `http://127.0.0.1:<port>/_nls/<commit>/<version>/<locale>/nls.messages.js` is answered out of
+  the APK by `interfaceBundleResponse` and never reaches the rules below, which judge
+  `*.vscode-cdn.net` and nothing else. It is deliberately unguarded: no `Origin`, `Referer`,
+  `parentOrigin` or connection token is consulted, because what it serves is a table of
+  translated interface strings that ships identically in every copy of the app and holds nothing
+  about the device or its files. The locale is resolved against the bundle names actually present
+  in `assets/nls` (`EditorLocale.resolveTag`), so no path in that segment can name another file,
+  and a language this build does not carry is a 404 that leaves the interface in English. The
+  port must be the one this client was constructed with, so no other loopback service is
+  addressable through it, and the response carries no `Access-Control-Allow-Origin`, so only the
+  workbench, which is same-origin with it, can read the body. Every other localhost request
+  returns null here and is answered by our own server, which does require the token.
 - **Resources are answered to the origin that asked, never with `*`.** The response carries
   `Access-Control-Allow-Origin: <the requesting origin>` and `Vary: Origin`. A request with no
   `Origin` gets no such header: those are the no-cors subresource loads (`<img>`, `<link>`,

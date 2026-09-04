@@ -49,19 +49,29 @@ class KeyboardGuardWiringTest {
             "injectKeyboardGuard is gone, so nothing keeps the keyboard down when a file is " +
                 "opened or the Explorer is tapped.",
         )
-        // The call sits beside the other per-page injections, which run from the
-        // page-finished path rather than once per WebView. That is what re-arms
-        // it after a folder switch, which the workbench performs by navigating
-        // its own WebView without telling this side.
-        val lines = source.lines()
-        val cssCall = lines.indexOfFirst { it.trim() == "injectTouchTargetCSS()" }
-        val guardCall = lines.indexOfFirst { it.trim() == "injectKeyboardGuard()" }
-        assertTrue(
-            cssCall >= 0 && guardCall > cssCall && guardCall - cssCall <= 5,
-            "injectKeyboardGuard is no longer called next to injectTouchTargetCSS. Both have to " +
-                "run on the same path: that path runs again after a folder switch, and a guard " +
-                "installed once per WebView is lost the first time the workbench navigates.",
-        )
+        // The call sits with the other per-page injections in `injectBridgeToken`,
+        // whose one call site is inside the `onPageFinished` lambda, under the
+        // `isWorkbenchUrl` test. That is the path which runs again after a folder
+        // switch, which the workbench performs by navigating its own WebView
+        // without telling this side.
+        //
+        // Read out of that body rather than off the whole file, because being
+        // next to `injectTouchTargetCSS()` is not the property and never was:
+        // move both calls into `initBridge`, which runs once per WebView, and
+        // they are still adjacent while the guard is gone from every page after
+        // the first. That is the regression itself, and an adjacency check
+        // passes it.
+        val injected = SourceScan.body(source, "private fun injectBridgeToken()")
+        for (call in listOf("injectTouchTargetCSS()", "injectKeyboardGuard()")) {
+            assertTrue(
+                injected.contains(call),
+                "`$call` is no longer called from injectBridgeToken, the one path every " +
+                    "page load takes. Wherever it went, if that place runs once per WebView " +
+                    "rather than once per page, the workbench's first self-navigation drops " +
+                    "it: the keyboard then covers half the screen while a file is being read, " +
+                    "or the editor is one nothing can be typed into, and neither says why.",
+            )
+        }
     }
 
     /**

@@ -906,20 +906,21 @@ class WorkbenchUrlTest {
  * declaration seeded from `workbenchUrl(...)`, `getConnectionToken()` or a
  * WebView's `url` is tainted; anything declared from a tainted name is tainted
  * too; and a `Logger` statement is an offender when a tainted name survives
- * removing everything that treats it. Statements are read whole, across the
- * lines a formatter wraps them onto, and string prose is dropped so the word
- * "token" in a message is not mistaken for the variable. Interpolation,
- * concatenation and an intermediate local all read the same to it. The reader is
- * driven against fixed snippets in the cases below, so it is measured in both
- * directions rather than trusted in either.
+ * removing everything that treats it. Statements are read across the lines a
+ * formatter wraps them onto, up to the cap that reader states and argues for,
+ * and string prose is dropped so the word "token" in a message is not mistaken
+ * for the variable. Interpolation, concatenation and an intermediate local all
+ * read the same to it. The reader is driven against fixed snippets in the cases
+ * below, so it is measured in both directions rather than trusted in either.
  *
  * That reader is shared with `SafFolderLogCallSiteTest`, which seeds it with
  * `Uri`-typed declarations for the other value in this file worth keeping out of
  * logcat. A device folder printed here therefore fails the case below as well,
  * and that file is where the remedy for one of those is written down.
  *
- * What still passes. The first of these is pinned as a case below, so the claim
- * is measured rather than promised, and the rest are the same shape as it:
+ * What still passes. The first two of these are pinned as cases below, so the
+ * claims are measured rather than promised, and the rest are the same shape as
+ * them:
  *
  *  - a value laundered through something that is not a declaration, appended to
  *    a `StringBuilder`, put in a collection, or assigned to a `var` some lines
@@ -1143,6 +1144,77 @@ class NavigationTokenLoggingTest {
         assertTrue(
             LogTaint.redactedLogs(laundered).isNotEmpty(),
             "the control has to be satisfied here, or this case is not the gap it claims",
+        )
+    }
+
+    @Test
+    fun `a declaration split across lines still passes, a stated limit`() {
+        // The second of the docstring's stated limits, pinned for the same reason
+        // as the first: a declaration's right-hand side is read to the end of the
+        // line and no further, so `val url =` with the call on the next line
+        // hands on no taint and the bare log below it is not reported.
+        //
+        // Kept rather than fixed, and this is the case that says why. Reading each
+        // right-hand side to the end of its statement instead pulls `message` into
+        // the tainted set, and that one name turns eight correct Logger lines in
+        // MainActivity into reported leaks: every one of them prints a caught
+        // exception's message. Names here are file-scoped (see above), so there is
+        // nowhere to put the distinction between that `message` and this one. A
+        // reader shouting at eight correct lines is a reader someone deletes.
+        //
+        // The limit is loud rather than silent, which is what makes it affordable:
+        // written this way the URL is not tainted, so the redacted statement stops
+        // counting as one and `the navigation URL still reaches the log, redacted`
+        // fails and says so. Nothing goes quietly unguarded.
+        val split = listOf(
+            "    private fun navigateToFolder(port: Int, folderPath: String) {",
+            "        val token = nodeService?.getConnectionToken()",
+            "        val url =",
+            "            workbenchUrl(port, folderPath, token)",
+            redactedLog,
+            """        Logger.i(tag, "also at ${'$'}url")""",
+            "        wv.loadUrl(url)",
+            "    }",
+        )
+
+        assertEquals(emptyList<String>(), LogTaint.leaks(split))
+        assertEquals(
+            emptyList<String>(), LogTaint.redactedLogs(split),
+            "the split declaration has to take the control with it. If a redacted " +
+                "statement still counts while the leak beside it does not, the limit " +
+                "above is silent instead of loud and MainActivity could carry it " +
+                "without a single case going red",
+        )
+    }
+
+    @Test
+    fun `a chain assigned back to front is followed to its end`() {
+        // Declarations are walked to a fixpoint rather than a fixed number of
+        // passes over the file, and written back to front is where the difference
+        // shows: each pass in file order follows exactly one more hop, so four
+        // hops need four passes and a reader capped at three calls this clean.
+        // Kotlin does not require the order below, but a formatter, a merge or a
+        // refactoring can produce it, and a guard that quietly stops following at
+        // a length nobody wrote down is a guard whose answer depends on how the
+        // file was arranged.
+        val reversed = listOf(
+            "    private fun navigateToFolder(port: Int, folderPath: String) {",
+            "        val token = nodeService?.getConnectionToken()",
+            """        Logger.i(tag, "still at ${'$'}fourth")""",
+            "        val fourth = third",
+            "        val third = second",
+            "        val second = first",
+            "        val first = workbenchUrl(port, folderPath, token)",
+            "    }",
+        )
+
+        assertTrue(
+            LogTaint.leaks(reversed).isNotEmpty(),
+            "the token-bearing URL reaches Logger through four declarations and the " +
+                "reader stopped following the chain before the end of it. A fixed number " +
+                "of passes reads as a fixpoint on every chain shorter than its bound and " +
+                "then silently stops answering, which is the one failure a taint reader " +
+                "cannot have: it goes on passing while it has stopped looking",
         )
     }
 

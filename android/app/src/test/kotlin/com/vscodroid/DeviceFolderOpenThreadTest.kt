@@ -81,6 +81,16 @@ class DeviceFolderOpenThreadTest {
      * Both forms, because both disable code, and a block counts as a comment only
      * where it opens a line.
      */
+    /**
+     * The statements of a body, with the comments and the blank lines gone.
+     *
+     * Blank lines gone as well as comments, because every case below reads "this
+     * happens within three lines of that", and a line a comment was stripped from
+     * is not a statement. Left in, a paragraph explaining a decision pushes the
+     * decision out of its own window, and the case goes red for a change that
+     * moved nothing: it happened, to this exact file, when the folder lookup grew
+     * an explanation above it.
+     */
     private fun code(text: String): List<String> {
         var inBlock = false
         return text.lines().map { raw ->
@@ -102,7 +112,7 @@ class DeviceFolderOpenThreadTest {
             }
             val marker = line.indexOf("//")
             if (marker >= 0) line.substring(0, marker) else line
-        }
+        }.filter { it.isNotBlank() }
     }
 
     private val opened by lazy { code(body("openSafFolder")) }

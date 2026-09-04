@@ -161,7 +161,12 @@ class SettingsMigrationTest {
         createDefaultSettings()
 
         assertTrue(current.isFile, "no settings file was written")
-        assertTrue(current.readText().contains("workbench.startupEditor"), "the defaults are not in it")
+        // A machine fact, not a preference. The preferences this file used to
+        // carry moved to the welcome extension's contributed defaults, because
+        // the workbench merges this file ABOVE the user's own settings; anything
+        // here has to be something the user cannot express and should not have
+        // to. `git.path` moves on every reinstall, which is why it is one.
+        assertTrue(current.readText().contains("git.path"), "the defaults are not in it")
     }
 
     /**

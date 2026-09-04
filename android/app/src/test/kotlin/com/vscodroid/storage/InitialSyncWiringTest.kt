@@ -64,8 +64,22 @@ class InitialSyncWiringTest {
     private var openedDocuments = mutableListOf<String>()
     private var writtenDocuments = mutableListOf<String>()
 
-    /** One file in the device folder, described to the engine through a fake cursor. */
-    private fun deviceFolderHolding(name: String, contents: String, modified: Long) {
+    /**
+     * One file in the device folder, described to the engine through a fake cursor.
+     *
+     * [reportedSize] is what the provider answers for `COLUMN_SIZE`, which is a
+     * separate thing from what the document holds. The column is documented "null
+     * if unknown", a NULL long reads back as 0 through every cursor a provider
+     * uses, and `walkTree` does not test for null, so `reportedSize = 0` is the
+     * faithful model of a provider that does not report sizes rather than an
+     * invented value. Defaulted to the truth, so every existing case is unchanged.
+     */
+    private fun deviceFolderHolding(
+        name: String,
+        contents: String,
+        modified: Long,
+        reportedSize: Long = contents.toByteArray().size.toLong(),
+    ) {
         var row = -1
         val cursor = mockk<Cursor>(relaxed = true)
         every { cursor.moveToNext() } answers { ++row == 0 }
@@ -82,7 +96,7 @@ class InitialSyncWiringTest {
         every { cursor.getString(0) } returns "doc:$name"
         every { cursor.getString(1) } returns name
         every { cursor.getString(2) } returns "text/plain"
-        every { cursor.getLong(3) } returns contents.toByteArray().size.toLong()
+        every { cursor.getLong(3) } returns reportedSize
         every { cursor.getLong(4) } returns modified
 
         every { resolver.query(any(), any(), any(), any(), any()) } returns cursor
@@ -186,6 +200,81 @@ class InitialSyncWiringTest {
             emptyList<String>(), journalEntries(files),
             "the record was acted on, so it has to be consumed or every later open " +
                 "repeats the repair",
+        )
+    }
+
+    /**
+     * The same case, from a provider that does not answer `COLUMN_SIZE`.
+     *
+     * The guard used to open with `deviceSize <= 0L || deviceSize >= localFile.length()`,
+     * and `deviceSize` came from the cursor with no null test. A provider that
+     * omits the column reports every document as 0 bytes, so that line answered
+     * "not a truncated mirror" for every file it holds, and the expected case
+     * above went to the set-aside instead: a `.device-` copy of this app's own
+     * half-written bytes, which phase 2b then puts in the user's folder and
+     * nothing ever removes.
+     */
+    @Test
+    fun `a provider that reports no size does not turn the guard off`(
+        @TempDir files: File,
+    ) {
+        val local = mirrorHolding("notes.txt", "the whole file, saved", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "the whole file", 1_700_000_090_000, reportedSize = 0)
+        journalHolding(local.absolutePath, files)
+
+        sync()
+
+        assertEquals(
+            emptyList<String>(), setAsideCopies(),
+            "the bytes are a strict prefix of the mirror whatever the provider claims " +
+                "about their length, so this is the app's own unfinished upload and a " +
+                "copy of it is litter in the user's folder. Found: " +
+                "${mirror.list().orEmpty().toList()}",
+        )
+        assertTrue(
+            writtenDocuments.contains("notes.txt"),
+            "the repair is the re-upload, so the mirror still has to reach the device",
+        )
+        assertEquals(
+            emptyList<String>(), journalEntries(files),
+            "the record was acted on, so it has to be consumed or every later open " +
+                "repeats the repair",
+        )
+    }
+
+    /**
+     * The likeliest shape of an interrupted upload, and the one the old pre-check
+     * could not name.
+     *
+     * `"wt"` truncates at open, so a process that dies between the open and the
+     * first write leaves an empty document. That is the empty prefix of the
+     * mirror and it is exactly what this branch exists to repair, but
+     * `deviceSize <= 0L` cannot tell it from "the provider does not know" and
+     * refused both.
+     */
+    @Test
+    fun `a device document the interrupted write emptied is recognised`(
+        @TempDir files: File,
+    ) {
+        val local = mirrorHolding("notes.txt", "the whole file, saved", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "", 1_700_000_090_000)
+        journalHolding(local.absolutePath, files)
+
+        sync()
+
+        assertEquals(
+            emptyList<String>(), setAsideCopies(),
+            "an empty document holds no bytes to rescue, and a zero-byte `.device-` " +
+                "copy in the user's folder is not a rescue. Found: " +
+                "${mirror.list().orEmpty().toList()}",
+        )
+        assertTrue(
+            writtenDocuments.contains("notes.txt"),
+            "the mirror holds the only copy of the file, so the repair has to write it",
+        )
+        assertEquals(
+            emptyList<String>(), journalEntries(files),
+            "the record was acted on, so it has to be consumed",
         )
     }
 

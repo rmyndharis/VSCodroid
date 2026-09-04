@@ -30,7 +30,7 @@ contributors.
 
 | Document | Description | Audience |
 |----------|-------------|----------|
-| [User Guide](./USER_GUIDE.md) | Using the app: editor, terminal, extensions, SSH, toolchains | Users |
+| [User Guide](./USER_GUIDE.md) | Using the app: editor, terminal, extensions, debugging, SSH, toolchains | Users |
 | [Device Test Checklist](./DEVICE_TEST_CHECKLIST.md) | Manual on-device pass, run after the automated tests | QA |
 | [Legal Notices](./LEGAL_NOTICES.md) | Licenses and attribution for everything redistributed | Everyone |
 | [Privacy Policy](./PRIVACY_POLICY.md) | What the app collects, and what it does not | Everyone |

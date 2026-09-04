@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid 进程监视器",
+  "description": "监视 Android 上的幻影进程数量",
+  "command.showProcesses": "VSCodroid: 显示进程树",
+  "config.server.heapCeilingMb": "编辑器服务器的 V8 堆上限，单位 MB。留空时根据设备内存推算（RAM 的八分之一，介于 256 和 768 之间）。下次启动应用时生效。超出本设备承受能力的值会被自动调低，反复崩溃后还会被关闭。\n\n该上限对服务器中的每个 V8 隔离区分别生效，而不是对它们的总和，因此调高它的代价是数字的好几倍。"
+}

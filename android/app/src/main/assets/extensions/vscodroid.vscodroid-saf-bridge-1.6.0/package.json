@@ -1,8 +1,8 @@
 {
   "name": "vscodroid-saf-bridge",
-  "displayName": "VSCodroid Android Bridge",
-  "description": "Commands that reach Android: device folders, browser, SSH keys, storage, about",
-  "version": "1.5.0",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.6.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -18,43 +18,43 @@
     "commands": [
       {
         "command": "vscodroid.openFolderFromDevice",
-        "title": "VSCodroid: Open Folder from Device"
+        "title": "%command.openFolderFromDevice%"
       },
       {
         "command": "vscodroid.openRecentFolder",
-        "title": "VSCodroid: Open Recent Folder"
+        "title": "%command.openRecentFolder%"
       },
       {
         "command": "vscodroid.openInBrowser",
-        "title": "VSCodroid: Open in Browser"
+        "title": "%command.openInBrowser%"
       },
       {
         "command": "vscodroid.generateSshKey",
-        "title": "VSCodroid: Generate SSH Key"
+        "title": "%command.generateSshKey%"
       },
       {
         "command": "vscodroid.copySshPublicKey",
-        "title": "VSCodroid: Copy SSH Public Key"
+        "title": "%command.copySshPublicKey%"
       },
       {
         "command": "vscodroid.showStorageUsage",
-        "title": "VSCodroid: Show Storage Usage"
+        "title": "%command.showStorageUsage%"
       },
       {
         "command": "vscodroid.manageDeviceFolders",
-        "title": "VSCodroid: Manage Device Folder Storage"
+        "title": "%command.manageDeviceFolders%"
       },
       {
         "command": "vscodroid.clearCaches",
-        "title": "VSCodroid: Clear Caches"
+        "title": "%command.clearCaches%"
       },
       {
         "command": "vscodroid.manageToolchains",
-        "title": "VSCodroid: Manage Toolchains"
+        "title": "%command.manageToolchains%"
       },
       {
         "command": "vscodroid.about",
-        "title": "VSCodroid: About"
+        "title": "%command.about%"
       }
     ],
     "menus": {

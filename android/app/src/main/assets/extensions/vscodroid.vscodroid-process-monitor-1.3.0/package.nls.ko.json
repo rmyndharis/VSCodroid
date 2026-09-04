@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid 프로세스 모니터",
+  "description": "Android의 팬텀 프로세스 수를 지켜봅니다",
+  "command.showProcesses": "VSCodroid: 프로세스 트리 보기",
+  "config.server.heapCeilingMb": "편집기 서버의 V8 힙 상한 (MB). 값을 비워 두면 기기 메모리에서 정해집니다 (RAM의 8분의 1, 256에서 768 사이). 앱을 다음에 시작할 때 적용됩니다. 이 기기가 감당할 수 없는 큰 값은 자동으로 낮아지고, 충돌이 반복되면 꺼집니다.\n\n이 상한은 서버 안의 V8 아이솔레이트마다 따로 적용되며 전체 합계가 아닙니다. 그래서 값을 올리면 숫자가 말하는 것의 몇 배가 듭니다."
+}

@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Приветствие",
+  "description": "Приветственное руководство VSCodroid",
+  "config.layout.autoHideSideBar": "Закрывать боковую панель при открытии файла. Если значение не задано, настройка подстраивается под экран: включена там, где дерево файлов и редактор не помещаются рядом, выключена там, где помещаются. Задайте её здесь, чтобы решить самостоятельно.",
+  "command.welcome.open": "VSCodroid: Открыть приветствие",
+  "command.welcome.toolsDismissed": "VSCodroid: Завершить шаг с инструментами",
+  "walkthrough.title": "Начало работы с VSCodroid",
+  "walkthrough.description": "Настройте мобильную среду разработки",
+  "walkthrough.theme.title": "Выберите тему",
+  "walkthrough.theme.description": "Выберите цветовую тему по своему вкусу.\n\n[Просмотреть цветовые темы](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "Ваши инструменты разработки",
+  "walkthrough.tools.description": "В VSCodroid есть всё, что нужно, чтобы начать писать код:\n\n$(check) **Node.js** + npm: готово\n\n$(check) **Python** + pip: готово\n\n$(check) **Git**: готово\n\n$(check) **make**: готово\n\n**Java 17** и **Ruby** устанавливаются по требованию. Нажмите и удерживайте значок VSCodroid на главном экране и выберите **Наборы инструментов**.\n\n[Понятно](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "Настоящий терминал",
+  "walkthrough.terminal.description": "Откройте полноценный терминал bash, в котором каждый встроенный инструмент есть в PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` выводит ``hi``\n\n``python3 -c 'print(\"hi\")'`` выводит ``hi``\n\n``git init demo`` выводит ``Initialized empty Git repository``\n\n[Открыть терминал](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Добавьте больше возможностей",
+  "walkthrough.extensions.description": "Устанавливайте расширения из каталога Open VSX: поддержку языков, темы и инструменты.\n\nРасширения, написанные на JavaScript, работают. Те немногие, что несут в себе программу, собранную для настольного Linux, устанавливаются без возражений, а затем ничего не делают и не показывают ошибку на экране.\n\n[Просмотреть расширения](command:workbench.view.extensions)"
+}

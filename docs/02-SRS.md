@@ -193,7 +193,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-PERF-04 | File open (< 1MB file) | < 1 second | P0 |
 | NFR-PERF-05 | Extension install + activate | < 30 seconds | P1 |
 | NFR-PERF-06 | Terminal command response | < 100ms input echo | P0 |
-| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 770 MiB across roughly 23,600 files, unpacked one at a time | P1 |
+| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 767 MiB across roughly 23,500 files, unpacked one at a time | P1 |
 
 ### 4.2 Resource Usage (NFR-RES)
 
@@ -203,7 +203,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
 | NFR-RES-03 | Phantom process count | 5 with nothing open and 8 with a terminal and two language servers, the `IDLE_BASELINE` and `SOFT_BUDGET` of `assets/process-monitor.js`; the monitor warns at 8 and calls it a problem at 14, against Android's 32; nothing sheds a process | P0 |
 | NFR-RES-04 | AAB base module, compressed download | Under Play's 500 MB cap, which `scripts/check-bundle-size.py` refuses a bundle over. Last measured at 270.7 MiB, before the workbench internal bundles were pruned from the server tree, so re-measure from the AAB rather than quoting this. **200 MB is not a cap**: it is the size above which a mobile-data user sees a large-download dialog. The on-demand toolchain ZIPs are 9.9 MB for Ruby and 55.4 MB for Java 17, per `ToolchainRegistry.available`, and draw on Play's separate on-demand budget rather than this one | P1 |
-| NFR-RES-05 | Runtime storage (core extracted) | About 770 MiB, the asset tree that `BuildConfig.EXTRACTED_ASSET_BYTES` is computed from at build time; about 950 MiB with both toolchains installed | P1 |
+| NFR-RES-05 | Runtime storage (core extracted) | About 767 MiB, the asset tree that `BuildConfig.EXTRACTED_ASSET_BYTES` is computed from at build time; about 950 MiB with both toolchains installed. The app quotes the same quantities in decimal MB, 804 and 996, because that is the unit a phone's storage screen counts in | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
 | NFR-RES-06a | Battery drain during idle session (foreground, no input) | < 5% per hour | P2 |
 | NFR-RES-07 | V8 heap limit (default) | An eighth of device RAM, held between 256 MB and 768 MB | P1 |
@@ -325,7 +325,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Constraint | Details |
 |-----------|---------|
 | RAM on low-end devices | 4GB devices must work without OOM |
-| Storage on 64GB devices | About 770 MiB extracted for core, and about 865 MiB free to unpack it: the tree plus the 96 MiB of slack `FirstRunSetup.requiredExtractionBytes` adds for per-file block rounding |
+| Storage on 64GB devices | About 767 MiB extracted for core, and about 863 MiB free to unpack it: the tree plus the 96 MiB of slack `FirstRunSetup.requiredExtractionBytes` adds for per-file block rounding. The refusal message names the same figure as 905 MB, in decimal |
 | CPU throttling | Android may throttle background processes |
 | Battery optimization | Doze mode may affect background server |
 

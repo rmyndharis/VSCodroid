@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid Moniteur de processus",
+  "description": "Surveille le nombre de processus fantômes sur Android",
+  "command.showProcesses": "VSCodroid: Afficher l'arborescence des processus",
+  "config.server.heapCeilingMb": "Plafond du tas V8 du serveur de l'éditeur, en Mo. Laissé vide, il est déduit de la mémoire de l'appareil (un huitième de la RAM, entre 256 et 768). Il prend effet au prochain démarrage de l'application. Une valeur trop grande pour cet appareil est réduite automatiquement, et désactivée après des plantages répétés.\n\nLa limite s'applique séparément à chaque isolat V8 du serveur, et non à leur ensemble : l'augmenter coûte donc plusieurs fois le chiffre indiqué."
+}

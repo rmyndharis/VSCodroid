@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Powitanie",
+  "description": "Powitalny przewodnik po VSCodroid",
+  "config.layout.autoHideSideBar": "Zamyka pasek boczny po otwarciu pliku. Bez ustawionej wartości dostosowuje się do ekranu: włączone tam, gdzie drzewo plików i edytor nie mieszczą się obok siebie, wyłączone tam, gdzie się mieszczą. Ustaw tutaj, aby zdecydować samodzielnie.",
+  "command.welcome.open": "VSCodroid: Otwórz powitanie",
+  "command.welcome.toolsDismissed": "VSCodroid: Zakończ krok z narzędziami",
+  "walkthrough.title": "Pierwsze kroki z VSCodroid",
+  "walkthrough.description": "Przygotuj swoje mobilne środowisko programistyczne",
+  "walkthrough.theme.title": "Wybierz motyw",
+  "walkthrough.theme.description": "Wybierz motyw kolorystyczny w swoim stylu.\n\n[Przeglądaj motywy kolorystyczne](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "Twoje narzędzia programistyczne",
+  "walkthrough.tools.description": "VSCodroid ma wszystko, czego potrzebujesz, aby zacząć pisać kod:\n\n$(check) **Node.js** + npm: gotowe\n\n$(check) **Python** + pip: gotowe\n\n$(check) **Git**: gotowe\n\n$(check) **make**: gotowe\n\n**Java 17** i **Ruby** instalują się na żądanie. Przytrzymaj ikonę VSCodroid na ekranie głównym i wybierz **Zarządzaj narzędziami**.\n\n[Rozumiem](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "Prawdziwy terminal",
+  "walkthrough.terminal.description": "Otwórz pełny terminal bash, w którym każde dołączone narzędzie jest w PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` wypisuje ``hi``\n\n``python3 -c 'print(\"hi\")'`` wypisuje ``hi``\n\n``git init demo`` wypisuje ``Initialized empty Git repository``\n\n[Otwórz terminal](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Rozbuduj o kolejne funkcje",
+  "walkthrough.extensions.description": "Instaluj rozszerzenia z marketplace Open VSX, aby dodać obsługę języków, motywy i narzędzia.\n\nRozszerzenia napisane w JavaScripcie działają. Te nieliczne, które niosą program skompilowany dla Linuksa na komputery, instalują się bez protestu, a potem nic nie robią, bez żadnego błędu na ekranie.\n\n[Przeglądaj rozszerzenia](command:workbench.view.extensions)"
+}

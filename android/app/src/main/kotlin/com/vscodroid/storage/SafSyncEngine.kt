@@ -420,7 +420,7 @@ class SafSyncEngine(private val context: Context) {
                     // [setAsideDeviceCopy] would keep a `.device-` copy of this
                     // app's own half-written bytes, and phase 2b would then put
                     // that copy on the device.
-                    val ownPartialWrite = deviceIsTruncatedMirror(doc.uri, localPath, doc.size)
+                    val ownPartialWrite = deviceIsTruncatedMirror(doc.uri, localPath)
                     if (!ownPartialWrite && !setAsideDeviceCopy(doc, localPath)) {
                         // Held back, not abandoned, and the record is deliberately
                         // NOT consumed: the mirror keeps the only complete copy,
@@ -453,8 +453,19 @@ class SafSyncEngine(private val context: Context) {
                     if (!ownPartialWrite) setAside++
                     Logger.i(
                         tag,
-                        "Kept the mirror of ${doc.relativePath}: its device copy was an " +
-                            "upload this app did not finish"
+                        if (ownPartialWrite) {
+                            "Kept the mirror of ${doc.relativePath}: its device copy was an " +
+                                "upload this app did not finish"
+                        } else {
+                            // Reached only where the bytes said the opposite: the
+                            // device copy did not come from that upload, and
+                            // [setAsideDeviceCopy] has just preserved it beside
+                            // itself, or found it identical and removed its own
+                            // copy. This is the line a maintainer reads to explain
+                            // a `.device-` file in a user's folder.
+                            "Kept the mirror of ${doc.relativePath}: its device copy did not " +
+                                "come from an unfinished upload and was preserved first"
+                        },
                     )
                     writeLocalToSaf(localPath, doc.uri)
                     filesDone++
@@ -1818,6 +1829,88 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
+     * Whether the device document is exactly what this app's own interrupted
+     * write-back leaves behind: a STRICT PREFIX of the mirror.
+     *
+     * The upload journal records that a write started and did not finish. It does
+     * not record that nothing touched the document afterwards, and the two are
+     * only the same thing if the app was the last writer. `"wt"` truncates at
+     * open and the copy runs forward from zero, so a write cut short leaves the
+     * document holding the mirror's leading bytes and nothing else. Any other
+     * content, longer, shorter with different bytes, or the same length, was
+     * written by something that is not that interrupted write, and the caller
+     * must preserve it rather than overwrite it.
+     *
+     * Strict, because equal length is [deviceMatchesMirror]'s question and means
+     * the write finished after all. Every case is decided from the two streams:
+     *
+     * | Device document | Answer |
+     * |---|---|
+     * | unreadable | false; the caller preserves it before replacing |
+     * | empty, mirror is not | true, the empty prefix |
+     * | empty, mirror is empty too | false, not strict |
+     * | shorter, bytes agree | true |
+     * | shorter, bytes differ | false |
+     * | same length, or longer | false |
+     *
+     * ⚠️ `doc.size` is deliberately not a parameter here, and a length
+     * pre-check must not come back. `COLUMN_SIZE` is optional, a NULL reads back
+     * as 0 through the cursor, and `walkTree` does not test for it, so a provider
+     * that omits it claims 0 for every document it returns. The pre-check this
+     * replaced, `deviceSize <= 0L || deviceSize >= localFile.length()`, therefore
+     * answered false for every file of such a provider, and for every genuinely
+     * empty document as well: which is exactly what a `"wt"` open followed by an
+     * immediate death leaves, the most likely shape of the write this exists to
+     * recognise. A false here sends the EXPECTED case into [setAsideDeviceCopy],
+     * which keeps a `.device-` copy of this app's own half-written bytes, and
+     * phase 2b then puts that copy in the user's folder, where nothing removes
+     * it. The relation is a property of two byte streams and both of them are
+     * open here; a third party's claim about one of them can only add ways to be
+     * wrong.
+     *
+     * The cost is one provider read of at most `min(document, mirror) + 1` bytes,
+     * paid a second time by [setAsideDeviceCopy] wherever this answers false.
+     * Affordable only because a journal line gates the branch, so it never runs
+     * on a healthy folder. [deviceMatchesMirror] decides the other way and says
+     * why: it runs for every file of a no-clock folder on every open.
+     *
+     * A read that fails answers false, the safe direction: the caller then
+     * preserves the document before replacing it.
+     */
+    private fun deviceIsTruncatedMirror(safDocUri: Uri, localFile: File): Boolean {
+        return try {
+            context.contentResolver.openInputStream(safDocUri)?.use { device ->
+                localFile.inputStream().use { mirror ->
+                    val a = ByteArray(COPY_BUFFER_SIZE)
+                    val b = ByteArray(COPY_BUFFER_SIZE)
+                    while (true) {
+                        val read = device.readNBytes(a, 0, a.size)
+                        // The document ended while the two still agreed, so it is
+                        // a prefix. Strict needs one more byte in the mirror, and
+                        // it is asked of the stream rather than of
+                        // `localFile.length()`: the mirror is a file an editor may
+                        // be writing while this runs, and a second measurement of
+                        // it can disagree with the bytes just read.
+                        if (read == 0) return@use mirror.read() != -1
+                        // The mirror ran out first, so the document holds more
+                        // than any prefix of it: something else put it there.
+                        if (mirror.readNBytes(b, 0, read) != read) return@use false
+                        if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+                    }
+                    @Suppress("UNREACHABLE_CODE") false
+                }
+            } ?: false
+        } catch (e: Exception) {
+            Logger.w(
+                tag,
+                "Could not compare ${localFile.name} with its device copy: " +
+                    e.javaClass.simpleName,
+            )
+            false
+        }
+    }
+
+    /**
      * Whether the device document and the mirror hold the same bytes.
      *
      * The one question that can be answered without a clock, and the only one this
@@ -1834,65 +1927,16 @@ class SafSyncEngine(private val context: Context) {
      * optional in the same way `COLUMN_LAST_MODIFIED` is. A provider omitting both
      * reports every length as 0, and this then answers false for every non-empty file,
      * so the fix does not apply there. It cannot answer a wrong yes, because the bytes
-     * are compared afterwards, so the ceiling is "does not help", never a loss.
+     * are compared afterwards, so the ceiling is "does not help", never a loss. The
+     * ceiling is accepted here on purpose: this runs for every file of a folder whose
+     * provider has no clock, on every open, and dropping the pre-check would read every
+     * document over binder each time. [deviceIsTruncatedMirror] takes the opposite
+     * decision, and says why.
      *
      * A read that fails answers false. That is the safe direction: false leaves the
      * mirror kept and unrecorded, which is what happens today, while a true this could
      * not justify would vouch for bytes nobody compared.
      */
-    /**
-     * Whether the device document is exactly what this app's own interrupted
-     * write-back leaves behind: a STRICT PREFIX of the mirror.
-     *
-     * The upload journal records that a write started and did not finish. It does
-     * not record that nothing touched the document afterwards, and the two are
-     * only the same thing if the app was the last writer. `"wt"` truncates at
-     * open and the copy runs forward from zero, so a write cut short leaves the
-     * document holding the mirror's leading bytes and nothing else. Any other
-     * content, longer, shorter with different bytes, or the same length, was
-     * written by something that is not that interrupted write, and the caller
-     * must preserve it rather than overwrite it.
-     *
-     * Strict, because equal length is [deviceMatchesMirror]'s question and means
-     * the write finished after all.
-     *
-     * One provider read, the same one [setAsideDeviceCopy] would pay, and it
-     * spends it on the question that decides whether a copy is worth keeping
-     * rather than on the copy itself. Answering false on any failure is the safe
-     * direction: the caller then preserves the document before replacing it.
-     */
-    private fun deviceIsTruncatedMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
-        if (deviceSize <= 0L || deviceSize >= localFile.length()) return false
-        return try {
-            context.contentResolver.openInputStream(safDocUri)?.use { device ->
-                localFile.inputStream().use { mirror ->
-                    val a = ByteArray(COPY_BUFFER_SIZE)
-                    val b = ByteArray(COPY_BUFFER_SIZE)
-                    var compared = 0L
-                    while (true) {
-                        val read = device.readNBytes(a, 0, a.size)
-                        if (read == 0) return@use compared == deviceSize
-                        // The mirror is the longer side, so a short read from it
-                        // means the two disagree about their own lengths and the
-                        // prefix cannot hold.
-                        if (mirror.readNBytes(b, 0, read) != read) return@use false
-                        if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
-                        compared += read
-                        if (compared > deviceSize) return@use false
-                    }
-                    @Suppress("UNREACHABLE_CODE") false
-                }
-            } ?: false
-        } catch (e: Exception) {
-            Logger.w(
-                tag,
-                "Could not compare ${localFile.name} with its device copy: " +
-                    e.javaClass.simpleName,
-            )
-            false
-        }
-    }
-
     private fun deviceMatchesMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
         if (deviceSize != localFile.length()) return false
         return try {

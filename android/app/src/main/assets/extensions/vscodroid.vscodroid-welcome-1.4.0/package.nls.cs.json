@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Vítejte",
+  "description": "Uvítací průvodce VSCodroidem",
+  "config.layout.autoHideSideBar": "Zavře postranní panel, když otevřete soubor. Bez nastavené hodnoty se řídí obrazovkou: zapnuto tam, kde se strom souborů a editor vedle sebe nevejdou, vypnuto tam, kde ano. Tady si to můžete určit sami.",
+  "command.welcome.open": "VSCodroid: Otevřít uvítání",
+  "command.welcome.toolsDismissed": "VSCodroid: Dokončit krok s nástroji",
+  "walkthrough.title": "Začínáme s VSCodroidem",
+  "walkthrough.description": "Připravte si mobilní vývojové prostředí",
+  "walkthrough.theme.title": "Vyberte si motiv",
+  "walkthrough.theme.description": "Vyberte si barevný motiv, který vám sedne.\n\n[Procházet barevné motivy](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "Vaše vývojářské nástroje",
+  "walkthrough.tools.description": "VSCodroid má v sobě všechno, co potřebujete k psaní kódu:\n\n$(check) **Node.js** + npm: připraveno\n\n$(check) **Python** + pip: připraveno\n\n$(check) **Git**: připraveno\n\n$(check) **make**: připraveno\n\n**Java 17** a **Ruby** se instalují na vyžádání. Podržte prst na ikoně VSCodroidu na ploše a zvolte **Spravovat sady nástrojů**.\n\n[Rozumím](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "Opravdový terminál",
+  "walkthrough.terminal.description": "Otevřete plnohodnotný terminál bash, ve kterém máte v PATH každý přibalený nástroj: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` vypíše ``hi``\n\n``python3 -c 'print(\"hi\")'`` vypíše ``hi``\n\n``git init demo`` vypíše ``Initialized empty Git repository``\n\n[Otevřít terminál](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Rozšiřte si možnosti",
+  "walkthrough.extensions.description": "Instalujte rozšíření z tržiště Open VSX pro podporu jazyků, motivy a nástroje.\n\nRozšíření psaná v JavaScriptu fungují. Těch pár, která s sebou nesou program přeložený pro desktopový Linux, se nainstaluje bez námitek a pak nedělá nic, bez chybové hlášky na obrazovce.\n\n[Procházet rozšíření](command:workbench.view.extensions)"
+}

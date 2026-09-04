@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android-Brücke",
+  "description": "Befehle, die Android erreichen: Geräteordner, Browser, SSH-Schlüssel, Speicher, Info",
+  "command.openFolderFromDevice": "VSCodroid: Ordner vom Gerät öffnen",
+  "command.openRecentFolder": "VSCodroid: Zuletzt verwendeten Ordner öffnen",
+  "command.openInBrowser": "VSCodroid: Im Browser öffnen",
+  "command.generateSshKey": "VSCodroid: SSH-Schlüssel erzeugen",
+  "command.copySshPublicKey": "VSCodroid: Öffentlichen SSH-Schlüssel kopieren",
+  "command.showStorageUsage": "VSCodroid: Speicherbelegung anzeigen",
+  "command.manageDeviceFolders": "VSCodroid: Speicher der Geräteordner verwalten",
+  "command.clearCaches": "VSCodroid: Zwischenspeicher leeren",
+  "command.manageToolchains": "VSCodroid: Toolchains verwalten",
+  "command.about": "VSCodroid: Info"
+}

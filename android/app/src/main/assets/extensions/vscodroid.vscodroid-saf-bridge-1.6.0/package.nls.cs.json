@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Most do Androidu",
+  "description": "Příkazy, které sahají do Androidu: složky v zařízení, prohlížeč, klíče SSH, úložiště, o aplikaci",
+  "command.openFolderFromDevice": "VSCodroid: Otevřít složku ze zařízení",
+  "command.openRecentFolder": "VSCodroid: Otevřít nedávnou složku",
+  "command.openInBrowser": "VSCodroid: Otevřít v prohlížeči",
+  "command.generateSshKey": "VSCodroid: Vytvořit klíč SSH",
+  "command.copySshPublicKey": "VSCodroid: Zkopírovat veřejný klíč SSH",
+  "command.showStorageUsage": "VSCodroid: Zobrazit využití úložiště",
+  "command.manageDeviceFolders": "VSCodroid: Spravovat úložiště složek v zařízení",
+  "command.clearCaches": "VSCodroid: Vymazat mezipaměti",
+  "command.manageToolchains": "VSCodroid: Spravovat sady nástrojů",
+  "command.about": "VSCodroid: O aplikaci"
+}

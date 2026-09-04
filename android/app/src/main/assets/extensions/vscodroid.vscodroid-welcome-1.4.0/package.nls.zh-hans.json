@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid 欢迎",
+  "description": "VSCodroid 欢迎导览",
+  "config.layout.autoHideSideBar": "打开文件时收起侧边栏。留空时会跟随屏幕：文件树和编辑器无法并排放下的屏幕上开启，放得下的屏幕上关闭。想自己决定，就在这里设置。",
+  "command.welcome.open": "VSCodroid: 打开欢迎页",
+  "command.welcome.toolsDismissed": "VSCodroid: 完成工具步骤",
+  "walkthrough.title": "开始使用 VSCodroid",
+  "walkthrough.description": "配置你的移动开发环境",
+  "walkthrough.theme.title": "选择主题",
+  "walkthrough.theme.description": "挑一个合你心意的颜色主题。\n\n[浏览颜色主题](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "你的开发工具",
+  "walkthrough.tools.description": "VSCodroid 自带开始写代码所需的一切：\n\n$(check) **Node.js** + npm：就绪\n\n$(check) **Python** + pip：就绪\n\n$(check) **Git**：就绪\n\n$(check) **make**：就绪\n\n**Java 17** 和 **Ruby** 可按需安装。长按主屏幕上的 VSCodroid 图标，选择 **管理工具链**。\n\n[知道了](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "真正的终端",
+  "walkthrough.terminal.description": "打开一个完整的 bash 终端，所有随附工具都在 PATH 中：``node``、``python3``、``git``、``npm``。\n\n``node -e 'console.log(\"hi\")'`` 会输出 ``hi``\n\n``python3 -c 'print(\"hi\")'`` 会输出 ``hi``\n\n``git init demo`` 会输出 ``Initialized empty Git repository``\n\n[打开终端](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "用更多功能扩展它",
+  "walkthrough.extensions.description": "在 Open VSX 市场安装扩展，获得语言支持、主题和工具。\n\n用 JavaScript 写的扩展可以正常工作。少数自带为桌面 Linux 编译的程序的扩展能顺利装上，然后什么也不做，屏幕上也没有任何报错。\n\n[浏览扩展](command:workbench.view.extensions)"
+}

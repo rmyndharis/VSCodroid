@@ -227,12 +227,15 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * quoted a toolchain 4.9% larger than the number the user had just read on
      * the screen they came from.
      *
-     * The convention kept is 1,048,576, for two reasons. It is what `du -h` and
-     * `df -h` report in this app's own terminal, which is where its users check
-     * a size, and it is what every other figure here already uses, so it is the
-     * one that can be made consistent without changing what a free-space gate
-     * appears to promise. Nothing computes with these strings: every pre-flight
-     * works in raw bytes.
+     * The convention kept is decimal, and the reason lives with the formatter:
+     * see [com.vscodroid.util.StorageManager.formatSize]. It is what a phone's
+     * own storage screen counts in, so it is the only figure of ours a user can
+     * check against anything. This paragraph said 1,048,576 until the app was
+     * made to agree with itself, and the sentence that made it wrong is worth
+     * keeping visible: "it is what every other figure here already uses" stopped
+     * being true the day the storage message moved, and nothing could notice,
+     * because each divisor was a literal beside its own caller. Nothing computes
+     * with these strings: every pre-flight works in raw bytes.
      */
     fun sizeFigures(info: ToolchainRegistry.ToolchainInfo): SizeFigures = SizeFigures(
         download = StorageManager.formatSize(info.downloadSize),

@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Passerelle Android",
+  "description": "Commandes qui atteignent Android : dossiers de l'appareil, navigateur, clés SSH, stockage, à propos",
+  "command.openFolderFromDevice": "VSCodroid: Ouvrir un dossier de l'appareil",
+  "command.openRecentFolder": "VSCodroid: Ouvrir un dossier récent",
+  "command.openInBrowser": "VSCodroid: Ouvrir dans le navigateur",
+  "command.generateSshKey": "VSCodroid: Générer une clé SSH",
+  "command.copySshPublicKey": "VSCodroid: Copier la clé publique SSH",
+  "command.showStorageUsage": "VSCodroid: Afficher l'utilisation du stockage",
+  "command.manageDeviceFolders": "VSCodroid: Gérer le stockage des dossiers de l'appareil",
+  "command.clearCaches": "VSCodroid: Vider les caches",
+  "command.manageToolchains": "VSCodroid: Gérer les chaînes d'outils",
+  "command.about": "VSCodroid: À propos"
+}

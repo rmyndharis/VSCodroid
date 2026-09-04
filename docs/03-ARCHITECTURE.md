@@ -482,7 +482,7 @@ flowchart TD
   B --> B1["home/ ($HOME)"]
   B1 --> B1a[".vscodroid/ (VS Code data folder)"]
   B1a --> B1a1["extensions/ (installed extensions)"]
-  B1a --> B1a2["data/Machine/settings.json (default settings the server reads)"]
+  B1a --> B1a2["data/Machine/settings.json (remote USER settings: machine facts and server-only keys)"]
   B1a --> B1a3["data/logs/ (remoteagent.log, written by the server;<br/>server.log, the process output mirrored by ServerLog)"]
   B1a --> B1a4["data/token (connection token, mode 0600)"]
   B1 --> B1b[".gitconfig"]
@@ -565,7 +565,7 @@ there, Extension Host output included. Nothing writes `exthost.log` under any na
 
 | Config | Location | Format |
 |--------|----------|--------|
-| VS Code settings | ~/.vscodroid/data/Machine/settings.json (the server rewrites `--user-data-dir` to `<server-data-dir>/data`. The web client takes only the remote-machine scopes from it; the server reads the same file with no scope filter, which is why an APPLICATION-scoped key it owns, `extensions.verifySignature`, does take effect) | JSON |
+| VS Code settings | ~/.vscodroid/data/Machine/settings.json (the server rewrites `--user-data-dir` to `<server-data-dir>/data`. The web client parses it as the REMOTE USER settings and merges it **above** the user's own, which live in the WebView's IndexedDB as `vscode-userdata:/User/settings.json`, so this file holds machine facts and server-only keys and never a preference; app preferences are contributed as defaults by the bundled welcome extension. Three readers: the web client with the remote-machine scopes, the server with no scope filter, which is why an APPLICATION-scoped key it owns, `extensions.verifySignature`, does take effect, and `ProcessManager` for the heap ceiling) | JSON |
 | product.json | `vscode-reh/product.json`, rewritten by `server.js` on every start from its `productOverrides` | JSON |
 | Environment variables | Set by Kotlin ProcessBuilder | Shell |
 | App preferences | Android SharedPreferences | XML |

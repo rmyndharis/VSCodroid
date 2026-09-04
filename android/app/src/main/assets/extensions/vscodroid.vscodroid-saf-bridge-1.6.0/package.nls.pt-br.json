@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Ponte para o Android",
+  "description": "Comandos que alcançam o Android: pastas do dispositivo, navegador, chaves SSH, armazenamento, sobre",
+  "command.openFolderFromDevice": "VSCodroid: Abrir uma pasta do dispositivo",
+  "command.openRecentFolder": "VSCodroid: Abrir uma pasta recente",
+  "command.openInBrowser": "VSCodroid: Abrir no navegador",
+  "command.generateSshKey": "VSCodroid: Gerar uma chave SSH",
+  "command.copySshPublicKey": "VSCodroid: Copiar a chave pública SSH",
+  "command.showStorageUsage": "VSCodroid: Mostrar o uso de armazenamento",
+  "command.manageDeviceFolders": "VSCodroid: Gerenciar o armazenamento das pastas do dispositivo",
+  "command.clearCaches": "VSCodroid: Limpar os caches",
+  "command.manageToolchains": "VSCodroid: Gerenciar toolchains",
+  "command.about": "VSCodroid: Sobre"
+}

@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android 桥接",
+  "description": "触达 Android 的命令：设备文件夹、浏览器、SSH 密钥、存储、关于",
+  "command.openFolderFromDevice": "VSCodroid: 打开设备上的文件夹",
+  "command.openRecentFolder": "VSCodroid: 打开最近的文件夹",
+  "command.openInBrowser": "VSCodroid: 在浏览器中打开",
+  "command.generateSshKey": "VSCodroid: 生成 SSH 密钥",
+  "command.copySshPublicKey": "VSCodroid: 复制 SSH 公钥",
+  "command.showStorageUsage": "VSCodroid: 查看存储占用",
+  "command.manageDeviceFolders": "VSCodroid: 管理设备文件夹存储",
+  "command.clearCaches": "VSCodroid: 清除缓存",
+  "command.manageToolchains": "VSCodroid: 管理工具链",
+  "command.about": "VSCodroid: 关于"
+}

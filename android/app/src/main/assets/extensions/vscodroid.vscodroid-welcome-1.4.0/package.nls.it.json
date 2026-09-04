@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Benvenuto",
+  "description": "Percorso di benvenuto di VSCodroid",
+  "config.layout.autoHideSideBar": "Chiude la barra laterale quando apri un file. Se non lo imposti, segue lo schermo: attivo dove l'albero dei file e l'editor non ci stanno affiancati, disattivo dove ci stanno. Impostalo qui per decidere tu.",
+  "command.welcome.open": "VSCodroid: Apri il benvenuto",
+  "command.welcome.toolsDismissed": "VSCodroid: Completa il passaggio sugli strumenti",
+  "walkthrough.title": "Inizia con VSCodroid",
+  "walkthrough.description": "Prepara il tuo ambiente di sviluppo mobile",
+  "walkthrough.theme.title": "Scegli il tema",
+  "walkthrough.theme.description": "Scegli un tema di colori che ti somigli.\n\n[Sfoglia i temi di colori](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "I tuoi strumenti di sviluppo",
+  "walkthrough.tools.description": "VSCodroid contiene tutto il necessario per iniziare a programmare:\n\n$(check) **Node.js** + npm: pronto\n\n$(check) **Python** + pip: pronto\n\n$(check) **Git**: pronto\n\n$(check) **make**: pronto\n\n**Java 17** e **Ruby** si installano su richiesta. Tieni premuta l'icona di VSCodroid nella schermata iniziale e scegli **Gestisci toolchain**.\n\n[Ho capito](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "Un terminale vero",
+  "walkthrough.terminal.description": "Apri un terminale bash completo con tutti gli strumenti inclusi nel PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` stampa ``hi``\n\n``python3 -c 'print(\"hi\")'`` stampa ``hi``\n\n``git init demo`` stampa ``Initialized empty Git repository``\n\n[Apri il terminale](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Aggiungi altre funzioni",
+  "walkthrough.extensions.description": "Installa estensioni dal marketplace Open VSX per il supporto ai linguaggi, i temi e gli strumenti.\n\nLe estensioni scritte in JavaScript funzionano. Le poche che includono un programma compilato per Linux desktop si installano senza protestare e poi non fanno nulla, senza alcun errore a schermo.\n\n[Sfoglia le estensioni](command:workbench.view.extensions)"
+}

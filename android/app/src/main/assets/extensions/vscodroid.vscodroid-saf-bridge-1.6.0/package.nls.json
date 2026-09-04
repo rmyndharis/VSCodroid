@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Android Bridge",
+  "description": "Commands that reach Android: device folders, browser, SSH keys, storage, about",
+  "command.openFolderFromDevice": "VSCodroid: Open Folder from Device",
+  "command.openRecentFolder": "VSCodroid: Open Recent Folder",
+  "command.openInBrowser": "VSCodroid: Open in Browser",
+  "command.generateSshKey": "VSCodroid: Generate SSH Key",
+  "command.copySshPublicKey": "VSCodroid: Copy SSH Public Key",
+  "command.showStorageUsage": "VSCodroid: Show Storage Usage",
+  "command.manageDeviceFolders": "VSCodroid: Manage Device Folder Storage",
+  "command.clearCaches": "VSCodroid: Clear Caches",
+  "command.manageToolchains": "VSCodroid: Manage Toolchains",
+  "command.about": "VSCodroid: About"
+}

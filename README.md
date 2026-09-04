@@ -120,7 +120,7 @@ If you are **ready to learn**, you should be able to **start today**.
 
 - **Real VS Code**: Monaco Editor, Workbench UI, Command Palette, and all the features you know.
 - **Extension Support**: Install themes, linters, language support, and more from [Open VSX](https://open-vsx.org).
-- **Interface In Your Language**: The editor's interface follows the phone's language, in thirteen of them (Chinese Simplified and Traditional, Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish, Turkish), with no language pack to install. The app's own screens are translated too; text contributed by extensions stays English.
+- **Interface In Your Language**: The editor's interface follows the phone's language, in thirteen of them (Chinese Simplified and Traditional, Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish, Turkish), with no language pack to install. The app's own screens are translated too, and so are VSCodroid's own commands, settings and walkthrough; an extension you install from Open VSX carries its own translations or none.
 - **Integrated Terminal**: Full bash terminal with real PTY support (tmux, bash line editing and the Node and Python REPLs all work).
 - **Batteries Included**: Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
 - **Offline-First**: Code without an internet connection. Everything runs locally on your device.
@@ -238,13 +238,13 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | Play Store download (core)             | ~270 MB              |
 | + Each toolchain (on-demand)           | 10-55 MB per language |
 | Free space required to install         | ~905 MB              |
-| Extracted to internal storage (core)   | ~769 MB              |
-| Extracted, plus both toolchains        | ~952 MB              |
+| Extracted to internal storage (core)   | ~805 MB              |
+| Extracted, plus both toolchains        | ~996 MB              |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction
-needs room to work: it is the asset tree plus 96 MB of headroom, which covers the
-filesystem block rounding a tree of 23,000 files costs. The app quotes the figure when
+needs room to work: it is the asset tree plus about 101 MB of headroom, which covers
+the filesystem block rounding a tree of 23,000 files costs. The app quotes the figure when
 it refuses to start for lack of space, and on an upgrade it quotes a smaller one,
 because what is already unpacked is credited. Freeing only what the extracted size
 suggests is what leaves setup failing partway.
@@ -255,8 +255,11 @@ These move with every VS Code bump. Re-measure rather than trusting them:
 # what the app will extract, and therefore what the storage gate demands.
 # python3 rather than stat: `stat -f` is the BSD spelling and `stat -c` the GNU one,
 # and the version that shipped here failed on Linux by printing a plausible 0 MB.
-# This also sums the way the gate itself does, in app/build.gradle.kts.
-python3 -c "import os; t=sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk('android/app/src/main/assets') for f in fs); print(f'{t/1048576:.0f} MB assets, gate demands {t/1048576+96:.0f} MB')"
+# This sums the way the gate itself does, in app/build.gradle.kts: decimal MB,
+# which is the unit the app asks in, and `nls/` left out, because those bundles are
+# served to the page straight from the APK and are never unpacked. The 100.7 is
+# EXTRACTION_SLACK_BYTES, 96 MiB, in the same unit.
+python3 -c "import os; b='android/app/src/main/assets'; s={os.path.join(r,f):os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(b) for f in fs}; n=os.path.join(b,'nls')+os.sep; t=sum(v for k,v in s.items() if not k.startswith(n)); print(f'{t/1e6:.0f} MB extracted, gate demands {t/1e6+100.7:.0f} MB')"
 ```
 
 ## 🤝 Contributing
@@ -294,7 +297,7 @@ Quick links:
 | [Risk Matrix](docs/08-RISK_MATRIX.md)                                        | Known risks and mitigation strategies                      |
 | [Development Guide](docs/09-DEVELOPMENT_GUIDE.md)                            | Pointer to CONTRIBUTING.md, which carries the build and contribution steps |
 | [Release Plan](docs/10-RELEASE_PLAN.md)                                      | Release strategy, CI/CD, Play Store                        |
-| [User Guide](docs/USER_GUIDE.md)                                             | How to use VSCodroid (keyboard, terminal, extensions, SSH) |
+| [User Guide](docs/USER_GUIDE.md)                                             | How to use VSCodroid (keyboard, terminal, extensions, debugging, SSH) |
 | [Milestones](MILESTONES.md)                                                  | Development milestones M0-M6                               |
 | [Glossary](docs/11-GLOSSARY.md)                                              | Terms and definitions                                      |
 | [Implementation Plan](docs/12-IMPLEMENTATION_PLAN.md)                        | Week-by-week task breakdown with dependencies              |

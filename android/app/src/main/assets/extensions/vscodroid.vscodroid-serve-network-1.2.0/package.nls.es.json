@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid Servir en la red",
+  "description": "Muestra la dirección con la que otros dispositivos pueden llegar a un servidor de desarrollo que se ejecuta en este dispositivo",
+  "command.serveOnNetwork": "VSCodroid: Servir en la red"
+}

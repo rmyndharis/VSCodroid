@@ -39,6 +39,35 @@ class VSCodroidWebChromeClient(
     val hasPendingFileChooser: Boolean
         get() = pendingFileChooser != null
 
+    /**
+     * Answers the browser's "are you sure you want to leave" for the page.
+     *
+     * The workbench registers a `beforeunload` handler, and the WebView's default
+     * handling of it is a modal asking whether to leave the page, worded for a
+     * browser: "Changes you made may not be saved." There is nowhere to leave to.
+     * This app holds exactly one document, the user cannot type an address, and
+     * every navigation that reaches here is one the app or the workbench decided
+     * to perform: opening a folder, restoring the empty window, or the workbench
+     * asking for a second window, which on a device is this one. Measured: a
+     * same-origin `window.open` put that modal in front of the editor, over a
+     * navigation that was working.
+     *
+     * The confirm is answered rather than the handler suppressed, so nothing
+     * about the page changes. Unsaved editor content is not what this protects:
+     * the workbench keeps it in browser storage and restores it on the next load,
+     * which is why its own reload and its own folder switch pass through here
+     * without asking either.
+     */
+    override fun onJsBeforeUnload(
+        view: WebView?,
+        url: String?,
+        message: String?,
+        result: android.webkit.JsResult?,
+    ): Boolean {
+        result?.confirm()
+        return true
+    }
+
     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
         // Redacted as one string, which covers both halves that can carry the
         // connection token: `sourceId` is a script URL and `message` is arbitrary

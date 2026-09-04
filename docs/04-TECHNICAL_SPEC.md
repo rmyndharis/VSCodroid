@@ -288,7 +288,7 @@ flowchart TD
   UTIL --> U1["Environment.kt (PATH, HOME, env setup)"]
   UTIL --> U2["PortFinder.kt (find available localhost port)"]
   UTIL --> U3["Logger.kt (logging utilities, redaction)"]
-  UTIL --> U4["CrashReporter.kt, Notices.kt, StorageManager.kt, ViewInsets.kt, WebViewVersion.kt"]
+  UTIL --> U4["CrashReporter.kt, EditorLocale.kt, Notices.kt, StorageManager.kt, ViewInsets.kt, WebViewVersion.kt"]
 
   ROOT --> RES["res/"]
   RES --> LAYOUT["layout/"]
@@ -297,6 +297,10 @@ flowchart TD
   LAYOUT --> L3["activity_toolchain.xml, item_toolchain_card.xml, layout_toolchain_picker.xml, layout_toolchain_progress.xml"]
   RES --> VALUES["values/"]
   VALUES --> V1["strings.xml"]
+  RES --> VALUESL["values-lang/ (thirteen: cs de es fr it ja ko pl pt-rBR ru tr zh-rCN zh-rTW)"]
+  VALUESL --> V2["strings.xml (the app's own screens, translated)"]
+  RES --> XML["xml/"]
+  XML --> X1["locales_config.xml (what android:localeConfig publishes to Android's per-app language picker)"]
   RES --> DRAW["drawable/"]
   DRAW --> D1["ic_launcher.xml (VSCodroid icon)"]
 
@@ -306,6 +310,7 @@ flowchart TD
   ASSET --> AS3["usr/lib/python3.x/ (Python standard library and pip)"]
   ASSET --> AS4["extensions/ (Pre-bundled extensions)"]
   ASSET --> AS5["server.js (Server bootstrap script)"]
+  ASSET --> AS6["nls/ (one translated message bundle per language, served straight from the APK, never unpacked)"]
 ```
 
 ### 2.2 Activity Lifecycle

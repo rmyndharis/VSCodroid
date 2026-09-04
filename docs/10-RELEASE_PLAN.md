@@ -231,7 +231,7 @@ Features:
 • Portrait, landscape and split-screen support
 
 The interface follows your phone's language, in 13 of them, the app's own screens
-included. Text that comes from extensions stays English.
+included. Extensions you install from Open VSX carry their own translations, or none.
 
 Built for developers who code on-the-go. Whether you're on a train, in a coffee shop, or just prefer your tablet, VSCodroid gives you a real development environment.
 

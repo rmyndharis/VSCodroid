@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Puente con Android",
+  "description": "Comandos que llegan a Android: carpetas del dispositivo, navegador, claves SSH, almacenamiento, acerca de",
+  "command.openFolderFromDevice": "VSCodroid: Abrir una carpeta del dispositivo",
+  "command.openRecentFolder": "VSCodroid: Abrir una carpeta reciente",
+  "command.openInBrowser": "VSCodroid: Abrir en el navegador",
+  "command.generateSshKey": "VSCodroid: Generar una clave SSH",
+  "command.copySshPublicKey": "VSCodroid: Copiar la clave pública SSH",
+  "command.showStorageUsage": "VSCodroid: Mostrar el uso de almacenamiento",
+  "command.manageDeviceFolders": "VSCodroid: Administrar el almacenamiento de las carpetas del dispositivo",
+  "command.clearCaches": "VSCodroid: Vaciar las cachés",
+  "command.manageToolchains": "VSCodroid: Administrar cadenas de herramientas",
+  "command.about": "VSCodroid: Acerca de"
+}

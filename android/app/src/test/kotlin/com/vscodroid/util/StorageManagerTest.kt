@@ -101,6 +101,14 @@ class StorageManagerTest {
         }
     }
 
+    /**
+     * The unit, not just the arithmetic.
+     *
+     * Every figure here is decimal on purpose, and the fixtures are chosen so
+     * that a divisor put back to its 1024 power cannot pass: a whole number of
+     * mebibytes reads "1.0 MB" under both conventions, which is why the cases
+     * that used to be written that way could not tell the two apart.
+     */
     @Nested
     inner class FormatSizeTest {
 
@@ -113,36 +121,52 @@ class StorageManagerTest {
         fun `formats small byte values`() {
             assertEquals("1 B", StorageManager.formatSize(1))
             assertEquals("512 B", StorageManager.formatSize(512))
-            assertEquals("1023 B", StorageManager.formatSize(1023))
+            assertEquals("999 B", StorageManager.formatSize(999))
         }
 
         @Test
         fun `formats kilobytes`() {
-            assertEquals("1.0 KB", StorageManager.formatSize(1_024))
-            assertEquals("1.5 KB", StorageManager.formatSize(1_536))
-            assertEquals("10.0 KB", StorageManager.formatSize(10_240))
+            assertEquals("1.0 KB", StorageManager.formatSize(1_000))
+            assertEquals("1.5 KB", StorageManager.formatSize(1_500))
+            assertEquals("10.0 KB", StorageManager.formatSize(10_000))
         }
 
         @Test
         fun `formats megabytes`() {
+            assertEquals("1.0 MB", StorageManager.formatSize(1_000_000))
+            assertEquals("500.0 MB", StorageManager.formatSize(500_000_000))
+            // Passes under either convention, 1.048576 rounding to 1.0, and it is
+            // here to say so: it is not the pin, and a suite of cases shaped like
+            // this one is how the app came to hold two meanings of "MB".
             assertEquals("1.0 MB", StorageManager.formatSize(1_048_576))
-            assertEquals("500.0 MB", StorageManager.formatSize(524_288_000))
         }
 
         @Test
         fun `formats gigabytes`() {
-            assertEquals("1.0 GB", StorageManager.formatSize(1_073_741_824))
-            assertEquals("2.5 GB", StorageManager.formatSize(2_684_354_560))
+            assertEquals("1.0 GB", StorageManager.formatSize(1_000_000_000))
+            assertEquals("2.5 GB", StorageManager.formatSize(2_500_000_000))
+        }
+
+        /**
+         * A figure a tenth of a percent under a megabyte is still kilobytes.
+         *
+         * Aimed at the likeliest new bug rather than at the old one: a divisor
+         * typed with one underscore group wrong (`1_00_000`) compiles, and every
+         * other case here still reads plausibly. This one prints "10.0 MB".
+         */
+        @Test
+        fun `a figure just under a megabyte is still kilobytes`() {
+            assertEquals("999.9 KB", StorageManager.formatSize(999_900))
         }
 
         @ParameterizedTest(name = "boundary at {0} bytes = {1}")
         @CsvSource(
-            "1023, 1023 B",
-            "1024, 1.0 KB",
-            "1048575, 1024.0 KB",
-            "1048576, 1.0 MB",
-            "1073741823, 1024.0 MB",
-            "1073741824, 1.0 GB"
+            "999, 999 B",
+            "1000, 1.0 KB",
+            "999999, 1000.0 KB",
+            "1000000, 1.0 MB",
+            "999999999, 1000.0 MB",
+            "1000000000, 1.0 GB"
         )
         fun `handles unit boundaries correctly`(bytes: Long, expected: String) {
             assertEquals(expected, StorageManager.formatSize(bytes))
@@ -151,7 +175,7 @@ class StorageManagerTest {
         @Test
         fun `formats large GB values`() {
             // 128 GB
-            val size = 128L * 1_073_741_824L
+            val size = 128L * 1_000_000_000L
             val result = StorageManager.formatSize(size)
             assertTrue(result.endsWith("GB"), "Large values should be in GB: $result")
             assertEquals("128.0 GB", result)

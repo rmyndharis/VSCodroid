@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid Sledování procesů",
+  "description": "Sleduje počet fantomových procesů v Androidu",
+  "command.showProcesses": "VSCodroid: Zobrazit strom procesů",
+  "config.server.heapCeilingMb": "Strop haldy V8 pro server editoru, v MB. Bez hodnoty se odvodí z paměti zařízení (osmina RAM, mezi 256 a 768). Projeví se při dalším spuštění aplikace. Hodnota větší, než toto zařízení unese, se automaticky sníží a po opakovaných pádech se vypne.\n\nLimit platí pro každý izolát V8 na serveru zvlášť, ne pro všechny dohromady, takže jeho zvýšení stojí několikanásobek toho, co číslo říká."
+}

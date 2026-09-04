@@ -160,8 +160,13 @@ function updateStatusBar(snapshot) {
         const homeDir = process.env.HOME || '';
         if (homeDir) {
             const stats = fs.statfsSync(homeDir);
-            const availableMB = Math.round((stats.bavail * stats.bsize) / (1024 * 1024));
-            const totalMB = Math.round((stats.blocks * stats.bsize) / (1024 * 1024));
+            // Decimal, like every other MB this app prints, so the figure
+            // here is the one the phone's storage screen shows. Both sides of
+            // usedPercent move together, so the percentage is unchanged; the
+            // LOW threshold below now trips at 200 MB rather than at 209.7,
+            // which is what it read as while the divisor was binary.
+            const availableMB = Math.round((stats.bavail * stats.bsize) / 1000000);
+            const totalMB = Math.round((stats.blocks * stats.bsize) / 1000000);
             const usedPercent = Math.round(((totalMB - availableMB) / totalMB) * 100);
             storageInfo = `\nStorage: ${availableMB} MB free (${usedPercent}% used)`;
             if (availableMB < 200) {
@@ -340,7 +345,7 @@ function showProcessTree() {
         const homeDir = process.env.HOME || '';
         if (homeDir) {
             const stats = fs.statfsSync(homeDir);
-            const availableMB = Math.round((stats.bavail * stats.bsize) / (1024 * 1024));
+            const availableMB = Math.round((stats.bavail * stats.bsize) / 1000000);
             outputChannel.appendLine(`Storage available: ${availableMB} MB`);
         }
     } catch { /* ignore */ }

@@ -55,6 +55,43 @@ class ToolchainManager(private val context: Context) {
     private val envFile = File(context.filesDir, "home/.vscodroid/toolchain-env.sh")
 
     /**
+     * Where an install writes down the tree it is about to create, before it
+     * creates it.
+     *
+     * [stateFile] is written last, so for the tens of seconds a copy takes,
+     * nothing on disk names the directory being filled. A low-memory kill or a
+     * force stop in that window leaves up to the whole unpacked tree, about
+     * 155 MB for the Java 17 that ships today, under no manifest at all:
+     * [getInstalledToolchains] does not name it, no card offers a Remove for it,
+     * [uninstallLocked] has no record to work from, and every pass in
+     * [repairInstalledToolchains] is driven by that same record. Clearing app
+     * data was the only way back. The kill is ordinary rather than exotic: while
+     * the first-run queue runs the foreground service has not been started yet,
+     * so a backgrounded install is a plain background process.
+     *
+     * Beside the record it stands in for, and inside `filesDir`, so it survives
+     * an app update exactly as the record does.
+     *
+     * ⚠️ A tree stranded by a build older than this marker has none, and there is
+     * nothing on disk to recover it from: [ToolchainRegistry] carries no install
+     * root, and a dangling `usr/bin` symlink is fragile and usually absent. Such
+     * a device gets the reclaim from its next interruption onward.
+     */
+    private val installMarkerDir = File(context.filesDir, "home/.vscodroid/toolchain-installing")
+
+    /**
+     * The marker for one pack.
+     *
+     * One place decides the path, so the install that writes it, the `finally`
+     * that removes it and [reclaimInterruptedInstallsSync] cannot drift apart.
+     * Keyed by pack name rather than by the manifest's `name` because the reclaim
+     * has to take the `installsInFlight` claim first, and that set is keyed by
+     * pack name; deriving one form from the other would break for a payload whose
+     * manifest name disagreed with its pack.
+     */
+    private fun installMarker(packName: String) = File(installMarkerDir, "$packName.json")
+
+    /**
      * The two derived files that make a toolchain command reachable from
      * something that is not bash, both named from [Environment] so the writer
      * here and the reader there cannot drift apart.
@@ -352,6 +389,26 @@ class ToolchainManager(private val context: Context) {
          */
         internal fun packsDownloading(): Map<String, Int> =
             httpDownloads.mapValues { (_, download) -> download.percent }
+
+        /**
+         * Whether some install in this process holds [packName] right now.
+         *
+         * Asked of the process rather than of one manager, for the reason
+         * [packsDownloading] is: the sets are on the companion because every call
+         * site builds its own [ToolchainManager], and the reader here holds
+         * neither of the two managers involved. The first-run progress screen
+         * needs it to tell "this pack was handed to an install already running"
+         * from "Play had nothing to say about it", which arrive as the same
+         * `UNKNOWN` status through the same callback.
+         *
+         * Both sets, because the two decline sites sit at different stages of one
+         * install: [httpDownloads] covers the whole transfer, [installsInFlight]
+         * only the copy. `containsKey` rather than `in`, for the reason
+         * [downloadViaHttp] already records at its own decline: `in` on a
+         * `ConcurrentHashMap` resolves to `containsValue`.
+         */
+        internal fun packIsBeingInstalled(packName: String): Boolean =
+            packName in installsInFlight || httpDownloads.containsKey(packName)
     }
 
     private val listener = AssetPackStateUpdateListener { state ->
@@ -1194,7 +1251,40 @@ class ToolchainManager(private val context: Context) {
             // which would refuse every later install of that pack for the life
             // of the process.
             installsInFlight.remove(packName)
+            // Beside the claim, and for the same reason plus one of its own. The
+            // marker's lifetime is meant to be exactly the claim's: that is what
+            // makes "a marker with no claim" mean "the process died", which is
+            // the whole basis on which [reclaimInterruptedInstallsSync] deletes
+            // anything. Dropped only on the path its author had in mind, a marker
+            // would outlive a finished install and leave the next launch
+            // examining a tree that is in use. The decline above returns before
+            // this `try`, so a decliner never removes a marker it did not write.
+            installMarker(packName).delete()
         }
+    }
+
+    /**
+     * The install root the record already holds for [name], or null.
+     *
+     * The sibling of [deliveredInstallRoot] for the path that has no delivered
+     * manifest to read. [downloadViaHttp] gates on free space before the ZIP
+     * carrying the incoming manifest has been fetched, so the persisted record is
+     * the only witness available then of where a previous install of this
+     * toolchain put its tree.
+     *
+     * A lookup by name rather than string surgery through the registry, because
+     * an entry can outlive its registry row and because the record is what those
+     * files were actually written from.
+     */
+    private fun recordedInstallRoot(name: String): File? {
+        val state = readState()
+        for (i in 0 until state.length()) {
+            val entry = state.optJSONObject(i) ?: continue
+            if (entry.optString("name") != name) continue
+            val root = entry.optString("installRoot", "")
+            return if (root.isEmpty()) null else File(context.filesDir, root)
+        }
+        return null
     }
 
     /**
@@ -1255,6 +1345,27 @@ class ToolchainManager(private val context: Context) {
             Logger.e(tag, "Invalid manifest.json in $packName: missing 'name'")
             fail(packName, ToolchainFailure.CORRUPT)
             return true
+        }
+        // Written before a single byte is copied, because that ordering is the
+        // whole of it: this is the only durable record of where the copy is about
+        // to write, and the record that normally names it is written last. Moved
+        // after the copy, or after the record, it would say nothing the record
+        // does not already say, and would leave a kill during the copy exactly as
+        // unrecoverable as it was.
+        //
+        // [writeAtomically] gives all-or-nothing content through a rename, so a
+        // torn marker cannot exist and [reclaimInterruptedInstallsSync] never has
+        // to reason about one. A marker that could not be written is a warning and
+        // not a failure: the install then behaves exactly as it did before this
+        // existed, which is the right trade for a file that only helps a launch
+        // that may never be needed.
+        installMarkerDir.mkdirs()
+        if (!writeAtomically(installMarker(packName)) { it.write(manifest.toString().toByteArray()) }) {
+            Logger.w(
+                tag,
+                "Could not note where $packName is being installed; if this copy is " +
+                    "interrupted nothing will be able to reclaim it",
+            )
         }
         Logger.i(tag, "Installing toolchain: $name (from $packName)")
 
@@ -1637,10 +1748,41 @@ class ToolchainManager(private val context: Context) {
                     return@execute
                 }
 
-                // Pre-flight disk space check
+                // Pre-flight disk space check, crediting the tree this install is
+                // about to write over. The same arithmetic and the same helper the
+                // Play path already applies in [installDeliveredPack], so the two
+                // delivery paths stop disagreeing about whether a device has room
+                // for a toolchain it mostly already holds.
+                //
+                // The credit covers the second of the two copies this reservation
+                // charges for, the one into `usr/`: `copyTo(overwrite = true)`
+                // deletes each destination file before opening its output stream,
+                // so overwriting an identical tree allocates nothing net. The
+                // staging copy under `cacheDir` is a genuinely new allocation and
+                // stays charged in full, which is also why no `coerceAtLeast` is
+                // wanted here and adding one would hide a mistake: [existingTreeCredit]
+                // clamps at the recorded size, so the figure below can never fall
+                // under one tree plus [SPACE_BUFFER].
+                //
+                // The root comes from the RECORD, not from the incoming payload,
+                // which is not on disk yet, and that gap is the whole reason this
+                // path lacked the credit. The two differ only if a pack moves its
+                // `installRoot` between versions under an unchanged pack name, and
+                // no shipped pack does (`usr/lib/ruby`,
+                // `usr/lib/jvm/java-17-openjdk`). If one ever did, this gate
+                // understates by at most the measured old tree, which costs one
+                // download and a STORAGE refusal at the copy rather than a wrong
+                // install; the reclaim then takes the partial tree back, so the
+                // retry is no worse off.
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
-                val requiredBytes = toolchainInstallBytes(unpackedBytes)
+                val credit = existingTreeCredit(
+                    recordedInstallRoot(toolchainShortName(packName)),
+                    context.filesDir,
+                    unpackedBytes,
+                    StorageManager::dirSize,
+                )
+                val requiredBytes = toolchainInstallBytes(unpackedBytes) - credit
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
@@ -2950,6 +3092,18 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Could not sweep abandoned toolchain downloads: ${e.message}")
             }
             try {
+                // Here for both of the reasons the sweep above gives, and for one
+                // more. What frees disk runs before what needs it, and before the
+                // tree walk below. After the retired removal, so a retired
+                // toolchain the record still names is taken out by the pass that
+                // also drops its record entry, leaving this one nothing to find.
+                // Its own try/catch, like every other step: one throw here must
+                // not cost the repairs that follow.
+                reclaimInterruptedInstallsSync()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not reclaim an interrupted toolchain install: ${e.message}")
+            }
+            try {
                 repairInstalledToolchainsSync()
             } catch (e: Exception) {
                 // A failed repair leaves the marker unset, so the next launch
@@ -3019,6 +3173,66 @@ class ToolchainManager(private val context: Context) {
         }
         if (removed > 0) {
             Logger.i(tag, "Removed $removed abandoned toolchain download directories")
+        }
+    }
+
+    /**
+     * Gives back the tree of an install the system stopped part-way through.
+     *
+     * Every other pass in [repairInstalledToolchains] reads `toolchains.json`,
+     * and an install killed during its copy never got that far, so all of them
+     * step straight over up to 155 MB that nothing in the app can name. The
+     * marker [installMarkerDir] holds is the one witness that survives the kill,
+     * and reading the install root out of it rather than out of
+     * [ToolchainRegistry] is what lets a withdrawn toolchain's orphan be
+     * reclaimed at all: `find` answers null for one, and [RETIRED_TOOLCHAINS]
+     * carries sizes and no paths.
+     *
+     * The decision itself stays [reclaimPartialCopy]'s. It already refuses an
+     * empty install root, keeps the tree when the record still names the
+     * toolchain (an install that finished and only lost its marker delete, or a
+     * reinstall over a working copy), and never touches the shared `usr/bin` and
+     * `usr/lib`. Reusing it is what keeps this pass and the two in-process
+     * failure paths from disagreeing about what a partial install is.
+     *
+     * The `installsInFlight` claim is taken first, and it is not bookkeeping:
+     * `SplashActivity` fires this pass on one manager's executor while
+     * [reconcileDeliveredPacks] runs on another's, and that one can be copying
+     * the very pack a marker names. A pack already held is left for the next
+     * launch rather than waited on, which is the call every other contender for
+     * this claim makes.
+     *
+     * ⚠️ A tree stranded by a build older than the marker has none, so this pass
+     * cannot see it and neither can the space credit. Nothing on disk can.
+     */
+    private fun reclaimInterruptedInstallsSync() {
+        val markers = installMarkerDir.listFiles() ?: return
+        for (marker in markers) {
+            // [writeAtomically] writes a sibling named `<file>.tmp~` and renames
+            // it, and a kill can leave one. Left where it is rather than deleted:
+            // it is a couple of kilobytes the next write of the same marker reuses,
+            // and its name does not identify a pack, so nothing here could take the
+            // claim that makes a delete safe.
+            if (!marker.name.endsWith(".json")) continue
+            val packName = marker.name.removeSuffix(".json")
+            if (!installsInFlight.add(packName)) continue
+            try {
+                val manifest = runCatching { JSONObject(marker.readText()) }.getOrNull()
+                val name = manifest?.optString("name", "").orEmpty()
+                if (manifest != null && name.isNotEmpty()) {
+                    Logger.i(tag, "Reclaiming an install of $name that did not finish")
+                    reclaimPartialCopy(name, manifest)
+                }
+                // Removed either way. A marker nothing can act on, unparseable or
+                // naming no toolchain, must not be kept for ever, and dropping
+                // it cannot itself delete a file.
+                marker.delete()
+            } finally {
+                // A claim never given back declines every later install of that
+                // pack for the life of the process, which is why this is a finally
+                // and not a line at the end of the body.
+                installsInFlight.remove(packName)
+            }
         }
     }
 

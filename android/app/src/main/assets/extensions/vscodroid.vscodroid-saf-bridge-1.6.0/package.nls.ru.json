@@ -1,0 +1,14 @@
+{
+  "displayName": "VSCodroid Мост к Android",
+  "description": "Команды, которые обращаются к Android: папки устройства, браузер, ключи SSH, память, о приложении",
+  "command.openFolderFromDevice": "VSCodroid: Открыть папку с устройства",
+  "command.openRecentFolder": "VSCodroid: Открыть недавнюю папку",
+  "command.openInBrowser": "VSCodroid: Открыть в браузере",
+  "command.generateSshKey": "VSCodroid: Создать ключ SSH",
+  "command.copySshPublicKey": "VSCodroid: Скопировать открытый ключ SSH",
+  "command.showStorageUsage": "VSCodroid: Показать использование памяти",
+  "command.manageDeviceFolders": "VSCodroid: Управление памятью папок устройства",
+  "command.clearCaches": "VSCodroid: Очистить кэши",
+  "command.manageToolchains": "VSCodroid: Наборы инструментов",
+  "command.about": "VSCodroid: О приложении"
+}

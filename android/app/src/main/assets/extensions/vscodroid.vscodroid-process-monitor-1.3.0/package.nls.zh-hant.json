@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid 處理程序監視器",
+  "description": "監看 Android 上的幽靈處理程序數量",
+  "command.showProcesses": "VSCodroid: 顯示處理程序樹狀圖",
+  "config.server.heapCeilingMb": "編輯器伺服器的 V8 堆積上限，單位 MB。留空時會依裝置記憶體推算（RAM 的八分之一，介於 256 與 768 之間）。下次啟動應用程式時生效。超出本裝置負荷的值會自動調低，反覆當機後還會被關閉。\n\n這個上限會分別套用到伺服器中的每個 V8 隔離區，而不是它們的總和，因此調高它的代價是數字的好幾倍。"
+}

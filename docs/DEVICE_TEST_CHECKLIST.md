@@ -71,7 +71,8 @@
 | SC-5 | Display cutout | Test on device with notch/punch-hole | Safe area padding applied, no content clipped | | |
 | SC-6 | Foldable (if available) | Fold/unfold device | UI adapts to new dimensions | | |
 | SC-7 | Side bar auto-close on a phone | Portrait, open the Explorer, tap a file | Side bar closes on its own, editor takes the full width | | |
-| SC-8 | Side bar stays open on a tablet | Same steps on a device wider than 600dp | Side bar stays where it was; `vscodroid.layout.autoHideSideBar` is false | | |
+| SC-8 | Side bar stays open on a tablet | Same steps on a device wider than 600dp | Side bar stays where it was; `settings.json` has `vscodroid.layout.compactScreen` false and no `vscodroid.layout.autoHideSideBar` at all | | |
+| SC-9 | A setting you change is the one that applies | Settings, User tab, set `editor.minimap.enabled` true, reopen a file, then restart the app | The minimap appears and is still there after the restart. It is the app's own defaults that must not win here | | |
 
 ## 5. Editor Operations
 
@@ -132,7 +133,7 @@ fresh.
 | ST-1 | Trim memory signal | `adb shell am send-trim-memory <PID> RUNNING_CRITICAL` | Process monitor kills idle LS, no crash | | |
 | ST-2 | Many terminals | Open 10 terminal tabs | Bash spawns for each, process count reported | | |
 | ST-3 | OOM recovery | Force WebView OOM (open huge file + extensions) | onRenderProcessGone fires, WebView recreated | | |
-| ST-4 | Storage nearly full | Fill device storage to <100MB free | Warning toast shown, app still functional | | |
+| ST-4 | Storage nearly full | Fill device storage to under 100 MB free, as Settings reports it | Warning toast shown, app still functional | | |
 
 ## 9. Performance Benchmarks
 
@@ -228,6 +229,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-11 | Conflicting edits, the other way round | With the folder closed, edit a file with another app; then open the folder in the editor, edit the same file there, force-stop the app before the save reaches the device, and reopen the folder | The editor's version wins on the device and the other app's version is beside it as `<name>.device-<time>`; neither is lost. An ordinary save with no device edit leaves no such copy | | |
 | SF-12 | A device folder holding one workspace file | Grant a folder whose top level holds exactly one `.code-workspace`; then relaunch the app | It opens as that workspace rather than as the folder, and the same workspace comes back after the relaunch | | |
 | SF-13 | A folder named like a workspace | Grant a folder whose own name ends in `.code-workspace` | It opens as a folder, not as an unreadable workspace with an empty window | | |
+| SF-14 | A folder you closed stays closed | Open a folder, run **File: Close Folder**, force-stop the app, relaunch through the launcher | The empty window comes back, not the folder that was closed. Opening a folder again and relaunching must still reopen it | | |
+| SF-15 | A second window is this window | Run **New Window** from the Command Palette, then **Open Folder in New Window** | The editor reuses its own window. The device browser must not come to the front, and no popup-blocked message appears over the editor | | |
+| SF-16 | An external link still leaves the app | With a dev server running on another port, follow a link to it from the editor | The device browser opens it. This is the branch the window reuse above must not swallow | | |
 
 ---
 
@@ -235,10 +239,12 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| DL-1 | Editor follows the phone | Set the phone to one of the thirteen languages, start the app | Menus, the Command Palette and settings descriptions are in that language | | |
+| DL-1 | Editor follows the phone | Set the phone to one of the thirteen languages, start the app | Menus, the Command Palette and settings descriptions are in that language, VSCodroid's own commands included | | |
 | DL-2 | App screens follow it too | Same run, watch setup and the toolchain picker | Progress steps, the picker and its buttons are in that language | | |
 | DL-3 | An unsupported language | Set the phone to one with no bundle, for example Vietnamese | Interface is English throughout, nothing half translated and no error | | |
 | DL-4 | Per-app language | Android 13+, Settings, Apps, VSCodroid, Language, pick one | Both the app screens and the editor come back in it | | |
+| DL-5 | The walkthrough and the VSCodroid commands | Same run, open Get Started, then the Command Palette and type `VSCodroid` | Walkthrough heading, subtitle and all four step titles in that language with the buttons still present; the VSCodroid commands show translated labels with the English original beside each, and typing the English name still finds them | | |
+| DL-6 | First launch after an upgrade | Install the previous release, set the app to that language, then `adb install -r` the new build without clearing data and relaunch through SplashActivity | Translated on the FIRST launch. English on the first and translated on the second means the extension scan cache was not invalidated | | |
 
 ## Summary
 
@@ -247,7 +253,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
 | Keyboard Input | 21 | | | |
-| Screen & Orientation | 8 | | | |
+| Screen & Orientation | 9 | | | |
 | Editor Operations | 12 | | | |
 | Extensions | 6 | | | |
 | Background/Foreground | 8 | | | |
@@ -255,9 +261,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
-| SAF & Files | 13 | | | |
-| Display Language | 4 | | | |
-| **Total** | **112** | | | |
+| SAF & Files | 16 | | | |
+| Display Language | 6 | | | |
+| **Total** | **118** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

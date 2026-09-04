@@ -1,0 +1,17 @@
+{
+  "displayName": "VSCodroid Bienvenue",
+  "description": "Visite guidée de bienvenue de VSCodroid",
+  "config.layout.autoHideSideBar": "Ferme la barre latérale quand vous ouvrez un fichier. Sans valeur, le réglage suit l'écran : activé là où l'arborescence et l'éditeur ne tiennent pas côte à côte, désactivé là où ils y tiennent. Fixez-le ici pour décider vous-même.",
+  "command.welcome.open": "VSCodroid: Ouvrir la page de bienvenue",
+  "command.welcome.toolsDismissed": "VSCodroid: Terminer l'étape des outils",
+  "walkthrough.title": "Bien démarrer avec VSCodroid",
+  "walkthrough.description": "Préparez votre environnement de développement mobile",
+  "walkthrough.theme.title": "Choisissez votre thème",
+  "walkthrough.theme.description": "Choisissez un thème de couleurs à votre goût.\n\n[Parcourir les thèmes de couleurs](command:workbench.action.selectTheme)",
+  "walkthrough.tools.title": "Vos outils de développement",
+  "walkthrough.tools.description": "VSCodroid contient tout ce qu'il faut pour commencer à coder :\n\n$(check) **Node.js** + npm : prêt\n\n$(check) **Python** + pip : prêt\n\n$(check) **Git** : prêt\n\n$(check) **make** : prêt\n\n**Java 17** et **Ruby** s'installent à la demande. Appuyez longuement sur l'icône VSCodroid de votre écran d'accueil et choisissez **Gérer les chaînes d'outils**.\n\n[J'ai compris](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.terminal.title": "Un vrai terminal",
+  "walkthrough.terminal.description": "Ouvrez un terminal bash complet, avec tous les outils fournis dans le PATH : ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` affiche ``hi``\n\n``python3 -c 'print(\"hi\")'`` affiche ``hi``\n\n``git init demo`` affiche ``Initialized empty Git repository``\n\n[Ouvrir un terminal](command:workbench.action.terminal.new)",
+  "walkthrough.extensions.title": "Ajoutez d'autres fonctionnalités",
+  "walkthrough.extensions.description": "Installez des extensions depuis la place de marché Open VSX pour la prise en charge des langages, les thèmes et les outils.\n\nLes extensions écrites en JavaScript fonctionnent. Les rares qui embarquent un programme compilé pour Linux de bureau s'installent sans se plaindre, puis ne font rien, sans aucun message d'erreur à l'écran.\n\n[Parcourir les extensions](command:workbench.view.extensions)"
+}

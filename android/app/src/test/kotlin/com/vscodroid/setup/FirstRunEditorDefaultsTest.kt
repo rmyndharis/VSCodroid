@@ -12,7 +12,9 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -37,22 +39,27 @@ import java.io.File
  * Four things have to hold together, and this file covers all four because
  * only the first of them used to, while the bar stayed open on the device.
  *
- * 1. A clean install carries `workbench.secondarySideBar.defaultVisibility`.
- * 2. So does an install that predates the key. `createDefaultSettings` writes
- *    only when `settings.json` is absent, so on its own it reaches nobody who
- *    already has one, and v1.1.0 shipped no such key. [refreshManagedPaths] is
- *    what closes that gap, and leaves a value the user chose alone.
- * 3. Something acts on it. The setting decides a workspace with no recorded
- *    layout, and by the time the web client can read it the record exists: the
- *    workbench starts from a copy of these settings held in browser storage,
- *    which the first load in a profile has not written yet, so that load falls
- *    back to `visibleInWorkspace`, opens the bar and stores
+ * 1. The value ships. It is a contributed default in the bundled welcome
+ *    extension's manifest, which lands in the DEFAULT layer, below every user
+ *    file. That is what a default is, and it is not where this app put it: the
+ *    value went into `Machine/settings.json`, which the workbench parses as the
+ *    REMOTE USER settings and merges ON TOP of the user's own, so the app's
+ *    choice beat whatever the user changed in the Settings editor.
+ * 2. The app no longer writes it. A clean install's `settings.json` carries
+ *    machine facts and server-only keys and none of these preferences.
+ * 3. An install that already has one loses the override.
+ *    `createDefaultSettings` writes only when the file is absent, so without a
+ *    prune every existing device would keep it for ever; and the prune must
+ *    leave a value the user changed exactly where it is.
+ * 4. Something acts on the setting, and the view has a provider. The secondary
+ *    side bar's default decides a workspace with no recorded layout, and by the
+ *    time the web client can read it the record exists: the workbench starts
+ *    from a copy of these settings held in browser storage, which the first load
+ *    in a profile has not written yet, so that load falls back to
+ *    `visibleInWorkspace`, opens the bar and stores
  *    `workbench.auxiliaryBar.hidden: false` against the workspace. Later loads
  *    read the record and never consult the default again. The bundled welcome
- *    extension corrects the record once per workspace; that call is the third
- *    check here.
- * 4. The view has a provider. Read from the gate that holds the shipped tree to
- *    it rather than from the tree, which a JVM run need not have fetched.
+ *    extension corrects the record once per workspace.
  *
  * Runs the real writer rather than asserting on the string it embeds, the way
  * `PythonLocatorDefaultTest` and `TerminalShellPathTest` do: the point is the
@@ -90,14 +97,48 @@ class FirstRunEditorDefaultsTest {
     fun tearDown() = unmockkAll()
 
     @Test
-    fun `a clean install opens with the secondary side bar closed`() {
+    fun `a clean install writes none of the app's preferences`() {
         createDefaultSettings()
 
         val written = settingsText()
+        val found = movedKeys().filter { written.contains("\"$it\"") }
+
         assertTrue(
-            written.contains(""""workbench.secondarySideBar.defaultVisibility": "hidden""""),
+            found.isEmpty(),
+            "$found went back into the machine settings file. The workbench merges that " +
+                "file ON TOP of the user's own settings, so every key here is one the " +
+                "Settings editor cannot change:\n$written",
+        )
+    }
+
+    /**
+     * And that they are still delivered, from the layer a default belongs in.
+     *
+     * The handoff is silent in both directions. A key dropped from the Kotlin
+     * block and forgotten in the manifest loses its default for everyone, with
+     * nothing to say so; a key added back to the Kotlin block silently restores
+     * the override this whole arrangement exists to remove.
+     */
+    @Test
+    fun `every preference the app used to write is a contributed default`() {
+        val contributed = JSONObject(welcomeManifest())
+            .getJSONObject("contributes")
+            .getJSONObject("configurationDefaults")
+
+        for (key in MOVED_TO_MANIFEST) {
+            assertTrue(
+                contributed.has(key),
+                "`$key` is written nowhere now: the app stopped writing it and the " +
+                    "welcome extension does not contribute it, so the default is simply " +
+                    "gone. Contributed keys: ${contributed.keys().asSequence().toList()}",
+            )
+        }
+
+        assertEquals(
+            "hidden",
+            contributed.getString("workbench.secondarySideBar.defaultVisibility"),
             "the first screen gives roughly 45 percent of a phone-width window to the " +
-                "chat view, beside the walkthrough it opened with:\n$written",
+                "chat view, beside the walkthrough it opened with",
         )
     }
 
@@ -128,99 +169,125 @@ class FirstRunEditorDefaultsTest {
     }
 
     @Test
-    fun `an install that predates the key gains it`() {
-        // The shape v1.1.0 left behind: a settings.json with no mention of the
-        // secondary side bar at all.
+    fun `an install that already has the override loses it`() {
+        // The shape the previous release left behind, written by this app.
         val existing = """
             {
-                "editor.fontSize": 14,
-                "workbench.colorTheme": "Default Dark Modern"
+                "workbench.secondarySideBar.defaultVisibility": "hidden",
+                "editor.wordWrap": "on",
+                "git.path": "/lib/libgit.so"
             }
         """.trimIndent()
 
-        val updated = refreshManagedPaths(existing, "/bin/bash", "/lib/libgit.so", "/lib/libldmusl.so")
+        val updated = pruneMovedDefaults(existing, autoHideSideBar = true)
 
         assertTrue(
-            updated != null &&
-                updated.contains(""""workbench.secondarySideBar.defaultVisibility": "hidden""""),
-            "every device upgrading from a release without the key keeps upstream's " +
-                "visibleInWorkspace, so the chat view keeps the width:\n$updated",
+            updated != null && movedKeys().none { updated.contains("\"$it\"") },
+            "the preferences the app wrote are still in the file, so they go on beating " +
+                "the user's own settings on every device that has one, and " +
+                "createDefaultSettings never rewrites a file that exists:\n$updated",
+        )
+        assertTrue(
+            updated != null && updated.contains(""""git.path": "/lib/libgit.so""""),
+            "the prune took a line that is not a preference; git.path is a machine fact " +
+                "that has to stay:\n$updated",
         )
     }
 
     @Test
-    fun `a bar the user asked for is left alone`() {
+    fun `a value the user changed is left exactly where it is`() {
         val chosen = """
             {
-                "workbench.secondarySideBar.defaultVisibility": "visible"
+                "workbench.secondarySideBar.defaultVisibility": "visible",
+                "editor.wordWrap": "off"
             }
         """.trimIndent()
 
-        val updated = refreshManagedPaths(chosen, "/bin/bash", "/lib/libgit.so", "/lib/libldmusl.so")
-
-        assertTrue(
-            updated == null || !updated.contains(""""defaultVisibility": "hidden""""),
-            "a user who opened the secondary side bar had the choice taken back:\n$updated",
+        assertNull(
+            pruneMovedDefaults(chosen, autoHideSideBar = true),
+            "a user who opened the secondary side bar, or turned word wrap off, had the " +
+                "choice deleted from under them. Only the value this app itself wrote is " +
+                "removable; anything else is theirs, and it goes on outranking their " +
+                "local settings, which is the honest outcome for a file they were handed",
         )
     }
 
     /**
-     * The two layout defaults, which decide how much of a phone the editor gets.
+     * The one layout value the app still writes, and why it is not a preference.
      *
-     * Both are written for an install that predates them, so the population that
-     * has been reading three words a line is the population they have to reach,
-     * and both are one-way: presence is the test, so a user who turned either
-     * off keeps it off.
+     * Nothing in the extension API reports how wide the window is, so the
+     * extension that closes the side bar cannot decide for itself whether it
+     * should. This process knows, and writes the answer down as a fact about the
+     * device. The user's own answer is a different key, in their own settings
+     * file, and it wins where they have given one.
      *
-     * The phone flag is a parameter rather than a device call, which is what
-     * makes this a plain JVM test. Its one caller passes
-     * `FirstRunSetup.isCompactScreen()`.
+     * Pinned rather than inserted-when-absent, which is the opposite of the keys
+     * beside it: a stale device fact is worse than an absent one, and there is
+     * no user decision here to preserve.
+     *
+     * The flag is a parameter rather than a device call, which is what makes
+     * this a plain JVM test. Its one caller passes `FirstRunSetup.isCompactScreen()`.
      */
     @Test
-    fun `an install without the layout defaults gains them`() {
+    fun `the phone flag is written for an install that never had it`() {
         val existing = """
             {
-                "editor.fontSize": 14
+                "git.path": "/lib/libgit.so"
             }
         """.trimIndent()
 
-        val updated = settingsWithLayoutDefaults(existing, autoHideSideBar = true)
+        val updated = settingsWithLayoutDefaults(existing, compactScreen = true)
 
         assertTrue(
-            updated != null && updated.contains(""""workbench.activityBar.compact": true"""),
-            "the activity bar keeps its 48px on a device that installed an earlier " +
-                "release:\n$updated",
-        )
-        assertTrue(
-            updated != null && updated.contains(""""vscodroid.layout.autoHideSideBar": true"""),
-            "the side bar has nothing to read, so it stays open over the file the user " +
-                "just opened:\n$updated",
+            updated != null && updated.contains(""""vscodroid.layout.compactScreen": true"""),
+            "the welcome extension has nothing to read, so the side bar stays open over " +
+                "the file the user just opened:\n$updated",
         )
     }
 
     @Test
-    fun `a tablet is told not to hide its side bar`() {
-        val updated = settingsWithLayoutDefaults("{}", autoHideSideBar = false)
+    fun `a tablet is recorded as a tablet`() {
+        val updated = settingsWithLayoutDefaults("{}", compactScreen = false)
 
         assertTrue(
-            updated != null && updated.contains(""""vscodroid.layout.autoHideSideBar": false"""),
+            updated != null && updated.contains(""""vscodroid.layout.compactScreen": false"""),
             "a tablet was given the phone's answer, so its file tree closes on every file " +
                 "it opens, on a screen with room for both:\n$updated",
         )
     }
 
     @Test
-    fun `a choice the user has already made is left alone`() {
+    fun `a stale device fact is corrected, not left`() {
+        val stale = """
+            {
+                "vscodroid.layout.compactScreen": true
+            }
+        """.trimIndent()
+
+        val updated = settingsWithLayoutDefaults(stale, compactScreen = false)
+
+        assertTrue(
+            updated != null && updated.contains(""""vscodroid.layout.compactScreen": false"""),
+            "the file still describes a phone on a device that is not one. This is the " +
+                "one key here that is not the user's, so leaving it as found is the " +
+                "wrong kindness:\n$updated",
+        )
+    }
+
+    @Test
+    fun `a user's own answer is never written here`() {
         val chosen = """
             {
-                "workbench.activityBar.compact": false,
+                "vscodroid.layout.compactScreen": true,
                 "vscodroid.layout.autoHideSideBar": false
             }
         """.trimIndent()
 
         assertNull(
-            settingsWithLayoutDefaults(chosen, autoHideSideBar = true),
-            "a user who turned both off had the choice taken back on the next launch",
+            settingsWithLayoutDefaults(chosen, compactScreen = true),
+            "the device fact already agrees, so there is nothing to write. The user's " +
+                "own key must never be touched from this file: it is the one they set, " +
+                "and this file outranks the one they set it in",
         )
     }
 
@@ -289,6 +356,109 @@ class FirstRunEditorDefaultsTest {
             "the alignment sits inside the walkthrough's once-ever gate, so every device " +
                 "that has already seen the walkthrough keeps the bar open",
         )
+
+        // Both layout keys, because the split between them is the whole fix. The
+        // app writes the device fact; the user writes the preference, in their
+        // own settings file; and an extension that reads only one of them either
+        // ignores the user or ignores the screen.
+        assertTrue(
+            source.contains("'vscodroid.layout.autoHideSideBar'"),
+            "the extension no longer reads the user's own key, so a preference set in " +
+                "Settings decides nothing and the screen decides everything",
+        )
+        assertTrue(
+            source.contains("'vscodroid.layout.compactScreen'"),
+            "the extension no longer reads the device fact, so a phone with no " +
+                "preference set keeps the side bar open over every file it opens",
+        )
+    }
+
+    /**
+     * The three launch configurations the user guide's Running and Debugging
+     * table names, one by one.
+     *
+     * They have shipped since the first milestone and were documented only in a
+     * changelog line, so nothing would have noticed a rename, a fourth entry or
+     * a switch of debug type: the guide would simply have started describing a
+     * dropdown that no longer matched. `node` is js-debug's current type;
+     * `pwa-node` still runs and its own manifest marks it deprecated.
+     *
+     * The file matters as much as the content. `launch` has to sit at the root
+     * of the MACHINE settings document, which is the one the workbench reads;
+     * written into the `User/` path it disappears from the dropdown with a
+     * settings.json that still looks right, which is the failure
+     * `migrateSettingsToMachinePath` exists to undo.
+     */
+    @Test
+    fun `the launch configurations the guide documents are the ones written`() {
+        createDefaultSettings()
+
+        val launch = JSONObject(settingsText()).getJSONObject("launch")
+        val configurations = launch.getJSONArray("configurations")
+        val names = (0 until configurations.length())
+            .map { configurations.getJSONObject(it).getString("name") }
+            .sorted()
+
+        assertEquals(
+            listOf("Attach to Node.js", "NestJS: Debug", "Node.js: Run Current File"),
+            names,
+            "the Running and Debugging section of docs/USER_GUIDE.md names these three in a " +
+                "table. A user reads that table against the dropdown, so the two move together " +
+                "or not at all",
+        )
+        for (i in 0 until configurations.length()) {
+            assertEquals(
+                "node",
+                configurations.getJSONObject(i).getString("type"),
+                "js-debug's own manifest marks `pwa-node` deprecated in favour of `node`, so " +
+                    "a configuration on the old type documents something upstream is retiring",
+            )
+        }
+    }
+
+    /**
+     * The keys that moved from the app's writer to the extension's manifest.
+     *
+     * Written out rather than read from `MOVED_DEFAULTS`, which is private, and
+     * the duplication is the point: this list is the specification, and a key
+     * dropped from the Kotlin side is meant to fail here until it is added to
+     * the manifest.
+     */
+    private val MOVED_TO_MANIFEST = listOf(
+        "workbench.startupEditor",
+        "workbench.colorTheme",
+        "workbench.sash.size",
+        "workbench.activityBar.compact",
+        "workbench.secondarySideBar.defaultVisibility",
+        "editor.wordWrap",
+        "editor.minimap.enabled",
+        "terminal.integrated.fontSize",
+    )
+
+    /**
+     * Every key the app must no longer write into the machine settings file.
+     *
+     * The contributed ones, plus the three it stopped writing outright because
+     * each was already the platform's own default: `editor.fontSize` 14,
+     * `diffEditor.wordWrap` inheriting from `editor.wordWrap`, and shell
+     * integration, which is on unless someone turns it off.
+     */
+    private fun movedKeys(): List<String> = MOVED_TO_MANIFEST + listOf(
+        "editor.fontSize",
+        "diffEditor.wordWrap",
+        "terminal.integrated.shellIntegration.enabled",
+        "vscodroid.layout.autoHideSideBar",
+    )
+
+    private fun welcomeManifest(): String {
+        val welcome = File("src/main/assets/extensions")
+            .listFiles { f -> f.isDirectory && f.name.startsWith("vscodroid.vscodroid-welcome-") }
+            ?.singleOrNull()
+        check(welcome != null) {
+            "no single bundled welcome extension under src/main/assets/extensions; this " +
+                "test would otherwise pass by finding nothing to read"
+        }
+        return File(welcome, "package.json").readText()
     }
 
     private fun createDefaultSettings() {

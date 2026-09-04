@@ -1,0 +1,6 @@
+{
+  "displayName": "VSCodroid Process Monitor",
+  "description": "Monitors phantom process count on Android",
+  "command.showProcesses": "VSCodroid: Show Process Tree",
+  "config.server.heapCeilingMb": "V8 heap ceiling for the editor server, in MB. Leave unset to derive it from device memory (an eighth of RAM, between 256 and 768). Takes effect the next time the app is started. A value larger than this device can hold is reduced automatically, and is turned off after repeated crashes.\n\nThe limit applies to each V8 isolate in the server separately, not to all of them together, so raising it costs several times what the number says."
+}

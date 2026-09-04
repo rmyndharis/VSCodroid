@@ -3,6 +3,7 @@ package com.vscodroid.storage
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -157,39 +158,42 @@ class SafWatchLifecycleTest {
  */
 class SafWatchLifecycleWiringTest {
 
-    private val engineFile = File("src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt")
-    private val managerFile = File("src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt")
+    private val engineFile = "src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt"
+    private val managerFile = "src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt"
 
-    /** The lines of a declaration's body, comments dropped, by brace matching. */
-    private fun body(file: File, declaration: String): List<String> {
-        check(file.isFile) {
-            "${file.absolutePath} not found; this test would otherwise pass by looking " +
-                "at nothing"
-        }
-        val source = file.readText()
-        val start = source.indexOf(declaration)
-        check(start >= 0) {
-            "`$declaration` is gone from ${file.name}, so this test is measuring nothing. " +
-                "If it moved or was renamed, point this at the new site rather than " +
-                "deleting it."
-        }
-        val open = source.indexOf('{', start)
+    /**
+     * The lines of a declaration's body, comments blanked, by brace matching.
+     *
+     * Read through [SourceScan] rather than a fourth private copy of the same walk,
+     * whose ceiling is written down there once instead of being re-acquired here in
+     * silence. Comments are blanked rather than dropped because [closesAt] counts
+     * braces on these lines: a trailing `// }` beside live code would otherwise
+     * close the block early and redden a case about a monitor for a reason that has
+     * nothing to do with one.
+     */
+    private fun body(path: String, declaration: String): List<String> =
+        SourceScan.body(SourceScan.withoutComments(SourceScan.read(path)), declaration)
+            .removeSurrounding("{", "}")
+            .lines().map { it.trim() }.filterNot { it.isEmpty() }
+
+    /**
+     * The index of the body line closing the block that body line 0 opened, or -1
+     * when the count never comes back to zero.
+     *
+     * Braces are counted with no idea of what is a string, which is the ceiling
+     * [SourceScan] states for its own walk. Comments are gone before this sees
+     * them, so the one thing left that can skew the count is a brace inside a
+     * `Logger` message. A failure here saying the block closes early, on a body
+     * nobody has touched the locking of, is that: read the messages in the body
+     * before going anywhere near the monitor.
+     */
+    private fun closesAt(lines: List<String>): Int {
         var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) {
-                    return source.substring(open + 1, i).lines().map { it.trim() }.filterNot {
-                        it.isEmpty() || it.startsWith("//") || it.startsWith("*") ||
-                            it.startsWith("/*")
-                    }
-                }
-            }
-            i += 1
+        lines.forEachIndexed { i, line ->
+            depth += line.count { it == '{' } - line.count { it == '}' }
+            if (depth == 0) return i
         }
-        throw AssertionError("Could not find the end of `$declaration` in ${file.name}")
+        return -1
     }
 
     @Test
@@ -199,13 +203,29 @@ class SafWatchLifecycleWiringTest {
             "fun stopWatching() {",
             "fun shutdown() {",
         )) {
-            val first = body(engineFile, declaration).first()
+            val lines = body(engineFile, declaration)
+            val first = lines.first()
             assertTrue(first == "synchronized(lifecycleLock) {") {
                 "`$declaration` no longer holds the lifecycle lock across its whole body " +
                     "(it opens with `$first`). Each of these takes several steps to say " +
                     "whether the engine is live, and run against each other the last " +
                     "writer wins: a stop finishing inside a start's drain leaves a " +
                     "watcher and a write-back thread on an engine whose owner is gone."
+            }
+
+            // Opening with the monitor is not holding it, and the difference is the
+            // whole of what this case is for. A block closed after the `shutDown`
+            // test and the rest of the body left outside it reads identically at
+            // line 0, so the first assertion above passes on the one mutation that
+            // reintroduces the race.
+            val closed = closesAt(lines)
+            assertTrue(closed == lines.lastIndex) {
+                "`$declaration` closes the lifecycle lock at body line ${closed + 1} of " +
+                    "${lines.size} and then goes on without it: ${lines.drop(closed + 1)}. " +
+                    "The session publish, the observer registration and the write-back " +
+                    "thread start all have to be inside the same block as the shutDown " +
+                    "test, or a shutdown that lands between them leaves a watcher and a " +
+                    "saf-writeback thread on an engine whose owner is gone."
             }
         }
     }

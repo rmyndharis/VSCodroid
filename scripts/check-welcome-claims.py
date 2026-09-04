@@ -89,6 +89,14 @@ PROSE_ALLOWED = (
 # and it should be as reviewable as one in prose.
 MEDIA_ALLOWED = ()
 
+# `%walkthrough.tools.description%` in the manifest: the whole value, never a
+# fragment of one, which is what the editor's own substitution walker requires.
+PLACEHOLDER = re.compile(r"%([^%]+)%")
+
+# The English base, and the per-key fallback for every translation. Its absence
+# is the one failure that puts a literal `%key%` on the screen.
+BASE_BUNDLE = "package.nls.json"
+
 
 def welcome_dir():
     """The bundled welcome extension, whatever version it is at.
@@ -110,13 +118,13 @@ def welcome_dir():
     return found[-1] if found else None
 
 
-def texts(directory):
+def texts(directory, rows):
     """Every user-visible string, from the manifest and the illustrations.
 
     The pictures are read as plain text rather than parsed: the claims sat in
     <text> elements, and any XML shape that renders words is worth checking.
     """
-    for where, text in prose(directory):
+    for where, text in rows:
         yield where, text
 
     for svg in sorted(directory.glob("media/*.svg")):
@@ -128,31 +136,69 @@ def texts(directory):
         yield svg.name, body
 
 
+def bundles(directory):
+    """`{file name: parsed contents}` for every `package.nls*.json` beside the manifest.
+
+    The manifest's user-facing strings are `%key%` placeholders that the editor's
+    extension scanner resolves out of these files, one per shipped language plus
+    an English base. So the prose this script exists to police no longer lives in
+    the file this script used to read, and reading only the English base would
+    leave thirteen copies of every claim unexamined.
+    """
+    return {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.glob("package.nls*.json"))
+    }
+
+
 def prose(directory):
-    """Every line of title and description text, from the walkthrough and its steps.
+    """`(rows, unresolved)`: every title and description line, and what could not be read.
 
     The walkthrough carries a title and a description of its own, and they are
     the first two lines a user reads -- they head the page the four steps sit
     under. This read only the steps, so those two fields were the one place on
     the screen where a version number or a "coming soon" was checked by nothing.
+
+    A field holding `%key%` yields one row per bundle that carries the key,
+    labelled with the bundle's file name so a failure names the file to edit. A
+    field holding `%key%` that the English base does not carry yields no rows at
+    all, which is why it is reported separately: it is exactly the shape that
+    would turn this whole script into a scan of placeholders that passes.
     """
     manifest = directory / "package.json"
+    rows, unresolved = [], []
     if not manifest.is_file():
-        return
+        return rows, unresolved
     data = json.loads(manifest.read_text())
+    found = bundles(directory)
+    base = found.get(BASE_BUNDLE)
+
+    def resolved(where, value):
+        key = PLACEHOLDER.fullmatch(value)
+        if not key:
+            return [(where, value)]
+        key = key.group(1)
+        if base is None or key not in base:
+            unresolved.append(f"{where}: %{key}%")
+        return [
+            (f"{where} in {name}", bundle[key])
+            for name, bundle in found.items()
+            if key in bundle
+        ]
 
     def lines(where, node):
         for field in ("title", "description"):
-            for line in node.get(field, "").split("\n"):
-                if line.strip():
-                    yield where, line.strip()
+            for labelled, text in resolved(where, node.get(field, "")):
+                for line in text.split("\n"):
+                    if line.strip():
+                        rows.append((labelled, line.strip()))
 
     for walkthrough in data.get("contributes", {}).get("walkthroughs", []):
-        yield from lines(
-            f"{manifest.name} walkthrough '{walkthrough.get('id', '?')}'", walkthrough
-        )
+        lines(f"{manifest.name} walkthrough '{walkthrough.get('id', '?')}'", walkthrough)
         for step in walkthrough.get("steps", []):
-            yield from lines(f"{manifest.name} step '{step.get('id', '?')}'", step)
+            lines(f"{manifest.name} step '{step.get('id', '?')}'", step)
+
+    return rows, unresolved
 
 
 def main():
@@ -177,7 +223,22 @@ def main():
             print("            the picture will not render; the step opens with a blank space")
             failed = True
 
-    for where, line in prose(directory):
+    rows, unresolved = prose(directory)
+
+    # A run that examined nothing must not read as a run that examined
+    # everything. With the prose behind `%key%` and no English bundle to resolve
+    # it, every rule below sees a placeholder: no digit, no forbidden phrase, and
+    # an ok line over text nobody read.
+    if unresolved:
+        print(f"  FAIL    {len(unresolved)} walkthrough field(s) could not be resolved:")
+        for entry in unresolved:
+            print(f"            {entry}")
+        print(f"            the walkthrough prose moved into a bundle this check cannot "
+              f"find; {BASE_BUNDLE} is missing or has no such key, and without it this "
+              f"check would pass without reading anything")
+        failed = True
+
+    for where, line in rows:
         stripped = line
         for allowed in PROSE_ALLOWED:
             stripped = stripped.replace(allowed, "")
@@ -188,7 +249,7 @@ def main():
                   "there at all")
             failed = True
 
-    for where, text in texts(directory):
+    for where, text in texts(directory, rows):
         for pattern, why in FORBIDDEN:
             for hit in pattern.findall(text):
                 print(f"  FAIL    {where}: {hit.strip()!r}")

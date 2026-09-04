@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid Ağda yayınla",
+  "description": "Bu cihazda çalışan bir geliştirme sunucusuna diğer cihazların ulaşabileceği adresi gösterir",
+  "command.serveOnNetwork": "VSCodroid: Ağda yayınla"
+}

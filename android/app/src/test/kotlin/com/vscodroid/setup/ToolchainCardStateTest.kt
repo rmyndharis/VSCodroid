@@ -478,22 +478,25 @@ class ToolchainCardStateTest {
 
         /**
          * The convention itself, pinned separately from the agreement above: if
-         * both sides were moved to 1,000,000 together the case above would still
-         * pass, and every free-space figure in the app would then be quoting a
-         * different "MB" from the one this card quotes.
+         * both sides moved together the case above would still pass, and every
+         * free-space figure in the app would then quote a different "MB" from
+         * the one this card quotes. That is not hypothetical. It happened, in
+         * the other direction, and this case asserted the losing side of it
+         * until the app was made to agree with itself.
          */
         @Test
-        fun `a hundred mebibytes is what the card calls a hundred MB`() {
-            // A hundred and not one: 1,048,576 divided by 1,000,000 rounds to
-            // "1.0 MB" as well, so a one-mebibyte case reads as a test of the
-            // convention while agreeing with both of them.
+        fun `a hundred million bytes is what the card calls a hundred MB`() {
+            // A hundred and not one: a mebibyte reads "1.0 MB" under either
+            // convention, so a one-megabyte case looks like a test of the unit
+            // while agreeing with both. Reverting the formatter to binary prints
+            // "95.4 MB" here.
             val info = ToolchainRegistry.ToolchainInfo(
                 packName = "toolchain_test",
                 displayName = "Test",
                 shortLabel = "Test",
                 descriptionRes = 0,
-                estimatedSize = 100L * 1_048_576,
-                downloadSize = 100L * 1_048_576,
+                estimatedSize = 100_000_000L,
+                downloadSize = 100_000_000L,
             )
 
             assertEquals("100.0 MB", manager().sizeFigures(info).installed)

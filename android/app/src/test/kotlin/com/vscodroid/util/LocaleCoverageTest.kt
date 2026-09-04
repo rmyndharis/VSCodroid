@@ -34,6 +34,13 @@ class LocaleCoverageTest {
         const val BUNDLE_SCRIPT = "../../scripts/build-nls-bundles.py"
         const val LOCALES_CONFIG = "src/main/res/xml/locales_config.xml"
         const val RES = "src/main/res"
+        const val OWN_EXTENSIONS = "src/main/assets/extensions"
+
+        /** welcome, saf-bridge, process-monitor, serve-network. */
+        const val OWN_EXTENSION_COUNT = 4
+
+        /** `package.nls.fr.json`. The English base carries no suffix and is not a language. */
+        val BUNDLE_FILE = Regex("""package\.nls\.([a-z-]+)\.json""")
 
         /**
          * The three languages the notations spell differently.
@@ -98,6 +105,51 @@ class LocaleCoverageTest {
                 "dialog in English around a translated editor; one only the resources have is " +
                 "the reverse. Add or remove it in both scripts/build-nls-bundles.py and " +
                 "src/main/res, and in src/main/res/xml/locales_config.xml with it.",
+        )
+    }
+
+    /**
+     * `{extension directory: the languages its manifest is translated into}`.
+     *
+     * The suffixes here are filenames the editor's extension scanner appends to
+     * `package.nls.`, and it appends exactly the bundle name the web client sends
+     * it, which is the name in [BUNDLE_SCRIPT]. So a file named for a VS Code
+     * language-pack id rather than a vscode-loc bundle -- `zh-cn` for `zh-hans`,
+     * `pt-pt` for `pt-br` -- is stepped over in silence and the extension shows
+     * in English.
+     */
+    private fun extensionBundles(): Map<String, Set<String>> =
+        File(OWN_EXTENSIONS).listFiles().orEmpty()
+            .filter { it.isDirectory && it.name.startsWith("vscodroid.vscodroid-") }
+            .sortedBy { it.name }
+            .associate { dir ->
+                dir.name to dir.listFiles().orEmpty()
+                    .mapNotNull { BUNDLE_FILE.matchEntire(it.name)?.groupValues?.get(1) }
+                    .toSet()
+            }
+
+    @Test
+    fun `every translated editor language has translated extension manifests`() {
+        val found = extensionBundles()
+
+        // The control. Everything below compares maps, and an empty map compares
+        // equal to an empty expectation: a renamed assets path would pass by
+        // finding no extension to check.
+        assertEquals(
+            OWN_EXTENSION_COUNT, found.size,
+            "expected $OWN_EXTENSION_COUNT of our own extensions under $OWN_EXTENSIONS, " +
+                "found ${found.keys}. Paths resolve from android/app.",
+        )
+
+        val expected = bundles()
+        assertEquals(
+            found.keys.associateWith { expected }, found,
+            "an extension of ours is translated into a different set of languages than the " +
+                "editor is. The editor's own interface and our commands, settings and " +
+                "walkthrough are resolved from two different places, so a language in one " +
+                "and not the other gives a user a translated editor with English VSCodroid " +
+                "commands inside it, and nothing else says so. Name the files with the " +
+                "bundle names in $BUNDLE_SCRIPT, not with VS Code language-pack ids.",
         )
     }
 

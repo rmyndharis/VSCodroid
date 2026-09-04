@@ -12,6 +12,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -180,6 +181,103 @@ class ToolchainInstallClaimTest {
             .getDeclaredMethod("uninstallSync", String::class.java)
             .apply { isAccessible = true }
             .invoke(m, name)
+
+    /** Private; the launch repair is its only caller in production. */
+    private fun reclaimInterruptedInstalls(m: ToolchainManager) =
+        ToolchainManager::class.java
+            .getDeclaredMethod("reclaimInterruptedInstallsSync")
+            .apply { isAccessible = true }
+            .invoke(m)
+
+    /** Where an install notes the tree it is about to write, before it writes it. */
+    private fun marker() = File(filesDir, "home/.vscodroid/toolchain-installing/$pack.json")
+
+    /**
+     * An install writes down where it is copying BEFORE it copies.
+     *
+     * Any other ordering makes the marker useless: written after the copy it says
+     * nothing about the window the copy occupies, and written after the record it
+     * says nothing the record does not already say. The park point here is the log
+     * line immediately before the copy, so this is taken at the one moment an
+     * install holds the pack and has written nothing.
+     */
+    @Test
+    fun `an install writes down where it is copying before it copies`() {
+        val dir = packDirectory()
+        val events = Collections.synchronizedList(mutableListOf<Int>())
+
+        val first = startHeldInstall(dir, events)
+        assertTrue(
+            firstIsHolding.await(10, TimeUnit.SECONDS),
+            "the install never reached the copy, so there was nothing to observe",
+        )
+
+        assertTrue(
+            marker().exists(),
+            "the install is about to copy and nothing on disk names the tree it will " +
+                "fill, so a kill here strands it for good",
+        )
+        val manifest = JSONObject(marker().readText())
+        assertEquals("java", manifest.optString("name"))
+        assertEquals("usr/opt/java", manifest.optString("installRoot"))
+        assertFalse(
+            copiedFile().exists(),
+            "the copy had already started, so this proves nothing about the ordering",
+        )
+
+        letFirstProceed.countDown()
+        first.join(TimeUnit.SECONDS.toMillis(10))
+        assertFalse(first.isAlive, "the install never finished")
+    }
+
+    /**
+     * And the reclaim leaves that install alone.
+     *
+     * `SplashActivity` fires the launch repair on one manager's executor while the
+     * delivered-pack reconcile runs on another's, so the pass genuinely can meet a
+     * copy in progress. What stops it deleting those files is the same
+     * `installsInFlight` claim an install takes: the marker is written after the
+     * claim, so a marker without a claim is provably a dead install and a marker
+     * with one is not.
+     *
+     * The tree here is planted rather than copied, and no record names it, so the
+     * reclaim would take it on the spot if the claim were dropped from the pass.
+     */
+    @Test
+    fun `a pack an install is copying right now is left alone by the reclaim`() {
+        val dir = packDirectory()
+        val earlier = copiedFile().apply {
+            parentFile?.mkdirs()
+            writeText("bytes this install has already written")
+        }
+        val events = Collections.synchronizedList(mutableListOf<Int>())
+
+        val first = startHeldInstall(dir, events)
+        assertTrue(
+            firstIsHolding.await(10, TimeUnit.SECONDS),
+            "the install never reached the copy, so nothing was being raced",
+        )
+
+        reclaimInterruptedInstalls(manager(Collections.synchronizedList(mutableListOf())))
+
+        assertTrue(
+            earlier.exists(),
+            "the reclaim deleted the tree an install is copying into right now",
+        )
+        assertTrue(
+            marker().exists(),
+            "the reclaim took the marker of a live install, so a kill after this point " +
+                "strands the tree with nothing left to name it",
+        )
+
+        letFirstProceed.countDown()
+        first.join(TimeUnit.SECONDS.toMillis(10))
+        assertFalse(first.isAlive, "the install never finished")
+        assertEquals(
+            listOf(AssetPackStatus.COMPLETED), events,
+            "the install that held the pack did not finish it",
+        )
+    }
 
     /**
      * A removal is the same file work in the opposite direction, and nothing put

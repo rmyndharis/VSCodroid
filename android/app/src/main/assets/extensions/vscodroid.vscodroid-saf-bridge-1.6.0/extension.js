@@ -560,17 +560,21 @@ const STORAGE_LABELS = {
 
 /**
  * Formats a byte count for people, not for machines.
+ *
+ * Decimal, matching the app's own StorageManager.formatSize and the phone's
+ * storage screen. This screen's total is the one figure a user can hold beside
+ * Settings > Apps > VSCodroid > Storage, so it has to be counted the same way.
  * @param {number} bytes
  * @returns {string}
  */
 function formatBytes(bytes) {
     if (!bytes || bytes < 0) return '0 B';
-    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1000) return `${bytes} B`;
     const units = ['KB', 'MB', 'GB'];
-    let value = bytes / 1024;
+    let value = bytes / 1000;
     let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
+    while (value >= 1000 && unit < units.length - 1) {
+        value /= 1000;
         unit++;
     }
     return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
