@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A device folder holding one `.code-workspace` now opens as that workspace. Android's picker can only hand back a folder, so a workspace on device storage was reachable only by finding the file in the explorer and opening it from there.
 - **VSCodroid: Open Recent Folder** is now on the remote indicator in the status bar. Typing its name into the Command Palette was the only way to reach the device folder picker, which is why people could not find it.
+- The editor's interface now follows your phone's language: Chinese (Simplified and Traditional), Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish and Turkish. Nothing to install, and a language nobody has translated the editor into stays English.
+- The app's own screens are translated into those same languages, and Android's per-app language picker now lists them.
 
 ### Fixed
 
@@ -34,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A sign-in waiting for its callback is no longer dropped by a single address naming many requests. The record filled and evicted the entry the sign-in in flight was waiting for, and it hung with no message.
 - First-run setup writes its unpack to the medium before recording the run as finished. Losing power in that window left the app marked set up with the tail of the unpack missing, and nothing looked again.
 - Leaving the editor while a device folder is opening no longer leaves a file watcher running on the folder you closed. It kept writing the mirror back to the device for the rest of the session, and nothing could stop it.
+- The soft keyboard stays down until you tap into text. Opening a file, or the Explorer, used to raise it over half the screen.
+- The activity bar is narrower, and on a phone the file tree closes when you open a file. With the tree open the editor had 193dp of a 411dp screen and now has 375dp. `vscodroid.layout.autoHideSideBar` turns the closing off; it is on for phones and off for tablets.
 
 ### Changed
 

@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "VSCodroid Welcome",
   "description": "Welcome walkthrough for VSCodroid",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -15,6 +15,16 @@
   ],
   "main": "./extension.js",
   "contributes": {
+    "configuration": {
+      "title": "VSCodroid",
+      "properties": {
+        "vscodroid.layout.autoHideSideBar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Close the side bar when you open a file. On by default on a phone, where the file tree and the editor cannot both fit across the screen; off on a tablet. Nothing here decides how wide the screen is: the app writes the value once, and this setting is what changes it back."
+        }
+      }
+    },
     "commands": [
       {
         "command": "vscodroid.welcome.open",

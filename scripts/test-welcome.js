@@ -45,6 +45,16 @@ const MARKER = '.vscodroid_welcome_shown';
 // does it.
 let executeCommand = () => Promise.resolve();
 let sideBarVisibility = 'hidden';
+// The side bar the extension closes when a file is opened, which is a setting
+// the app writes rather than a preference the extension owns, so the stub has
+// to answer for it by name. It defaults to off here on purpose: every case that
+// predates it must go on measuring what it measured.
+let autoHideSideBar = false;
+// The listener the extension registers for the active editor. Held rather than
+// dropped, because it is the whole of that feature: nothing else can reach it,
+// and a stub without a `window` at all is what turned this script red when the
+// listener was added.
+let activeEditorListener = null;
 const ran = [];
 // Kept rather than discarded, the way scripts/test-process-monitor-extension.js
 // keeps them: the palette entry is a handler nothing else here can reach, and it
@@ -58,8 +68,18 @@ const vscodeStub = {
             return executeCommand(id, ...rest);
         },
     },
+    window: {
+        onDidChangeActiveTextEditor: (fn) => {
+            activeEditorListener = fn;
+            return { dispose() { activeEditorListener = null; } };
+        },
+    },
     workspace: {
-        getConfiguration: () => ({ get: () => sideBarVisibility }),
+        getConfiguration: () => ({
+            get: (key) => (
+                key === 'vscodroid.layout.autoHideSideBar' ? autoHideSideBar : sideBarVisibility
+            ),
+        }),
     },
 };
 const resolveFilename = Module._resolveFilename;
@@ -83,8 +103,10 @@ process.on('unhandledRejection', (reason) => { escaped.push(String(reason)); });
  * variable: the same extension, the same empty state, a command that works or a
  * command that does not.
  */
-async function activate(home, commandFor) {
+async function activate(home, commandFor, { autoHide = false, openAFile = false } = {}) {
     executeCommand = commandFor;
+    autoHideSideBar = autoHide;
+    activeEditorListener = null;
     ran.length = 0;
     process.env.HOME = home;
     const workspaceState = new Map();
@@ -100,11 +122,27 @@ async function activate(home, commandFor) {
     // Past the delay, and past the microtask turn in which a rejection with no
     // listener is reported.
     await sleep(DELAY_MS + 400);
+    // Opening a file is the event the side bar closes on, and it has to be
+    // delivered while the extension is still active. Recorded separately from
+    // the walkthrough's own close, which has already happened by now, so a case
+    // can tell the two apart.
+    const beforeOpen = ran.length;
+    if (openAFile) {
+        assert.ok(
+            activeEditorListener,
+            'the extension no longer listens for the active editor, so nothing closes the side ' +
+                'bar when a file is opened on a phone',
+        );
+        activeEditorListener({ document: { uri: 'file:///workspace/a.txt' } });
+        await sleep(50);
+    }
+    const afterOpen = ran.slice(beforeOpen);
     extension.deactivate();
     return {
         marker: fs.existsSync(path.join(home, MARKER)),
         aligned: workspaceState.get('vscodroid.secondarySideBar.aligned') === true,
         ran: ran.slice(),
+        onOpen: afterOpen,
     };
 }
 
@@ -172,6 +210,46 @@ async function main() {
             `a rejected close of the side bar escaped as an unhandled rejection: ${escaped}`,
         );
 
+        // The side bar closing itself when a file is opened, which is the whole
+        // of the portrait layout fix on this side. Two cases, because the
+        // feature is a setting and the setting has to decide: the app writes it
+        // true on a phone and false on a tablet, and a tablet closing its side
+        // bar on every file would be the regression.
+        const onPhone = await activate(
+            fs.mkdtempSync(path.join(base, 'phone-')), resolves,
+            { autoHide: true, openAFile: true },
+        );
+        assert.ok(
+            onPhone.onOpen.includes('workbench.action.closeSidebar'),
+            `opening a file did not close the side bar with the setting on: ${onPhone.onOpen}`,
+        );
+
+        const onTablet = await activate(
+            fs.mkdtempSync(path.join(base, 'tablet-')), resolves,
+            { autoHide: false, openAFile: true },
+        );
+        assert.deepStrictEqual(
+            onTablet.onOpen, [],
+            'opening a file closed the side bar with the setting off, so a tablet loses its file ' +
+                `tree on every file it opens: ${onTablet.onOpen}`,
+        );
+
+        // The same rejection rule as everywhere else in this file: the close is
+        // nobody's request, so its failure is not the user's to see.
+        const closeRejects = await activate(
+            fs.mkdtempSync(path.join(base, 'open-close-fails-')),
+            (id) => (id === 'workbench.action.closeSidebar' ? rejects() : resolves()),
+            { autoHide: true, openAFile: true },
+        );
+        assert.ok(
+            closeRejects.onOpen.includes('workbench.action.closeSidebar'),
+            'the side bar was never asked to close, so the rejection below is not measured',
+        );
+        assert.deepStrictEqual(
+            escaped, [],
+            `a rejected close after opening a file escaped as an unhandled rejection: ${escaped}`,
+        );
+
         // The palette entry. Nothing above calls it, because the extension only
         // registers it, and it is the one command here a user chooses: its
         // failure is theirs to be told about, so the handler hands the thenable
@@ -194,7 +272,8 @@ async function main() {
     console.log(
         'ok -- neither the walkthrough marker nor the side bar marker is recorded for a command ' +
             'that failed, both are recorded for one that ran, no rejection escapes from either ' +
-            'command or from the close in between, and the palette entry hands its failure back',
+            'command or from the close in between, the palette entry hands its failure back, and ' +
+            'opening a file closes the side bar only where the setting asks for it',
     );
 }
 

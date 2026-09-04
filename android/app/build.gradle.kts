@@ -183,10 +183,18 @@ android {
             assetSizes.entries.filter { it.key.startsWith(prefix) }.sumOf { it.value }
         }
 
+        // Translated interface bundles are the one part of the tree that is not
+        // unpacked at all. The page is served them straight out of the APK by
+        // VSCodroidWebViewClient, and nothing else reads them: FirstRunSetup's
+        // extraction targets are named one by one and none of them is `nls`.
+        // Charging the tree for them would ask a first run for 16 MiB it never
+        // writes, so they come off the total and nothing goes back.
+        val nlsPrefix = File(assetsDir, "nls").path + File.separator
+        val nlsSizes = assetSizes.filterKeys { it.startsWith(nlsPrefix) }.values
         buildConfigField(
             "long",
             "EXTRACTED_ASSET_BYTES",
-            "${assetSizes.values.sum()}L"
+            "${assetSizes.values.sum() - nlsSizes.sum()}L"
         )
 
         // The biggest single file in that tree, which is what an install that
@@ -321,6 +329,25 @@ android {
 
     // On-demand toolchain asset packs (Play Asset Delivery)
     assetPacks += listOf(":toolchain_ruby", ":toolchain_java")
+
+    bundle {
+        language {
+            // Ship every language in the base module instead of letting Play
+            // install only the one the device is set to.
+            //
+            // The split is on by default and it does not fit this app. Android's
+            // per-app language picker, which `android:localeConfig` publishes,
+            // offers all thirteen; picking one whose split Play never installed
+            // leaves the app's own screens in English while the editor beside
+            // them is translated, because the editor's strings are assets and
+            // assets are not split by language. Fetching the missing split needs
+            // the Play Core split-install API and a dependency this app does not
+            // carry, so the cheaper answer is not to split: the thirteen
+            // `values-*` directories are a few hundred KB against an APK of some
+            // hundreds of MB.
+            enableSplit = false
+        }
+    }
 
     // The attribution documents, packaged so they reach the device. See
     // `bundleNotices` at the foot of this file for why they are copied rather
@@ -540,7 +567,6 @@ tasks.withType<Test> {
     //   README.md, docs/*.md  WebViewVersionTest, BridgeApiSpecParityTest,
     //                         NoticesTest
     //   MILESTONES.md         BundledExtensionVersionTest
-    //   branding/product.json DisplayLanguageTest
     //
     // Sources under src/main/kotlin are read by other suites the same way and are
     // deliberately not listed: they are compiled into the classpath this task
@@ -555,6 +581,20 @@ tasks.withType<Test> {
     inputs.files(fileTree(rootProject.projectDir.parentFile.resolve("patches")))
         .withPropertyName("serverPatches")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The three files that between them decide which languages ship, read by
+    // LocaleCoverageTest, which exists because they are written in three
+    // notations and nothing compares them. `values-*` is under src/main/res
+    // rather than src/main/kotlin, so no compiler stands behind it either.
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/build-nls-bundles.py"))
+        .withPropertyName("interfaceBundleScript")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(file("src/main/res/xml/locales_config.xml"))
+        .withPropertyName("localesConfig")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(fileTree("src/main/res") { include("values-*/strings.xml") })
+        .withPropertyName("translatedStrings")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
     // One script, not the directory: MenuSeparatorFloorTest reads the block
     // build-vscode-oss.sh appends to workbench.css, because the touch-target
     // floors that block writes reach a menu separator and the exemption that
@@ -594,12 +634,14 @@ tasks.withType<Test> {
         .withPropertyName("statedRequirements")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The branding overlay the server build applies to product.json.
-    // DisplayLanguageTest parses it to check the `set` half still names no
-    // nlsCoreBaseUrl: one there gives the editor an address to fetch translated
-    // interface strings from, which retires the Known Limitations entry the
-    // guide carries. Its other reader, server.js, is already covered by
-    // bootstrapScripts above; this file compiles into nothing here, so without
-    // this line nothing makes the task notice it change.
+    //
+    // No suite parses it today. DisplayLanguageTest did, to check the `set` half
+    // named no nlsCoreBaseUrl, and that check moved out when the app began
+    // supplying that address itself at runtime: what matters now is that the
+    // BUILT tree carries none, which only scripts/verify-server-tree.py can see.
+    // The declaration stays because the file is still one a change here should
+    // re-run the suite for, and because the next reader of it will be a test
+    // again rather than a comment.
     inputs.file(rootProject.projectDir.parentFile.resolve("branding/product.json"))
         .withPropertyName("brandingOverlay")
 

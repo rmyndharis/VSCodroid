@@ -402,6 +402,16 @@ jobs:
         # package-assets.sh` as though it were the step CI takes. It is now.
         run: bash scripts/package-assets.sh
 
+      # Reads out/nls.keys.json and out/nls.messages.json from the tree the step
+      # above just wrote, so it cannot run any earlier, and Gradle sizes the
+      # assets directory at configuration time (EXTRACTED_ASSET_BYTES), so it
+      # cannot run any later. Nothing in this job caches the assets tree, so
+      # unlike build.yml there is no cache key to keep in step with it here; a
+      # release that skipped it would publish an APK offering thirteen display
+      # languages and serving English for every one of them.
+      - name: Build the translated string bundles
+        run: python3 scripts/build-nls-bundles.py
+
       - name: Download Termux tools
         run: bash scripts/download-termux-tools.sh
 

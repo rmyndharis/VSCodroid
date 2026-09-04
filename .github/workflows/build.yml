@@ -112,9 +112,10 @@ jobs:
             android/app/src/main/assets/vscode-reh/
             android/app/src/main/assets/usr/
             android/app/src/main/assets/extensions/
+            android/app/src/main/assets/nls/
             android/app/src/main/jniLibs/arm64-v8a/
             server/vscode-reh/
-          key: assets-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/package-assets.sh', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'scripts/build-exec-trampoline.sh', 'scripts/exec-trampoline.c', 'scripts/build-claude-shim.sh', 'scripts/seccomp-shim.c', 'scripts/claude-launch.c', 'android/app/src/main/assets/extensions/**', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
+          key: assets-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'VSCODE_LOC_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/package-assets.sh', 'scripts/build-nls-bundles.py', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'scripts/build-exec-trampoline.sh', 'scripts/exec-trampoline.c', 'scripts/build-claude-shim.sh', 'scripts/seccomp-shim.c', 'scripts/claude-launch.c', 'android/app/src/main/assets/extensions/**', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
           # The fallback is what let a removed extension come back: it restores
           # any earlier tree, and the run then saves that tree forward under its
           # own key. It stays, because a partial hit still saves most of a build
@@ -170,6 +171,18 @@ jobs:
         # messages told their reader to run `fetch-vscode-oss.sh &&
         # package-assets.sh` as though it were the step CI takes. It is now.
         run: bash scripts/package-assets.sh
+
+      # Reads out/nls.keys.json and out/nls.messages.json from the tree the step
+      # above just wrote, so it cannot run any earlier, and Gradle sizes the
+      # assets directory at configuration time (EXTRACTED_ASSET_BYTES), so it
+      # cannot run any later. Its output is gitignored, which is why
+      # assets/nls/ is in the cache path above: this step is skipped on a cache
+      # hit, and a restored tree without the bundles builds an APK that offers
+      # thirteen display languages and serves English for every one of them,
+      # with every gate in this workflow green.
+      - name: Build the translated string bundles
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: python3 scripts/build-nls-bundles.py
 
       - name: Download Termux tools
         if: steps.cache-assets.outputs.cache-hit != 'true'

@@ -1,158 +1,159 @@
 package com.vscodroid.service
 
-import org.json.JSONObject
+import com.vscodroid.SourceScan
+import com.vscodroid.webview.VSCodroidWebViewClient
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.Test
-import java.io.File
 
 /**
- * The user guide tells people the interface cannot be shown in their language.
- * These are the two pieces of configuration that make that true.
+ * The wiring that shows the interface in the phone's language, and the two
+ * places it is written down twice.
  *
- * The editor pulls its interface strings from two script tags in the page it
- * serves: an English bundle that ships inside the app, and a translated bundle
- * whose URL the server builds from `nlsCoreBaseUrl` in `product.json`. Code -
- * OSS ships no such key and this repository adds none, so the second URL is
- * always empty and the English bundle is the only one that ever loads. On the
- * server side `assets/server.js` fixes `VSCODE_NLS_CONFIG` to English at every
- * start, which is what keeps an extension's own contributions in English too.
+ * This file used to pin the opposite. The editor was English whatever the device
+ * was set to, because the workbench builds its translated bundle's URL from
+ * `nlsCoreBaseUrl` in `product.json` and nothing here supplied one, and because
+ * `assets/server.js` fixed `VSCODE_NLS_CONFIG` to English at every start. Both
+ * are gone: `server.js` now names an address on the app's own origin, and takes
+ * the server side's language from the environment.
  *
- * Neither piece announces itself. A language pack from Open VSX installs, shows
- * as enabled, and offers to reload; the editor comes back in English with
- * nothing said, so the only thing standing between a user and half an hour of
- * confusion is the guide entry. If somebody supplies a translated bundle the
- * limit stops being real and the guide becomes a lie, which is the direction
- * this file is pointed: change either mechanism and it fails, naming the
- * section to rewrite.
+ * Neither half fails loudly. A prefix that stops matching, or an environment
+ * variable renamed on one side, brings the editor up in English with nothing on
+ * screen to notice, which is precisely what every build before this one did, so
+ * there is no user report to expect either. Hence three cases over two contracts
+ * that no compiler checks:
  *
- * This reads source, which is the weaker kind of test. What it buys is the one
- * property at issue: that the files a fresh clone contains still say what the
- * guide says they say. What it cannot buy is the runtime behaviour, which lives
- * in the built server bundle, and that bundle is a gitignored artifact absent
- * from a fresh clone. The reverse direction is covered too, by the last case:
- * deleting the guide entry while the mechanism stands fails just as loudly.
+ *  - the path in `nlsCoreBaseUrl` against [VSCodroidWebViewClient.NLS_PATH_PREFIX],
+ *    which is what decides whether the page's request is answered at all: nothing
+ *    serves that address over HTTP, `shouldInterceptRequest` does, and only for
+ *    paths whose first segment is that constant;
+ *  - `VSCODROID_NLS_LOCALE` and `VSCODROID_NLS_MESSAGES`, read in `server.js` and
+ *    written in `Environment.getEnvironment`, which is how the server process and
+ *    the extension host learn the language the page was already served in.
+ *
+ * The fourth case is the user guide, which described the limit while it was real
+ * and would be a lie now. It is the reverse direction of the same pin: restoring
+ * the entry while the mechanism stands fails as loudly as losing the mechanism.
+ *
+ * This reads source, which is the weaker kind of test. What it buys is that the
+ * files a fresh clone contains still agree with each other. What it cannot buy is
+ * the runtime behaviour, which needs the built server tree and the translated
+ * bundles, both gitignored artifacts absent from a fresh clone. The comment-blank
+ * pass matters for the same reason it always did here: commenting a line out is
+ * how a pin gets switched off while something else is being tried, and it leaves
+ * every character in place for a substring search to find.
  */
 class DisplayLanguageTest {
 
-    private val serverJs = File("src/main/assets/server.js")
-    private val branding = File("../../branding/product.json")
-    private val guide = File("../../docs/USER_GUIDE.md")
-
-    /**
-     * Paths are resolved from the Gradle test working directory, which is the
-     * module directory (`android/app`). Reading is centralised here so no case
-     * can forget the existence check: a missing file would otherwise reach an
-     * assertion as an empty string, and an empty string satisfies every
-     * "does not contain" case in this file while proving nothing.
-     */
-    private fun read(file: File): String {
-        assertTrue(
-            file.isFile,
-            "${file.absolutePath} not found. This test resolves paths relative to the Gradle " +
-                "test working directory, which is the module directory (android/app).",
-        )
-        val text = file.readText()
-        assertTrue(text.isNotBlank(), "${file.absolutePath} is empty, so nothing was checked")
-        return text
-    }
-
-    @Test
-    fun `the server fixes the editor's language to English at every start`() {
-        val source = read(serverJs)
-
-        // Both halves matter and they are separately losable: the environment
-        // variable can be dropped while the literal survives in a comment, and
-        // the locale can be changed while the assignment stays.
-        //
-        // The first half is anchored to the assignment at the start of a line,
-        // which is what makes "survives in a comment" something this can tell
-        // apart. Commenting the line out is how the pin gets switched off while
-        // something else is being tried, and it leaves every character in place,
-        // so a substring search reads the disabled line as the live one and
-        // reports the limit as still enforced. The variable is written once, as a
-        // statement of its own, so the anchor matches what is there today.
-        assertTrue(
-            Regex("""(?m)^\s*process\.env\.VSCODE_NLS_CONFIG\s*=""").containsMatchIn(source),
-            "server.js no longer sets VSCODE_NLS_CONFIG. The editor then resolves a language " +
-                "from the environment instead of being held at English, and the Known " +
-                "Limitations entry 'The Interface Is English Only' in docs/USER_GUIDE.md is " +
-                "no longer true of the server side. If the assignment moved out of a " +
-                "statement of its own, retarget this deliberately rather than unanchoring it.",
-        )
-        assertTrue(
-            Regex("""(?m)^\s*process\.env\.VSCODE_NLS_CONFIG[\s\S]{0,120}?locale:\s*'en'""")
-                .containsMatchIn(source),
-            "server.js no longer pins VSCODE_NLS_CONFIG to the 'en' locale. Rewrite the " +
-                "'The Interface Is English Only' entry in docs/USER_GUIDE.md to match whatever " +
-                "it now does.",
-        )
+    private companion object {
+        const val SERVER_JS = "src/main/assets/server.js"
+        const val WEBVIEW_CLIENT = "src/main/kotlin/com/vscodroid/webview/VSCodroidWebViewClient.kt"
+        const val USER_GUIDE = "../../docs/USER_GUIDE.md"
     }
 
     /**
-     * The key whose absence decides it. `server-main.js` builds the translated
-     * bundle's URL only when `nlsCoreBaseUrl` is set, and hands the page an
-     * empty URL otherwise, so the key arriving anywhere that reaches
-     * `product.json` turns the interface translatable and retires the guide
-     * entry.
+     * The bootstrap's source with its comments blanked.
      *
-     * Three writers reach that file, and this covers the two a fresh clone
-     * contains.
+     * Not used by the case below it, deliberately: [SourceScan.withoutComments]
+     * cuts a line at `//`, which is inside every URL there is, and the value that
+     * case reads is a URL. It reads the raw text and anchors on a line whose
+     * first non-blank characters are the key, which a commented-out line is not.
+     */
+    private fun serverJsCode() = SourceScan.withoutComments(SourceScan.read(SERVER_JS))
+
+    /**
+     * The address the server advertises has to be one this app answers.
      *
-     * `branding/product.json` is an overlay with two opposite halves and only
-     * `set` adds keys: `scripts/build-vscode-oss.sh` pops everything named in
-     * `remove` out of the built file, so the same string landing there would
-     * make the limit permanent rather than lift it. Reading the file as text
-     * cannot tell those apart, and would fail loudest on the one edit that
-     * agrees with the guide, which is why this parses instead.
+     * `out/server-main.js` appends `<commit>/<version>/<locale>/nls.messages.js`
+     * to `nlsCoreBaseUrl` and puts the result in a script tag; the WebView
+     * answers it from the bundles in the APK, and only when the first path
+     * segment is [VSCodroidWebViewClient.NLS_PATH_PREFIX]. The two are the same
+     * decision written in two files, so this compares them rather than restating
+     * either.
      *
-     * `server.js` is JavaScript rather than JSON, so it stays a text check.
-     *
-     * The third writer is Code - OSS's own `product.json`. The overlay is
-     * merged onto it rather than replacing it, so a `VSCODE_VERSION` bump that
-     * lands the key upstream carries it into the built file without either of
-     * the two files here changing. That one is out of reach from a unit test,
-     * because the built tree is a gitignored artifact; `verify-server-tree.py`
-     * reads it on every build, where it exists.
+     * The trailing slash is part of the comparison and not tidiness: the commit
+     * is concatenated straight onto the base, so a base ending at the prefix
+     * makes the first segment `_nls<commit>`, which matches nothing.
      */
     @Test
-    fun `no product configuration supplies a translated string bundle`() {
-        val overlay = JSONObject(read(branding))
-        val set = if (overlay.has("set")) overlay.getJSONObject("set") else JSONObject()
+    fun `the address the server advertises is the one this app serves`() {
+        val base = Regex("""(?m)^\s*nlsCoreBaseUrl:\s*[`'"]([^`'"]+)[`'"]""")
+            .find(SourceScan.read(SERVER_JS))?.groupValues?.get(1)
+            ?: fail(
+                "server.js no longer sets nlsCoreBaseUrl in productOverrides. Without it " +
+                    "server-main.js hands the page an empty script src and the interface is " +
+                    "English on every device, silently. If the key moved to another writer, " +
+                    "point this case at it; if the feature was withdrawn, restore the " +
+                    "'The Interface Is English Only' entry in docs/USER_GUIDE.md with it."
+            )
 
-        // Positive control. The assertion below passes on an overlay whose
-        // adding half is named something else, or gone, which is a scan of
-        // nothing wearing the same green.
+        // Everything after the authority, interpolation included: the host and
+        // port are runtime values and are not what this compares.
+        val path = base.substringAfter("://").substringAfter('/', "")
+
+        assertEquals(
+            "${VSCodroidWebViewClient.NLS_PATH_PREFIX}/",
+            path,
+            "the path in server.js's nlsCoreBaseUrl ($base) is not the path " +
+                "VSCodroidWebViewClient.nlsBundleRequested answers. The page then asks for a " +
+                "bundle nothing serves, the request falls through to the editor server, and " +
+                "the interface stays English with nothing logged. Note the trailing slash: " +
+                "the commit is appended directly to this value, so without it the first path " +
+                "segment is the prefix and the commit run together.",
+        )
+    }
+
+    /**
+     * That the page is told which language it is in, not only given the strings.
+     *
+     * Two globals travel in one bundle upstream, and this app assembles that
+     * bundle itself, so it can ship half of it. `_VSCODE_NLS_MESSAGES` is what
+     * the interface renders from; `_VSCODE_NLS_LANGUAGE` is the answer to
+     * `vscode.env.language`, it selects the date and number formats extensions
+     * are handed, and the workbench copies both into every worker it starts.
+     * The English fallback bundle in the tree sets neither, so nothing else on
+     * the page can supply the second one.
+     *
+     * Serving only the first is invisible: every string is translated and every
+     * extension is told the editor is English. That is what this case is for.
+     */
+    @Test
+    fun `the page is told which language it is in`() {
+        val client = SourceScan.withoutComments(SourceScan.read(WEBVIEW_CLIENT))
+
         assertTrue(
-            set.length() > 0,
-            "branding/product.json has no non-empty 'set' object, so nothing was checked here. " +
-                "The overlay's shape changed; find the half that adds keys now and point this " +
-                "at it.",
+            client.contains("_VSCODE_NLS_MESSAGES"),
+            "the interface bundle no longer assigns _VSCODE_NLS_MESSAGES, so the page is " +
+                "served a script that translates nothing.",
         )
-        assertFalse(
-            set.has("nlsCoreBaseUrl"),
-            "branding/product.json sets nlsCoreBaseUrl, which is the address the editor " +
-                "downloads translated interface strings from. If that is deliberate, the " +
-                "interface is no longer English only and the Known Limitations entry " +
-                "'The Interface Is English Only' in docs/USER_GUIDE.md has to go. Naming it " +
-                "in the overlay's 'remove' half is the opposite change and is not this.",
-        )
-        assertFalse(
-            read(serverJs).contains("nlsCoreBaseUrl"),
-            "server.js names nlsCoreBaseUrl, which it writes into product.json on every " +
-                "start, so the editor now has an address to download translated interface " +
-                "strings from. If that is deliberate, the Known Limitations entry 'The " +
-                "Interface Is English Only' in docs/USER_GUIDE.md has to go.",
+        assertTrue(
+            client.contains("_VSCODE_NLS_LANGUAGE"),
+            "the interface bundle no longer assigns _VSCODE_NLS_LANGUAGE. Every string is " +
+                "still translated, so nothing looks wrong, but vscode.env.language answers " +
+                "\"en\" to every extension and the workbench formats dates as English.",
         )
     }
 
     @Test
-    fun `the guide states the limit those two produce`() {
+    fun `the guide no longer tells people the interface is English`() {
+        val guide = SourceScan.read(USER_GUIDE)
+
+        // Positive control. The case below is an absence, and an absence is also
+        // what reading the wrong file, or a file whose sections were renamed
+        // wholesale, looks like.
         assertTrue(
-            read(guide).contains("### The Interface Is English Only"),
-            "docs/USER_GUIDE.md no longer carries the 'The Interface Is English Only' entry, " +
-                "but the configuration that makes it true is still in place. A user who " +
-                "installs a language pack still gets no explanation from anywhere.",
+            guide.contains("## Known Limitations"),
+            "docs/USER_GUIDE.md has no 'Known Limitations' section, so the case below " +
+                "checked nothing. Find where the limits are listed now and point this at it.",
+        )
+        assertFalse(
+            guide.contains("The Interface Is English Only"),
+            "docs/USER_GUIDE.md still tells people the interface cannot be shown in their " +
+                "language, which stopped being true when server.js began supplying " +
+                "nlsCoreBaseUrl and the app began shipping translated bundles. Describe what " +
+                "it does now: the phone's language, for the languages the app carries.",
         )
     }
 }

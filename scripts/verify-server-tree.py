@@ -224,20 +224,29 @@ def main(tree):
         check("marketplace.visualstudio.com" not in gallery,
               "no Microsoft marketplace URL", f"serviceUrl = {gallery!r}")
         # An absence again, and the only place it can be read. server-main.js
-        # builds the translated string bundle's URL from nlsCoreBaseUrl and hands
-        # the page an empty one when the key is missing, which is the whole of
-        # why the interface is English only and why docs/USER_GUIDE.md says so.
-        # Neither the branding overlay nor assets/server.js names the key, but
-        # the overlay is merged ONTO Code - OSS's own product.json rather than
-        # replacing it, so a VSCODE_VERSION bump that lands the key upstream
-        # carries it into the built file with nothing in this repository having
-        # changed. That path only exists in the built tree, which is why it is
-        # checked here rather than beside the other two.
+        # builds the translated string bundle's URL from nlsCoreBaseUrl, and the
+        # app supplies that key itself: assets/server.js rewrites product.json on
+        # every start with an nlsCoreBaseUrl pointing at a path on this app's own
+        # origin, which the WebView answers from the bundles inside the APK
+        # (VSCodroidWebViewClient.nlsBundleRequested, util/EditorLocale.kt). The
+        # interface therefore follows the device's language, and the built tree
+        # must carry no nls URL of its own: upstream's names Microsoft's CDN, and
+        # a value the runtime override does not happen to replace by name points
+        # the page at the network for strings that are already on disk.
+        # Neither the branding overlay nor assets/server.js names such a key in
+        # the built file, but the overlay is merged ONTO Code - OSS's own
+        # product.json rather than replacing it, so a VSCODE_VERSION bump that
+        # lands one upstream carries it into the built file with nothing in this
+        # repository having changed. That path only exists in the built tree,
+        # which is why it is checked here rather than beside the other two.
         nls = sorted(k for k in product if "nls" in k.lower())
-        check(not nls, "no translated string bundle URL",
-              f"product.json now carries {', '.join(nls)}. The interface is no longer "
-              "English only; rewrite the 'The Interface Is English Only' entry in "
-              "docs/USER_GUIDE.md and retire DisplayLanguageTest with it.")
+        check(not nls, "no upstream string bundle URL",
+              f"product.json now carries {', '.join(nls)}, pointing the page at "
+              "Microsoft's CDN over the network. Interface strings come from the "
+              "bundles in the APK instead: assets/server.js sets nlsCoreBaseUrl at "
+              "every start and VSCodroidWebViewClient.nlsBundleRequested answers "
+              "it. Add the key to the \"remove\" list in branding/product.json so "
+              "the build drops it rather than serving it.")
 
     # LICENSE.txt was required to exist and then never opened, which made it the
     # one gate that could not see the thing it was added for. The pivot away from

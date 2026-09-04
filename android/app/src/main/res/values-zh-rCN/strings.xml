@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VSCodroid</string>
-    <string name="notification_channel_name">VSCodroid Server</string>
-    <string name="notification_channel_description">Keeps the local development server running</string>
-    <string name="notification_title">VSCodroid is running</string>
+    <string name="notification_channel_name">VSCodroid 服务器</string>
+    <string name="notification_channel_description">保持本地开发服务器运行</string>
+    <string name="notification_title">VSCodroid 正在运行</string>
     <!-- The card the service puts up while first-run setup unpacks. Its own pair
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
-    <string name="notification_title_setup">VSCodroid is setting up</string>
-    <string name="notification_text_setup">Unpacking the editor and its tools. This takes a few minutes and only happens once.</string>
-    <string name="notification_text">Local development server active</string>
+    <string name="notification_title_setup">VSCodroid 正在初始化</string>
+    <string name="notification_text_setup">正在解压编辑器及其工具。这需要几分钟，且只会进行一次。</string>
+    <string name="notification_text">本地开发服务器运行中</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
          Stop. It was true while `assets/server.js` bound the DNS proxy inside
@@ -20,31 +20,31 @@
          as it does, so an adopted server carries a working one and there is
          nothing left to say. Read those two files before adding a line back;
          `NodeService.degradableNotificationText` names the same check. -->
-    <string name="action_stop">Stop Server</string>
+    <string name="action_stop">停止服务器</string>
 
     <!-- Shown once the automatic restart budget is spent. Replaces the two
          strings above in the same notification, which then carries no Stop
          action because there is nothing left to stop. -->
-    <string name="notification_title_stopped">VSCodroid server stopped</string>
-    <string name="notification_text_stopped">Server crashed repeatedly. Please restart the app.</string>
-    <string name="extracting_message">Extracting core files\u2026</string>
+    <string name="notification_title_stopped">VSCodroid 服务器已停止</string>
+    <string name="notification_text_stopped">服务器多次崩溃。请重新启动应用。</string>
+    <string name="extracting_message">正在解压核心文件\u2026</string>
 
     <!-- The steps first-run setup reports while it unpacks, shown under the
          progress bar on the splash screen. They are also the %1$s in
          [error_setup_failed_at], which names the step that failed, so a
          translation lands in two places at once. describeFailure trims a
          trailing period, space or ellipsis off the name before quoting it. -->
-    <string name="setup_step_directories">Creating directories\u2026</string>
-    <string name="setup_step_server">Extracting server files\u2026</string>
-    <string name="setup_step_bootstrap">Extracting server bootstrap\u2026</string>
-    <string name="setup_step_tools">Extracting tools\u2026</string>
-    <string name="setup_step_git">Setting up git\u2026</string>
-    <string name="setup_step_symlinks">Setting up tools\u2026</string>
-    <string name="setup_step_extensions">Setting up extensions\u2026</string>
-    <string name="setup_step_environment">Configuring environment\u2026</string>
-    <string name="setup_step_done">Done!</string>
-    <string name="error_server_start">Failed to start development server</string>
-    <string name="error_server_timeout">Server took too long to start</string>
+    <string name="setup_step_directories">创建目录\u2026</string>
+    <string name="setup_step_server">解压服务器文件\u2026</string>
+    <string name="setup_step_bootstrap">解压服务器引导程序\u2026</string>
+    <string name="setup_step_tools">解压工具\u2026</string>
+    <string name="setup_step_git">设置 git\u2026</string>
+    <string name="setup_step_symlinks">设置工具\u2026</string>
+    <string name="setup_step_extensions">设置扩展\u2026</string>
+    <string name="setup_step_environment">配置环境\u2026</string>
+    <string name="setup_step_done">完成！</string>
+    <string name="error_server_start">无法启动开发服务器</string>
+    <string name="error_server_timeout">服务器启动耗时过长</string>
 
     <!-- Deliberately not an error_ string, and deliberately not the wording of
          the one above it. This is said while the server is still being waited
@@ -56,8 +56,8 @@
          It also has to survive being read later. The next activity to bind
          reads it through NodeService.lastStartupNotice() with no idea how long
          ago it was recorded, so it says nothing about elapsed time. -->
-    <string name="status_server_slow_start">The development server is taking longer than usual to start. The editor will open as soon as it is ready.</string>
-    <string name="status_updating_python">Updating Python…</string>
+    <string name="status_server_slow_start">开发服务器的启动时间比平时长。编辑器将在准备就绪后打开。</string>
+    <string name="status_updating_python">正在更新 Python\u2026</string>
     <!-- Says what happened and what to do about it, and deliberately does not
          claim to have diagnosed anything. The app cannot tell an out-of-memory
          kill from a phantom-process one: both arrive as the same exit code and
@@ -69,7 +69,7 @@
          settings.json inside the editor, which is the surface this message is
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
-    <string name="heap_override_suspended">The custom memory limit in settings.json was turned off after repeated crashes. Change vscodroid.server.heapCeilingMb and restart the app to try a different value.</string>
+    <string name="heap_override_suspended">由于反复崩溃，settings.json 中的自定义内存上限已被关闭。请修改 vscodroid.server.heapCeilingMb 并重新启动应用，以尝试其他数值。</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is
@@ -84,25 +84,25 @@
          to it, so this announcement is the only place a screen reader user is
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
-    <string name="error_storage_full">Not enough storage space. Free at least %1$d MB, then tap Retry.</string>
-    <string name="error_setup_failed">Setup failed. Tap Retry or reinstall the app.</string>
+    <string name="error_storage_full">存储空间不足。请至少释放 %1$d MB，然后点按“重试”。</string>
+    <string name="error_setup_failed">初始化失败。请点按“重试”，或重新安装应用。</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">Setup failed while: %1$s\n\n%2$s\n\nTap Retry, or reinstall the app if it keeps failing.</string>
+    <string name="error_setup_failed_at">初始化失败，步骤：%1$s\n\n%2$s\n\n请点按“重试”；如果仍然失败，请重新安装应用。</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a
          token, and says the one thing the user can act on: nothing here is
          broken, there is simply nothing installed that opens this kind of link. -->
-    <string name="url_handoff_no_app">No installed app opens %1$s links.</string>
+    <string name="url_handoff_no_app">没有已安装的应用可以打开 %1$s 链接。</string>
     <!-- The same tap failing for any other reason: a file:// URI Android refuses
          to expose, a content:// without a grant, anything else. The exception
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
-    <string name="url_handoff_failed">Could not open that %1$s link (%2$s).</string>
+    <string name="url_handoff_failed">无法打开该 %1$s 链接（%2$s）。</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,
@@ -130,83 +130,83 @@
          one rather than the fullest. Why a user-installed CA does not help a page,
          when it does help git, is a paragraph rather than a toast: it is in the
          user guide, and the full reason is in logcat on every refusal. -->
-    <string name="tls_blocked_untrusted">Blocked %1$s: certificate not trusted. Use http instead.</string>
-    <string name="tls_blocked_hostname">Blocked %1$s: its certificate is issued for a different host name.</string>
-    <string name="tls_blocked_date">Blocked %1$s: its certificate is expired or not yet valid.</string>
-    <string name="tls_blocked_invalid">Blocked %1$s: its certificate could not be validated.</string>
-    <string name="tls_blocked_handshake">Blocked %1$s: the secure connection could not be negotiated.</string>
-    <string name="tls_unknown_host">that address</string>
+    <string name="tls_blocked_untrusted">已阻止 %1$s：证书不受信任。请改用 http。</string>
+    <string name="tls_blocked_hostname">已阻止 %1$s：其证书签发给了另一个主机名。</string>
+    <string name="tls_blocked_date">已阻止 %1$s：其证书已过期或尚未生效。</string>
+    <string name="tls_blocked_invalid">已阻止 %1$s：无法验证其证书。</string>
+    <string name="tls_blocked_handshake">已阻止 %1$s：无法协商安全连接。</string>
+    <string name="tls_unknown_host">该地址</string>
 
     <!-- Shown on the page itself, not in a toast, when the restart budget is
          spent. The screen behind it read "Starting server..." and went on
          reading that for ever, so the only thing it said was the only thing
          that was no longer true. -->
-    <string name="error_server_gave_up">The development server stopped and could not be restarted. Your files are safe. Trying again usually works; if it does not, close and reopen the app.</string>
-    <string name="error_server_retry">Try again</string>
+    <string name="error_server_gave_up">开发服务器已停止且无法重新启动。您的文件是安全的。重试通常可以解决问题；如果不行，请关闭并重新打开应用。</string>
+    <string name="error_server_retry">重试</string>
     <!-- The first screen of every cold start, inside the placeholder page
          MainActivity draws while the server comes up. -->
-    <string name="server_starting">Starting server…</string>
+    <string name="server_starting">正在启动服务器\u2026</string>
     <!-- Shown on the page, with the reload control, once the editor's renderer
          has died several times in a minute and the app stops reopening it. -->
-    <string name="error_renderer_crash_loop">The editor closed unexpectedly several times in a row, so VSCodroid stopped reopening it. Your files and the server are untouched. Closing some other apps first makes this less likely.</string>
-    <string name="legal_disclaimer">VSCodroid is built from the MIT-licensed Code - OSS source code.\nNot affiliated with or endorsed by Microsoft Corporation.\n\"Visual Studio Code\" and \"VS Code\" are trademarks of Microsoft.\nUses Open VSX extension registry, not Microsoft Marketplace.</string>
+    <string name="error_renderer_crash_loop">编辑器连续多次意外关闭，因此 VSCodroid 不再重新打开它。您的文件和服务器未受影响。先关闭一些其他应用可以降低再次发生的可能性。</string>
+    <string name="legal_disclaimer">VSCodroid 基于 MIT 许可的 Code - OSS 源代码构建。\n与 Microsoft Corporation 无关联，也未获其认可。\n“Visual Studio Code”和“VS Code”是 Microsoft 的商标。\n使用 Open VSX 扩展注册表，而非 Microsoft Marketplace。</string>
 
     <!-- About dialog -->
-    <string name="about_title">About VSCodroid</string>
-    <string name="about_version_format">Version %s</string>
-    <string name="about_licenses">Licenses</string>
-    <string name="licenses_title">Open Source Licenses</string>
+    <string name="about_title">关于 VSCodroid</string>
+    <string name="about_version_format">版本 %s</string>
+    <string name="about_licenses">许可证</string>
+    <string name="licenses_title">开源许可证</string>
     <!-- Opens the verbatim GPL and LGPL texts. Separate from the notices above
          because the copyleft binaries in this app require the licence itself to
          be handed over, not only named. -->
-    <string name="licenses_full_texts">License Texts</string>
+    <string name="licenses_full_texts">许可证全文</string>
 
     <!-- Toolchain picker (first-run) -->
-    <string name="picker_title">What do you code in?</string>
-    <string name="picker_subtitle">Optional. Touch and hold the app icon to add or remove these later.</string>
-    <string name="picker_included">Node.js, Python, and Git are already included.</string>
-    <string name="picker_continue">Continue</string>
-    <string name="picker_skip">Skip</string>
+    <string name="picker_title">您用什么语言编程？</string>
+    <string name="picker_subtitle">可选。之后可以长按应用图标来添加或移除。</string>
+    <string name="picker_included">已包含 Node.js、Python 和 Git。</string>
+    <string name="picker_continue">继续</string>
+    <string name="picker_skip">跳过</string>
 
     <!-- Toolchain download progress -->
-    <string name="progress_title">Installing toolchains\u2026</string>
-    <string name="progress_waiting">Waiting\u2026</string>
+    <string name="progress_title">正在安装工具链\u2026</string>
+    <string name="progress_waiting">等待中\u2026</string>
     <!-- How much of a download has arrived. The number is an argument rather than
          part of a literal built in Kotlin because neither half of a percentage is
          fixed across locales: the sign sits before the number in some of them, and
          the digits are drawn with a different set of glyphs in others. Passing it
          through the resource lets both follow the device's locale. -->
     <string name="progress_percent">%1$d%%</string>
-    <string name="progress_installing">Installing\u2026</string>
-    <string name="progress_done">Done</string>
-    <string name="progress_failed">Failed</string>
+    <string name="progress_installing">正在安装\u2026</string>
+    <string name="progress_done">已完成</string>
+    <string name="progress_failed">失败</string>
 
     <!-- Why an install failed. "Failed" alone was the same word for a full disk,
          a dropped connection and a file the release never published, and the user
          is the one person who can act on the difference. Each of these names the
          thing they can do about it; ToolchainFailure decides which one is shown. -->
-    <string name="toolchain_failed_network">Download failed. Check your connection and try again.</string>
-    <string name="toolchain_failed_storage">Not enough storage. Free some space and try again.</string>
-    <string name="toolchain_failed_not_published">This toolchain is not in the current release. Try again after the next app update.</string>
-    <string name="toolchain_failed_digest">The download did not match what the release published. Try again.</string>
-    <string name="toolchain_failed_corrupt">The download was incomplete. Try again.</string>
-    <string name="toolchain_failed_play">Play delivers this toolchain only to apps it installed. Install from the Play Store and try again.</string>
+    <string name="toolchain_failed_network">下载失败。请检查网络连接后重试。</string>
+    <string name="toolchain_failed_storage">存储空间不足。请释放一些空间后重试。</string>
+    <string name="toolchain_failed_not_published">当前版本不包含此工具链。请在应用下次更新后重试。</string>
+    <string name="toolchain_failed_digest">下载的内容与发布的内容不一致。请重试。</string>
+    <string name="toolchain_failed_corrupt">下载未完成。请重试。</string>
+    <string name="toolchain_failed_play">Play 只向由它安装的应用提供此工具链。请从 Play Store 安装后重试。</string>
     <!-- Shown when a second install of the same toolchain is declined because one is
          already running. Not a failure: the toolchain is on its way in, by the install
          that got there first, and the only thing the user needs is to stop tapping. -->
-    <string name="toolchain_already_installing">That toolchain is already being installed.</string>
-    <string name="toolchain_failed_internal">Install failed. The app log has the details.</string>
-    <string name="progress_cancel">Cancel</string>
-    <string name="progress_retry">Retry</string>
+    <string name="toolchain_already_installing">该工具链正在安装中。</string>
+    <string name="toolchain_failed_internal">安装失败。详细信息见应用日志。</string>
+    <string name="progress_cancel">取消</string>
+    <string name="progress_retry">重试</string>
 
     <!-- Toolchain settings -->
-    <string name="toolchain_settings_title">Toolchains</string>
-    <string name="toolchain_installed">Installed</string>
-    <string name="toolchain_install">Install</string>
-    <string name="toolchain_remove">Remove</string>
-    <string name="toolchain_cancel">Cancel</string>
-    <string name="toolchain_remove_confirm_title">Remove %s?</string>
-    <string name="toolchain_remove_confirm_message">This will delete all %s files. You can reinstall anytime.</string>
+    <string name="toolchain_settings_title">工具链</string>
+    <string name="toolchain_installed">已安装</string>
+    <string name="toolchain_install">安装</string>
+    <string name="toolchain_remove">移除</string>
+    <string name="toolchain_cancel">取消</string>
+    <string name="toolchain_remove_confirm_title">移除 %s？</string>
+    <string name="toolchain_remove_confirm_message">这将删除 %s 的所有文件。您可以随时重新安装。</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one
@@ -218,75 +218,73 @@
          device, that row renders as "Manage toolchai...", cut off mid-word. So
          any screen telling a user what to look for has to name the long label,
          which is what the Get Started walkthrough now does. -->
-    <string name="shortcut_toolchains_short">Toolchains</string>
-    <string name="shortcut_toolchains_long">Manage toolchains</string>
-    <string name="toolchain_size_download_and_installed">%1$s download, %2$s installed</string>
+    <string name="shortcut_toolchains_short">工具链</string>
+    <string name="shortcut_toolchains_long">管理工具链</string>
+    <string name="toolchain_size_download_and_installed">下载 %1$s，安装后占用 %2$s</string>
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
-    <string name="saf_write_back_failed">%1$s did not reach the device folder. The only copy is inside VSCodroid.</string>
+    <string name="saf_write_back_failed">%1$s 未能写入设备文件夹。唯一的副本在 VSCodroid 内。</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
          the editor: a provider error, or no room left. The opposite of
          saf_write_back_failed on purpose. There the app holds the only copy; here the
          device does, and the file is simply absent from the editor. -->
     <plurals name="saf_documents_not_copied">
-        <item quantity="one">A file could not be copied into the editor. It is unchanged in the device folder.</item>
-        <item quantity="other">%1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
+        <item quantity="other">有 %1$d 个文件无法复制到编辑器中。它们在设备文件夹中未被更改。</item>
     </plurals>
     <!-- The same shortfall when the sizes the provider reported did not fit in the space
          left. Named separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
-        <item quantity="one">Not enough free space: a file could not be copied into the editor. It is unchanged in the device folder.</item>
-        <item quantity="other">Not enough free space: %1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
+        <item quantity="other">可用空间不足：有 %1$d 个文件无法复制到编辑器中。它们在设备文件夹中未被更改。</item>
     </plurals>
     <!-- A directory deleted in the editor that was left standing in the device folder,
          because it holds documents that never reached the editor and deleting the
          directory would have taken them with it. Names the device as where the files
          are: the local copy is gone, so saf_write_back_failed's "the only copy is
          inside VSCodroid" would be backwards here. -->
-    <string name="saf_directory_kept">%1$s was kept in the device folder: it holds files that were never copied into the editor. Delete it there if you no longer need them.</string>
+    <string name="saf_directory_kept">%1$s 已保留在设备文件夹中：其中含有从未复制到编辑器的文件。如果不再需要，请在设备文件夹中删除它。</string>
 
     <!-- The same refusal one level down: a single document that never reached the
          editor, deleted in the editor anyway. Worded apart from saf_directory_kept
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
-    <string name="saf_document_kept">%1$s was kept in the device folder: the editor never had a copy of it. Delete it there if you no longer need it.</string>
+    <string name="saf_document_kept">%1$s 已保留在设备文件夹中：编辑器从未有过它的副本。如果不再需要，请在设备文件夹中删除它。</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
-    <string name="saf_mirror_unknown">There is no local copy of that folder to remove.</string>
+    <string name="saf_mirror_unknown">该文件夹没有可移除的本地副本。</string>
     <!-- The reclaim gate declining. Worded as what is at stake rather than as a
          refusal, because the user's next step is to confirm and remove it anyway: the
          mirrors that hold unsynced files are exactly the ones worth the disk, since a
          folder gets large by being worked in and working in one creates files the sync
          excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Some files in that folder are not in the device folder. Removing the local copy would delete them.</string>
+    <string name="saf_mirror_not_a_copy">该文件夹中的部分文件不在设备文件夹内。移除本地副本会删除这些文件。</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
-    <string name="saf_mirror_not_removed">That folder\'s local copy could not be removed. Please try again.</string>
+    <string name="saf_mirror_not_removed">无法移除该文件夹的本地副本。请重试。</string>
     <!-- Said after a removal, on the Android side rather than in the editor, because
          the recursive delete outlives the call the editor is waiting on. -->
-    <string name="saf_mirror_removed">Removed a device folder\'s local copy, freeing %1$s.</string>
+    <string name="saf_mirror_removed">已移除一个设备文件夹的本地副本，释放了 %1$s。</string>
     <!-- The affirmative button on that confirmation. Not android.R.string.ok: the delete
          is recursive and irreversible, and "OK" beside a warning about files that exist
          nowhere else names no action, so a reader confirming quickly has nothing to read
          but the sentence they are dismissing. -->
-    <string name="saf_mirror_remove">Remove</string>
+    <string name="saf_mirror_remove">移除</string>
 
     <!-- The refusals the removal guard raises before anything is deleted. They travel
          back across the bridge and the bundled extension shows them verbatim, so they
          are the user's whole explanation for a removal that did not happen. Each names
          the thing that has to change first; none of them invites a bare retry. -->
-    <string name="saf_mirror_folder_open">That folder is open in the editor. Open a different folder first.</string>
-    <string name="saf_mirror_folder_opening">That folder is still opening.</string>
+    <string name="saf_mirror_folder_open">该文件夹已在编辑器中打开。请先打开另一个文件夹。</string>
+    <string name="saf_mirror_folder_opening">该文件夹仍在打开中。</string>
     <!-- The widest of the three. A write-back drain outlives the folder switch that
          stopped it and can still be streaming out of the copy, so a restart is what
          makes the copy safe to remove rather than closing the folder. -->
-    <string name="saf_mirror_folder_this_session">That folder was open in this session. Restart VSCodroid, then remove it.</string>
+    <string name="saf_mirror_folder_this_session">该文件夹在本次会话中打开过。请重新启动 VSCodroid，然后再移除。</string>
 
     <!-- Reasons a bridge call did not do what it was asked. These are returned to the
          page and rendered by the bundled extension's showErrorMessage, which is the
@@ -296,25 +294,25 @@
     <!-- The caller's session token did not match. Used by both the external-URL and
          the folder-removal calls; one string because it is one situation and one
          instruction. -->
-    <string name="bridge_stale_session">VSCodroid did not accept the request. Reload the window and try again.</string>
+    <string name="bridge_stale_session">VSCodroid 未接受该请求。请重新加载窗口后重试。</string>
     <!-- Too many storage commands already outstanding. The four that walk the disk share
          one thread with a bounded queue, so this is a wait and not a fault, and it needs
          its own sentence: bridge_stale_session above tells the reader to reload the
          window, which does not drain that thread and costs them their editor state on the
          way to waiting exactly as long. Named by AndroidBridge.STORAGE_BUSY. -->
-    <string name="bridge_storage_busy">VSCodroid is busy with another storage request. Try again in a moment.</string>
+    <string name="bridge_storage_busy">VSCodroid 正忙于另一个存储请求。请稍后重试。</string>
     <!-- No Activity wired the removal callback, so nothing could have been removed.
          Distinct from a refusal with a reason: this is a mistake in the app rather
          than a state the user can act on, and saying "that folder is in use" would
          send them looking for a folder to close. -->
-    <string name="bridge_reclaim_unavailable">VSCodroid cannot manage device folder storage right now.</string>
+    <string name="bridge_reclaim_unavailable">VSCodroid 目前无法管理设备文件夹的存储。</string>
     <!-- Nothing on the device claimed the link. The one refusal the user can act on. -->
-    <string name="open_url_no_handler">VSCodroid did not open it. No app on this device handles that link.</string>
+    <string name="open_url_no_handler">VSCodroid 未能打开它。此设备上没有应用可以处理该链接。</string>
     <!-- Every other launch failure, with the class name of the exception substituted. The
          class name and never its message: ActivityNotFoundException quotes the whole
          Intent and FileUriExposedException quotes the file, so the message would hand
          the address back to the page that supplied it. -->
-    <string name="open_url_failed">VSCodroid could not open that link: %1$s</string>
+    <string name="open_url_failed">VSCodroid 无法打开该链接：%1$s</string>
 
     <!-- A folder copied out to the device that did not arrive whole. Counts entries
          rather than naming them, because the failure is usually folder-wide and forty
@@ -322,19 +320,18 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: one item did not reach the device folder.</item>
-        <item quantity="other">%2$s: %1$d items did not reach the device folder.</item>
+        <item quantity="other">%2$s：有 %1$d 个项目未能写入设备文件夹。</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
-    <string name="saf_upload_capped">%1$s is too large to copy out whole. The rest of it stayed inside VSCodroid.</string>
+    <string name="saf_upload_capped">%1$s 太大，无法整体复制出去。其余部分留在了 VSCodroid 内。</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an
          unlabelled button: setSupportActionBar is never called, so the framework's
          own "Navigate up" default never applies. -->
-    <string name="toolchain_navigate_up">Back to the editor</string>
+    <string name="toolchain_navigate_up">返回编辑器</string>
 
     <!-- What the toolchain picker's card says the toolchain is for. Held here
          rather than in ToolchainRegistry.ToolchainInfo, which is where the rest
@@ -343,18 +340,18 @@
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
          strings on purpose; "Ruby" and "Java 17" are the products' own names. -->
-    <string name="toolchain_ruby_description">Ruby with irb, gem, bundler</string>
-    <string name="toolchain_java_description">OpenJDK 17 (javac, jar, jshell)</string>
+    <string name="toolchain_ruby_description">Ruby，含 irb、gem、bundler</string>
+    <string name="toolchain_java_description">OpenJDK 17（javac、jar、jshell）</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->
-    <string name="toolchain_card_selected">Selected</string>
+    <string name="toolchain_card_selected">已选择</string>
 
     <!-- Shown on the splash screen when setup is re-running because the app was
          updated, rather than because it is being installed for the first time.
          Distinct from extracting_message so that a user who did not expect a
          wait learns why there is one. -->
-    <string name="status_updating_app">Updating VSCodroid…</string>
+    <string name="status_updating_app">正在更新 VSCodroid\u2026</string>
 
     <!-- Opening a device folder. The sync can take a while on a large folder and
          the dialog is not cancellable, so it has to say what is happening.
@@ -362,8 +359,8 @@
          The folder name is an argument rather than concatenated, because a
          translation may need it somewhere other than the middle: the quoting
          around it is part of the resource for the same reason. -->
-    <string name="saf_sync_title">Opening folder</string>
-    <string name="saf_sync_message">Syncing \"%1$s\"…</string>
+    <string name="saf_sync_title">正在打开文件夹</string>
+    <string name="saf_sync_message">正在同步“%1$s”\u2026</string>
     <!-- The same dialog once the file count is known. Three arguments and all of
          them positional, since a language that counts before it names would put
          %2$d and %3$d first.
@@ -374,8 +371,7 @@
          done, because the total is the noun's own count; the running figure is
          just how far along it is. -->
     <plurals name="saf_sync_progress">
-        <item quantity="one">Syncing \"%1$s\"\n%2$d / %3$d file…</item>
-        <item quantity="other">Syncing \"%1$s\"\n%2$d / %3$d files…</item>
+        <item quantity="other">正在同步“%1$s”\n%2$d / %3$d 个文件\u2026</item>
     </plurals>
 
     <!-- A folder whose SAF grant no longer holds. Nothing opens after this any
@@ -383,7 +379,7 @@
          grant it could not use, which let a caller put the chooser in front of
          the user without asking for it, so the sentence has to carry the next
          step itself. -->
-    <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
+    <string name="saf_permission_expired">权限已过期。请重新选择该文件夹。</string>
 
     <!-- A device folder that did not open. Said as one sentence per case, with the
          cause as an argument, rather than as two resources joined in Kotlin: a
@@ -398,47 +394,47 @@
          The cause of the second one is the platform's own exception message, which is
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
-    <string name="saf_sync_denied">Permission denied.</string>
-    <string name="saf_sync_failed">Failed to open folder: %1$s.</string>
-    <string name="saf_sync_failed_other_folder_watched">%1$s The folder already open is unaffected.</string>
-    <string name="saf_sync_failed_no_write_back">%1$s Changes will not sync to this folder until you open it again.</string>
+    <string name="saf_sync_denied">权限被拒绝。</string>
+    <string name="saf_sync_failed">无法打开文件夹：%1$s。</string>
+    <string name="saf_sync_failed_other_folder_watched">%1$s已打开的文件夹不受影响。</string>
+    <string name="saf_sync_failed_no_write_back">%1$s在您再次打开该文件夹之前，更改不会同步到其中。</string>
 
     <!-- Two ways a sign-in started in the browser fails to land back in the
          editor. Worded separately because the causes differ and neither is the
          user's doing: one is the editor having restarted underneath the browser,
          the other the callback arriving after its window closed. Both end in the
          same instruction because retrying is genuinely all there is to do. -->
-    <string name="sign_in_editor_restarted">Sign-in could not be completed because the editor restarted. Please sign in again.</string>
-    <string name="sign_in_timed_out">Sign-in took too long to complete. Please sign in again.</string>
+    <string name="sign_in_editor_restarted">由于编辑器已重新启动，登录未能完成。请重新登录。</string>
+    <string name="sign_in_timed_out">登录耗时过长，未能完成。请重新登录。</string>
 
     <!-- The About dialog's body: the version line and the legal disclaimer, which
          are separate resources because only one of them is a sentence. Joined
          here rather than in Kotlin so a translation can change the separator. -->
     <string name="about_body">%1$s\n\n%2$s</string>
-    <string name="about_privacy_policy">Privacy Policy</string>
+    <string name="about_privacy_policy">隐私政策</string>
     <!-- The written offer of source that the bundled GPL and LGPL binaries
          require, reached from the licences dialog. -->
-    <string name="licenses_source_code">Source Code</string>
+    <string name="licenses_source_code">源代码</string>
     <!-- The dismiss button on every dialog that only has something to say. One
          resource for all of them: they are the same word doing the same job, and
          three copies would be three chances for a translation to disagree with
          itself. -->
-    <string name="dialog_ok">OK</string>
+    <string name="dialog_ok">确定</string>
 
     <!-- Shown once on the launch after a crash. The report is quoted into the
          message because the audience is developers, and truncated by the caller
          before it arrives. -->
-    <string name="crash_title">VSCodroid crashed</string>
-    <string name="crash_message">The app crashed in a previous session.\n\n%1$s</string>
-    <string name="crash_dismiss">Dismiss</string>
-    <string name="crash_copy_report">Copy Report</string>
-    <string name="crash_report_copied">Bug report copied to clipboard</string>
+    <string name="crash_title">VSCodroid 已崩溃</string>
+    <string name="crash_message">应用在上一次会话中崩溃。\n\n%1$s</string>
+    <string name="crash_dismiss">关闭</string>
+    <string name="crash_copy_report">复制报告</string>
+    <string name="crash_report_copied">错误报告已复制到剪贴板</string>
 
     <!-- Storage running out, with the space left substituted. The command name is
          quoted exactly as the palette lists it because the reader's next action
          is to type it, and it is the one part of this sentence a translator must
          leave in English. -->
-    <string name="storage_low_warning">Storage low (%1$s available). Run \"VSCodroid: Manage Device Folder Storage\" from the Command Palette.</string>
+    <string name="storage_low_warning">存储空间不足（可用 %1$s）。请在命令面板中运行“VSCodroid: Manage Device Folder Storage”。</string>
 
     <!-- An Android System WebView older than the one this app is tested against.
          Both versions are arguments: the installed one is read off the device and
@@ -449,7 +445,7 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView is version %1$s. VSCodroid is tested against %2$s and newer, so parts of the editor may not work. Update it from the Play Store.</string>
+    <string name="webview_below_minimum">Android System WebView 的版本为 %1$s。VSCodroid 针对 %2$s 及更高版本进行测试，因此编辑器的部分功能可能无法正常工作。请从 Play Store 更新。</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 
@@ -463,10 +459,10 @@
          the point of the whole set: a reader hearing "{}" learns nothing, and
          "Curly braces" is what the key is. KeyPageConfig has no fallback left, so
          a new key without one does not compile. -->
-    <string name="key_desc_tab">Tab key</string>
-    <string name="key_desc_escape">Escape key</string>
-    <string name="key_desc_ctrl">Control modifier</string>
-    <string name="key_desc_alt">Alt modifier</string>
+    <string name="key_desc_tab">Tab 键</string>
+    <string name="key_desc_escape">Escape 键</string>
+    <string name="key_desc_ctrl">Control 修饰键</string>
+    <string name="key_desc_alt">Alt 修饰键</string>
     <!-- Shift is named for what it does rather than by analogy with the other
          two, because it does something different. Ctrl and Alt turn the next
          character typed on the soft keyboard into a chord; Shift ALONE cannot,
@@ -480,41 +476,41 @@
          carry shiftKey through, which is what makes Ctrl+Shift+P typable from
          the soft keyboard. The button looked and sounded identical to the two
          that work. -->
-    <string name="key_desc_shift">Shift modifier, for this row\'s keys and for Control or Alt chords</string>
-    <string name="key_desc_curly_braces">Curly braces</string>
-    <string name="key_desc_parentheses">Parentheses</string>
-    <string name="key_desc_semicolon">Semicolon</string>
-    <string name="key_desc_colon">Colon</string>
-    <string name="key_desc_double_quote">Double quote</string>
-    <string name="key_desc_forward_slash">Forward slash</string>
-    <string name="key_desc_pipe">Pipe</string>
-    <string name="key_desc_backtick">Backtick</string>
-    <string name="key_desc_ampersand">Ampersand</string>
-    <string name="key_desc_underscore">Underscore</string>
-    <string name="key_desc_left_bracket">Left bracket</string>
-    <string name="key_desc_right_bracket">Right bracket</string>
-    <string name="key_desc_less_than">Less than</string>
-    <string name="key_desc_greater_than">Greater than</string>
-    <string name="key_desc_equals">Equals</string>
-    <string name="key_desc_exclamation">Exclamation</string>
-    <string name="key_desc_hash">Hash</string>
-    <string name="key_desc_at_sign">At sign</string>
-    <string name="key_desc_f1">Function key F1</string>
-    <string name="key_desc_f2">Function key F2</string>
-    <string name="key_desc_f3">Function key F3</string>
-    <string name="key_desc_f4">Function key F4</string>
-    <string name="key_desc_f5">Function key F5</string>
-    <string name="key_desc_f6">Function key F6</string>
-    <string name="key_desc_f7">Function key F7</string>
-    <string name="key_desc_f8">Function key F8</string>
-    <string name="key_desc_f9">Function key F9</string>
-    <string name="key_desc_f10">Function key F10</string>
-    <string name="key_desc_f11">Function key F11</string>
-    <string name="key_desc_f12">Function key F12</string>
-    <string name="key_desc_home">Home key</string>
-    <string name="key_desc_end">End key</string>
-    <string name="key_desc_page_up">Page up</string>
-    <string name="key_desc_page_down">Page down</string>
+    <string name="key_desc_shift">Shift 修饰键，用于本行按键以及 Control 或 Alt 组合键</string>
+    <string name="key_desc_curly_braces">花括号</string>
+    <string name="key_desc_parentheses">圆括号</string>
+    <string name="key_desc_semicolon">分号</string>
+    <string name="key_desc_colon">冒号</string>
+    <string name="key_desc_double_quote">双引号</string>
+    <string name="key_desc_forward_slash">正斜杠</string>
+    <string name="key_desc_pipe">竖线</string>
+    <string name="key_desc_backtick">反引号</string>
+    <string name="key_desc_ampersand">和号</string>
+    <string name="key_desc_underscore">下划线</string>
+    <string name="key_desc_left_bracket">左方括号</string>
+    <string name="key_desc_right_bracket">右方括号</string>
+    <string name="key_desc_less_than">小于号</string>
+    <string name="key_desc_greater_than">大于号</string>
+    <string name="key_desc_equals">等号</string>
+    <string name="key_desc_exclamation">感叹号</string>
+    <string name="key_desc_hash">井号</string>
+    <string name="key_desc_at_sign">At 符号</string>
+    <string name="key_desc_f1">功能键 F1</string>
+    <string name="key_desc_f2">功能键 F2</string>
+    <string name="key_desc_f3">功能键 F3</string>
+    <string name="key_desc_f4">功能键 F4</string>
+    <string name="key_desc_f5">功能键 F5</string>
+    <string name="key_desc_f6">功能键 F6</string>
+    <string name="key_desc_f7">功能键 F7</string>
+    <string name="key_desc_f8">功能键 F8</string>
+    <string name="key_desc_f9">功能键 F9</string>
+    <string name="key_desc_f10">功能键 F10</string>
+    <string name="key_desc_f11">功能键 F11</string>
+    <string name="key_desc_f12">功能键 F12</string>
+    <string name="key_desc_home">Home 键</string>
+    <string name="key_desc_end">End 键</string>
+    <string name="key_desc_page_up">向上翻页</string>
+    <string name="key_desc_page_down">向下翻页</string>
 
     <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
@@ -524,15 +520,15 @@
          at all: the `()` key sends the opening one, Shift over it cannot produce
          the closing one, and no page carries a digit row for Shift to work from,
          so the long press was the only place left to put it. -->
-    <string name="key_desc_apostrophe">Apostrophe</string>
-    <string name="key_desc_backslash">Backslash</string>
-    <string name="key_desc_tilde">Tilde</string>
-    <string name="key_desc_closing_parenthesis">Closing parenthesis</string>
+    <string name="key_desc_apostrophe">单引号</string>
+    <string name="key_desc_backslash">反斜杠</string>
+    <string name="key_desc_tilde">波浪号</string>
+    <string name="key_desc_closing_parenthesis">右圆括号</string>
 
     <!-- Which of the key row's pages is showing. The dots below the keys carry
          this in colour alone, which leaves a screen reader nothing to read and
          a swipe with nothing to announce. -->
-    <string name="key_page_indicator">Key page %1$d of %2$d</string>
+    <string name="key_page_indicator">按键第 %1$d 页，共 %2$d 页</string>
 
     <!-- The same indicator while a modifier is latched, said as one sentence
          rather than as a second description on the badge that draws the cue:
@@ -544,34 +540,34 @@
          purpose, so from page 2 onwards this is the only thing that reports one.
          The last placeholder is the key names as they are written on the keys,
          which are not translated. -->
-    <string name="key_page_indicator_held">Key page %1$d of %2$d, %3$s held</string>
+    <string name="key_page_indicator_held">按键第 %1$d 页，共 %2$d 页，%3$s 已按住</string>
 
     <!-- What a screen reader says after the name of a latched modifier. Kept to
          one word each because the platform reads them straight after the key's
          own description, and anything longer turns every Ctrl into a sentence. -->
-    <string name="key_toggle_on">on</string>
-    <string name="key_toggle_off">off</string>
+    <string name="key_toggle_on">开</string>
+    <string name="key_toggle_off">关</string>
 
     <!-- The trackpad, and the four arrows it offers to an assistive service.
          A drag is the only other way to reach them and touch exploration takes
          the gesture stream first, so these labels are the whole of that route:
          they appear in the actions menu a screen reader shows for the view. -->
-    <string name="trackpad_description">Arrow key trackpad. Drag to move cursor.</string>
-    <string name="trackpad_action_left">Move cursor left</string>
-    <string name="trackpad_action_right">Move cursor right</string>
-    <string name="trackpad_action_up">Move cursor up</string>
-    <string name="trackpad_action_down">Move cursor down</string>
+    <string name="trackpad_description">方向键触控板。拖动以移动光标。</string>
+    <string name="trackpad_action_left">向左移动光标</string>
+    <string name="trackpad_action_right">向右移动光标</string>
+    <string name="trackpad_action_up">向上移动光标</string>
+    <string name="trackpad_action_down">向下移动光标</string>
     <!-- Saving a file the editor downloaded. These three are the whole
          user-visible outcome of the download feature, and they were written in
          Kotlin, so a values-xx/strings.xml could not reach any of them: the
          message is built into a local before it reaches the Toast, which is the
          shape check-translatable-strings.py names as the hole it cannot see. -->
-    <string name="download_saved">Saved %1$s</string>
-    <string name="download_cancelled">Download cancelled</string>
-    <string name="download_not_saved">Could not save %1$s</string>
+    <string name="download_saved">已保存 %1$s</string>
+    <string name="download_cancelled">下载已取消</string>
+    <string name="download_not_saved">无法保存 %1$s</string>
 
     <!-- Stands in for a version the package manager would not report, the way
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
-    <string name="about_version_unknown">unknown</string>
+    <string name="about_version_unknown">未知</string>
 </resources>

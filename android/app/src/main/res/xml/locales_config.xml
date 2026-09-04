@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The languages this app ships, which is what puts it in Android's per-app
+  language picker (Settings > Apps > VSCodroid > Language) on Android 13 and
+  later. Without this file that picker does not appear at all, and the only way
+  to change the language is to change the phone's.
+
+  It decides the editor's language too, not just the screens around it. Picking
+  a language here changes this app's locale, EditorLocale resolves that to one of
+  the bundles below, and MainActivity puts the answer in the cookie the workbench
+  asks with. The Accept-Language header the WebView sends is deliberately not
+  what decides it; see util/EditorLocale.kt.
+
+  Same list as scripts/build-nls-bundles.py, and it has to stay the same list:
+  a locale here with no bundle behind it gives the Android screens one language
+  and the editor English.
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+    <locale android:name="cs" />
+    <locale android:name="de" />
+    <locale android:name="es" />
+    <locale android:name="fr" />
+    <locale android:name="it" />
+    <locale android:name="ja" />
+    <locale android:name="ko" />
+    <locale android:name="pl" />
+    <locale android:name="pt-BR" />
+    <locale android:name="ru" />
+    <locale android:name="tr" />
+    <locale android:name="zh-Hans" />
+    <locale android:name="zh-Hant" />
+</locale-config>

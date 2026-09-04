@@ -3,6 +3,7 @@ package com.vscodroid.setup
 import android.content.Context
 import android.system.Os
 import com.vscodroid.BuildConfig
+import com.vscodroid.R
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
@@ -474,7 +475,7 @@ class FirstRunSetup(
                 }
             prefs.edit(commit = true) { putString(KEY_EXTRACTION_ATTEMPT, marker) }
 
-            reportProgress("Creating directories...", 2)
+            reportProgress(context.getString(R.string.setup_step_directories), 2)
             createDirectories()
 
             // Each of these is checked, and every one is attempted before the
@@ -523,7 +524,8 @@ class FirstRunSetup(
 
             // The reh-web download carries the web client inside this same tree,
             // so this one extraction is both the server and the workbench.
-            reportProgress("Extracting server files...", SERVER_PROGRESS_START)
+            val serverMessage = context.getString(R.string.setup_step_server)
+            reportProgress(serverMessage, SERVER_PROGRESS_START)
             // The one step long enough for a still bar to read as a hang: the server
             // tree is the bulk of the assets and takes minutes on a mid-range phone.
             // A force-quit at that point produces exactly the partial tree the retry
@@ -534,7 +536,6 @@ class FirstRunSetup(
             // percent changes: 55 updates rather than one per file across 16,891 of
             // them. Capped, because a tree fetched after the APK was built would
             // otherwise run the bar past the step.
-            val serverMessage = "Extracting server files..."
             val extracted = extractAssetDir(
                 "vscode-reh",
                 "server/vscode-reh",
@@ -542,7 +543,7 @@ class FirstRunSetup(
             )
             if (!extracted) incomplete += "vscode-reh"
 
-            reportProgress("Extracting server bootstrap...", 60)
+            reportProgress(context.getString(R.string.setup_step_bootstrap), 60)
             for (script in listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js")) {
                 if (!extractAssetFile(script, "server/$script")) incomplete += script
             }
@@ -551,7 +552,7 @@ class FirstRunSetup(
             // a hang too: 2,812 files and 110 MiB with the bar pinned at 62 was
             // tens of seconds of nothing moving, which is exactly what the server
             // counter above was written to stop.
-            val toolsMessage = "Extracting tools..."
+            val toolsMessage = context.getString(R.string.setup_step_tools)
             reportProgress(toolsMessage, USR_PROGRESS_START)
             val usrExtracted = extractAssetDir(
                 "usr",
@@ -574,10 +575,10 @@ class FirstRunSetup(
             // only the cleanup half.
             reconcilePythonRuntimeLocked()
 
-            reportProgress("Setting up git...", 82)
+            reportProgress(context.getString(R.string.setup_step_git), 82)
             setupGitCore()
 
-            reportProgress("Setting up tools...", 85)
+            reportProgress(context.getString(R.string.setup_step_symlinks), 85)
             setupToolSymlinks()
             setupRipgrepVscodeSymlink()
             // Also here, not only in SplashActivity's always-run block: that
@@ -593,13 +594,13 @@ class FirstRunSetup(
             createStorageSymlinks()
             createWelcomeProject()
 
-            reportProgress("Setting up extensions...", 88)
+            reportProgress(context.getString(R.string.setup_step_extensions), 88)
             extractBundledExtensions()
 
-            reportProgress("Configuring environment...", 97)
+            reportProgress(context.getString(R.string.setup_step_environment), 97)
             createDefaultSettings()
 
-            reportProgress("Done!", 100)
+            reportProgress(context.getString(R.string.setup_step_done), 100)
 
             // Before the flag, never after, and the order is the entire point.
             // markSetupComplete() commits, and a commit fsyncs, so without this
@@ -2255,12 +2256,21 @@ claude() {
         val settingsFile = File(Environment.getMachineSettingsPath(context))
         if (!settingsFile.exists()) return
 
-        val updated = refreshManagedPaths(
-            settingsFile.readText(),
+        // Two passes over one document, written once. They are separate
+        // functions because they answer to different things: the first repairs
+        // paths that go stale on every reinstall, the second fills in layout
+        // defaults a device that installed an earlier version never had. Either
+        // one alone can be the reason there is something to write.
+        val current = settingsFile.readText()
+        val refreshed = refreshManagedPaths(
+            current,
             Environment.getTerminalShellPath(context),
             Environment.getGitPath(context),
             Environment.getClaudeLauncherPath(context),
-        ) ?: return
+        )
+        val updated = settingsWithLayoutDefaults(refreshed ?: current, isCompactScreen())
+            ?: refreshed
+            ?: return
 
         // Atomic because this file is the user's, not ours -- it carries their
         // editor preferences, and this runs at every launch. writeText truncates
@@ -2273,6 +2283,18 @@ claude() {
         }
         Logger.i(tag, "Refreshed managed paths in settings.json")
     }
+
+    /**
+     * Whether the editor has to share a phone-width window rather than a tablet.
+     *
+     * `smallestScreenWidthDp` and not the current width, because it does not
+     * change with rotation: the answer has to hold for the same device in
+     * landscape, where a side bar that closed itself on every file would be
+     * closing a bar there is room for. 600 is Android's own dividing line, the
+     * one behind `sw600dp` resources.
+     */
+    private fun isCompactScreen(): Boolean =
+        context.resources.configuration.smallestScreenWidthDp < COMPACT_SCREEN_DP
 
     /**
      * Moves settings.json from the path this app used to write to the one the
@@ -2643,6 +2665,8 @@ claude() {
             {
                 "workbench.secondarySideBar.defaultVisibility": "hidden",
                 "workbench.sash.size": 20,
+                "workbench.activityBar.compact": true,
+                "vscodroid.layout.autoHideSideBar": ${isCompactScreen()},
                 "workbench.startupEditor": "none",
                 "workbench.colorTheme": "Default Dark Modern",
                 "editor.fontSize": 14,
@@ -2768,7 +2792,7 @@ claude() {
         // run re-unpacking only some of the directories stops the bar short of
         // the step's end instead of over-running it, which is the safe direction.
         val progress = byteProgress(
-            "Setting up extensions...",
+            context.getString(R.string.setup_step_extensions),
             EXTENSIONS_PROGRESS_START,
             EXTENSIONS_PROGRESS_END,
             bundledExtensionBytes,
@@ -3393,6 +3417,15 @@ claude() {
 
     companion object {
         /**
+         * Below this smallest width, in dp, the editor is sharing a phone screen.
+         *
+         * Android's own tablet threshold, the one that selects `sw600dp`
+         * resources, so a device this app calls compact is a device the platform
+         * calls compact too.
+         */
+        private const val COMPACT_SCREEN_DP = 600
+
+        /**
          * The closure the running extraction reports through.
          *
          * In the companion beside [setupMutex] and for the same reason: the lock
@@ -3448,7 +3481,7 @@ claude() {
                 message.length <= DETAIL_LIMIT -> "$type: $message"
                 else -> "$type: " + message.take(DETAIL_LIMIT).trimEnd() + "\u2026"
             }
-            return Failure(step?.trimEnd('.', ' ').orEmpty(), detail)
+            return Failure(step?.trimEnd('.', ' ', '\u2026').orEmpty(), detail)
         }
 
         /** The band the server extraction reports across; the next step opens at 60. */
@@ -4032,6 +4065,20 @@ private val SECONDARY_SIDE_BAR = Regex(""""workbench\.secondarySideBar\.defaultV
  * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
  */
 private val SASH_SIZE = Regex(""""workbench\.sash\.size"\s*:""")
+
+/**
+ * Whether the user's settings already mention the compact activity bar.
+ *
+ * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
+ */
+private val ACTIVITY_BAR_COMPACT = Regex(""""workbench\.activityBar\.compact"\s*:""")
+
+/**
+ * Whether the user's settings already mention hiding the side bar on open.
+ *
+ * Presence alone, either value, for the reason [VERIFY_SIGNATURE] gives.
+ */
+private val AUTO_HIDE_SIDE_BAR = Regex(""""vscodroid\.layout\.autoHideSideBar"\s*:""")
 
 /**
  * The two settings that route Python environment discovery through `pet`, the
@@ -5048,6 +5095,46 @@ internal fun refreshManagedPaths(
     updated = PYTHON_LOCATOR.applyTo(updated)
     updated = PYTHON_ENV_EXTENSION.applyTo(updated)
 
+    return updated.takeIf { it != content }
+}
+
+/**
+ * Fills in the two layout defaults, for installs that never had them.
+ *
+ * Both are about width on a phone held upright, where the editor is whatever is
+ * left after the two bars beside it. Measured on a 411dp screen: 48px of
+ * activity bar, and a side bar that will not go below 170px however far its
+ * divider is dragged, leaving the editor 193dp and the welcome text wrapping at
+ * three words a line. That is where "the layout is bad" comes from.
+ *
+ * `workbench.activityBar.compact` is upstream's own narrow bar, 36px instead of
+ * 48px, with all seven icons still shown; measured, not read. What is
+ * deliberately NOT used is `workbench.activityBar.location`: both `top` and
+ * `bottom` remove the bar's width entirely and, in this build, take every view
+ * icon with it (measured at 411dp: `.part.activitybar` 0px wide and zero action
+ * items, with only Accounts and Manage moved into the title bar), which would
+ * leave the Explorer reachable only through the menu.
+ *
+ * `vscodroid.layout.autoHideSideBar` is read by the bundled welcome extension,
+ * which closes the side bar when a file is opened. The extension cannot decide
+ * this for itself: nothing in the extension API reports how wide the window is,
+ * so the one process that does know, this one, writes the answer down.
+ *
+ * Inserted when absent and never rewritten, in company with the keys
+ * [refreshManagedPaths] backfills: a user who turned either off meant to.
+ */
+internal fun settingsWithLayoutDefaults(content: String, autoHideSideBar: Boolean): String? {
+    var updated = content
+    if (!ACTIVITY_BAR_COMPACT.containsMatchIn(updated)) {
+        updated = insertSetting(updated, "workbench.activityBar.compact", "true")
+    }
+    if (!AUTO_HIDE_SIDE_BAR.containsMatchIn(updated)) {
+        updated = insertSetting(
+            updated,
+            "vscodroid.layout.autoHideSideBar",
+            autoHideSideBar.toString(),
+        )
+    }
     return updated.takeIf { it != content }
 }
 

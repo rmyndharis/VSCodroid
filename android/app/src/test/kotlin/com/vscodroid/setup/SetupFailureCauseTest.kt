@@ -48,6 +48,29 @@ class SetupFailureCauseTest {
     }
 
     /**
+     * The same, for the ellipsis the app actually emits.
+     *
+     * The three dots above are the form the labels had while they were Kotlin
+     * literals. They are resources now, written `\u2026` in `strings.xml` and
+     * translated, so what reaches this function is one character rather than
+     * three, and a translator can write it in their own convention. Trimming
+     * only the ASCII form left every failure message ending "Setting up git..."
+     * mid-sentence.
+     */
+    @Test
+    fun `the step loses a real ellipsis too`() {
+        val failure = FirstRunSetup.describeFailure("\u2026", IOException("x"))
+        assertEquals("", failure.step, "a step that is nothing but an ellipsis kept it")
+
+        val git = FirstRunSetup.describeFailure("Setting up git\u2026", IOException("x"))
+        assertEquals(
+            "Setting up git", git.step,
+            "the step still trails the ellipsis the resources carry, so the screen reads " +
+                "\"Setup failed while: Setting up git…\"",
+        )
+    }
+
+    /**
      * A failure before the first progress report has no step to name. The screen
      * falls back to the plain string, so an empty step has to be distinguishable
      * from a real one rather than rendering as "failed while: ".

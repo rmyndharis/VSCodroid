@@ -230,7 +230,8 @@ Features:
 • Open folders from your device storage, including SD cards and cloud providers
 • Portrait, landscape and split-screen support
 
-The editor's interface is in English.
+The interface follows your phone's language, in 13 of them, the app's own screens
+included. Text that comes from extensions stays English.
 
 Built for developers who code on-the-go. Whether you're on a train, in a coffee shop, or just prefer your tablet, VSCodroid gives you a real development environment.
 
@@ -245,10 +246,10 @@ device storage" is SAF, and the app deliberately offers no "Open with" entry for
 individual files; advertising file opening would describe a capability that was
 removed. And the editor is never named as the trademarked product; it is built from
 Code - OSS, which is what the disclaimer says. The extension line offers "language
-support" and not "language packs": a display-language pack from Open VSX installs,
-enables, and changes not one word on screen, so the old wording sold a capability
-the app does not have to exactly the readers who would miss it. The line under the
-list says so outright, because a listing is read before the guide is.
+support" and not "language packs": the interface translations ship in the app, so a
+display-language pack from Open VSX buys nothing, and naming packs would send
+readers to the marketplace for what they already have. The line under the list says
+what is translated and what is not, because a listing is read before the guide is.
 
 ### 5.3 Policy Compliance
 

@@ -46,6 +46,46 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### VS Code Language Packs (vscode-loc)
+
+The editor's translated interface strings. `scripts/build-nls-bundles.py` merges
+them into the English message array the workbench reads and writes the result to
+`assets/nls/<locale>.json`, which ships in the APK. Those bundles carry no notice
+of their own, so the text below is where this one is handed over.
+
+- **Project**: https://github.com/microsoft/vscode-loc
+- **Version**: the commit pinned in `VSCODE_LOC_COMMIT`
+- **License**: MIT License
+- **Copyright**: Copyright (c) Microsoft Corporation. All rights reserved.
+
+```
+Visual Studio Code Localization Packs
+
+Copyright (c) Microsoft Corporation
+
+All rights reserved.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE
+```
+
 ### Node.js
 
 - **Project**: https://nodejs.org
@@ -701,4 +741,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on August 24, 2026._
+_This document was last updated on September 4, 2026._

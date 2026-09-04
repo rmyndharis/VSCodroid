@@ -62,6 +62,61 @@ function alignSecondarySideBar(context) {
     );
 }
 
+/**
+ * Closes the side bar when a file is opened, on a screen too narrow to hold both.
+ *
+ * A phone in portrait is about 411dp wide. The activity bar takes 36 of that and
+ * the side bar will not go below 170 however far its divider is dragged, so
+ * opening a file from the Explorer leaves the file itself under half the screen,
+ * wrapping at a few words a line. Closing the tree once the user has chosen from
+ * it is what a phone should do, and it is reversible with one tap on the same
+ * icon they opened it with.
+ *
+ * Gated on a setting rather than measured here, because this side cannot measure
+ * it: nothing in the extension API reports the window's width. The app writes
+ * `vscodroid.layout.autoHideSideBar` when it sets up (FirstRunSetup), true on a
+ * phone and false on a tablet, and a user who disagrees changes it in Settings.
+ *
+ * Read on every event and not once at activation, so turning it off takes effect
+ * on the next file rather than on the next launch.
+ *
+ * `onDidChangeActiveTextEditor` and not an Explorer selection event: the editor
+ * becoming active is the moment the side bar has done its job, and it covers
+ * every route to a file, the Quick Open list and a link in a hover included. It
+ * also fires on a plain tab switch, where the bar is already closed and
+ * `closeSidebar` costs nothing.
+ *
+ * `closeSidebar` closes whichever view is showing, not the Explorer alone, and
+ * that is the intent: a phone that has just put a file on screen has no room
+ * for Search or Source Control beside it either, and the same icon the user
+ * opened brings it back.
+ *
+ * One case it deliberately does not cover: tapping a file that is already the
+ * active editor changes no editor, so no event arrives and the side bar stays.
+ * Nothing else changed on screen either, so the tap looks like what it was.
+ */
+function autoHideSideBar(context) {
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor((editor) => {
+            if (!editor) {
+                return;
+            }
+            const enabled = vscode.workspace
+                .getConfiguration()
+                .get('vscodroid.layout.autoHideSideBar');
+            if (!enabled) {
+                return;
+            }
+            // Fire and forget with its own handler, the shape every other
+            // executeCommand in this file uses and for the same reason: nobody
+            // asked for this one, so a rejection is not theirs to see.
+            Promise.resolve(
+                vscode.commands.executeCommand('workbench.action.closeSidebar')
+            ).catch(() => {});
+        })
+    );
+}
+
 function activate(context) {
     // File-based marker, kept because it outlives the workbench profile: a
     // cleared WebView data directory takes extension state with it, and the
@@ -107,6 +162,11 @@ function activate(context) {
     // already has it, which is exactly the population whose stored layout needs
     // correcting.
     alignSecondarySideBar(context);
+
+    // Outside the marker below for the same reason: every device upgrading into
+    // this release already has it, and they are exactly the population whose
+    // side bar has been eating the screen.
+    autoHideSideBar(context);
 
     // Auto-open walkthrough on first activation only
     if (!fs.existsSync(markerFile)) {

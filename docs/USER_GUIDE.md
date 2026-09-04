@@ -765,26 +765,39 @@ shipping a compiled program. A single download covering all platforms is not
 proof of the opposite: some extensions carry a compiled helper inside that one
 package, and the helper is the part that can fail.
 
-### The Interface Is English Only
+### The Interface Follows Your Phone's Language
 
-Menus, commands, settings descriptions and dialogs are in English, and no setting
-changes that. A language pack from Open VSX installs and enables normally,
-**Configure Display Language** lists it, and choosing it offers to reload. The
-editor comes back in English.
+Menus, commands, settings descriptions and dialogs come up in the language the
+phone is set to. There is nothing to turn on and nothing to install: change the
+language in Android's Settings, then start VSCodroid.
 
-The translated text is not on the device, and there is nowhere to fetch it from.
-The editor loads its interface strings from two places at startup: an English
-bundle that ships inside the app, and a translated bundle downloaded from an
-address held in the editor's product configuration. The open-source editor source
-carries no such address and VSCodroid adds none, so the download URL is empty and
-only the English bundle ever loads. The editor's server side is started with
-English fixed as well, so an extension's own commands and settings stay English
-too.
+Thirteen languages ship inside the app: Chinese (Simplified and Traditional),
+Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil),
+Russian, Spanish and Turkish. A phone set to Portuguese gets the Brazilian
+translation wherever it is, because that is the only Portuguese the editor has
+been translated into. Any other language leaves the interface in English.
 
-Nothing reports any of this. The language pack shows as installed and enabled;
-the only sign is that the words do not change. If you have already picked a
-language, **Clear Display Language Preference** from the Command Palette puts the
-setting back.
+The translations are the ones the desktop editor uses, built into the app from
+Microsoft's `vscode-loc` packs. A display-language pack from Open VSX is neither
+needed nor used, and installing one adds no language to the list above.
+
+VSCodroid's own screens follow the same list: the setup progress, the toolchain
+picker, and the notifications and dialogs the app puts on screen are translated
+into those thirteen languages too. On Android 13 and later they can be set
+separately from the phone, under Settings, Apps, VSCodroid, Language, and the
+editor follows that choice as well.
+
+Two things stay English whatever the phone is set to:
+
+- Anything an extension contributes: its command titles, its settings
+  descriptions, its messages. An extension carries its own translations, and the
+  bundled ones carry English only, the welcome walkthrough included.
+- The occasional string the translation packs do not cover, roughly one in fifty.
+
+Changing the language while VSCodroid is running takes effect on the spot: the
+editor reloads in the new one. What does not change is anything already written,
+including the terminal's output and the app's own notifications from before the
+change.
 
 ### No Multi-window
 

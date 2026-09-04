@@ -13,6 +13,7 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -160,6 +161,66 @@ class FirstRunEditorDefaultsTest {
         assertTrue(
             updated == null || !updated.contains(""""defaultVisibility": "hidden""""),
             "a user who opened the secondary side bar had the choice taken back:\n$updated",
+        )
+    }
+
+    /**
+     * The two layout defaults, which decide how much of a phone the editor gets.
+     *
+     * Both are written for an install that predates them, so the population that
+     * has been reading three words a line is the population they have to reach,
+     * and both are one-way: presence is the test, so a user who turned either
+     * off keeps it off.
+     *
+     * The phone flag is a parameter rather than a device call, which is what
+     * makes this a plain JVM test. Its one caller passes
+     * `FirstRunSetup.isCompactScreen()`.
+     */
+    @Test
+    fun `an install without the layout defaults gains them`() {
+        val existing = """
+            {
+                "editor.fontSize": 14
+            }
+        """.trimIndent()
+
+        val updated = settingsWithLayoutDefaults(existing, autoHideSideBar = true)
+
+        assertTrue(
+            updated != null && updated.contains(""""workbench.activityBar.compact": true"""),
+            "the activity bar keeps its 48px on a device that installed an earlier " +
+                "release:\n$updated",
+        )
+        assertTrue(
+            updated != null && updated.contains(""""vscodroid.layout.autoHideSideBar": true"""),
+            "the side bar has nothing to read, so it stays open over the file the user " +
+                "just opened:\n$updated",
+        )
+    }
+
+    @Test
+    fun `a tablet is told not to hide its side bar`() {
+        val updated = settingsWithLayoutDefaults("{}", autoHideSideBar = false)
+
+        assertTrue(
+            updated != null && updated.contains(""""vscodroid.layout.autoHideSideBar": false"""),
+            "a tablet was given the phone's answer, so its file tree closes on every file " +
+                "it opens, on a screen with room for both:\n$updated",
+        )
+    }
+
+    @Test
+    fun `a choice the user has already made is left alone`() {
+        val chosen = """
+            {
+                "workbench.activityBar.compact": false,
+                "vscodroid.layout.autoHideSideBar": false
+            }
+        """.trimIndent()
+
+        assertNull(
+            settingsWithLayoutDefaults(chosen, autoHideSideBar = true),
+            "a user who turned both off had the choice taken back on the next launch",
         )
     }
 

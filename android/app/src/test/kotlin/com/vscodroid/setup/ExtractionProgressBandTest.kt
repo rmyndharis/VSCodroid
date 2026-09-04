@@ -96,6 +96,7 @@ class ExtractionProgressBandTest {
         every { context.assets } returns assets
         every { context.getSharedPreferences(any(), any()) } returns prefs
         every { context.getExternalFilesDir(null) } returns File(filesDir, "external")
+        SetupStepStrings.stub(context)
     }
 
     @AfterEach
@@ -129,7 +130,7 @@ class ExtractionProgressBandTest {
      */
     @Test
     fun `the tools step stays inside its own band however much it copies`() {
-        val tools = run().filter { it.first == "Extracting tools..." }
+        val tools = run().filter { it.first == SetupStepStrings.text("setup_step_tools") }
 
         assertTrue(tools.isNotEmpty(), "the tools step reported nothing, so the bar sat still")
         for ((_, percent) in tools) {

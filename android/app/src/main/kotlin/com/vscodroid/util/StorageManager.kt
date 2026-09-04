@@ -320,10 +320,12 @@ object StorageManager {
 
     /**
      * The separator is pinned to [Locale.US] because the unit beside it is not
-     * localized: `KB`, `MB` and `GB` are written here in English and the module
-     * ships a single `res/values`, so letting the number follow the device
-     * locale renders `1,0 GB`, half of one convention and half of another, on
-     * every device whose region uses a comma. It also made the same code print
+     * localized: `KB`, `MB` and `GB` are written here in Kotlin rather than in
+     * `res/`, so they stay English on a device whose screens are translated, and
+     * letting the number follow the device locale renders `1,0 GB`, half of one
+     * convention and half of another, on every device whose region uses a comma.
+     * The module has shipped translated resources since the languages were
+     * added; these two literals are what has not moved with them. It also made the same code print
      * two different strings on two JDKs, because the CLDR data behind a region
      * moves between releases.
      */

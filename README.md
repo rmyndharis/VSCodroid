@@ -119,7 +119,8 @@ If you are **ready to learn**, you should be able to **start today**.
 ## ✨ Features
 
 - **Real VS Code**: Monaco Editor, Workbench UI, Command Palette, and all the features you know.
-- **Extension Support**: Install themes, linters, language support, and more from [Open VSX](https://open-vsx.org). The editor's own interface is English only.
+- **Extension Support**: Install themes, linters, language support, and more from [Open VSX](https://open-vsx.org).
+- **Interface In Your Language**: The editor's interface follows the phone's language, in thirteen of them (Chinese Simplified and Traditional, Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish, Turkish), with no language pack to install. The app's own screens are translated too; text contributed by extensions stays English.
 - **Integrated Terminal**: Full bash terminal with real PTY support (tmux, bash line editing and the Node and Python REPLs all work).
 - **Batteries Included**: Node.js, Python 3, Git, npm, SSH, and essential tools bundled out of the box.
 - **Offline-First**: Code without an internet connection. Everything runs locally on your device.

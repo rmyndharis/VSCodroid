@@ -23,6 +23,7 @@ import android.provider.DocumentsContract
 import android.text.util.Linkify
 import android.view.KeyEvent
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -49,6 +50,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AndroidBridge
@@ -2413,6 +2415,7 @@ class MainActivity : AppCompatActivity() {
         // caller that is neither checks the flag before calling; see onServerReady.
         rendererCrashLoopShown = false
         initBridge(port)
+        applyEditorLanguage()
         // Before the folder chain, because a closed folder is the one state that
         // chain cannot name and would otherwise fall through to the remembered
         // folder, reopening the workspace the user had just closed. [fromUrl] is
@@ -2712,6 +2715,11 @@ class MainActivity : AppCompatActivity() {
                 }
             },
             onRetryServer = { retryServerStart() },
+            // The application's assets, not this activity's, because the client
+            // outlives nothing here but the request it is answering and an
+            // AssetManager tied to an activity is one more thing to get wrong on
+            // recreation. Both point at the same APK.
+            interfaceTranslations = applicationContext.assets,
         )
         wv.webChromeClient = VSCodroidWebChromeClient { allowMultiple ->
             // "*/*" rather than the input's accept types: the Upload command's
@@ -2879,6 +2887,8 @@ class MainActivity : AppCompatActivity() {
         injectMemoryPressureHandler()
         // Fix #2: Inject touch target enlargement CSS for phone-sized screens
         injectTouchTargetCSS()
+        // Keeps the soft keyboard down until the user aims at text
+        injectKeyboardGuard()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
         // Keeps a downloaded blob readable long enough to be saved, and names it
@@ -2978,6 +2988,249 @@ class MainActivity : AppCompatActivity() {
      * the right attribute and the wrong line within a day of being written. Letting the browser hold the condition costs nothing and never goes
      * stale.
      */
+    /**
+     * Tells the page which language to ask for, before it asks.
+     *
+     * The server decides the page's language from the request it serves the
+     * workbench on: a `vscode.nls.locale` cookie if there is one, else the first
+     * `Accept-Language` entry. Left alone, that means the header decides the
+     * page while [EditorLocale] decides the server process, and the two can
+     * disagree: `android:localeConfig` lets someone set this app to Korean on an
+     * English phone, and whether the WebView's header follows the app's locale
+     * or the system's is not something this app controls. The failure is not a
+     * crash, it is a workbench in one language and its extension host in
+     * another, with nothing on screen to explain it.
+     *
+     * So the cookie is written from the same answer the server process is given,
+     * and the header is never consulted. `en` is written rather than nothing
+     * when no bundle fits, because a cookie already on the WebView from an
+     * earlier language would otherwise stand: the server reads any locale
+     * starting with "en" as "serve the English that already ships".
+     *
+     * Called from [loadVSCode] rather than once per WebView, so a language
+     * changed while the app is running is picked up by the next navigation
+     * rather than only by the next process. Measured on an emulator: switching
+     * the per-app language while the editor was open brought it back in the new
+     * language without a restart.
+     *
+     * The address carries no port, and that is not an omission. A cookie is
+     * scoped to a host and a path, never to a port, so this one is sent to the
+     * editor server whatever port it ends up on. Naming the port would also put
+     * a second expression for the workbench's own address in this file, which
+     * `NavigationTokenLoggingTest` refuses: one address means the string that is
+     * logged and the string that is loaded cannot drift apart.
+     */
+    private fun applyEditorLanguage() {
+        val bundle = EditorLocale.forDevice(applicationContext.assets) ?: "en"
+        try {
+            CookieManager.getInstance().apply {
+                setAcceptCookie(true)
+                setCookie("http://127.0.0.1/", "vscode.nls.locale=$bundle; path=/")
+            }
+        } catch (e: Exception) {
+            // The editor is still usable in English, so this is a log line and
+            // not a failed start. Broad on purpose: CookieManager reaches into
+            // the WebView provider, and a device whose provider is being updated
+            // throws from anywhere inside it.
+            Logger.w(tag, "Could not set the editor's language cookie: ${e.message}")
+        }
+    }
+
+    /**
+     * Keeps the soft keyboard down until the user actually aims at text.
+     *
+     * The editor's caret lives in a focusable element the workbench focuses
+     * whenever it hands focus back to the editor: after the Explorer opens or
+     * closes, after a file is opened from the tree, after a view is toggled. On
+     * a desktop that is invisible. Here Chromium answers a focused editing host
+     * by raising the input method, so browsing files covered half the screen
+     * with a keyboard nobody asked for, which is what people report as "every
+     * time I touch something the keyboard appears".
+     *
+     * The element is `div.native-edit-context`, not a textarea: this build of
+     * the workbench uses the EditContext API. That was measured over the
+     * DevTools protocol rather than assumed, after a first version of this
+     * guard aimed at `textarea.inputarea`, matched nothing at all, and still
+     * appeared to work because the keyboard happened not to rise in the one
+     * case that was tried. Monaco also keeps a `textarea.ime-text-area` around,
+     * which is not the focus target; both selectors are kept so that a version
+     * bump away from EditContext does not silently disarm this.
+     *
+     * The mechanism is `inputmode="none"`, which tells Chromium to leave the
+     * keyboard alone for an element that still takes key events, so a hardware
+     * keyboard and the extra key row are unaffected. Three things have to
+     * happen for it to hold:
+     *
+     * - it is set on whatever exists when this runs, and
+     * - on any editing host that takes focus later, which is how opening a file
+     *   is covered: that builds a new editor, and its element does not exist at
+     *   the moment of the tap that opened it. Answering the focus is enough on
+     *   its own, and it is answered by taking the focus away and giving it back
+     *   with the attribute in place, because by the time the event arrives the
+     *   browser has already decided to raise the keyboard. A MutationObserver
+     *   over the document did the same job a moment earlier and was dropped: it
+     *   ran on every line the editor rendered, which on a phone is every scroll.
+     * - it is removed when a touch on text turns out to be a tap rather than a
+     *   scroll, which is decided at pointerup by how far the finger travelled.
+     *   Deciding it at pointerdown is the obvious shape and is wrong: dragging
+     *   inside the editor is how a phone scrolls a file, so it put the keyboard
+     *   up over half the screen on every scroll. The element usually already has
+     *   focus by then, so no focus event follows; hence the same blur and
+     *   refocus, inside the gesture, which is what raises the keyboard.
+     *
+     * Measured on an API 37 emulator at 411dp, `dumpsys input_method` beside a
+     * screenshot each time. Tapping the Explorer icon: was `mInputShown=true`,
+     * now false. Opening a file from the tree: was true, now false. Dragging to
+     * scroll a file: was true, now false. Tapping a word: true, with the caret
+     * on it and the keyboard up.
+     *
+     * What it deliberately does not do is raise the keyboard where the editor
+     * itself would not take focus. A tap inside the editor but off the text
+     * lands on a container Monaco ignores, and the keyboard now follows the
+     * focus rather than the touch: measured, focusin never fires for that tap.
+     * The version before this one raised it anyway, which is a keyboard over a
+     * file with no caret in it.
+     *
+     * The terminal is left alone. It has an editing host of its own, and
+     * opening a terminal is asking to type.
+     */
+    private fun injectKeyboardGuard() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidKeyboardGuard) return;
+                window.__vscodroidKeyboardGuard = true;
+                // What counts as aiming at text: anywhere inside an editor, and
+                // any real input, which covers the Command Palette, the find
+                // widget and every extension form.
+                //
+                // The whole editor rather than its lines, because everything
+                // inside one belongs to the act of typing in it: the margin
+                // (tapping a line number moves the caret), the empty space under
+                // the last line, and the widgets the editor renders inside
+                // itself. That last one is the reason it is not narrower. The
+                // suggest list is a child of `.monaco-editor`, so a narrower
+                // selector reads "tap a completion" as "not text" and takes the
+                // keyboard away in the middle of typing, which is worse than the
+                // problem this guard exists to solve.
+                //
+                // The trade, stated rather than discovered later: the scrollbar,
+                // sticky scroll, CodeLens, the minimap for anyone who turns it
+                // on, and the find widget's buttons are all inside an editor
+                // too, so touching them raises the keyboard. That is what every
+                // build before this guard did for those targets and for every
+                // other one, so it is where this change leaves them rather than
+                // something it introduces; the alternative is a selector that
+                // has to name each of them and be corrected on every VS Code
+                // bump that renames one.
+                var TEXT = '.monaco-editor, textarea, input, [contenteditable="true"], .native-edit-context';
+                var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea';
+                var aimedAtText = false;
+                // Set while this code is taking focus away and giving it back,
+                // so the focus it causes is not treated as one to answer.
+                var reapplying = false;
+                // Where a touch on text went down, while it is still undecided
+                // whether it is a tap or the beginning of a scroll. Null at any
+                // other moment.
+                var pendingTap = null;
+                // How far a finger may travel and still be a tap, in CSS pixels.
+                // Chromium's own touch slop is 8; this is looser because the
+                // target is a line of code rather than a button.
+                var TAP_SLOP = 12;
+                function apply(element) {
+                    if (aimedAtText) element.removeAttribute('inputmode');
+                    else if (element.getAttribute('inputmode') !== 'none') element.setAttribute('inputmode', 'none');
+                }
+                function applyAll() {
+                    document.querySelectorAll(EDITING_HOST).forEach(apply);
+                }
+                // Lets the keyboard up for a touch that has turned out to be a
+                // tap on text.
+                //
+                // The element usually already has focus by then, so no focus
+                // event follows to act on; hence the blur and refocus, which
+                // happens inside the gesture and is what raises the keyboard.
+                // Only when the guard was actually holding it down: a tap on
+                // text while the keyboard is already up must not reach the focus
+                // at all, because blurring an element mid-composition drops the
+                // text being composed, and composition is an ordinary path now
+                // that the editor ships in Japanese, Korean and both Chinese
+                // scripts.
+                function letTheKeyboardUp() {
+                    aimedAtText = true;
+                    var focused = document.activeElement;
+                    var wasHeldDown = !!(focused && focused.getAttribute &&
+                        focused.getAttribute('inputmode') === 'none');
+                    applyAll();
+                    if (wasHeldDown && focused.matches && focused.matches(EDITING_HOST)) {
+                        reapplying = true;
+                        focused.blur();
+                        focused.focus();
+                        reapplying = false;
+                    }
+                }
+                document.addEventListener('pointerdown', function(e) {
+                    var target = e.target;
+                    if (target && target.closest && target.closest(TEXT)) {
+                        // Undecided, and that is the point. Dragging inside the
+                        // editor is how a phone scrolls a file, and it goes down
+                        // on the same text a tap does, so raising the keyboard
+                        // here puts it over half the screen on every scroll:
+                        // the complaint this guard exists for, reached by
+                        // another route. Measured on a file opened with the
+                        // keyboard down, before this branch was written.
+                        pendingTap = { x: e.clientX, y: e.clientY };
+                        return;
+                    }
+                    pendingTap = null;
+                    aimedAtText = false;
+                    applyAll();
+                }, true);
+                document.addEventListener('pointerup', function(e) {
+                    if (!pendingTap) return;
+                    var travelled = Math.abs(e.clientX - pendingTap.x) +
+                        Math.abs(e.clientY - pendingTap.y);
+                    pendingTap = null;
+                    // A scroll leaves the keyboard where it was, which is down.
+                    if (travelled > TAP_SLOP) return;
+                    letTheKeyboardUp();
+                }, true);
+                document.addEventListener('pointercancel', function() {
+                    // The gesture became the system's: a swipe from an edge, a
+                    // pull down, a second finger. Nothing was decided, so
+                    // nothing changes.
+                    pendingTap = null;
+                }, true);
+                // Focus is answered directly rather than watched for, because an
+                // editing host built for a file that is being opened is focused
+                // in the same breath as it is inserted: by the time anything
+                // observing the document is told, the browser has already
+                // decided to raise the keyboard. Blurring and refocusing puts
+                // the attribute in place before focus is granted rather than a
+                // moment after.
+                document.addEventListener('focusin', function(e) {
+                    var target = e.target;
+                    if (reapplying) return;
+                    // A touch on text is still in the air. Whether the keyboard
+                    // may come up is the pointerup handler's to answer, and
+                    // answering it here would raise it for a scroll.
+                    if (pendingTap) return;
+                    if (!target || !target.matches || !target.matches(EDITING_HOST)) return;
+                    if (aimedAtText) { target.removeAttribute('inputmode'); return; }
+                    if (target.getAttribute('inputmode') === 'none') return;
+                    target.setAttribute('inputmode', 'none');
+                    reapplying = true;
+                    target.blur();
+                    target.focus();
+                    reapplying = false;
+                }, true);
+                applyAll();
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
     private fun injectTouchTargetCSS() {
         webView?.evaluateJavascript(
             """

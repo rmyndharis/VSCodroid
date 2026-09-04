@@ -10,6 +10,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 |----------|---------|--------|
 | Code - OSS (VS Code Server + Web) | MIT; `LICENSE.txt` and `ThirdPartyNotices.txt` ship inside the server tree | Built from https://github.com/microsoft/vscode at the commit pinned in `VSCODE_COMMIT`, with the patches in `patches/` and the branding in `branding/` applied before the build |
 | GitHub Copilot Chat extension | See the license files inside `extensions/copilot/` in the server tree; its `@github/copilot` SDK dependency carries GitHub, Inc.'s own `LICENSE.md` | Produced by the same Code - OSS build |
+| VS Code Language Packs (vscode-loc) | MIT; the generated bundles carry no notice of their own, so the copyright and permission text is in `docs/LEGAL_NOTICES.md` | https://github.com/microsoft/vscode-loc at the commit pinned in `VSCODE_LOC_COMMIT`; `scripts/build-nls-bundles.py` merges its translations into the editor's message array and writes `assets/nls/<locale>.json` |
 | Node.js | MIT | Termux build of `nodejs-lts`, https://github.com/nodejs/node |
 | npm | Artistic License 2.0 | https://github.com/npm/cli |
 | Python | PSF License | Termux build, https://www.python.org |

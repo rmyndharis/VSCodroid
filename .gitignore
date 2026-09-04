@@ -52,6 +52,11 @@ yarn-error.log*
 # extension is silently absent from the APK with nothing to explain why.
 !/android/app/src/main/assets/extensions/vscodroid.vscodroid-*/
 /android/app/src/main/assets/usr/
+# Translated interface bundles, built from microsoft/vscode-loc by
+# scripts/build-nls-bundles.py against the packaged server tree. Generated for
+# the same reason that tree is not committed: 16 MiB that a script reproduces
+# from a pinned commit.
+/android/app/src/main/assets/nls/
 
 # ===== Toolchain Asset Packs (populated by scripts/download-*.sh) =====
 /android/toolchain_ruby/src/main/assets/usr/

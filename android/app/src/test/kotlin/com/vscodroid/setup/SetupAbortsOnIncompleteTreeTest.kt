@@ -83,6 +83,9 @@ class SetupAbortsOnIncompleteTreeTest {
         every { context.assets } returns assets
         every { context.getSharedPreferences(any(), any()) } returns prefs
         every { context.getExternalFilesDir(null) } returns File(filesDir, "external")
+        // The step names come from resources now, and a mocked context answers
+        // "" without this, which is exactly what this test asserts against.
+        SetupStepStrings.stub(context)
     }
 
     @AfterEach

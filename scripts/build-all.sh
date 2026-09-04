@@ -25,33 +25,41 @@ echo "========================================="
 
 step() { echo; echo "[$1] $2"; }
 
-step 1/10 "Checking prerequisites..."
+step 1/11 "Checking prerequisites..."
 "$SCRIPT_DIR/setup.sh"
 
-step 2/10 "Fetching the Code - OSS server tree..."
+step 2/11 "Fetching the Code - OSS server tree..."
 "$SCRIPT_DIR/fetch-vscode-oss.sh"
 
 # fetch-vscode-oss.sh leaves the tree in server/; the APK reads it from assets/.
 # Without this copy the build succeeds and ships no server at all.
-step 3/10 "Installing the server tree into assets..."
+step 3/11 "Installing the server tree into assets..."
 "$SCRIPT_DIR/package-assets.sh"
 
-step 4/10 "Downloading Termux tools..."
+# Reads out/nls.keys.json from the tree the step above installed, so it cannot
+# run before it, and Gradle sizes assets/ at configuration time, so it cannot run
+# after the build. Not a shell script, which is why check-build-steps.py does not
+# see it: that gate matches on .sh, so this line is the only thing keeping a local
+# build from producing an APK whose editor is English in every language.
+step 4/11 "Building the translated interface bundles..."
+python3 "$SCRIPT_DIR/build-nls-bundles.py"
+
+step 5/11 "Downloading Termux tools..."
 "$SCRIPT_DIR/download-termux-tools.sh"
 
-step 5/10 "Downloading npm..."
+step 6/11 "Downloading npm..."
 "$SCRIPT_DIR/download-npm.sh"
 
-step 6/10 "Downloading Python..."
+step 7/11 "Downloading Python..."
 "$SCRIPT_DIR/download-python.sh"
 
-step 7/10 "Downloading extensions..."
+step 8/11 "Downloading extensions..."
 "$SCRIPT_DIR/download-extensions.sh"
 
-step 8/10 "Downloading the musl loader..."
+step 9/11 "Downloading the musl loader..."
 "$SCRIPT_DIR/download-musl-loader.sh"
 
-step 9/10 "Building native addons and the compatibility shim..."
+step 10/11 "Building native addons and the compatibility shim..."
 "$SCRIPT_DIR/download-node.sh"
 "$SCRIPT_DIR/build-native-addons.sh"
 "$SCRIPT_DIR/build-glibc-shim.sh" \
@@ -65,7 +73,7 @@ step 9/10 "Building native addons and the compatibility shim..."
 # The same, and it can sit here for the same reason: it writes only into jniLibs.
 "$SCRIPT_DIR/build-claude-shim.sh"
 
-step 10/10 "Building the APK..."
+step 11/11 "Building the APK..."
 cd "$ROOT_DIR/android"
 if [ ! -f gradlew ]; then
     echo "  ERROR: Gradle wrapper not found. Run: cd android && gradle wrapper" >&2

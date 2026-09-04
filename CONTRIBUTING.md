@@ -75,38 +75,44 @@ This is the order CI uses, and the order matters: each step below notes why.
 #    release.yml perform the same copy inline rather than calling this script.
 ./scripts/package-assets.sh
 
-# 3. Termux tools (bash, git, tmux, make, openssh) and the shared libraries the
+# 3. The editor's translated interface strings, built from the vscode-loc commit
+#    pinned in VSCODE_LOC_COMMIT against the message order of the tree copied
+#    above. Skip it and the app builds and runs with an English interface in
+#    every language, with nothing failing to say so.
+python3 scripts/build-nls-bundles.py
+
+# 4. Termux tools (bash, git, tmux, make, openssh) and the shared libraries the
 #    bundled binaries link against. Wipes and repopulates assets/usr/lib.
 ./scripts/download-termux-tools.sh
 
-# 4. npm
+# 5. npm
 ./scripts/download-npm.sh
 
-# 5. Python 3
+# 6. Python 3
 ./scripts/download-python.sh
 
-# 6. Pre-bundled extensions
+# 7. Pre-bundled extensions
 ./scripts/download-extensions.sh
 
-# 7. musl's loader. Without it the Claude Code CLI cannot start: its binary is
+# 8. musl's loader. Without it the Claude Code CLI cannot start: its binary is
 #    musl-linked and Android has no loader for it.
 ./scripts/download-musl-loader.sh
 
-# 8. The Node runtime. After step 3, which places the libraries it links against
+# 9. The Node runtime. After step 4, which places the libraries it links against
 ./scripts/download-node.sh
 
-# 9. Bionic native addons (requires NDK). After step 8, so the build can check
+# 10. Bionic native addons (requires NDK). After step 9, so the build can check
 #    each addon against the runtime it will load in.
 ./scripts/build-native-addons.sh
 
-# 10. The glibc compatibility shim. Last, because step 3 wipes assets/usr/lib
+# 11. The glibc compatibility shim. Last, because step 4 wipes assets/usr/lib
 #     and the stubs it generates live there. Without it the prebuilt native
 #     addons fail to load at runtime.
 ./scripts/build-glibc-shim.sh \
     --scan android/app/src/main/assets/vscode-reh \
     --scan android/app/src/main/assets/extensions
 
-# 11. (Optional) On-demand toolchains
+# 12. (Optional) On-demand toolchains
 ./scripts/download-ruby.sh
 ./scripts/download-java.sh
 ```

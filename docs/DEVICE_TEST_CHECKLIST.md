@@ -58,6 +58,7 @@
 | KB-19 | Escape on a hardware keyboard | FIRST establish the precondition, because without it this row cannot fail on any build: with the keyboard connected, run `adb shell dumpsys input`, find its `KeyCharacterMapFile`, and confirm that file contains `ESCAPE` with `base: fallback BACK`. Record the keyboard model and the map. Then open a file in the editor, click in it so the editor and not a terminal has focus, and press Esc once | The app stays in the foreground. Only hardware answers this row: an injected Escape carries `Virtual.kcm` and the emulator's own keyboard resolves to `qwerty2.kcm`, and neither declares the fallback. The editor is the target on purpose, and a terminal is not: xterm consumes the Escape keydown and writes `0x1b`, so a terminal never leaves the key unhandled and the route this row exists to test is never entered. Only the keyup leaks with the editor focused, which is enough, because the synthesised press carries the same action | | |
 | KB-20 | Escape still reaches the page | Same keyboard and the same editor file, then a terminal: press Esc in the editor with a suggest widget open, and press Esc in a terminal running `cat -v` | The widget closes, and `^[` appears under `cat -v`. This is the control for KB-19: refusing to hand Escape back to Android must not take it from the page, and the two rows fail in opposite directions | | |
 | KB-16 | Narrow phone paging | On a device or emulator whose portrait width is 360dp or less, bring the keyboard up and swipe through every page. `adb shell wm size` and `adb shell wm density` give the width in dp: pixels times 160, divided by density | There are more pages than the five a 411dp phone shows: six at 360dp, seven at 320dp. Every key still fills a comfortable target, no label is clipped, and the keys appear in the same order, only broken across more pages. The dots say how many there are | | |
+| KB-21 | Keyboard only for text | Tap the Explorer icon, open a file from the tree, then tap a line of text | Stays down for the first two, comes up on the third with the caret where the tap landed | | |
 
 ## 4. Screen & Orientation
 
@@ -69,6 +70,8 @@
 | SC-4 | Split-screen | Enter split-screen with another app | VSCodroid resizes correctly | | |
 | SC-5 | Display cutout | Test on device with notch/punch-hole | Safe area padding applied, no content clipped | | |
 | SC-6 | Foldable (if available) | Fold/unfold device | UI adapts to new dimensions | | |
+| SC-7 | Side bar auto-close on a phone | Portrait, open the Explorer, tap a file | Side bar closes on its own, editor takes the full width | | |
+| SC-8 | Side bar stays open on a tablet | Same steps on a device wider than 600dp | Side bar stays where it was; `vscodroid.layout.autoHideSideBar` is false | | |
 
 ## 5. Editor Operations
 
@@ -226,14 +229,23 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 
 ---
 
+## 13. Display Language
+
+| ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
+|----|----------|-------|-----------------|-----------|-------|
+| DL-1 | Editor follows the phone | Set the phone to one of the thirteen languages, start the app | Menus, the Command Palette and settings descriptions are in that language | | |
+| DL-2 | App screens follow it too | Same run, watch setup and the toolchain picker | Progress steps, the picker and its buttons are in that language | | |
+| DL-3 | An unsupported language | Set the phone to one with no bundle, for example Vietnamese | Interface is English throughout, nothing half translated and no error | | |
+| DL-4 | Per-app language | Android 13+, Settings, Apps, VSCodroid, Language, pick one | Both the app screens and the editor come back in it | | |
+
 ## Summary
 
 | Category | Total | Pass | Fail | Skip |
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 20 | | | |
-| Screen & Orientation | 6 | | | |
+| Keyboard Input | 21 | | | |
+| Screen & Orientation | 8 | | | |
 | Editor Operations | 12 | | | |
 | Extensions | 6 | | | |
 | Background/Foreground | 8 | | | |
@@ -242,7 +254,8 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 11 | | | |
-| **Total** | **103** | | | |
+| Display Language | 4 | | | |
+| **Total** | **110** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

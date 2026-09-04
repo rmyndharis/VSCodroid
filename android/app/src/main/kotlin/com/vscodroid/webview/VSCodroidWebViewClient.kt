@@ -2,6 +2,7 @@ package com.vscodroid.webview
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
@@ -19,6 +20,7 @@ import android.webkit.WebViewClient
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.isExtensionCallback
+import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import com.vscodroid.workspaceDirectoryInForce
@@ -27,6 +29,7 @@ import java.io.FilterInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.SequenceInputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URISyntaxException
@@ -745,6 +748,16 @@ class VSCodroidWebViewClient(
      * gate in [onReceivedError]. What the user saw was an empty tab.
      */
     private val onTlsFailure: (TlsFailure) -> Unit = { },
+    /**
+     * Where the translated interface bundles are read from, or null to leave
+     * the interface in English.
+     *
+     * An `AssetManager` and not a `Context`, for the reason the callbacks above
+     * are functions: this class has no context of its own and nothing here
+     * needs one. The bundles are read straight out of the APK, so there is no
+     * path to hand over instead.
+     */
+    private val interfaceTranslations: AssetManager? = null,
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -969,8 +982,65 @@ class VSCodroidWebViewClient(
      * Local path format: /{quality}-{commit}/static/{path}
      */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        // Before the CDN arm, because this one answers an address on the app's
+        // own origin and that arm refuses everything which is not
+        // *.vscode-cdn.net. See [nlsBundleRequested] for the shape.
+        if (isLocalhost(request.url)) {
+            val requested = nlsBundleRequested(request.url) ?: return null
+            return interfaceBundleResponse(requested)
+        }
         return interceptCdnRequest(
             request, allowedPort, connectionToken(), resourceRoots, sensitiveLocations, openFolder
+        )
+    }
+
+    /**
+     * Answers the page's request for a translated interface bundle.
+     *
+     * A language this build does not carry is a 404 and not an error: the page
+     * has already loaded the English bundle by the time it asks for this one
+     * (`workbench.html` loads the fallback in the script tag above), so a
+     * missing translation leaves the interface in English, which is the outcome
+     * every build had before the bundles existed.
+     */
+    private fun interfaceBundleResponse(requested: String): WebResourceResponse {
+        val assets = interfaceTranslations ?: return notFound("no interface bundles in this build")
+        val bundle = EditorLocale.resolveTag(requested, EditorLocale.available(assets))
+            ?: return notFound("no interface bundle for $requested")
+        val messages = EditorLocale.open(assets, bundle)
+            ?: return notFound("interface bundle $bundle could not be opened")
+
+        // The asset is the JSON array on its own; the page needs it as a script
+        // that assigns two globals. Wrapping here rather than shipping the
+        // script form keeps one copy of 1 MiB per language in the APK.
+        //
+        // The second global is not decoration. `_VSCODE_NLS_MESSAGES` is what
+        // the interface reads, but `_VSCODE_NLS_LANGUAGE` is what it answers
+        // when asked which language it is in: the workbench reads it for
+        // `vscode.env.language`, for the date and number formats it hands
+        // extensions, and it copies both into every worker it starts. Upstream
+        // sets them together in one bundle; the English fallback that ships in
+        // the tree sets neither. Serving only the messages left every string
+        // translated and every extension told the editor was in English.
+        val body = SequenceInputStream(
+            java.util.Collections.enumeration(
+                listOf(
+                    ByteArrayInputStream(NLS_ASSIGNMENT_PREFIX.toByteArray()),
+                    messages,
+                    ByteArrayInputStream(";globalThis._VSCODE_NLS_LANGUAGE=\"$bundle\";".toByteArray()),
+                )
+            )
+        )
+        return WebResourceResponse(
+            "text/javascript", "utf-8", 200, "OK",
+            // Deliberately not cached, unlike the versioned assets beside it.
+            // The address carries the editor's commit and version, and the
+            // bundles are rebuilt from whatever VSCODE_LOC_COMMIT pins, so two
+            // builds can serve different strings at one URL and an immutable
+            // year would pin a user to the older ones for as long as the WebView
+            // kept them. Answering costs one read out of the APK.
+            mapOf("Cache-Control" to "no-store"),
+            body
         )
     }
 
@@ -1172,6 +1242,42 @@ class VSCodroidWebViewClient(
          * spellings of the same authority is how the two would drift apart.
          */
         private const val RESOURCE_AUTHORITY = "vscode-resource.vscode-cdn.net"
+
+        /**
+         * The path prefix `assets/server.js` sets `nlsCoreBaseUrl` to.
+         *
+         * The server appends `<commit>/<version>/<locale>/nls.messages.js` to
+         * whatever that key holds and puts the result in a script tag, so this
+         * is one half of a contract with the other file; changing it there and
+         * not here leaves the page asking for an address nothing answers, and
+         * the interface silently stays English.
+         *
+         * A path on the app's own origin rather than a hostname, so a build
+         * that loses this interception fails by 404 against the local server
+         * rather than by resolving a name and opening a connection.
+         */
+        internal const val NLS_PATH_PREFIX = "_nls"
+
+        private const val NLS_BUNDLE_FILE = "nls.messages.js"
+
+        private const val NLS_ASSIGNMENT_PREFIX = "globalThis._VSCODE_NLS_MESSAGES="
+
+        /**
+         * The locale in an interface-bundle request, or null if this is not one.
+         *
+         * Shape: `/_nls/<commit>/<version>/<locale>/nls.messages.js`. Only the
+         * ends are read. The two middle segments are the build's commit and
+         * version, which the server puts there for cache separation and which
+         * this app has no reason to check: they come from the same
+         * `product.json` it just served the page from.
+         */
+        internal fun nlsBundleRequested(uri: Uri): String? {
+            val segments = uri.pathSegments ?: return null
+            if (segments.size < 3) return null
+            if (segments.first() != NLS_PATH_PREFIX) return null
+            if (segments.last() != NLS_BUNDLE_FILE) return null
+            return segments[segments.size - 2].takeIf { it.isNotEmpty() }
+        }
 
         /**
          * Register a ServiceWorkerClient to intercept service worker script fetches.

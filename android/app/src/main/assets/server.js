@@ -28,8 +28,9 @@ const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
 const CHILD_KILL_AFTER_SIGTERM_MS = 700;
 
 // Product configuration override. Applied with a shallow Object.assign, so each
-// nested object here replaces the built one whole. Nothing below depends on the
-// port; the comment here said it did, and the branding overlay repeated it.
+// nested object here replaces the built one whole. One key below, nlsCoreBaseUrl,
+// is built from the port, and why it has to be is written beside it; nothing else
+// here depends on it, and the comment used to say that of the whole object.
 const productOverrides = {
     nameShort: 'VSCodroid',
     nameLong: 'VSCodroid',
@@ -45,7 +46,29 @@ const productOverrides = {
     },
     linkProtectionTrustedDomains: ['https://open-vsx.org'],
     telemetryOptIn: false,
-    enableTelemetry: false
+    enableTelemetry: false,
+    // Where the page is told to fetch its translated interface strings.
+    //
+    // `out/server-main.js` appends `<commit>/<version>/<locale>/nls.messages.js`
+    // to this and puts the result in a script tag, and hands the page an empty
+    // src when the key is missing, which is why the interface used to be English
+    // whatever language the device was in. The address is a path on the app's own
+    // origin, and nothing serves it over HTTP: the Android WebView answers it
+    // from the bundles in the APK. See VSCodroidWebViewClient.NLS_PATH_PREFIX,
+    // which is the other half of this contract.
+    //
+    // Only ever requested when the locale does not start with "en", so an
+    // English device never asks for it at all.
+    //
+    // A whole address rather than the bare path, because the same value is put
+    // into the page's `script-src` Content-Security-Policy by the same function
+    // that builds the script tag. A path is not a valid CSP source: the browser
+    // drops that entry, says so in the console on every load, and the bundle
+    // then loads only because 'self' happens to be in the list beside it. It is
+    // this app's own origin either way, so naming it in full costs nothing and
+    // stops the interface from silently falling back to English the day that
+    // list gets stricter.
+    nlsCoreBaseUrl: `http://${HOST}:${PORT}/_nls/`
     // CDN URLs (webEndpointUrl, webviewContentExternalBaseUrlTemplate) are hardcoded
     // in workbench.js and cannot be overridden via product.json. The Android WebView
     // intercepts *.vscode-cdn.net requests and redirects them to localhost instead.
@@ -82,6 +105,21 @@ if (!fs.existsSync(rehEntryPoint)) {
     log('info', `Starting VS Code Server on http://${HOST}:${PORT}`);
 
     // Inject product overrides
+
+    // English, and not because the device might not be: this variable cannot
+    // decide the language whatever is written into it. `out/server-main.js`
+    // resolves its own configuration with `userLocale` and `osLocale` hardcoded
+    // to "en" and then assigns the result over this variable, before anything
+    // reads it, so the value here reaches nothing. The extension host is not a
+    // way round it either: the server builds that child's environment from the
+    // language the CLIENT asks for, resolved through the language-pack
+    // machinery, and no language pack is installed here.
+    //
+    // What the device's language does reach is the page, which gets its strings
+    // over HTTP (see nlsCoreBaseUrl above), so the interface is translated and
+    // the strings this process logs are not. Removing this line is not the
+    // cleanup it looks like: it predates the translations and the shape it
+    // writes is what the loader expects if upstream ever stops overwriting it.
     process.env.VSCODE_NLS_CONFIG = JSON.stringify({ locale: 'en', availableLanguages: {} });
 
     // Override product.json.
