@@ -11,8 +11,9 @@ replaced, position for position.
 
 Nothing here rebuilds the server. It reads the tree `package-assets.sh` has
 already produced and writes one JSON array per language into
-`android/app/src/main/assets/nls/`, which is where `VSCodroidWebViewClient`
-serves the web side from and where `ProcessManager` copies the node side from.
+`android/app/src/main/assets/nls/`, which `VSCodroidWebViewClient` serves the
+page from. Nothing else reads them: the server process cannot be translated from
+this side, and `assets/server.js` records why.
 
 The pinned source commit lives in `VSCODE_LOC_COMMIT`, for the same reason
 `VSCODE_COMMIT` exists: vscode-loc is updated most days, and a build that
@@ -80,14 +81,18 @@ MIN_COVERAGE = 0.45
 # array are upstream's own and already ship as they are.
 BRANDED = "VSCodroid"
 
-# Matched with the spaces loose, because they are not always spaces. vscode-loc
-# writes the product name with U+00A0 between the words in several languages, so
-# a plain "Visual Studio Code" replacement left the trademark standing in
-# exactly the strings the branding patch took it out of: French "Bienvenue dans
-# Visual\u00a0Studio\u00a0Code", German "Erste Schritte mit VS\u00a0Code für das
-# Web", Spanish "Recargue Visual\u00a0Studio Code". Longest alternative first,
-# so the full name is not left half replaced by the short one.
-TRADEMARK = re.compile(r"Visual[\s\u00a0]+Studio[\s\u00a0]+Code|VS[\s\u00a0]+Code")
+# Matched with the spaces loose and the last word optional, because neither is
+# reliable. vscode-loc writes the product name with U+00A0 between the words in
+# several languages, and some translations drop "Code" entirely: Polish renders
+# the English "Welcome to VSCodroid" as "Program Visual Studio, Zapraszamy!".
+# A pattern anchored on the full name left the mark standing in exactly the
+# strings the branding patch took it out of. Longest alternative first, so the
+# full name is not left half replaced by the short one.
+TRADEMARK = re.compile(
+    r"Visual[\s\u00a0]+Studio([\s\u00a0]+Code)?"
+    r"|VS[\s\u00a0]*Code"
+    r"|VSCode"
+)
 
 
 def fetch(url: str) -> bytes:
@@ -148,6 +153,17 @@ if __name__ == "__main__":
 
     messages, keys = load_source_order()
     DEST.mkdir(parents=True, exist_ok=True)
+
+    # A language dropped from LOCALES has to leave the directory as well as the
+    # list. CI restores this directory from a cache keyed on this script, and a
+    # partial-key restore can hand a build the previous run's tree, so a bundle
+    # nobody generates any more would go on shipping and go on being offered by
+    # LocaleCoverageTest's counterpart in res/. Removing first also means a run
+    # that fails part way leaves no half-old, half-new set behind.
+    expected = {f"{locale}.json" for locale in LOCALES}
+    for stale in sorted(p for p in DEST.glob("*.json") if p.name not in expected):
+        stale.unlink()
+        print(f"  removed {stale.name}, no longer in LOCALES")
     print(f"vscode-loc @ {commit[:12]}, {len(messages)} messages per bundle")
 
     written = 0
@@ -162,6 +178,20 @@ if __name__ == "__main__":
                 f"{MIN_COVERAGE:.0%} floor. The key layout has moved; check that "
                 "VSCODE_LOC_COMMIT matches VSCODE_VERSION before raising the floor."
             )
+        leaked = [
+            index for index, english in enumerate(messages)
+            if BRANDED in english and TRADEMARK.search(bundle[index])
+        ]
+        if leaked:
+            sample = leaked[0]
+            sys.exit(
+                f"{locale}: {len(leaked)} of the branded strings still carry Microsoft's "
+                f"product name after substitution, for example index {sample}: "
+                f"{bundle[sample]!r}. These are the strings patch 0011 rebrands, so shipping "
+                "them puts the trademark back into the interface. Widen TRADEMARK to cover "
+                "the form this language uses."
+            )
+
         target = DEST / f"{locale}.json"
         target.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
         size = target.stat().st_size / 1024 / 1024

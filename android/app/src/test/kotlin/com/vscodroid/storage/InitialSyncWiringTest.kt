@@ -232,6 +232,39 @@ class InitialSyncWiringTest {
         )
     }
 
+    /**
+     * A repair the app holds back says so too.
+     *
+     * The sibling of `a write-back that gives up announces the file`, for the other
+     * exit that ends with the mirror holding the only complete copy. Both were silent
+     * apart from a log line, and silence here is the shape a user reads as "saved":
+     * the editor shows the edit, the device folder does not have it, and nothing on
+     * screen connects the two. The seam is throttled per path here and per interval in
+     * SafStorageManager, so the notice cannot become a wall of them.
+     */
+    @Test
+    fun `a repair that is held back announces the file`(
+        @TempDir files: File,
+    ) {
+        val local = mirrorHolding("notes.txt", "the whole file, saved", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "typed on the phone instead", 1_700_000_090_000)
+        journalHolding(local.absolutePath, files)
+        every { resolver.openInputStream(any()) } throws IOException("the provider refused")
+
+        val announced = mutableListOf<String>()
+        runBlocking {
+            SafSyncEngine(context)
+                .apply { onWriteBackFailed = { announced.add(it.name) } }
+                .initialSync(mockk<Uri>(relaxed = true), mirror) { _, _ -> }
+        }
+
+        assertEquals(
+            listOf("notes.txt"), announced,
+            "the repair was held back and told nobody, so the mirror keeps a copy the " +
+                "user cannot see and an uninstall would take with it",
+        )
+    }
+
     @Test
     fun `an unsaved local edit survives reopening the folder`() {
         // Newer AND a different length: the pairing the size-first rule overwrote.

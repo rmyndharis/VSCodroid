@@ -40,6 +40,9 @@ class LocaleCoverageTest {
          *
          * Keyed by the bundle name, which is the one this app resolves to.
          */
+        /** `fr`, `pt-rBR`: a language, optionally a region. Nothing else. */
+        val LANGUAGE_QUALIFIER = Regex("""^[a-z]{2,3}(-r[A-Z]{2})?$""")
+
         val SPELLINGS = mapOf(
             "pt-br" to Pair("pt-rBR", "pt-BR"),
             "zh-hans" to Pair("zh-rCN", "zh-Hans"),
@@ -62,10 +65,21 @@ class LocaleCoverageTest {
         return Regex(""""([a-z-]+)"""").findAll(list).map { it.groupValues[1] }.toSet()
     }
 
+    /**
+     * The language qualifiers under `res/`, and only those.
+     *
+     * `values-` prefixes every alternate resource directory, not only the
+     * translated ones: `values-night`, `values-land`, `values-sw600dp` and
+     * `values-v34` are all ordinary Android qualifiers this app may grow at any
+     * time, and comparing one of those against the list of shipped languages
+     * would fail this test for a change that has nothing to do with language.
+     * Hence the shape test rather than the prefix.
+     */
     private fun resourceDirectories(): Set<String> =
         File(RES).listFiles().orEmpty()
             .filter { it.isDirectory && it.name.startsWith("values-") }
             .map { it.name.removePrefix("values-") }
+            .filter { LANGUAGE_QUALIFIER.matches(it) }
             .toSet()
 
     private fun pickerLocales(): Set<String> =

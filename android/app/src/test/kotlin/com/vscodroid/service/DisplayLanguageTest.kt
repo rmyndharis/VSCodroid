@@ -14,26 +14,29 @@ import org.junit.jupiter.api.Test
  *
  * This file used to pin the opposite. The editor was English whatever the device
  * was set to, because the workbench builds its translated bundle's URL from
- * `nlsCoreBaseUrl` in `product.json` and nothing here supplied one, and because
- * `assets/server.js` fixed `VSCODE_NLS_CONFIG` to English at every start. Both
- * are gone: `server.js` now names an address on the app's own origin, and takes
- * the server side's language from the environment.
+ * `nlsCoreBaseUrl` in `product.json` and nothing supplied one. `server.js` now
+ * names an address on the app's own origin, and the WebView answers it.
  *
- * Neither half fails loudly. A prefix that stops matching, or an environment
- * variable renamed on one side, brings the editor up in English with nothing on
- * screen to notice, which is precisely what every build before this one did, so
- * there is no user report to expect either. Hence three cases over two contracts
- * that no compiler checks:
+ * Nothing here fails loudly. A prefix that stops matching brings the editor up
+ * in English with nothing on screen to notice, which is precisely what every
+ * build before this one did, so there is no user report to expect either. Hence
+ * two contracts that no compiler checks, and a third case for what a user is
+ * told:
  *
  *  - the path in `nlsCoreBaseUrl` against [VSCodroidWebViewClient.NLS_PATH_PREFIX],
  *    which is what decides whether the page's request is answered at all: nothing
  *    serves that address over HTTP, `shouldInterceptRequest` does, and only for
  *    paths whose first segment is that constant;
- *  - `VSCODROID_NLS_LOCALE` and `VSCODROID_NLS_MESSAGES`, read in `server.js` and
- *    written in `Environment.getEnvironment`, which is how the server process and
- *    the extension host learn the language the page was already served in.
+ *  - the two globals the served bundle assigns. The strings alone leave the page
+ *    translated and every extension told the editor is English.
  *
- * The fourth case is the user guide, which described the limit while it was real
+ * What is deliberately NOT pinned here is the server process, because there is
+ * nothing to pin: the built `out/server-main.js` resolves its own configuration
+ * with the locale hardcoded and assigns it over `VSCODE_NLS_CONFIG` before
+ * reading it, so no environment this app writes can reach it. `assets/server.js`
+ * records that beside the line it explains.
+ *
+ * The last case is the user guide, which described the limit while it was real
  * and would be a lie now. It is the reverse direction of the same pin: restoring
  * the entry while the mechanism stands fails as loudly as losing the mechanism.
  *
@@ -50,6 +53,7 @@ class DisplayLanguageTest {
     private companion object {
         const val SERVER_JS = "src/main/assets/server.js"
         const val WEBVIEW_CLIENT = "src/main/kotlin/com/vscodroid/webview/VSCodroidWebViewClient.kt"
+        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivity.kt"
         const val USER_GUIDE = "../../docs/USER_GUIDE.md"
     }
 
@@ -133,6 +137,40 @@ class DisplayLanguageTest {
             "the interface bundle no longer assigns _VSCODE_NLS_LANGUAGE. Every string is " +
                 "still translated, so nothing looks wrong, but vscode.env.language answers " +
                 "\"en\" to every extension and the workbench formats dates as English.",
+        )
+    }
+
+    /**
+     * That the two wires this feature hangs on are still connected.
+     *
+     * Both are call sites rather than code, and both fail silently. The client
+     * takes its bundles through a constructor parameter that defaults to null,
+     * so dropping the argument compiles and leaves every request answered with a
+     * 404 and the interface in English. The cookie is written from `loadVSCode`
+     * before the navigation it decides, so moving or losing that call hands the
+     * page whatever `Accept-Language` the WebView felt like sending, which is
+     * the disagreement `EditorLocale` exists to prevent.
+     *
+     * Read as text because that is what a call site is; the alternative is to
+     * make the parameter non-defaulted, which would put a null in six unrelated
+     * test call sites to say what this one line says.
+     */
+    @Test
+    fun `the activity still hands the client its bundles and sets the cookie`() {
+        val activity = SourceScan.withoutComments(SourceScan.read(MAIN_ACTIVITY))
+
+        assertTrue(
+            activity.contains("interfaceTranslations ="),
+            "MainActivity no longer passes interfaceTranslations to VSCodroidWebViewClient. The " +
+                "parameter defaults to null, so this compiles and every request for a " +
+                "translated bundle is answered with a 404: the interface comes up in English " +
+                "with nothing on screen to say why.",
+        )
+        assertTrue(
+            activity.contains("applyEditorLanguage()"),
+            "MainActivity no longer calls applyEditorLanguage, so nothing writes the " +
+                "vscode.nls.locale cookie and the page's language is decided by the " +
+                "Accept-Language header instead of by EditorLocale.",
         )
     }
 

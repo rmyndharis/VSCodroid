@@ -173,6 +173,9 @@ def collect() -> list[str]:
         f"app-commit\t{git_head()}",
         f"vscode-version\t{read_text('VSCODE_VERSION')}",
         f"vscode-commit\t{read_text('VSCODE_COMMIT')}",
+        # The translations are built from this commit rather than downloaded at a
+        # version, so it is the only record of which strings a release shipped.
+        f"vscode-loc-commit\t{read_text('VSCODE_LOC_COMMIT')}",
     ]
 
     tarballs = sorted((ROOT / "server").glob("*.tar.gz")) if (ROOT / "server").is_dir() else []

@@ -226,6 +226,8 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-9 | A save that did not reach the device | Create a file in the folder, force-stop the app immediately, relaunch and reopen the same folder | The file is present in the device folder, checked from a device file manager. Before, a write the sync never delivered stayed inside VSCodroid until the app was uninstalled, with nothing saying so | | |
 | SF-10 | Conflicting edits | Edit a file in the editor, force-stop the app before the save reaches the device, edit the same file with another app, reopen the folder | The device's version is shown and the editor's version is beside it as `<name>.local-<number>`; neither is lost. Both appear in the device folder as well as in the editor | | |
 | SF-11 | Conflicting edits, the other way round | With the folder closed, edit a file with another app; then open the folder in the editor, edit the same file there, force-stop the app before the save reaches the device, and reopen the folder | The editor's version wins on the device and the other app's version is beside it as `<name>.device-<time>`; neither is lost. An ordinary save with no device edit leaves no such copy | | |
+| SF-12 | A device folder holding one workspace file | Grant a folder whose top level holds exactly one `.code-workspace`; then relaunch the app | It opens as that workspace rather than as the folder, and the same workspace comes back after the relaunch | | |
+| SF-13 | A folder named like a workspace | Grant a folder whose own name ends in `.code-workspace` | It opens as a folder, not as an unreadable workspace with an empty window | | |
 
 ---
 
@@ -253,9 +255,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
-| SAF & Files | 11 | | | |
+| SAF & Files | 13 | | | |
 | Display Language | 4 | | | |
-| **Total** | **110** | | | |
+| **Total** | **112** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

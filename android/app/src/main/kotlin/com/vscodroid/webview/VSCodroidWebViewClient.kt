@@ -23,7 +23,6 @@ import com.vscodroid.isExtensionCallback
 import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
-import com.vscodroid.workspaceDirectoryInForce
 import java.io.ByteArrayInputStream
 import java.io.FilterInputStream
 import java.io.File

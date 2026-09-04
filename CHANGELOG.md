@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run setup writes its unpack to the medium before recording the run as finished. Losing power in that window left the app marked set up with the tail of the unpack missing, and nothing looked again.
 - Leaving the editor while a device folder is opening no longer leaves a file watcher running on the folder you closed. It kept writing the mirror back to the device for the rest of the session, and nothing could stop it.
 - The soft keyboard stays down until you tap into text. Opening a file, or the Explorer, used to raise it over half the screen.
-- The activity bar is narrower, and on a phone the file tree closes when you open a file. With the tree open the editor had 193dp of a 411dp screen and now has 375dp. `vscodroid.layout.autoHideSideBar` turns the closing off; it is on for phones and off for tablets.
+- The activity bar is narrower, and on a phone the file tree closes when you open a file. Opening a file from the tree left the editor 193dp of a 411dp screen and now leaves 375dp. `vscodroid.layout.autoHideSideBar` turns the closing off; it is on for phones and off for tablets.
 
 ### Changed
 

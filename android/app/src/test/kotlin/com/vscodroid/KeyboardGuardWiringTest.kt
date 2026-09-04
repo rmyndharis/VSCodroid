@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
@@ -98,9 +99,17 @@ class KeyboardGuardWiringTest {
 
         // The other direction: that the name still describes the workbench in
         // the tree. Skipped rather than failed when the tree is absent, because
-        // it is a gitignored artifact and a fresh clone has none.
+        // it is a gitignored artifact and a fresh clone has none. Stated as an
+        // assumption rather than an `if`, so a run that cannot make this check
+        // says so: the unit-test job in build.yml stubs `assets/vscode-reh`, and
+        // a silent skip there reads as a green check of something nothing ran.
         val workbench = File(WORKBENCH)
-        if (workbench.isFile) {
+        assumeTrue(
+            workbench.isFile,
+            "no packaged workbench at ${workbench.path}; run scripts/fetch-vscode-oss.sh and " +
+                "scripts/package-assets.sh to check the selector against the shipped bundle",
+        )
+        run {
             assertTrue(
                 workbench.readText().contains("native-edit-context"),
                 "the packaged workbench no longer mentions `native-edit-context`, so the " +

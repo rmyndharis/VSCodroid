@@ -3179,7 +3179,7 @@ class MainActivity : AppCompatActivity() {
                         // the complaint this guard exists for, reached by
                         // another route. Measured on a file opened with the
                         // keyboard down, before this branch was written.
-                        pendingTap = { x: e.clientX, y: e.clientY };
+                        pendingTap = { id: e.pointerId, x: e.clientX, y: e.clientY };
                         return;
                     }
                     pendingTap = null;
@@ -3187,7 +3187,11 @@ class MainActivity : AppCompatActivity() {
                     applyAll();
                 }, true);
                 document.addEventListener('pointerup', function(e) {
-                    if (!pendingTap) return;
+                    // Keyed by pointer, because a second finger anywhere on the
+                    // page would otherwise answer for the first: the last touch
+                    // down wins the single slot, and lifting either one is read
+                    // as the end of that gesture.
+                    if (!pendingTap || pendingTap.id !== e.pointerId) return;
                     var travelled = Math.abs(e.clientX - pendingTap.x) +
                         Math.abs(e.clientY - pendingTap.y);
                     pendingTap = null;
@@ -3195,7 +3199,8 @@ class MainActivity : AppCompatActivity() {
                     if (travelled > TAP_SLOP) return;
                     letTheKeyboardUp();
                 }, true);
-                document.addEventListener('pointercancel', function() {
+                document.addEventListener('pointercancel', function(e) {
+                    if (pendingTap && pendingTap.id !== e.pointerId) return;
                     // The gesture became the system's: a swipe from an edge, a
                     // pull down, a second finger. Nothing was decided, so
                     // nothing changes.
@@ -4728,25 +4733,6 @@ internal fun workspaceDirectoryInForce(
     }
 
 /**
- * What to open once a device folder has been granted and synced.
- *
- * The Android picker is `ACTION_OPEN_DOCUMENT_TREE` and returns a directory,
- * never a file, so a workspace on device storage can only ever be reached
- * through the folder holding it. Nothing joined the two: the folder opened as a
- * folder, and the `.code-workspace` sitting in it was reachable only by knowing
- * to find the file in the explorer and press the button on it. That is the gap
- * behind "I cannot find a way to open an existing workspace", and it is the
- * shell's to close, because desktop VS Code offers this from code the browser
- * workbench does not carry (no `contains a workspace file` string exists in the
- * bundle).
- *
- * Exactly one, at the top level, or nothing. Two is a guess, and guessing wrong
- * is worse than opening the folder the user actually chose, from which either is
- * one tap away. A directory that merely ends in `.code-workspace` is excluded
- * because the workbench answers a workspace it cannot read with an empty window
- * and no message, which is the failure this whole change exists to remove.
- */
-/**
  * The URL to reload when the workbench had the folder closed, or null.
  *
  * A closed folder is the third thing the workbench can be showing, and it is the
@@ -4781,6 +4767,25 @@ internal fun emptyWindowUrl(url: String?, port: Int): String? {
     return if (closed) url else null
 }
 
+/**
+ * What to open once a device folder has been granted and synced.
+ *
+ * The Android picker is `ACTION_OPEN_DOCUMENT_TREE` and returns a directory,
+ * never a file, so a workspace on device storage can only ever be reached
+ * through the folder holding it. Nothing joined the two: the folder opened as a
+ * folder, and the `.code-workspace` sitting in it was reachable only by knowing
+ * to find the file in the explorer and press the button on it. That is the gap
+ * behind "I cannot find a way to open an existing workspace", and it is the
+ * shell's to close, because desktop VS Code offers this from code the browser
+ * workbench does not carry (no `contains a workspace file` string exists in the
+ * bundle).
+ *
+ * Exactly one, at the top level, or nothing. Two is a guess, and guessing wrong
+ * is worse than opening the folder the user actually chose, from which either is
+ * one tap away. A directory that merely ends in `.code-workspace` is excluded
+ * because the workbench answers a workspace it cannot read with an empty window
+ * and no message, which is the failure this whole change exists to remove.
+ */
 internal fun folderOpenTarget(
     folderPath: String,
     names: List<String>,

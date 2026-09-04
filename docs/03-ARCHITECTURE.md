@@ -457,7 +457,8 @@ flowchart TD
   E --> E4["usr/share/ (terminfo, git-core)"]
   E --> E5["extensions/ (pre-bundled extensions)"]
   E --> E6["server.js, process-monitor.js, platform-fix.js, dns-proxy.js"]
-  B --> F["res/ (Android resources)"]
+  E --> E7["nls/ (translated interface bundles, served from the APK and never extracted)"]
+  B --> F["res/ (Android resources, including values-*/ for thirteen languages and xml/locales_config.xml)"]
   B --> G["AndroidManifest.xml"]
 ```
 

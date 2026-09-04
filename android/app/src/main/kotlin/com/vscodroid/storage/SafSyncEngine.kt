@@ -435,6 +435,14 @@ class SafSyncEngine(private val context: Context) {
                                 "set aside, so the mirror keeps its copy and the next open " +
                                 "tries again",
                         )
+                        // Said on screen as well, for the reason every sibling
+                        // path here says it: the mirror now holds a copy no other
+                        // app can see, that an uninstall takes with it, and a log
+                        // line is not an answer to a user who thinks they saved.
+                        // Throttled twice over, per path here and per interval in
+                        // SafStorageManager, so a folder full of them is one
+                        // notice rather than a wall of them.
+                        announceLost(localPath)
                         filesDone++
                         onProgress(filesDone, totalFiles)
                         continue
@@ -607,6 +615,11 @@ class SafSyncEngine(private val context: Context) {
                                     "read to set aside, so the mirror keeps the edit and " +
                                     "the next open tries again",
                             )
+                            // The deferral this branch's comment describes, said
+                            // to the user rather than to logcat alone. Same seam,
+                            // same throttles and same sentence as every other
+                            // path that ends with the only copy inside the app.
+                            announceLost(localPath)
                         } else {
                             if (deviceChanged) setAside++
                             uploadsDone++

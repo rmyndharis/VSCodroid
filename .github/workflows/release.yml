@@ -192,6 +192,22 @@ jobs:
             exit 1
           fi
 
+          # The heading is a reference-style link, so renaming it alone leaves it
+          # pointing at nothing and leaves [Unreleased] comparing against the tag
+          # before this one. Both definitions live at the foot of the file, both
+          # have been missed by hand, and neither is visible in the rendered page
+          # until someone clicks the heading.
+          if ! grep -q "^\[$version_name\]: " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '[$version_name]: ' link definition." \
+                 "Add it at the foot of the file beside the others."
+            exit 1
+          fi
+          if ! grep -q "^\[Unreleased\]: .*compare/$TAG\.\.\.HEAD" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md's [Unreleased] link does not compare against $TAG." \
+                 "Point it at compare/$TAG...HEAD so the next section starts from this release."
+            exit 1
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
@@ -513,7 +529,12 @@ jobs:
           # invocation whose task graph packages an asset tree.
           server=android/app/src/main/assets/vscode-reh/out/server-main.js
           libnode=android/app/src/main/jniLibs/arm64-v8a/libnode.so
-          for f in "$server" "$libnode"; do
+          # One translated bundle stands for the thirteen. They are built by a
+          # step of their own, from a pinned vscode-loc commit, and their absence
+          # is the quietest failure in this job: the APK installs, opens, and is
+          # in English in every language, with nothing failing to say so.
+          nls=android/app/src/main/assets/nls/fr.json
+          for f in "$server" "$libnode" "$nls"; do
             if [ ! -f "$f" ]; then
               echo "::error::$f is missing; this build would install and open with nothing in it."
               exit 1
