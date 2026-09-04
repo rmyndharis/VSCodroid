@@ -1106,7 +1106,12 @@ class VSCodroidWebViewClient(
      * `ViewRootImpl.dispatchUnhandledInputEvent`, which queues the event with
      * `FLAG_UNHANDLED`. `deliverInputEvent` sends anything carrying that flag to
      * `mSyntheticInputStage` INSTEAD of the view tree, and that stage is the only
-     * caller of `KeyCharacterMap.getFallbackAction` in the framework. Some
+     * caller of `KeyCharacterMap.getFallbackAction` reached by an event carrying
+     * that flag. It is not the only caller in the platform, and the other one is
+     * the whole reason the Activity keeps an override of its own:
+     * `PhoneWindowManager.dispatchUnhandledKey` calls it too, in the system
+     * server, for a key the app reported unhandled. The two are answered
+     * separately and neither substitutes for the other. Some
      * keyboards answer `ESCAPE` there with `fallback BACK` (AOSP ships one:
      * `Vendor_18d1_Product_5018.kcm`, the Pixel C keyboard, which reads
      * `base: fallback BACK` on a stock API 33 image where `Generic.kcm` reads

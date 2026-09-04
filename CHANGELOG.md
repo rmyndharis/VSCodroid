@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-04
+
 ### Added
 
 - A device folder holding one `.code-workspace` now opens as that workspace. Android's picker can only hand back a folder, so a workspace on device storage was reachable only by finding the file in the explorer and opening it from there.
@@ -14,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Pressing Esc on a hardware keyboard no longer sends the app to the background. Some keyboard layouts turn an Escape the page leaves unhandled into a Back press, so leaving vi's insert mode in a terminal minimised the editor mid-keystroke.
+- An Escape the editor leaves unhandled is no longer handed back to Android. Some keyboard layouts answer it with a Back press, which sends the app to the background mid-keystroke.
 - Edits made in a workspace opened from a device folder now reach the device. Nothing was syncing them back, so they stayed in the app's private copy with nothing on screen to say so.
 - A workspace is reopened on the next launch and survives an editor crash. Both dropped you into the default folder, and opening a workspace file looked like it had loaded an empty project.
 - A folder whose own name ends in `.code-workspace` opens as a folder. It was sent to the editor as a workspace, and an unreadable workspace opens an empty window, which every later launch reopened because the folder had already been remembered.
@@ -888,7 +890,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.9...v1.0.0

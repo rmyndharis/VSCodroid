@@ -55,7 +55,8 @@
 | KB-15 | Ctrl+Enter from the key row | Put the caret in the MIDDLE of a line, tap Ctrl on the key row, then press Enter on the soft keyboard | A new line opens below and the caret moves to it, leaving the line under the caret unsplit (Insert Line Below). A split line means the latch was spent without being applied: the soft keyboard reports Enter as an edit rather than as a key, so this is a different path from every other row key | | |
 | KB-17 | Latched Ctrl and a composed word on the EditContext path | On a WebView 121 or newer device with Gboard suggestions on (KB-11's check says which path), latch Ctrl on the row, type a word, then space | The word is inserted plainly and the row's Ctrl clears as the word starts; the space is inserted and no suggest widget opens. Latch Ctrl and type `s` with a non-composing commit (suggestions off, or Samsung keyboard) as the control: the file still saves (KB-7) | | |
 | KB-18 | Latched modifier and a frame | Latch Ctrl on the row, tap into a Simple Browser page or an extension webview and type, then tap back into the editor and type `a` | The row's Ctrl clears within a moment of focus entering the frame, and `a` is inserted rather than run as a chord | | |
-| KB-19 | Escape on a hardware keyboard | Connect a BT/USB keyboard, open a terminal, start `vi`, press `i` for insert mode, then press Esc | vi leaves INSERT and the app stays in the foreground. Only hardware answers this row, and unusually it is the key character map rather than the dispatch that has to be real: an injected Escape carries `Virtual.kcm` and the emulator's own keyboard resolves to `qwerty2.kcm`, and neither declares the `ESCAPE base: fallback BACK` that turns the key into a back press. Record the keyboard model, since only some maps carry it | | |
+| KB-19 | Escape on a hardware keyboard | FIRST establish the precondition, because without it this row cannot fail on any build: with the keyboard connected, run `adb shell dumpsys input`, find its `KeyCharacterMapFile`, and confirm that file contains `ESCAPE` with `base: fallback BACK`. Record the keyboard model and the map. Then open a file in the editor, click in it so the editor and not a terminal has focus, and press Esc once | The app stays in the foreground. Only hardware answers this row: an injected Escape carries `Virtual.kcm` and the emulator's own keyboard resolves to `qwerty2.kcm`, and neither declares the fallback. The editor is the target on purpose, and a terminal is not: xterm consumes the Escape keydown and writes `0x1b`, so a terminal never leaves the key unhandled and the route this row exists to test is never entered. Only the keyup leaks with the editor focused, which is enough, because the synthesised press carries the same action | | |
+| KB-20 | Escape still reaches the page | Same keyboard and the same editor file, then a terminal: press Esc in the editor with a suggest widget open, and press Esc in a terminal running `cat -v` | The widget closes, and `^[` appears under `cat -v`. This is the control for KB-19: refusing to hand Escape back to Android must not take it from the page, and the two rows fail in opposite directions | | |
 | KB-16 | Narrow phone paging | On a device or emulator whose portrait width is 360dp or less, bring the keyboard up and swipe through every page. `adb shell wm size` and `adb shell wm density` give the width in dp: pixels times 160, divided by density | There are more pages than the five a 411dp phone shows: six at 360dp, seven at 320dp. Every key still fills a comfortable target, no label is clipped, and the keys appear in the same order, only broken across more pages. The dots say how many there are | | |
 
 ## 4. Screen & Orientation
@@ -231,7 +232,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 19 | | | |
+| Keyboard Input | 20 | | | |
 | Screen & Orientation | 6 | | | |
 | Editor Operations | 12 | | | |
 | Extensions | 6 | | | |
@@ -241,7 +242,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 11 | | | |
-| **Total** | **102** | | | |
+| **Total** | **103** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
