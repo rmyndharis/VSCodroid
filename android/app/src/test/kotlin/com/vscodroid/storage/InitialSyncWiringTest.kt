@@ -127,6 +127,111 @@ class InitialSyncWiringTest {
         every { context.contentResolver } returns resolver
     }
 
+    /**
+     * The upload journal, which is a plain list of absolute paths in `filesDir`.
+     *
+     * Seeded rather than produced, because producing one means killing the
+     * process mid-write. `context.filesDir` is stubbed per case rather than in
+     * `setUp` so the cases that do not care keep the relaxed mock they have
+     * always had.
+     */
+    private fun journalHolding(path: String, into: File) {
+        every { context.filesDir } returns into
+        File(into, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).writeText(path + "\n")
+    }
+
+    private fun journalEntries(into: File): List<String> =
+        File(into, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+            .takeIf { it.isFile }?.readLines()?.filter { it.isNotBlank() } ?: emptyList()
+
+    private fun setAsideCopies(): List<String> =
+        mirror.list().orEmpty().filter { SafSyncEngine.DEVICE_COPY_SUFFIX in it }
+
+    /**
+     * What the journal actually licenses, which is narrower than it was read as.
+     *
+     * A line says a write started at this path and did not finish. The repair
+     * took that to mean the device document is this app's own truncated copy and
+     * pushed the mirror over it with a truncating open. The two are only the same
+     * thing when nothing touched the document afterwards, and the window is as
+     * long as the app was away.
+     *
+     * These three are the whole decision: the bytes say which case it is, a copy
+     * is kept only when they say the document came from somewhere else, and a
+     * document that cannot be read holds the repair back rather than overwriting
+     * it. Each asserts on the journal too, because consuming the record is what
+     * makes a held-back repair permanent.
+     */
+    @Test
+    fun `a device copy that is this app's own truncated write is replaced without a copy`(
+        @TempDir files: File,
+    ) {
+        val local = mirrorHolding("notes.txt", "the whole file, saved", 1_700_000_060_000)
+        // A strict prefix: exactly what "wt" plus a copy cut short leaves behind.
+        deviceFolderHolding("notes.txt", "the whole file", 1_700_000_090_000)
+        journalHolding(local.absolutePath, files)
+
+        sync()
+
+        assertTrue(
+            writtenDocuments.contains("notes.txt"),
+            "the repair is the re-upload, so the mirror still has to reach the device",
+        )
+        assertEquals(
+            emptyList<String>(), setAsideCopies(),
+            "these are this app's own half-written bytes, and a copy of them is not a " +
+                "rescue: phase 2b would put it in the user's folder and nothing removes it",
+        )
+        assertEquals(
+            emptyList<String>(), journalEntries(files),
+            "the record was acted on, so it has to be consumed or every later open " +
+                "repeats the repair",
+        )
+    }
+
+    @Test
+    fun `a device edit made while the app was away is kept before the mirror replaces it`(
+        @TempDir files: File,
+    ) {
+        val local = mirrorHolding("notes.txt", "the whole file, saved", 1_700_000_060_000)
+        // Not a prefix, and that is the only thing separating it from the case
+        // above: something other than the interrupted write produced these bytes.
+        deviceFolderHolding("notes.txt", "typed on the phone instead", 1_700_000_090_000)
+        journalHolding(local.absolutePath, files)
+
+        sync()
+
+        assertEquals(
+            1, setAsideCopies().size,
+            "the device bytes were overwritten with nothing kept, which is the loss this " +
+                "guard exists to prevent. Found: ${mirror.list().orEmpty().toList()}",
+        )
+    }
+
+    @Test
+    fun `a device copy that cannot be read holds the repair back`(
+        @TempDir files: File,
+    ) {
+        val local = mirrorHolding("notes.txt", "the whole file, saved", 1_700_000_060_000)
+        deviceFolderHolding("notes.txt", "typed on the phone instead", 1_700_000_090_000)
+        journalHolding(local.absolutePath, files)
+        // After the fixture, so it replaces the reader the fixture installed.
+        every { resolver.openInputStream(any()) } throws IOException("the provider refused")
+
+        sync()
+
+        assertEquals(
+            emptyList<String>(), writtenDocuments,
+            "the document could not be read, so what it holds is unknown, and writing " +
+                "over an unknown is the loss itself",
+        )
+        assertEquals(
+            listOf(local.absolutePath), journalEntries(files),
+            "the record has to survive a held-back repair, or the next open has no reason " +
+                "to try again and the mirror keeps the only complete copy for ever",
+        )
+    }
+
     @Test
     fun `an unsaved local edit survives reopening the folder`() {
         // Newer AND a different length: the pairing the size-first rule overwrote.

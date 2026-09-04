@@ -117,6 +117,13 @@ class SafUploadInterruptionTest {
             row = -1
             cursor
         }
+        // A real stream, and not decoration. The repair path reads the document
+        // before it replaces it, and a relaxed mock answers 0 from `read`, which
+        // `InputStream.copyTo` treats as "keep going": its loop is
+        // `while (bytes >= 0)`, so the copy spins for ever and takes the test JVM
+        // with it. A real stream ends at -1, and the fixture has to keep the
+        // contract the engine is entitled to rely on.
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(ByteArray(0)) }
     }
 
     /** One event, and the write-back thread's pass over what it queued. */
@@ -241,13 +248,17 @@ class SafUploadInterruptionTest {
 
     @Test
     fun `a sync prefers the mirror of a file whose upload was cut short`() {
-        // The device's copy is newer and shorter: exactly what a truncation looks
-        // like, and exactly what an edit made on the device looks like. The
-        // journal is the only thing that can tell them apart.
+        // The device's copy is newer and shorter, and its bytes are a PREFIX of
+        // the mirror's, which is what `"wt"` plus a copy cut short leaves: the
+        // open truncates and the copy runs forward from zero. Length alone is not
+        // the shape, and this fixture said "TRUNC" until it was pointed at the
+        // bytes: an edit made on the device is also newer and shorter, and telling
+        // the two apart is the whole job. The journal says a write started here;
+        // the bytes say whether it is still the thing that finished last.
         val local = File(mirror, "notes.txt").apply { writeText("the whole edit") }
         local.setLastModified(1_000_000_000_000L)
         journal.writeText(local.absolutePath)
-        val byDocId = mapOf("doc:notes.txt" to "TRUNC")
+        val byDocId = mapOf("doc:notes.txt" to "the wh")
 
         val cursor = mockk<Cursor>(relaxed = true)
         var row = -1
@@ -265,7 +276,7 @@ class SafUploadInterruptionTest {
         every { cursor.getString(0) } returns "doc:notes.txt"
         every { cursor.getString(1) } returns "notes.txt"
         every { cursor.getString(2) } returns "text/plain"
-        every { cursor.getLong(3) } returns 5L
+        every { cursor.getLong(3) } returns 6L
         every { cursor.getLong(4) } returns 2_000_000_000_000L
         every { resolver.query(any(), any(), any(), any(), any()) } returns cursor
         every { resolver.openInputStream(any()) } answers {

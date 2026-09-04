@@ -385,12 +385,14 @@ class SafSyncEngine(private val context: Context) {
                 localPath.mkdirs()
             } else {
                 // The one thing no timestamp comparison can see: this app was
-                // writing this path back when it stopped, so a newer, shorter
-                // document here is this app's own truncated copy rather than a
-                // device edit. The mirror is kept, it is the only complete
-                // version, and the upload attempted again, which is also the
-                // repair. The record is consumed by the sync that acted on it;
-                // the re-upload re-marks it if it is cut short again.
+                // writing this path back when it stopped. A newer, shorter
+                // document here is CONSISTENT with this app's own truncated copy,
+                // which is not the same as being one, so the bytes are asked
+                // rather than assumed below. Where they answer yes the mirror is
+                // kept, it is the only complete version, and the upload is
+                // attempted again, which is also the repair. The record is
+                // consumed by the sync that acted on it; the re-upload re-marks
+                // it if it is cut short again.
                 //
                 // Repaired here rather than queued: the queue belongs to the
                 // watcher's lifecycle, and [startWatching] opens by calling
@@ -399,9 +401,48 @@ class SafSyncEngine(private val context: Context) {
                 // is discarded before anything executes it. The sync already
                 // owns this moment; it is on the IO dispatcher and mid-copy.
                 if (localPath.exists() && localPath.absolutePath in unfinishedUploads) {
+                    // The journal line is not the licence the comment above reads
+                    // it as. It says a write started here and did not finish; it
+                    // says nothing about what touched the document between then
+                    // and now, and the window is as long as the app was away. A
+                    // user who edits that file on the device before opening the
+                    // app again, or another app that rewrites it, leaves a
+                    // document this branch used to overwrite with `"wt"`, which
+                    // truncates at open. The bytes were gone and nothing had been
+                    // kept.
+                    //
+                    // [deviceIsTruncatedMirror] is what the comment above assumed
+                    // rather than checked: the interrupted write leaves a strict
+                    // prefix of the mirror, so anything else came from somewhere
+                    // else. In the expected case it costs one provider read and
+                    // no copy, which is why it is asked before the set-aside
+                    // rather than instead of it: routing every repair through
+                    // [setAsideDeviceCopy] would keep a `.device-` copy of this
+                    // app's own half-written bytes, and phase 2b would then put
+                    // that copy on the device.
+                    val ownPartialWrite = deviceIsTruncatedMirror(doc.uri, localPath, doc.size)
+                    if (!ownPartialWrite && !setAsideDeviceCopy(doc, localPath)) {
+                        // Held back, not abandoned, and the record is deliberately
+                        // NOT consumed: the mirror keeps the only complete copy,
+                        // unvouched, and the next open tries the whole repair
+                        // again. Writing anyway would be the loss this guard
+                        // exists to prevent.
+                        keptLocal++
+                        Logger.w(
+                            tag,
+                            "Not replacing ${doc.relativePath}: its device copy is not the " +
+                                "unfinished upload this app left and could not be read to " +
+                                "set aside, so the mirror keeps its copy and the next open " +
+                                "tries again",
+                        )
+                        filesDone++
+                        onProgress(filesDone, totalFiles)
+                        continue
+                    }
                     unfinishedUploads.remove(localPath.absolutePath)
                     consumeStaleUploadRecord(localPath.absolutePath)
                     keptLocal++
+                    if (!ownPartialWrite) setAside++
                     Logger.i(
                         tag,
                         "Kept the mirror of ${doc.relativePath}: its device copy was an " +
@@ -1786,6 +1827,59 @@ class SafSyncEngine(private val context: Context) {
      * mirror kept and unrecorded, which is what happens today, while a true this could
      * not justify would vouch for bytes nobody compared.
      */
+    /**
+     * Whether the device document is exactly what this app's own interrupted
+     * write-back leaves behind: a STRICT PREFIX of the mirror.
+     *
+     * The upload journal records that a write started and did not finish. It does
+     * not record that nothing touched the document afterwards, and the two are
+     * only the same thing if the app was the last writer. `"wt"` truncates at
+     * open and the copy runs forward from zero, so a write cut short leaves the
+     * document holding the mirror's leading bytes and nothing else. Any other
+     * content, longer, shorter with different bytes, or the same length, was
+     * written by something that is not that interrupted write, and the caller
+     * must preserve it rather than overwrite it.
+     *
+     * Strict, because equal length is [deviceMatchesMirror]'s question and means
+     * the write finished after all.
+     *
+     * One provider read, the same one [setAsideDeviceCopy] would pay, and it
+     * spends it on the question that decides whether a copy is worth keeping
+     * rather than on the copy itself. Answering false on any failure is the safe
+     * direction: the caller then preserves the document before replacing it.
+     */
+    private fun deviceIsTruncatedMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
+        if (deviceSize <= 0L || deviceSize >= localFile.length()) return false
+        return try {
+            context.contentResolver.openInputStream(safDocUri)?.use { device ->
+                localFile.inputStream().use { mirror ->
+                    val a = ByteArray(COPY_BUFFER_SIZE)
+                    val b = ByteArray(COPY_BUFFER_SIZE)
+                    var compared = 0L
+                    while (true) {
+                        val read = device.readNBytes(a, 0, a.size)
+                        if (read == 0) return@use compared == deviceSize
+                        // The mirror is the longer side, so a short read from it
+                        // means the two disagree about their own lengths and the
+                        // prefix cannot hold.
+                        if (mirror.readNBytes(b, 0, read) != read) return@use false
+                        if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+                        compared += read
+                        if (compared > deviceSize) return@use false
+                    }
+                    @Suppress("UNREACHABLE_CODE") false
+                }
+            } ?: false
+        } catch (e: Exception) {
+            Logger.w(
+                tag,
+                "Could not compare ${localFile.name} with its device copy: " +
+                    e.javaClass.simpleName,
+            )
+            false
+        }
+    }
+
     private fun deviceMatchesMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
         if (deviceSize != localFile.length()) return false
         return try {
