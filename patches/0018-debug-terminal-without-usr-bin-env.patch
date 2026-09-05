@@ -20,6 +20,16 @@ the command. The one behavioural difference is that unset affects the shell
 that runs the command rather than only the child, which matters only if the
 terminal is reused for something else afterwards, and a debug terminal is not.
 
+A name a shell cannot assign to is skipped rather than emitted, which is the
+one place this cannot match what env does. env takes NAME=VALUE as a single
+argument and calls execve itself, so any name without an '=' reaches the child;
+a shell treats a word as an assignment only when the part before '=' is a valid
+name, and runs it as a command otherwise. A project whose .env holds `my-var=1`
+would therefore stop the program starting, with the debug toolbar up and the
+session hanging, which is this patch's own symptom arriving by another door, and
+a name holding a semicolon would run what follows it. Dropping the variable is
+the mild outcome and the only one available without env.
+
 Only the VALUE is quoted, and that is the whole of the difference between this
 and the first version of it. `env` takes NAME=VALUE as a single argument, so
 quoting the pair is correct there; a shell reads a quoted pair as one word and
@@ -28,14 +38,15 @@ tries to execute it, which on the device read as
   bash: NODE_OPTIONS= --require .../bootloader.js: No such file or directory
 
 one layer further along and looking like a different bug. The key is left
-unquoted because `'NAME'=value` is not an assignment to a shell; the removals
-still quote the name, since `unset` takes it as an ordinary word.
+unquoted because `'NAME'=value` is not an assignment to a shell, and the names
+reaching `unset` need no quoting either: the guard above has already reduced
+them to letters, digits and underscores.
 
 diff --git a/src/vs/workbench/contrib/debug/node/terminals.ts b/src/vs/workbench/contrib/debug/node/terminals.ts
-index b3b5a84..0e1d7ff 100644
+index b3b5a84..a2b294b 100644
 --- a/src/vs/workbench/contrib/debug/node/terminals.ts
 +++ b/src/vs/workbench/contrib/debug/node/terminals.ts
-@@ -173,16 +173,30 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
+@@ -173,16 +173,43 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
  				command += `cd ${quote(cwd)} ; `;
  			}
  			if (env) {
@@ -48,13 +59,26 @@ index b3b5a84..0e1d7ff 100644
 +				// Only the value is quoted. env takes NAME=VALUE as one
 +				// argument, so quoting the pair is right there; a shell reads a
 +				// quoted pair as one word and tries to execute it.
++				//
++				// A name a shell cannot assign to is skipped rather than
++				// emitted. env accepts any name without an '=' because it calls
++				// execve itself; a shell treats a word as an assignment only
++				// when the part before '=' is a valid name, and runs it as a
++				// command otherwise. So 'my-var=1' from a project's .env would
++				// stop the program starting, and a name holding ';' would run
++				// what follows it. Losing such a variable is the mild outcome
++				// and it is the only one available without env.
++				const assignable = /^[A-Za-z_][A-Za-z0-9_]*$/;
 +				const removed: string[] = [];
 +				let assigned = '';
  				for (const key in env) {
++					if (!assignable.test(key)) {
++						continue;
++					}
  					const value = env[key];
  					if (value === null) {
 -						command += ` -u ${hardQuote(key)}`;
-+						removed.push(hardQuote(key));
++						removed.push(key);
  					} else {
 -						command += ` ${hardQuote(`${key}=${value}`)}`;
 +						assigned += ` ${key}=${hardQuote(value)}`;
