@@ -89,7 +89,19 @@ object EditorLocale {
         // Simplified is the default because it is what every zh region except
         // the three below uses.
         if (language == "zh") {
-            val traditional = rest.startsWith("hant") || rest.substringAfterLast('-') in TRADITIONAL_CHINESE
+            // The script wins where the tag states one, and the region decides
+            // only where it does not. Reading the region first is wrong in one
+            // direction that a device can actually be set to: `zh-Hans-HK` and
+            // `zh-Hans-MO` are both in Android's own language picker, and a
+            // region test applied to them hands a user who asked for Simplified
+            // a Traditional editor, legibly and with nothing on screen to
+            // explain it. The mirror case reads correctly by accident, since
+            // `zh-Hant-*` is caught by the script before the region is consulted.
+            val traditional = when {
+                rest.startsWith("hans") -> false
+                rest.startsWith("hant") -> true
+                else -> rest.substringAfterLast('-') in TRADITIONAL_CHINESE
+            }
             val bundle = if (traditional) "zh-hant" else "zh-hans"
             return bundle.takeIf { it in available }
         }

@@ -64,6 +64,22 @@ class EditorLocaleTest {
         assertEquals("zh-hant", resolve("zh-TW"))
         assertEquals("zh-hant", resolve("zh-HK"))
         assertEquals("zh-hant", resolve("zh-Hant"))
+
+        // Both directions of the script test, because only one of them used to
+        // be there and the region was read first. Android's own picker offers
+        // these two, and a region test applied to them contradicts the script
+        // the user chose: Simplified in Hong Kong or Macau came up Traditional.
+        assertEquals(
+            "zh-hans", resolve("zh-Hans-HK"),
+            "the tag says Simplified and the region says Traditional. The script is " +
+                "what the user picked and what the bundles are named for",
+        )
+        assertEquals("zh-hans", resolve("zh-Hans-MO"))
+        assertEquals(
+            "zh-hant", resolve("zh-Hant-CN"),
+            "and the mirror case, which passed before only because the script arm " +
+                "happened to be tested first",
+        )
     }
 
     @Test

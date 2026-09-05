@@ -166,9 +166,15 @@ class DisplayLanguageTest {
                 "translated bundle is answered with a 404: the interface comes up in English " +
                 "with nothing on screen to say why.",
         )
+        // Scoped to the caller, because the whole file contains the string
+        // whatever happens: `private fun applyEditorLanguage() {` is itself a
+        // match, so a whole-file search passes on a build where the call is
+        // gone and only the declaration remains. What matters is that it runs
+        // from the navigation path, before the page is loaded, which is the one
+        // moment a cookie can still decide the language of the request.
         assertTrue(
-            activity.contains("applyEditorLanguage()"),
-            "MainActivity no longer calls applyEditorLanguage, so nothing writes the " +
+            SourceScan.body(activity, "private fun loadVSCode(").contains("applyEditorLanguage()"),
+            "loadVSCode no longer calls applyEditorLanguage, so nothing writes the " +
                 "vscode.nls.locale cookie and the page's language is decided by the " +
                 "Accept-Language header instead of by EditorLocale.",
         )
