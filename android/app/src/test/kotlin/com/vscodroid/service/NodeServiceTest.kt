@@ -38,6 +38,43 @@ class RestartBudgetTest {
         assertTrue(hasRestartBudget(0))
     }
 
+    /**
+     * The budget is only a bound while something spends it.
+     *
+     * A server that binds, answers, and is killed again seconds later has
+     * recovered from nothing; counting that as recovery sets the count back to
+     * zero on every attempt, so it never reaches [MAX_RESTARTS], the give-up
+     * state is unreachable, and the workspace reloads every twenty-odd seconds
+     * for as long as the app is open with nothing on screen to say why.
+     */
+    @Test
+    fun `a server killed shortly after answering has recovered from nothing`() {
+        assertFalse(
+            readinessIsRecovery(now = 100_000L, lastReadyAt = 100_000L - (READY_STABLE_MS - 1)),
+            "a readiness that lasted less than the window refilled the retry budget",
+        )
+        assertTrue(
+            readinessIsRecovery(now = 100_000L, lastReadyAt = 100_000L - READY_STABLE_MS),
+            "a server that held for the whole window was not credited with recovering",
+        )
+    }
+
+    /**
+     * The first readiness of a run, where nothing has answered yet.
+     *
+     * The parked value is far below zero rather than zero because the clock is
+     * time since boot: an app started seconds after boot would otherwise be
+     * compared against a number smaller than the window and refuse to refill,
+     * spending a budget it had never used.
+     */
+    @Test
+    fun `the first readiness of a run always counts as recovery`() {
+        assertTrue(
+            readinessIsRecovery(now = 5_000L, lastReadyAt = Long.MIN_VALUE / 2),
+            "the first ready server of a run did not refill the retry budget",
+        )
+    }
+
     @Test
     fun `the ceiling that is passed in is the one that is used`() {
         // Kills a predicate written against the constant instead of the

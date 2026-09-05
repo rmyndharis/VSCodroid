@@ -76,6 +76,17 @@ class NodeService : Service() {
 
     private lateinit var processManager: ProcessManager
     private var restartCount = 0
+
+    /**
+     * When the server last reported ready, on [SystemClock.elapsedRealtime].
+     *
+     * Half of Long.MIN_VALUE rather than 0 or the real minimum: the first
+     * readiness of a run has to refill the budget, and subtracting from 0 would
+     * compare against however long the device has been awake, which on an app
+     * started seconds after boot is a smaller number than the window. Halved so
+     * the subtraction cannot overflow.
+     */
+    private var lastReadyAt = Long.MIN_VALUE / 2
     private var isServiceRunning = false
     private var launchJob: Job? = null
 
@@ -721,10 +732,23 @@ class NodeService : Service() {
 
     /** Records a ready server and tells whoever is listening. */
     private fun announceReady() {
-        // Recovery succeeded. Future crashes get a fresh retry budget, and a
-        // failure after this point is a new episode that has to be heard even
-        // though an earlier one in the same run already spoke.
-        endFailureEpisode()
+        // Recovery succeeded, and only then. Future crashes get a fresh retry
+        // budget, and a failure after this point is a new episode that has to be
+        // heard even though an earlier one in the same run already spoke.
+        //
+        // Conditional because an unconditional refill spends nothing: a server
+        // the system kills seconds after it binds would set the count back to
+        // zero on every attempt, so it could never reach [MAX_RESTARTS] and
+        // [enterTerminalState] could never run. See [READY_STABLE_MS].
+        //
+        // Read before the comparison and assigned after it, so the first
+        // readiness of a run always refills: [endFailureEpisode] parks the
+        // instant far enough back that the difference clears the window.
+        val now = SystemClock.elapsedRealtime()
+        if (readinessIsRecovery(now, lastReadyAt)) {
+            endFailureEpisode()
+        }
+        lastReadyAt = now
         startupNotice = null
         Logger.i(tag, "Server is ready on port ${processManager.port}")
         // Unconditional, and that is the fix for what the guarded version got
@@ -887,6 +911,10 @@ class NodeService : Service() {
     private fun endFailureEpisode() {
         restartCount = 0
         failureRaised = false
+        // Parked with the budget, so the next readiness after a stop or a
+        // recoverable shutdown is judged as the first one of a new run rather
+        // than against whenever the last server happened to answer.
+        lastReadyAt = Long.MIN_VALUE / 2
     }
 
     /**
@@ -1301,6 +1329,41 @@ internal const val RESTART_DELAY_MS = 2000L
 
 /** Cap on the doubling, so the wait cannot grow without bound. */
 internal const val MAX_BACKOFF_SHIFT = 4
+
+/**
+ * How long a ready server has to last before its readiness counts as recovery.
+ *
+ * [MAX_RESTARTS] is only a bound while something spends the budget. A server
+ * that binds, answers, and is killed again seconds later has recovered from
+ * nothing, so refilling on that readiness leaves the count oscillating between
+ * zero and one and [enterTerminalState] unreachable: the workspace reloads
+ * every twenty-odd seconds for as long as the app is open, the notification
+ * goes on saying it is running, and the user is never told the device cannot
+ * hold this workspace nor offered the page that would let them retry.
+ *
+ * A minute rather than something derived from the poll timeout, which measures
+ * how long to wait for a server rather than how long one survived. It is long
+ * enough that a memory kill under load lands inside the window, and short
+ * enough that a person who fixes the cause and reopens is not still being
+ * judged by it.
+ */
+internal const val READY_STABLE_MS = 60_000L
+
+/**
+ * Whether a server reporting ready has recovered from anything.
+ *
+ * Pure, and separate from [NodeService.announceReady] for the reason
+ * [crashAction] and [hasRestartBudget] are: the decision is the part worth
+ * pinning, and the caller around it needs a Service to exist.
+ *
+ * [lastReadyAt] is parked far below zero between runs, so the first readiness
+ * of a run always answers true without that having to be a special case here.
+ */
+internal fun readinessIsRecovery(
+    now: Long,
+    lastReadyAt: Long,
+    window: Long = READY_STABLE_MS,
+): Boolean = now - lastReadyAt >= window
 
 /**
  * How often a server is asked again once the start poll has given up on it.
