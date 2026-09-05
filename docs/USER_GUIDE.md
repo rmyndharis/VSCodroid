@@ -706,7 +706,7 @@ The status bar shows a phantom process count. This tells you how many background
 
 - Connect a Bluetooth keyboard for the best experience with complex editing.
 - Without an external keyboard, rely heavily on the Command Palette (**Ctrl+Shift+P**) and the Extra Key Row.
-- Pinch-to-zoom is disabled to prevent layout issues. Use **Ctrl+= / Ctrl+-** to change font size.
+- Pinch-to-zoom is disabled to prevent layout issues. Change text size with the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
 
 ---
 
@@ -715,6 +715,30 @@ The status bar shows a phantom process count. This tells you how many background
 ### Native npm Packages
 
 Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because there is no C compiler on the device. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
+
+### Python Packages Written in C
+
+`pip` is bundled and installs anything written in pure Python. What it cannot
+install is a package with a compiled part, and for the same two reasons, in the
+order pip hits them.
+
+There is no wheel to download. This interpreter reports its platform as
+`android-24-arm64_v8a`, which is what it is, and PyPI carries no Android wheels
+for the popular compiled packages: `pygame`, `numpy`, `matplotlib`, `Pillow` and
+`scipy` all publish Linux, macOS and Windows builds only. Pip then falls back to
+building from source, and there is no C compiler on the device, so that fails
+too. The error you see names the missing build tool rather than either of these,
+which is why it reads as something you could install your way out of.
+
+`turtle` and `tkinter` are not included at all. Tk draws into a desktop window,
+and this app has no window to give it.
+
+For graphics, the practical route is to write a file and look at it. An image
+preview updates on its own when the file changes, so a program that rewrites a
+PNG or an SVG in the workspace acts as a display you can watch while you edit.
+Python's own `zlib` is enough to write a PNG with no packages at all. For
+anything interactive, serve it: `python3 -m http.server` and open the address, as
+in [Dev Server Preview](#dev-server-preview) above.
 
 ### Packages With Prebuilt Binaries
 
