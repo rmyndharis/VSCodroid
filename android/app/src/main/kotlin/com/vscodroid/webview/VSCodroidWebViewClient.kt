@@ -1026,7 +1026,7 @@ class VSCodroidWebViewClient(
                 listOf(
                     ByteArrayInputStream(NLS_ASSIGNMENT_PREFIX.toByteArray()),
                     messages,
-                    ByteArrayInputStream(";globalThis._VSCODE_NLS_LANGUAGE=\"$bundle\";".toByteArray()),
+                    ByteArrayInputStream(";globalThis._VSCODE_NLS_LANGUAGE=\"${EditorLocale.languageId(bundle)}\";".toByteArray()),
                 )
             )
         )

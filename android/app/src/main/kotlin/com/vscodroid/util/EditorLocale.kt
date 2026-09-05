@@ -115,6 +115,35 @@ object EditorLocale {
             ?: available.filter { it.startsWith("$language-") }.minOrNull()
     }
 
+    /**
+     * The language id VS Code answers with, for one of our bundle names.
+     *
+     * The two are the same string for eleven of the thirteen and are not for
+     * Chinese, and the difference is not cosmetic. The name that reaches the page
+     * as `_VSCODE_NLS_LANGUAGE` is what the workbench reports as
+     * `vscode.env.language` AND what it passes to `scanExtensions`, where the
+     * remote scanner appends it to `package.nls.` to find an extension's
+     * translated manifest. Extensions name those files with VS Code's
+     * language-pack ids, `zh-cn` and `zh-tw`; vscode-loc names its own directories
+     * `zh-hans` and `zh-hant`. Sending the bundle name made the scanner look for
+     * `package.nls.zh-hans.json`, then strip to `package.nls.zh.json`, then give
+     * up on the English base, so a Chinese user got a fully translated workbench
+     * with every extension's commands and settings in English.
+     *
+     * Kept apart from [resolveTag] rather than folded into it, because that
+     * function answers a different question: which FILE under `assets/nls` to
+     * serve, and those are ours and named for vscode-loc. This maps one to the
+     * other at the single point the id leaves the app.
+     */
+    fun languageId(bundle: String): String = LANGUAGE_IDS[bundle] ?: bundle
+
+    /**
+     * Bundle name to VS Code language id, for the two that differ.
+     *
+     * Only Chinese: the other eleven bundle names are already VS Code's ids.
+     */
+    private val LANGUAGE_IDS = mapOf("zh-hans" to "zh-cn", "zh-hant" to "zh-tw")
+
     /** The bundle for the device's current language, or null for English. */
     fun forDevice(assets: AssetManager): String? =
         resolveTag(Locale.getDefault().toLanguageTag(), available(assets))

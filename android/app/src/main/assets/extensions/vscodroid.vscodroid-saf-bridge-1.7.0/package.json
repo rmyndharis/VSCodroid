@@ -2,7 +2,7 @@
   "name": "vscodroid-saf-bridge",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"

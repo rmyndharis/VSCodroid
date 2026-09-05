@@ -112,4 +112,33 @@ class EditorLocaleTest {
         assertNull(resolve("vi-VN"))
         assertNull(resolve("vi"))
     }
+
+    /**
+     * The name that leaves the app is VS Code's language id, not our bundle name.
+     *
+     * `_VSCODE_NLS_LANGUAGE` is not only what the workbench reports as
+     * `vscode.env.language`: it is argument zero of `scanExtensions`, and the
+     * remote scanner appends it to `package.nls.` to find an extension's translated
+     * manifest, stripping after the last `-` once before falling back to English.
+     * So `zh-hans` looks for `package.nls.zh-hans.json`, then `package.nls.zh.json`,
+     * then gives up -- while every extension in the ecosystem, ours included, names
+     * that file `zh-cn`. The symptom was a fully Chinese workbench in which every
+     * extension's commands and settings were English.
+     *
+     * The eleven others are asserted too, because the mapping must not invent a
+     * difference where there is none: those bundle names already ARE VS Code ids.
+     */
+    @Test
+    fun `Chinese announces the VS Code language id, and nothing else changes`() {
+        assertEquals("zh-cn", EditorLocale.languageId("zh-hans"))
+        assertEquals("zh-tw", EditorLocale.languageId("zh-hant"))
+
+        for (same in listOf("cs", "de", "es", "fr", "it", "ja", "ko", "pl", "pt-br", "ru", "tr")) {
+            assertEquals(
+                same, EditorLocale.languageId(same),
+                "`$same` is already the id VS Code uses; remapping it would send the " +
+                    "extension scanner looking for a manifest nobody writes",
+            )
+        }
+    }
 }

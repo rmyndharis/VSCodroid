@@ -112,11 +112,13 @@ class LocaleCoverageTest {
      * `{extension directory: the languages its manifest is translated into}`.
      *
      * The suffixes here are filenames the editor's extension scanner appends to
-     * `package.nls.`, and it appends exactly the bundle name the web client sends
-     * it, which is the name in [BUNDLE_SCRIPT]. So a file named for a VS Code
-     * language-pack id rather than a vscode-loc bundle -- `zh-cn` for `zh-hans`,
-     * `pt-pt` for `pt-br` -- is stepped over in silence and the extension shows
-     * in English.
+     * `package.nls.`, and it appends exactly the id the web client sends it, which
+     * is `EditorLocale.languageId` of the served bundle. For Chinese those differ:
+     * vscode-loc names its directories `zh-hans`/`zh-hant` and VS Code's language
+     * ids, which every extension names its manifests for, are `zh-cn`/`zh-tw`. A
+     * file named the other way is stepped over in silence and the extension shows
+     * in English, which is what these files were called until the id and the bundle
+     * name were told apart.
      */
     private fun extensionBundles(): Map<String, Set<String>> =
         File(OWN_EXTENSIONS).listFiles().orEmpty()
@@ -141,7 +143,10 @@ class LocaleCoverageTest {
                 "found ${found.keys}. Paths resolve from android/app.",
         )
 
-        val expected = bundles()
+        // Through languageId, because these filenames answer to the scanner rather
+        // than to our asset directory: the served bundle is `zh-hans`, the manifest
+        // beside it must be `zh-cn`.
+        val expected = bundles().map { EditorLocale.languageId(it) }.toSet()
         assertEquals(
             found.keys.associateWith { expected }, found,
             "an extension of ours is translated into a different set of languages than the " +
