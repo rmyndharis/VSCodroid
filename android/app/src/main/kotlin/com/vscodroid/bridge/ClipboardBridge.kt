@@ -36,34 +36,69 @@ class ClipboardBridge(private val context: Context) {
      * JavaScript.
      *
      * The item's own [android.content.ClipData.Item.getText] first, because that
-     * is the accessor, and the coercion only for a clip whose description already
-     * says it is text. That is the same predicate [hasClipboardText] applies, and
-     * the two disagreeing is what let the guard say "no text here" while the read
-     * returned a file. It is asked of the clip in hand rather than through that
-     * method, so the answer cannot be about a different clip from the one being
-     * read. What the coercion still buys on this path is a styled or HTML clip,
-     * whose plain text it renders and whose text field can be absent.
+     * is the accessor, and the coercion only for an item that carries NO URI.
+     *
+     * The mime test alone does not do it, and believing it did was the second
+     * version of this bug. `ClipDescription.hasMimeType` matches the `text/` wildcard against
+     * every type the clip declares, and a file manager copying a `.kt`, a `.md` or
+     * a `.txt` declares `text/plain`; `ClipData.newUri` also appends
+     * `text/uri-list` for a `content://` URI when the provider resolves no type.
+     * Either way the description says text, `getText` is null because an item built
+     * from a URI has none, and the coercion opened the document after all. The URI
+     * is the thing that makes `coerceToText` a provider read, so the URI is what
+     * has to be tested.
+     *
+     * What the coercion still buys is a styled or HTML clip, whose plain text it
+     * renders and whose text field can be absent; such a clip carries no URI, so it
+     * is unaffected. [hasClipboardText] asks the same question of the same clip,
+     * because the two disagreeing is what let the guard say "no text here" while
+     * the read returned a file.
      */
     fun readFromClipboard(): String? {
         return try {
             val clip = clipboardManager.primaryClip
             if (clip == null || clip.itemCount == 0) return null
             val item = clip.getItemAt(0)
-            val isText = clip.description?.hasMimeType("text/*") == true
-            item.text?.toString()
-                ?: if (isText) item.coerceToText(context).toString() else null
+            item.text?.toString() ?: if (offersTextWithoutReading(clip, item)) {
+                item.coerceToText(context).toString()
+            } else {
+                null
+            }
         } catch (e: Exception) {
             Logger.e(tag, "Failed to read clipboard", e)
             null
         }
     }
 
+    /**
+     * Whether there is text to read, answered by the same rule [readFromClipboard]
+     * uses.
+     *
+     * Off the clip rather than off `primaryClipDescription`, so the two cannot be
+     * asked about different clips, and including the item test so they cannot
+     * disagree about the same one: a description-only answer says "text here" for
+     * the file-manager clip the read now declines, which is the shape of the
+     * original defect with the two halves swapped.
+     */
     fun hasClipboardText(): Boolean {
         return try {
-            clipboardManager.hasPrimaryClip() &&
-                    clipboardManager.primaryClipDescription?.hasMimeType("text/*") == true
+            val clip = clipboardManager.primaryClip ?: return false
+            if (clip.itemCount == 0) return false
+            val item = clip.getItemAt(0)
+            item.text != null || offersTextWithoutReading(clip, item)
         } catch (e: Exception) {
             false
         }
     }
+
+    /**
+     * Whether [item] can be coerced to text without opening a provider.
+     *
+     * Both halves are needed. The description must say text, or a clip of some
+     * other kind would be rendered; and the item must carry no URI, because that
+     * is the only thing `coerceToText` opens. An item with neither text nor URI
+     * nor Intent coerces to the empty string, which is harmless.
+     */
+    private fun offersTextWithoutReading(clip: ClipData, item: ClipData.Item): Boolean =
+        clip.description?.hasMimeType("text/*") == true && item.uri == null
 }

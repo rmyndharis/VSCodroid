@@ -14,7 +14,9 @@ import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -59,10 +61,22 @@ class ClipboardReadTest {
     @AfterEach
     fun tearDown() = unmockkAll()
 
-    /** One item on the clipboard, with the mime type its description declares. */
-    private fun clipOf(text: CharSequence?, mimeIsText: Boolean): ClipData.Item {
+    /**
+     * One item on the clipboard, with the mime type its description declares and
+     * the URI it carries.
+     *
+     * [uri] is not decoration: it is the whole of what makes `coerceToText` a
+     * provider read, and a fixture without it cannot model the case these tests
+     * exist for.
+     */
+    private fun clipOf(
+        text: CharSequence?,
+        mimeIsText: Boolean,
+        uri: android.net.Uri? = null,
+    ): ClipData.Item {
         val item = mockk<ClipData.Item>(relaxed = true)
         every { item.text } returns text
+        every { item.uri } returns uri
         val description = mockk<ClipDescription>(relaxed = true)
         every { description.hasMimeType("text/*") } returns mimeIsText
         val clip = mockk<ClipData>(relaxed = true)
@@ -83,29 +97,41 @@ class ClipboardReadTest {
 
     @Test
     fun `a file copied from a file manager is not opened and read`() {
-        // The clip a file manager leaves: no text field, and a mime type that is
-        // the document's rather than text. coerceToText would resolve the URI
-        // through this app's ContentResolver and return what it could read.
-        val item = clipOf(null, mimeIsText = false)
+        // The clip a file manager actually leaves, which is not what this fixture
+        // used to describe. It said the mime type was "the document's rather than
+        // text" and set mimeIsText = false, a clip that cannot occur for a text
+        // file: copying a .kt, a .md or a .txt declares text/plain, and
+        // ClipDescription.hasMimeType matches the text/ wildcard against every declared type.
+        // ClipData.newUri also appends text/uri-list when the provider resolves no
+        // type. So the description says text either way, getText is null because an
+        // item built from a URI has none, and the old guard let coerceToText open
+        // the document through this app's ContentResolver.
+        val item = clipOf(null, mimeIsText = true, uri = mockk(relaxed = true))
 
         assertNull(
             clipboard.readFromClipboard(),
-            "a clipboard entry that holds no text answered with something, which for a " +
-                "content URI is the document this app was able to open on the caller's " +
-                "behalf",
+            "a clipboard entry carrying a URI answered with something, which is the " +
+                "document this app was able to open on the caller's behalf",
         )
         verify(exactly = 0) { item.coerceToText(any()) }
+        assertFalse(
+            clipboard.hasClipboardText(),
+            "the guard says there is text to read for a clip the read declines, which " +
+                "is the two halves disagreeing again with the sides swapped",
+        )
     }
 
     @Test
     fun `a styled clip with no plain text field is still rendered`() {
         // The case the coercion is for, and the control that keeps the fix from
         // being "return item.text and nothing else": an HTML or styled clip is
-        // text/*, and its plain-text field can be absent.
-        val item = clipOf(null, mimeIsText = true)
+        // the text/ wildcard, and its plain-text field can be absent.
+        // No URI, which is what distinguishes it from the file-manager clip above.
+        val item = clipOf(null, mimeIsText = true, uri = null)
         every { item.coerceToText(any()) } returns "rendered text"
 
         assertEquals("rendered text", clipboard.readFromClipboard())
+        assertTrue(clipboard.hasClipboardText(), "the styled clip must still count as text")
     }
 
     @Test
