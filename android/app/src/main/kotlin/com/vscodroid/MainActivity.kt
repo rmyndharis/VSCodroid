@@ -3391,6 +3391,29 @@ class MainActivity : AppCompatActivity() {
                     // narrow it and this rule starts deciding its width.
                     '  .slider { min-width: 12px !important; }',
                     '  .quick-input-list .monaco-list-row { min-height: 36px !important; }',
+                    // The chrome's own text, which no setting in this build can reach.
+                    // `editor.fontSize` governs the editor and nothing else; the
+                    // workbench styles itself from 622 literal `font-size` rules in
+                    // workbench.css, this build registers no window zoom action and
+                    // ignores `window.zoomLevel`, and `WebSettings.textZoom` is pinned
+                    // at 100. So the only lever left for the parts a phone user
+                    // actually reads is this stylesheet.
+                    //
+                    // Measured on an API 37 emulator through the DevTools protocol, at
+                    // the 411 CSS px viewport a phone gives: a pane header was 11px, a
+                    // status bar item 12px and a tab label 13px, against 16px of editor
+                    // text beside them. Each rule below stays under the min-height
+                    // already floored above (32px for a status bar item, 40px for a
+                    // tab, 36px for a list row), so nothing here can push text past the
+                    // row that holds it.
+                    //
+                    // The activity bar badge is deliberately left at 9px: it is drawn
+                    // as a circle sized to its own glyph, so growing the text there
+                    // distorts the shape rather than the reading.
+                    '  .pane-header .title { font-size: 13px !important; }',
+                    '  .part.statusbar .statusbar-item { font-size: 13px !important; }',
+                    '  .tabs-container .tab .label-name { font-size: 14px !important; }',
+                    '  .monaco-list-row { font-size: 13px !important; }',
                     '}'
                 ].join('\n');
                 document.head.appendChild(s);

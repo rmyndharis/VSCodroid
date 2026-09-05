@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -38,6 +38,9 @@
       "workbench.secondarySideBar.defaultVisibility": "hidden",
       "editor.wordWrap": "on",
       "editor.minimap.enabled": false,
+      "breadcrumbs.enabled": false,
+      "editor.stickyScroll.enabled": false,
+      "workbench.layoutControl.enabled": false,
       "terminal.integrated.fontSize": 13
     },
     "commands": [
