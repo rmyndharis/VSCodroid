@@ -246,4 +246,42 @@ class RendererCrashLoopTest {
                 "placeholder load clears the record the page just set"
         }
     }
+
+    /**
+     * What the refusal leaves behind, and the one way out of it that does not go
+     * through [MainActivity.loadVSCode].
+     *
+     * `recreateWebView` clears `bridgeInitialized` and installs the bootstrap
+     * client, and on the looping path it shows the crash page and returns before
+     * the load, so the bridge is never put back. `onServerReady` is refused for as
+     * long as that page is up, which leaves `navigateToFolder` as the only route
+     * that can still load the workbench: a folder picked from the crash page
+     * arrives there directly. Loading it under the bootstrap client gives a page
+     * that renders and does nothing, with no JS interface and no request
+     * interception, and nothing on screen saying so.
+     *
+     * Asking on that path is free rather than a second registration: `initBridge`
+     * returns at its own flag before any work, so a folder switch re-registers
+     * nothing and the once-per-WebView rule is untouched.
+     */
+    @Test
+    fun `a folder opened after the refusal is given the bridge back`() {
+        val navigate = code("private fun navigateToFolder(")
+
+        val asks = navigate.indexOf("initBridge(")
+        val loads = navigate.indexOf("loadUrl(")
+
+        assertTrue(asks >= 0) {
+            "navigateToFolder loads the workbench without asking for the bridge, so a " +
+                "folder opened after the crash page comes up with no JS interface: every " +
+                "VSCodroid command does nothing and CDN requests leave the device"
+        }
+        assertTrue(loads >= 0) {
+            "navigateToFolder no longer loads anything, so this case is measuring nothing"
+        }
+        assertTrue(asks < loads) {
+            "navigateToFolder asks for the bridge after starting the load, which races the " +
+                "page it is meant to be ready for"
+        }
+    }
 }

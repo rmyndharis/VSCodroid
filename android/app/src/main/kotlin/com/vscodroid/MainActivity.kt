@@ -2404,10 +2404,15 @@ class MainActivity : AppCompatActivity() {
         val retry = getString(R.string.error_server_retry)
         // This app deciding to replace a dead editor, which is exactly the
         // distinction navigationIsOurs draws. Unmarked, the workbench's unload
-        // veto over a backup the dead server cannot accept puts the platform's
-        // leave-page modal in front of this load, and its Cancel branch aborts
-        // the navigation -- taking away the RETRY_URL button that is the only
-        // control able to start the server again.
+        // veto puts the platform's leave-page modal in front of this load, and
+        // its Cancel branch aborts the navigation, taking away the RETRY_URL
+        // button that is the only control able to start the server again.
+        //
+        // Not "a backup the dead server cannot accept", which this said until it
+        // was read against the shipped bundle: the workbench registers an
+        // IndexedDB provider for `vscode-userdata` in the page, so a backup is
+        // written here and needs no server at all. The veto the dead server does
+        // cause is the other one, a save still in flight.
         markAppNavigation()
         webView?.loadDataWithBaseURL(
             null,
@@ -2436,6 +2441,29 @@ class MainActivity : AppCompatActivity() {
         // The loading page promises the editor once the server answers, and the
         // readiness that follows has to be allowed to keep that promise.
         rendererCrashLoopShown = false
+        // The same distinction [showErrorPage] marks for, and this site was left
+        // out of it. This is the app replacing an editor whose server is gone, not
+        // the page navigating itself, and unmarked the workbench's unload veto
+        // puts the platform's leave-page modal in front of the load. Cancel then
+        // aborts it, and the caller that reaches this after a mirror sync has just
+        // spent minutes copying a folder the user granted.
+        //
+        // The loading page is not decoration on that route, it is how the folder
+        // travels: its URL is a `data:` one, so [folderFromUrl] answers null and
+        // [loadVSCode] falls through to the folder remembered a moment ago instead
+        // of reading the old one back out of a workbench URL that never went away.
+        // Abort the load and the old URL survives and wins.
+        //
+        // What confirming costs, stated rather than implied, because the obvious
+        // sentence here is wrong. Two things raise this callback: a save still in
+        // flight, which a server that is not serving can never finish, and a
+        // modified file whose backup is not written yet. That backup goes to
+        // IndexedDB in this WebView rather than to the server, so it is the one
+        // thing the modal could still have saved, and it is scheduled about a
+        // second after the keystroke. Confirming spends that second, and what
+        // refusing costs is the page carrying the folder and the only control that
+        // can start the server again.
+        markAppNavigation()
         webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this
@@ -2938,8 +2966,14 @@ class MainActivity : AppCompatActivity() {
     )
 
     /**
-     * Navigates the WebView to a specific folder without re-initializing the bridge.
+     * Navigates the WebView to a specific folder.
      * Safe to call multiple times (e.g., when switching SAF folders).
+     *
+     * Asks for the bridge rather than assuming it, and [initBridge]'s own guard is
+     * what makes that free: on a folder switch it returns at the flag and nothing
+     * is re-registered, so the once-per-WebView rule still holds. The call is here
+     * because this is the funnel every workbench load passes through, and one
+     * route reaches it with the flag cleared. See the paragraph on it below.
      *
      * [token] is the connection token, and it is a parameter so that the caller
      * which already has a thread to spare can read it there. The default keeps
@@ -2953,6 +2987,23 @@ class MainActivity : AppCompatActivity() {
         token: String? = nodeService?.getConnectionToken(),
     ) {
         val wv = webView ?: return
+        // The bridge can be gone by the time a folder is opened, and this is the
+        // only load that does not come through [loadVSCode], which asks for it.
+        // [recreateWebView] clears the flag and installs the bootstrap client, and
+        // its crash-loop exit shows the crash page and returns without ever
+        // reaching [loadVSCode]; [onServerReady] is refused for as long as that
+        // page is up, so nothing else puts the bridge back. A picker result
+        // landing afterwards would then load the real workbench under a client
+        // with no JS interface and no request interception: every VSCodroid
+        // command silently does nothing, the touch and keyboard injections never
+        // run, and CDN requests leave the device instead of being served from
+        // localhost, with nothing on screen saying so.
+        //
+        // The guard inside [initBridge] is the whole reason this is safe to put on
+        // the folder-switch path: it returns at `bridgeInitialized` before doing
+        // any work, so the ordinary case pays a field read and the once-per-WebView
+        // rule is untouched.
+        initBridge(port)
         // Every workbench load passes through here, and a workbench on screen is
         // a page that never refused a reload: a picker result landing while the
         // crash page is up navigates here directly, and a later self-restart's
