@@ -162,8 +162,12 @@ class MainActivity : AppCompatActivity() {
     /**
      * Whether a workbench page is loaded and able to receive an auth callback.
      *
-     * Reset by [recreateWebView], because the replacement is a new page: the ids
-     * the workbench is waiting on live in memory and do not survive it. See
+     * Cleared by every path that puts a page of this app's own in front of the
+     * workbench, because none of them can consume a callback: [recreateWebView],
+     * whose replacement is a new page and does not carry the ids the workbench is
+     * waiting on, since those live in its memory; [showErrorPage]; and
+     * [retryServerStart], whose loading page is a `data:` document. Set again
+     * only where the workbench itself has finished loading. See
      * [receiveCallbackIntent].
      */
     private var workbenchLoaded = false
@@ -2438,6 +2442,15 @@ class MainActivity : AppCompatActivity() {
      * again anyway. Only the start is missing, and only the start is sent.
      */
     private fun retryServerStart() {
+        // The page about to replace the workbench is a `data:` loading page, and
+        // it can consume nothing: an auth callback relayed into it writes
+        // `vscode-web.url-callbacks` into that document's own localStorage and
+        // dispatches a StorageEvent no listener exists for, inside a try/catch
+        // that only reaches the console. The sign-in then hangs with nothing said,
+        // where a false flag raises the notice that names the restart.
+        // [showErrorPage] and [recreateWebView] clear it for the same reason; this
+        // site loads over the workbench exactly as they do and was left out.
+        workbenchLoaded = false
         // The loading page promises the editor once the server answers, and the
         // readiness that follows has to be allowed to keep that promise.
         rendererCrashLoopShown = false
