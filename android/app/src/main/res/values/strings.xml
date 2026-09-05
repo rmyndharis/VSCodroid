@@ -252,6 +252,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s was kept in the device folder: the editor never had a copy of it. Delete it there if you no longer need it.</string>
+    <string name="saf_delete_refused">%1$s could not be deleted from the device folder, so it comes back the next time the folder is opened. Delete it in the file manager on your device.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

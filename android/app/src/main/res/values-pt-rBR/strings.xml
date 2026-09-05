@@ -252,6 +252,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s continua na pasta do dispositivo: o editor nunca teve uma cópia. Exclua por lá se não precisar mais.</string>
+    <string name="saf_delete_refused">Não foi possível excluir %1$s da pasta do dispositivo, então ele voltará na próxima vez que a pasta for aberta. Exclua-o no gerenciador de arquivos do dispositivo.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

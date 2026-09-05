@@ -2272,6 +2272,21 @@ class SafSyncEngine(private val context: Context) {
     internal var onKeptOnDevice: (file: File, isDirectory: Boolean) -> Unit = { _, _ -> }
 
     /**
+     * Told when the device folder would not delete something the editor did.
+     *
+     * Its own seam rather than [onKeptOnDevice], which reads as a decision this
+     * app made and explains it with a reason that is false here: the editor did
+     * have a copy, and it deleted it. This is the provider refusing, so the
+     * sentence has to be about the device folder rather than about the editor.
+     *
+     * Worth a notice at all because the outcome is not merely a stale document.
+     * The mirror entry is unlinked whatever the provider says, so the next time
+     * the folder is opened the document is copied back in and the file the user
+     * deleted returns, with nothing in between having said why.
+     */
+    internal var onDeleteRefused: (File) -> Unit = {}
+
+    /**
      * How much room is left where the mirror lives.
      *
      * A seam because no JVM test can make a real filesystem answer that it is full, and
@@ -2347,6 +2362,22 @@ class SafSyncEngine(private val context: Context) {
                 "never read",
         )
         onKeptOnDevice(localFile, isDirectory)
+    }
+
+    /**
+     * Says that a deletion did not reach the device folder.
+     *
+     * Not routed through [keepUnread], whose sentence is about content this sync
+     * never read and which is this app declining on purpose. Here the app asked
+     * and was told no.
+     */
+    private fun announceDeleteRefused(localFile: File) {
+        Logger.w(
+            tag,
+            "The device folder would not delete ${localFile.name}; the next open will " +
+                "copy it back into the editor",
+        )
+        onDeleteRefused(localFile)
     }
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
@@ -3075,12 +3106,20 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Deletes a document from the SAF tree.
      */
-    private fun deleteFromSaf(safDocUri: Uri) {
-        try {
-            DocumentsContract.deleteDocument(context.contentResolver, safDocUri)
-        } catch (e: Exception) {
-            Logger.w(tag, "Failed to delete from SAF: ${e.javaClass.simpleName}")
-        }
+    /**
+     * Removes the document, and answers whether the device folder agreed.
+     *
+     * The Boolean is the point. `deleteDocument` reports a refusal by returning
+     * false as readily as by throwing, and both used to end here: the mirror
+     * entry is unlinked either way, so the file left the editor while the device
+     * kept it, and the next open copied it back. What a user sees is a file they
+     * deleted returning, with nothing in between saying why.
+     */
+    private fun deleteFromSaf(safDocUri: Uri): Boolean = try {
+        DocumentsContract.deleteDocument(context.contentResolver, safDocUri)
+    } catch (e: Exception) {
+        Logger.w(tag, "Failed to delete from SAF: ${e.javaClass.simpleName}")
+        false
     }
 
     // -- Internal: Write-back Processing --
@@ -3115,9 +3154,21 @@ class SafSyncEngine(private val context: Context) {
                 }
             }
             SyncType.DELETE -> {
-                if (job.safDocUri != null) {
-                    deleteFromSaf(job.safDocUri)
+                // A null uri is the same outcome as a refusal, and deliberately
+                // shares the branch: [findChildDocId] folds a failed provider
+                // query into the null it returns for genuine absence, so "could
+                // not be resolved" and "is not there" arrive here as one answer,
+                // and both leave the device holding what the editor no longer
+                // shows.
+                if (job.safDocUri == null || !deleteFromSaf(job.safDocUri)) {
+                    announceDeleteRefused(File(job.localPath))
                 }
+                // Both cleanups below run whatever the device folder decided.
+                // The mirror entry is already unlinked, so what they remove is
+                // stale either way, and skipping them on a refusal would leave
+                // the reclaim reporting the copy for ever as holding work the
+                // device does not have.
+                //
                 // The enqueue resolved that path to the document it was about to
                 // remove, and the resolution is cached. Left behind, the entry
                 // answers for a name the device no longer holds: the next event

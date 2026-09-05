@@ -256,6 +256,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">Файл %1$s оставлен в папке на устройстве: у редактора не было его копии. Удалите его там, если он больше не нужен.</string>
+    <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому файл появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

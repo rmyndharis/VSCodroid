@@ -250,6 +250,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기에 사본이 없었기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
+    <string name="saf_delete_refused">%1$s 을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 파일이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

@@ -252,6 +252,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s cihaz klasöründe tutuldu: düzenleyicide bunun kopyası hiç olmadı. Buna artık ihtiyacınız yoksa orada silin.</string>
+    <string name="saf_delete_refused">%1$s cihaz klasöründen silinemedi, bu yüzden klasör bir dahaki açılışta yeniden görünecek. Cihazınızdaki dosya yöneticisinden silin.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

@@ -705,6 +705,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // The other way a deletion ends with the device still holding the file,
+        // and the one the app did not choose: the provider said no. Worth its own
+        // sentence because the file comes back on the next open, so silence here
+        // reads as the editor undoing a deletion by itself.
+        safManager.onDeleteRefused { refused ->
+            val message = appContext.getString(R.string.saf_delete_refused, refused.name)
+            toMainThread.post {
+                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+            }
+        }
+
         setupWebView()
         setupExtraKeyRow()
         setupBackNavigation()

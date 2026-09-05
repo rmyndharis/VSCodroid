@@ -146,6 +146,24 @@ class SafStorageManager(context: Context) {
     }
 
     /**
+     * Told when the device folder refused a deletion the editor made.
+     *
+     * Shares [lastKeptAnnouncedAt] with [onKeptOnDevice] rather than taking a
+     * stamp of its own, for the reason the comment above gives for the two cases
+     * already sharing it: both sentences end "it is still in the device folder",
+     * and an `rm -r` that a provider refuses raises one per entry. One notice for
+     * the burst is the useful count; the log carries every name.
+     */
+    fun onDeleteRefused(announce: (File) -> Unit) {
+        syncEngine.onDeleteRefused = { file ->
+            val last = lastKeptAnnouncedAt.get()
+            if (claimAnnouncement(SystemClock.elapsedRealtime(), last, lastKeptAnnouncedAt)) {
+                announce(file)
+            }
+        }
+    }
+
+    /**
      * Told when a folder opened without every document reaching the mirror.
      *
      * Forwarded rather than set on the engine directly, for the reason

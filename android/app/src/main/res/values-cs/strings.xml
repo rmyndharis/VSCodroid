@@ -256,6 +256,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">Soubor %1$s zůstal ve složce v zařízení: editor jeho kopii nikdy neměl. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
+    <string name="saf_delete_refused">Soubor %1$s se nepodařilo smazat ze složky v zařízení, takže se při příštím otevření složky objeví znovu. Smažte jej ve správci souborů v zařízení.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

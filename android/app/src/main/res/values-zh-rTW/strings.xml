@@ -250,6 +250,7 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s 已保留在裝置資料夾中：編輯器從未取得它的副本。若不再需要，請在該處刪除。</string>
+    <string name="saf_delete_refused">無法從裝置資料夾中刪除 %1$s，下次開啟該資料夾時它會再次出現。請在裝置的檔案管理員中刪除。</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
