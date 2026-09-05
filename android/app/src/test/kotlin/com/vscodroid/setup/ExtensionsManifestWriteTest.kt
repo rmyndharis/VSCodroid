@@ -145,6 +145,48 @@ class ExtensionsManifestWriteTest {
         )
     }
 
+    /**
+     * That the workbench cannot offer to uninstall the app's own extensions.
+     *
+     * Its Uninstall action disables itself for a builtin and for nothing else,
+     * and the server decides that from the metadata written here. Removing one
+     * is not recoverable from inside the editor: no gallery publishes
+     * `vscodroid.*`, and the relist rule declines an id already recorded, so the
+     * directory comes back on the next update and stays unlisted.
+     *
+     * The fetched extension beside it is the half that must not change. Marking
+     * everything builtin would take Uninstall away from extensions the user
+     * chose and can reinstall.
+     */
+    @Test
+    fun `the app's own extensions are builtin and a fetched one is not`() {
+        val fetched = "publisher.fetched-1.0.0"
+        File(extensionsDir, fetched).mkdirs()
+        File(extensionsDir, "$fetched/package.json").writeText(
+            """{"publisher":"publisher","name":"fetched","version":"1.0.0"}"""
+        )
+
+        FirstRunSetup::class.java
+            .getDeclaredMethod("generateExtensionsManifest", File::class.java, Array<String>::class.java)
+            .apply { isAccessible = true }
+            .invoke(FirstRunSetup(context), extensionsDir, arrayOf(dirName, fetched))
+
+        val entries = JSONArray(manifestFile.readText())
+        val byId = (0 until entries.length()).associate {
+            val entry = entries.getJSONObject(it)
+            entry.getJSONObject("identifier").getString("id") to entry.getJSONObject("metadata")
+        }
+        assertTrue(
+            byId.getValue(expectedId).optBoolean("isBuiltin", false),
+            "the workbench would offer to uninstall the app's own extension, and nothing " +
+                "in the editor could put it back",
+        )
+        assertTrue(
+            !byId.getValue("publisher.fetched").optBoolean("isBuiltin", false),
+            "a downloaded extension was marked builtin, so the user cannot remove it",
+        )
+    }
+
     /** Non-empty, so the cleanup delete() cannot quietly reclaim it. */
     private fun blockTheWrite() {
         val blocker = File(extensionsDir, "${manifestFile.name}.tmp~")

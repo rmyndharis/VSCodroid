@@ -3184,6 +3184,29 @@ claude() {
                 put("metadata", JSONObject().apply {
                     put("installedTimestamp", System.currentTimeMillis())
                     put("source", "bundled")
+                    // Our own four are the app, not extensions a user chose, and
+                    // without this the workbench offers to uninstall them: its
+                    // Uninstall action disables itself only for a builtin
+                    // (`if(this.extension.isBuiltin){this.enabled=!1;return}` in
+                    // workbench.js), and the server derives that from what is
+                    // written here (`isBuiltin:e.isBuiltin||!!e.metadata?.isBuiltin`
+                    // in server-main.js).
+                    //
+                    // Removing one is not recoverable from inside the editor.
+                    // Uninstalling the bridge takes with it the only route to the
+                    // device folder picker, the toolchain screen and the storage
+                    // tools; no gallery publishes `vscodroid.*`, so the Extensions
+                    // view cannot offer it back. The directory returns on the next
+                    // app update, because [bundledDirsToExtract] exempts this prefix
+                    // from the "the user removed it, leave it removed" rule, but
+                    // [bundledIdsToRelist] declines an id [rememberBundledIds] has
+                    // already recorded, so it sits there unlisted and unloaded.
+                    //
+                    // Relisting instead would be the wrong half to fix: that rule
+                    // exists so a downloaded extension a user deliberately removed
+                    // does not come back on every update. This keeps that promise
+                    // and takes ours out of the argument entirely.
+                    if (dirName.startsWith(OWN_EXTENSION_PREFIX)) put("isBuiltin", true)
                 })
             }
         } catch (e: Exception) {
