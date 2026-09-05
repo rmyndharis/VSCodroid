@@ -2743,6 +2743,13 @@ class SafSyncEngine(private val context: Context) {
      * Does not descend. [createInSaf] owns that, so that the recursion lives in one
      * place and this stays the single-entry operation both it and
      * [createChildrenInSaf] need.
+     *
+     * ⚠️ A file's mirror copy can come out of this under a DIFFERENT name: where the
+     * provider stored the document as something else, [mirrorNamedAsStored] renames the
+     * mirror to match, so [localFile] then names a path that is gone. [createInSaf] is safe
+     * as written because only a directory reaches its second half and a directory is never
+     * renamed here; a caller that grows a use of [localFile] after this returns has to say
+     * why it is right.
      */
     private fun createOneInSaf(localFile: File, parentSafUri: Uri, treeUri: Uri): Uri? {
         return try {
@@ -2759,10 +2766,17 @@ class SafSyncEngine(private val context: Context) {
                 }
                 DocumentsContract.createDocument(
                     context.contentResolver, parentSafUri, mimeType, localFile.name
-                )?.also { warnIfNameNotHonoured(it, localFile.name) }
+                )
             } ?: return null
 
-            if (localFile.isFile) {
+            // The device folder decides what the file is called and the mirror follows;
+            // [mirrorNamedAsStored] holds the whole argument, including why the three
+            // obvious repairs are each worse. Only for a document this call created: one
+            // that was already there was found BY the mirror's name, so the two agree.
+            val file =
+                if (existingDocId == null) mirrorNamedAsStored(docUri, localFile) else localFile
+
+            if (file.isFile) {
                 // The same question [handleMirrorEvent] asks before queueing a job, asked
                 // again here because this path does not come through it. A directory
                 // create, or a move whose other half never arrived, walks the tree
@@ -2774,12 +2788,12 @@ class SafSyncEngine(private val context: Context) {
                 // the device, would otherwise be written back as whatever placeholder the
                 // mirror holds -- truncating a document nothing here has ever seen.
                 if (writeWouldReplaceUnreadDocument(
-                        localFile.absolutePath, existingDocId != null, unfetched,
+                        file.absolutePath, existingDocId != null, unfetched,
                     )
                 ) {
-                    refuseUnreadDocument(localFile, localFile.name)
+                    refuseUnreadDocument(file, file.name)
                 } else {
-                    writeLocalToSaf(localFile, docUri)
+                    writeLocalToSaf(file, docUri)
                 }
             }
             // Cache the document ID for future write-back lookups, but only while the
@@ -2800,8 +2814,13 @@ class SafSyncEngine(private val context: Context) {
                 }
             }
             if (parentRelPath != null) {
-                val relPath = if (parentRelPath.isEmpty()) localFile.name
-                    else "$parentRelPath/${localFile.name}"
+                // [file] and not [localFile]. Where the provider stored the document under
+                // another name the mirror was renamed to match above, and this entry has to
+                // name the document as both sides now spell it. Filed under the requested
+                // name instead, the MOVED_FROM that rename raises resolves straight to this
+                // document and the write-back deletes it.
+                val relPath = if (parentRelPath.isEmpty()) file.name
+                    else "$parentRelPath/${file.name}"
                 cacheDocId(treeUri, relPath, DocumentsContract.getDocumentId(docUri))
             }
             docUri
@@ -2815,27 +2834,73 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Says so when the provider stored a document under a name other than the one it was
-     * asked for.
+     * Renames the mirror copy to the name the device folder really gave the document, and
+     * answers with the file under that name.
      *
      * The name is the only thing tying a mirror file to its device document: every lookup
      * here is [findChildDocId] by display name, and the cache below is keyed by the
-     * mirror's own path. A provider that renames on create therefore leaves the device
-     * holding the bytes under a name the next [initialSync] reads as a second file, so the
-     * editor shows both and the next edit of the original creates a third.
+     * mirror's own path. A provider that renames on create therefore leaves the two sides
+     * disagreeing about what the file is called, and nothing afterwards converges. This
+     * was written as a warning and left unrepaired on the reading that it costs one
+     * duplicate; it does not stop there. The next [initialSync] fetches the stored name
+     * into the mirror beside the original, so the editor shows two files, and then
+     * [uploadMirrorOnlyDocuments] reads the original as a file only the mirror has and
+     * creates it again. Its record cannot say otherwise, because a locally created file
+     * was never recorded, and for the same reason [reconcileDeletions] will not tidy any
+     * of it. So the device folder gains one more document on every open, without bound.
+     * That is what a user reports as the editor making files they did not ask for.
      *
-     * Said and not repaired, and both halves are deliberate. What made this happen was the
-     * type this app asked for, which [CREATED_FILE_MIME_TYPE] settles for every extension.
-     * What is left is a provider normalising the name itself, as the platform one does for
-     * characters FAT cannot hold, and a rename back would be handed to the same
-     * normaliser; deleting the document it did make would take the user's bytes off the
-     * device to tidy up a name, which is the wrong way round. So the bytes stay where the
-     * provider put them and this is the line that explains the duplicate in a bug report.
+     * The mirror follows the device rather than the other way round, because the three
+     * other repairs are each worse. Renaming the document back hands the same name to the
+     * same normaliser that just rejected it. Deleting the document it did make takes the
+     * user's bytes off the device to tidy up a name. Refusing the create leaves the file
+     * inside the app only. What is left is the mirror, which is this app's own copy:
+     * [setAsideDivergedMirror] already renames one out from under an open editor, and what
+     * tells the user here is what tells them there, the name in the explorer.
      *
-     * A provider that will not answer for the document it just made proves nothing either
-     * way, and this stays quiet: the create itself succeeded.
+     * What used to cause this was the type this app asked for, which [CREATED_FILE_MIME_TYPE]
+     * settles for every extension. What is left is a provider normalising the name itself,
+     * as the platform one does for characters FAT cannot hold, and a name the folder turns
+     * out to hold already, which providers answer by inventing "notes (1).txt".
+     *
+     * Files only, which is a scope limit rather than an oversight: [createInSaf] and
+     * [deviceDirectoryFor] both descend into a directory by the path they came in with, so
+     * renaming one underneath them would strand every child in the mirror.
+     *
+     * **The rename is observed, and that is what decides where the caller caches.** On the
+     * write-back path the mirror is watched, so this raises MOVED_FROM on the old name and
+     * MOVED_TO on the new one. The MOVED_FROM arrives as a DELETE whose document is
+     * resolved from the old path, and it resolves to nothing only because the caller files
+     * this document under the name returned here. Filed under the requested name instead,
+     * that DELETE calls `deleteDocument` on the document this call just made. The MOVED_TO
+     * arrives as a CREATE, finds the document by its stored name and writes the same bytes
+     * into it once more, which costs one provider write and changes nothing.
+     *
+     * **What it does not close is the old name being written again.** Nothing here
+     * remembers that the folder refused a name, and the mirror no longer carries it, so a
+     * producer still holding the old spelling starts the whole thing from the top: the
+     * lookup misses, because the device has never held that name, `createDocument` makes a
+     * second document, which the provider names past the first as "notes (1).txt", and the
+     * mirror follows that one instead. A checked-out repository is where it bites, since
+     * the tracked spelling is the one the folder will not store: the working tree reads
+     * dirty against a path the mirror gave up, and every `git checkout` of it leaves one
+     * more document. Shipped this way because the bound is how often something writes the
+     * old name, against one more document on every open of the folder while the mirror
+     * kept the refused name. Closing it needs a per-folder memory of the names a provider
+     * would not store, scrubbed where [initialSync] scrubs [unfetched]; the count is
+     * pinned in `SafCreatedDocumentNameTest` so the ceiling is measured rather than
+     * asserted.
+     *
+     * Three refusals, each leaving the caller exactly where it was:
+     * - a provider that will not answer for the document it just made proves nothing
+     *   either way, and the create itself succeeded;
+     * - a stored name that is not one path segment would move the file out of the mirror,
+     *   which is the reason [isSafeSegment] exists on the way in;
+     * - a mirror that already holds the stored name, because `rename(2)` replaces its
+     *   destination silently and that copy is the device's own, fetched by an earlier sync.
      */
-    private fun warnIfNameNotHonoured(docUri: Uri, requestedName: String) {
+    private fun mirrorNamedAsStored(docUri: Uri, localFile: File): File {
+        if (!localFile.isFile) return localFile
         val stored = try {
             context.contentResolver.query(
                 docUri,
@@ -2850,17 +2915,27 @@ class SafSyncEngine(private val context: Context) {
         } catch (e: Exception) {
             Logger.d(
                 tag,
-                "Could not read back the name of $requestedName: ${e.javaClass.simpleName}",
+                "Could not read back the name of ${localFile.name}: ${e.javaClass.simpleName}",
             )
             null
         }
-        if (stored != null && stored != requestedName) {
+        if (stored == null || stored == localFile.name) return localFile
+
+        val renamed = if (isSafeSegment(stored)) File(localFile.parentFile, stored) else null
+        if (renamed == null || renamed.exists() || !localFile.renameTo(renamed)) {
             Logger.w(
                 tag,
-                "The device folder stored $requestedName as $stored; the editor will show " +
-                    "both the next time the folder is opened",
+                "The device folder stored ${localFile.name} as $stored and the mirror could " +
+                    "not follow; the editor will show both the next time the folder is opened",
             )
+            return localFile
         }
+        Logger.i(
+            tag,
+            "The device folder stored ${localFile.name} as $stored; the mirror copy now " +
+                "carries that name too",
+        )
+        return renamed
     }
 
     /**

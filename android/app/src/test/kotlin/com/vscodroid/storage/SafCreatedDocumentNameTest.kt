@@ -12,6 +12,7 @@ import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -213,8 +214,8 @@ class SafCreatedDocumentNameTest {
      * The name is read back, because the type is not the only way a provider can decide
      * to store a document as something else.
      *
-     * Negative control: drop the `?.also { warnIfNameNotHonoured(it, localFile.name) }`
-     * from `createOneInSaf` and this goes red while the case below it stays green.
+     * Negative control: drop the `mirrorNamedAsStored` call from `createOneInSaf` and this
+     * goes red while the case below it stays green.
      */
     @Test
     fun `a provider that stores another name says so`() {
@@ -247,6 +248,90 @@ class SafCreatedDocumentNameTest {
             logged.none { it.contains("stored notes.txt as") },
             "an ordinary create was reported as a rename: $logged",
         )
+    }
+
+    /**
+     * The repair, and the case the read-back existed without for a while.
+     *
+     * Saying it is not enough. The mirror keeping the refused name is what makes the next
+     * open fetch the stored name beside it, and the open after that create a third
+     * document, one more on every open for as long as the folder is used. The mirror is
+     * this app's own copy, so it is the side that moves.
+     */
+    @Test
+    fun `the mirror follows a name the device folder rewrote`() {
+        alwaysStoreAs = "a_b.txt"
+
+        create("a:b.txt")
+
+        assertEquals(
+            listOf("a_b.txt"), workspace.list()!!.sorted(),
+            "the mirror kept a name the device folder refused, so reopening the folder " +
+                "fetches the stored name beside it and the open after that makes a third",
+        )
+    }
+
+    /**
+     * `rename(2)` replaces its destination without a word, and here that destination is
+     * the device's own copy, fetched by an earlier sync. The duplicate is the lesser loss.
+     */
+    @Test
+    fun `a stored name the mirror already holds does not replace that copy`() {
+        File(workspace, "a_b.txt").writeText("the device copy")
+        alwaysStoreAs = "a_b.txt"
+
+        create("a:b.txt", "the local copy")
+
+        assertEquals(listOf("a:b.txt", "a_b.txt"), workspace.list()!!.sorted())
+        assertEquals("the device copy", File(workspace, "a_b.txt").readText())
+    }
+
+    /**
+     * A display name is whatever text the provider returned, and nothing promises it is
+     * one path segment. `walkTree` refuses such a name on the way in; the rename out is
+     * the same question one direction over, and the file would leave the mirror entirely.
+     */
+    @Test
+    fun `a stored name that is not one path segment leaves the mirror alone`() {
+        alwaysStoreAs = "../escaped.txt"
+
+        create("a:b.txt")
+
+        assertEquals(listOf("a:b.txt"), workspace.list()!!.sorted())
+        assertFalse(
+            File(workspace.parentFile, "escaped.txt").exists(),
+            "the mirror file was renamed out of the mirror",
+        )
+    }
+
+    /**
+     * The ceiling the repair leaves behind, pinned rather than described.
+     *
+     * Nothing remembers that the folder refused a name, and the mirror no longer carries
+     * it, so a producer still holding the old spelling starts the whole thing again: the
+     * lookup misses, because the device has never held that name, and a second document
+     * is made beside the first. A checked-out repository is where it bites, since the
+     * tracked spelling is the one the folder will not store, so the working tree reads
+     * dirty against a path the mirror gave up and every `git checkout` leaves one more
+     * document. Bounded by that producer, against one more on every open of the folder
+     * before the mirror followed at all, which is why it ships this way.
+     *
+     * Whoever closes it turns this case red. The numbers are here so they know what to
+     * expect: one document and one mirror file, both under the stored name.
+     */
+    @Test
+    fun `writing the refused name again makes one more document`() {
+        alwaysStoreAs = "a_b.txt"
+        create("a:b.txt")
+
+        // What `buildUniqueFile` answers once the first name is taken. Set by hand
+        // because the fixture cannot work it out: its folder cursor is always empty,
+        // which is also why the lookup misses on the way back in.
+        alwaysStoreAs = "a_b (1).txt"
+        create("a:b.txt")
+
+        assertEquals(listOf("a_b.txt", "a_b (1).txt"), stored)
+        assertEquals(listOf("a_b (1).txt", "a_b.txt"), workspace.list()!!.sorted())
     }
 
     private companion object {
