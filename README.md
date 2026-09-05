@@ -244,10 +244,11 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 
 The install figure is larger than what the app ends up occupying because extraction
 needs room to work: it is the asset tree plus about 101 MB of headroom, which covers
-the filesystem block rounding a tree of 22,000 files costs. The app quotes the figure when
-it refuses to start for lack of space, and on an upgrade it quotes a smaller one,
-because what is already unpacked is credited. Freeing only what the extracted size
-suggests is what leaves setup failing partway.
+the filesystem block rounding a tree of 22,000 files costs. When it refuses to
+start for lack of space it asks for the shortfall it measured, not for the whole
+figure, so a device already holding part of the tree is asked only for what is
+missing. Freeing only what the extracted size suggests is what leaves setup
+failing partway.
 
 These move with every VS Code bump. Re-measure rather than trusting them:
 

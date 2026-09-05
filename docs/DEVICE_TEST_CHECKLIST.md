@@ -72,6 +72,7 @@
 | SC-6 | Foldable (if available) | Fold/unfold device | UI adapts to new dimensions | | |
 | SC-7 | Side bar auto-close on a phone | Portrait, open the Explorer, tap a file | Side bar closes on its own, editor takes the full width | | |
 | SC-8 | Side bar stays open on a tablet | Same steps on a device wider than 600dp | Side bar stays where it was; `settings.json` has `vscodroid.layout.compactScreen` false and no `vscodroid.layout.autoHideSideBar` at all | | |
+| SC-10 | The side bar setting has a control | Settings, search `autoHideSideBar` | The row draws a dropdown offering auto, on and off, not an "Edit in settings.json" link. Pick `on` on a tablet and `off` on a phone and check each one overrides the screen | | |
 | SC-9 | A setting you change is the one that applies | Settings, User tab, set `editor.minimap.enabled` true, reopen a file, then restart the app | The minimap appears and is still there after the restart. It is the app's own defaults that must not win here | | |
 
 ## 5. Editor Operations
@@ -141,7 +142,7 @@ fresh.
 
 | ID | Metric | Steps | Target | Actual | Pass/Fail | Notes |
 |----|--------|-------|--------|--------|-----------|-------|
-| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 769 MiB across 23,558 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
+| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 767 MiB across 22,307 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
 | PF-2 | Cold start (subsequent) | Kill app, re-launch, time to editor | <5s | | | |
 | PF-3 | Warm start | Home → return to app | <2s | | | |
 | PF-4 | Memory (idle) | Open app, check `dumpsys meminfo` | <400MB | | | |
@@ -255,7 +256,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
 | Keyboard Input | 21 | | | |
-| Screen & Orientation | 9 | | | |
+| Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 6 | | | |
 | Background/Foreground | 8 | | | |
@@ -265,7 +266,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **120** | | | |
+| **Total** | **121** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

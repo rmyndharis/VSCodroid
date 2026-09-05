@@ -325,7 +325,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Constraint | Details |
 |-----------|---------|
 | RAM on low-end devices | 4GB devices must work without OOM |
-| Storage on 64GB devices | About 767 MiB extracted for core, and about 863 MiB free to unpack it: the tree plus the 96 MiB of slack `FirstRunSetup.requiredExtractionBytes` adds for per-file block rounding. The refusal message names the same figure as 905 MB, in decimal |
+| Storage on 64GB devices | About 767 MiB extracted for core, and about 863 MiB free to unpack it: the tree plus the 96 MiB of slack `FirstRunSetup.requiredExtractionBytes` adds for per-file block rounding. The refusal asks for the SHORTFALL it measured, in decimal MB, not for the whole demand: a device already holding most of the tree is asked for what is missing |
 | CPU throttling | Android may throttle background processes |
 | Battery optimization | Doze mode may affect background server |
 

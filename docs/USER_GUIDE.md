@@ -884,8 +884,12 @@ VSCodroid's own commands, settings and the Get Started walkthrough are
 translated into the same thirteen languages. An extension you install from Open
 VSX carries its own translations if its author wrote any, and English if not.
 
-One thing stays English whatever the phone is set to: the occasional string the
-translation packs do not cover, roughly one in fifty.
+Two things stay English whatever the phone is set to. The occasional editor
+string the translation packs do not cover, roughly one in fifty. And the
+messages an extension shows while it is running, VSCodroid's own included: what
+is translated for an extension is what its manifest declares, its commands and
+its settings, while the notices it puts on screen as it works are written into
+its code.
 
 Changing the language while VSCodroid is running takes effect on the spot: the
 editor reloads in the new one. What does not change is anything already written,
@@ -898,7 +902,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 805 MB to internal storage. With both toolchains installed, expect around 996 MB. Setup needs about 905 MB free before it starts, which is more than it ends up occupying because extraction needs room to work; the app quotes that figure if it refuses to start. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 805 MB to internal storage. With both toolchains installed, expect around 996 MB. Setup needs about 905 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 
