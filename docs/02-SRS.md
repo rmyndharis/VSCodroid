@@ -193,7 +193,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-PERF-04 | File open (< 1MB file) | < 1 second | P0 |
 | NFR-PERF-05 | Extension install + activate | < 30 seconds | P1 |
 | NFR-PERF-06 | Terminal command response | < 100ms input echo | P0 |
-| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 767 MiB across roughly 23,500 files, unpacked one at a time | P1 |
+| NFR-PERF-07 | First-run binary extraction | Progress reported throughout, no time target. About 767 MiB across roughly 22,300 files, unpacked one at a time | P1 |
 
 ### 4.2 Resource Usage (NFR-RES)
 

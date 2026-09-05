@@ -169,7 +169,7 @@ android {
         // tree to unpack either, so the gate keeps matching what shipped.
         //
         // One walk, five figures. Each of the fields below used to call
-        // `fileTree(...).files` itself: the whole 23,494-file tree twice over
+        // `fileTree(...).files` itself: the whole 22,320-file tree twice over
         // (this total and the maximum under it) and each of the three subtrees a
         // third time. All five run during the configuration phase of every
         // invocation, `lint`, `testDebugUnitTest` and `assembleDebugAndroidTest`
