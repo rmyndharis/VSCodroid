@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor's interface now follows your phone's language: Chinese (Simplified and Traditional), Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish and Turkish. Nothing to install, and a language nobody has translated the editor into stays English.
 - The app's own screens are translated into those same languages, and Android's per-app language picker now lists them.
 - VSCodroid's own commands, settings and the Get Started walkthrough are translated into the same thirteen languages as the editor.
+- Attaching the debugger to a Node process you started with `--inspect` works, and the user guide says which debug routes do and do not.
 - The user guide covers installing an extension from a VSIX file, and what running and debugging does and does not do on the device.
 
 ### Fixed

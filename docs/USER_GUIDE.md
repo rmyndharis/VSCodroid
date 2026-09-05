@@ -570,20 +570,27 @@ the same list beside VSCodroid's three.
 
 ### What Works Today, Measured
 
-Starting a launch configuration on the device does not run your program yet, and
-this is the honest state of it rather than a caveat:
+**Attaching works.** Start your program yourself with the inspector open and
+attach to it:
 
-- **Launching in the integrated terminal** (what **Node.js: Run Current File**
-  and **NestJS: Debug** do) fails with `bash: /usr/bin/env: No such file or
-  directory`. The editor builds that command line for any POSIX shell, and
-  Android has no `/usr/bin` at all. The debug session starts and the toolbar
-  appears, so it looks like it is working until you read the terminal.
-- **Attaching** to a process you started yourself is the route that avoids that
-  command line entirely, and is the one to try if you need a debugger today.
+```bash
+node --inspect server.js
+```
 
-Fixing the first properly means a change inside the editor's own server build
-rather than anything in the app, so it is tracked as its own piece of work.
-Until then, `console.log` and the terminal are the working route.
+Node prints `Debugger listening on ws://127.0.0.1:9229/...`; start **Attach to
+Node.js** and it connects, and the process itself reports `Debugger attached.`
+The configuration sets `restart`, so it reconnects when a watcher restarts the
+process. Breakpoints, stepping and the call stack all work from there.
+
+**Launching does not yet.** **Node.js: Run Current File** and **NestJS: Debug**
+start a session, put the toolbar up and then hang without running your program.
+The reason is in the debug adapter rather than in this app: it starts a helper
+process for the debugger connection with a stripped environment, three variables
+and no library path, and this device's Node cannot start without one. It leaves
+no error on screen, which is why this section says so plainly.
+
+Until that is fixed, attach to a process you started yourself, or use
+`console.log` and the terminal.
 
 ### What Has No Debugger Here At All
 
@@ -717,11 +724,10 @@ The status bar shows a phantom process count. This tells you how many background
 
 ### Starting a Debug Session
 
-The debug adapter ships and the launch configurations are there, but starting one
-does not run your program on the device yet: the editor builds its terminal
-command around `/usr/bin/env`, which Android does not have. See [Running and
-Debugging](#running-and-debugging) for what that looks like and what to use
-instead.
+Attaching to a process you started with `--inspect` works. Launching one from a
+configuration does not yet: the debug adapter starts its helper process with a
+stripped environment that this device's Node cannot start under. See [Running
+and Debugging](#running-and-debugging).
 
 ### Native npm Packages
 
