@@ -516,7 +516,26 @@ function start(log) {
                 closeWith(clientSocket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
                 return;
             }
-            const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
+            // The same rule the plain leg keeps, and this leg was left out of it.
+            // It spliced raw bytes to whatever the URI named while reading the
+            // scheme for one thing only, the default port: an https:// upgrade
+            // was dialled on 443 and then written in the clear, so a request
+            // head carrying an Authorization header or a cookie left the device
+            // unencrypted on the port that promised TLS, and every other scheme,
+            // wss:// included, fell to 80 and was dialled as plain HTTP.
+            //
+            // Refused rather than tunnelled, because this leg has no TLS in it
+            // and adding some would be a second implementation of what CONNECT
+            // already does properly; a client that wants TLS through a proxy
+            // opens a tunnel. ws: is allowed beside http: because it means the
+            // same plaintext upgrade and is what a websocket client may put in
+            // the request line; a proxied browser sends http: there, which is
+            // what the case in scripts/test-dns-proxy.js does.
+            if (target.protocol !== 'http:' && target.protocol !== 'ws:') {
+                closeWith(clientSocket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+                return;
+            }
+            const port = Number(target.port) || 80;
             upstream = net.connect(port, bareHost(target.hostname), () => {
                 const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`];
                 for (let i = 0; i < req.rawHeaders.length; i += 2) {

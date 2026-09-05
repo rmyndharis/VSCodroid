@@ -681,6 +681,31 @@ async function main() {
         /^HTTP\/1\.1 407 /,
         `an unauthenticated ws:// upgrade was tunnelled: ${anonymousUpgrade}`,
     );
+
+    // The scheme rule reaches this leg too, and it was the one left out of it.
+    // An https:// upgrade used to be dialled on 443 and then written in the
+    // clear, taking any Authorization header in the request head with it, and
+    // wss:// fell to port 80 for the same reason. Asserted at the recorder,
+    // where a byte reaching the origin at all is the failure.
+    for (const scheme of ['https', 'wss']) {
+        firstBytes.length = 0;
+        const refused = await rawExchange(
+            proxyPort,
+            `GET ${scheme}://127.0.0.1:${recorderPort}/socket HTTP/1.1\r\n` +
+                `Host: 127.0.0.1:${recorderPort}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+                `Authorization: Bearer not-for-the-wire\r\n` +
+                `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+        );
+        assert.match(
+            refused, /^HTTP\/1\.1 400 /,
+            `a ${scheme}:// upgrade was not refused: ${refused}`,
+        );
+        assert.strictEqual(
+            firstBytes.length, 0,
+            `a ${scheme}:// upgrade reached the origin in the clear: ` +
+                JSON.stringify(firstBytes.map((b) => b.subarray(0, 40).toString('latin1'))),
+        );
+    }
     wsOrigin.close();
 
     // --- a flood of unauthenticated sockets is bounded --------------------
