@@ -305,11 +305,13 @@ function start(log) {
             // read HTTPS_PROXY out of the environment themselves, and this
             // process exports it to the whole editor server and every terminal.
             //
-            // servername is deliberately not passed. Node derives SNI from
-            // `host` for a name and correctly omits it for an IP literal;
-            // measured on the bundled runtime, setting it explicitly for an IP
-            // literal fails the handshake with ECONNRESET, so supplying it
-            // would trade this bug for a narrower one.
+            // servername is deliberately not passed, and the Host header below
+            // is what makes that safe. Node does not take SNI from `host`: its
+            // agent reads the OUTGOING Host header, strips the port, answers
+            // with nothing when that value is an IP literal, and only falls
+            // back to `host` when there is no Host header at all. Setting
+            // servername by hand is not the way out either, because passing an
+            // IP literal there fails the handshake outright.
             const secure = target.protocol === 'https:';
             const upstream = (secure ? https : http).request(
                 {
@@ -321,7 +323,26 @@ function start(log) {
                     port: target.port || (secure ? 443 : 80),
                     method: req.method,
                     path: target.pathname + target.search,
-                    headers: req.headers,
+                    // Host follows the absolute URI and never the client's own
+                    // header. RFC 9110 requires a proxy to prefer the
+                    // request-target's authority, and here that is not
+                    // bookkeeping: the header decides SNI and therefore which
+                    // certificate the origin is checked against. Forwarded
+                    // verbatim it is whatever the client wrote, and the shape
+                    // `http.request` produces when it is handed an absolute URI
+                    // as its path is the proxy's own address, which is an IP
+                    // literal, which means no server name is sent at all.
+                    // Measured on the bundled runtime by reading the record off
+                    // the wire: Host `evil.example` put that name in the
+                    // ClientHello for a socket dialled at 127.0.0.1, and an
+                    // `IP:port` Host produced no server_name extension. An
+                    // origin that keys its certificate on SNI, which
+                    // raw.githubusercontent.com does, answers the second with
+                    // the wrong certificate or with nothing.
+                    //
+                    // target.host carries the port only when it is not the
+                    // scheme's default, which is what a Host header should say.
+                    headers: { ...req.headers, host: target.host },
                 },
                 (upstreamRes) => {
                     // The origin has answered, so the setup bound below is done
