@@ -31,13 +31,51 @@ class ToolchainInstallSpaceTest {
      */
     @Test
     fun `the reservation covers both copies the install holds at once`() {
-        assertEquals(342_000_000L, toolchainInstallBytes(146_000_000L))
+        assertEquals(342_000_000L, toolchainInstallBytes(146_000_000L, 55_000_000L, 0L))
     }
 
     @Test
     fun `and scales with the tree rather than being a fixed figure`() {
-        assertEquals(SPACE_BUFFER, toolchainInstallBytes(0L))
-        assertEquals(2 * 34_000_000L + SPACE_BUFFER, toolchainInstallBytes(34_000_000L))
+        assertEquals(SPACE_BUFFER, toolchainInstallBytes(0L, 0L, 0L))
+        assertEquals(
+            2 * 34_000_000L + SPACE_BUFFER,
+            toolchainInstallBytes(34_000_000L, 9_000_000L, 0L),
+        )
+    }
+
+    /**
+     * A credited reinstall still has to pay for the unpacking, which is a stage
+     * the credit is worth nothing at.
+     *
+     * The archive and the staging tree it expands into are both on disk for the
+     * whole of the extraction; only the copy after it overwrites the tree the
+     * credit stands for, and it frees those bytes file by file as it goes. Java
+     * 17 as it ships today: 55.4 MB downloaded, 156 MB unpacked, on a device that
+     * already holds the whole tree. Taking the credit off a single doubled figure
+     * reserved 206 MB for an extraction that needs 211.4 MB, so the gate passed,
+     * the download was spent, and the unpack ran out of disk a few megabytes from
+     * the end -- the exact outcome the gate exists to buy the user out of.
+     */
+    @Test
+    fun `a fully credited reinstall still reserves for the archive and the unpack`() {
+        assertEquals(
+            55_400_000L + 156_000_000L + SPACE_BUFFER,
+            toolchainInstallBytes(156_000_000L, 55_400_000L, 156_000_000L),
+        )
+    }
+
+    /** And that holds for every pack shipped, whatever its compression ratio. */
+    @Test
+    fun `no credit takes a shipped toolchain under its unpacking peak`() {
+        for (info in ToolchainRegistry.available) {
+            val asked = toolchainInstallBytes(info.estimatedSize, info.downloadSize, info.estimatedSize)
+            assertTrue(
+                asked >= info.downloadSize + info.estimatedSize + SPACE_BUFFER,
+                "${info.displayName} is charged $asked on a reinstall, while unpacking it " +
+                    "holds ${info.downloadSize} of archive and ${info.estimatedSize} of tree " +
+                    "at once; a device could pass the gate and fail during the extraction",
+            )
+        }
     }
 
     /**
@@ -69,7 +107,8 @@ class ToolchainInstallSpaceTest {
     fun `the Play reservation is smaller than the HTTP one for every shipped toolchain`() {
         for (info in ToolchainRegistry.available) {
             assertTrue(
-                packInstallBytes(info.estimatedSize) < toolchainInstallBytes(info.estimatedSize),
+                packInstallBytes(info.estimatedSize) <
+                    toolchainInstallBytes(info.estimatedSize, info.downloadSize, 0L),
                 "${info.packName}: the Play path should ask for less than the HTTP path, " +
                     "since Play has already written the tree it copies from",
             )
@@ -80,7 +119,7 @@ class ToolchainInstallSpaceTest {
     @Test
     fun `every shipped toolchain is charged for both copies`() {
         for (info in ToolchainRegistry.available) {
-            val asked = toolchainInstallBytes(info.estimatedSize)
+            val asked = toolchainInstallBytes(info.estimatedSize, info.downloadSize, 0L)
             assertTrue(
                 asked >= info.estimatedSize * 2,
                 "${info.displayName} is charged $asked for a tree of ${info.estimatedSize} " +
@@ -145,13 +184,40 @@ class ToolchainInstallSpaceTest {
         )
     }
 
+    /**
+     * The floor is held here, not by the coercion that carries its name.
+     *
+     * `installDeliveredPack` spells its reservation
+     * `(packInstallBytes(unpacked) - credit).coerceAtLeast(SPACE_BUFFER)`, which
+     * reads as the guard and is not one: [existingTreeCredit] clamps the credit
+     * at the size the pack itself records, and [packInstallBytes] adds
+     * [SPACE_BUFFER] on top of that same figure, so the subtraction bottoms out
+     * at exactly the buffer and the coercion never has anything to do.
+     *
+     * Take either half away and the gate collapses. Without the clamp, a `usr/`
+     * that has grown past what the pack writes back credits bytes the overwrite
+     * never returns, and the reservation goes to zero or below: a full device
+     * walks through the pre-flight and fails partway into the copy it existed to
+     * refuse, leaving half a toolchain under no manifest. Without the buffer in
+     * [packInstallBytes], an unchanged tree credits the whole reservation and
+     * the gate asks for nothing at all.
+     *
+     * Asserted over the composition, and over the range of measurements a device
+     * can produce rather than one of them, because a case written against the
+     * coercion measures what happens after this has already held, and stays
+     * green with the coercion deleted.
+     */
     @Test
     fun `the credited gate never falls below the buffer`() {
-        val credit = existingTreeCredit(rootUnder("usr"), filesDir, 156_000_000L) { 900_000_000L }
-        assertEquals(
-            SPACE_BUFFER,
-            (packInstallBytes(156_000_000L) - credit).coerceAtLeast(SPACE_BUFFER),
-        )
+        val unpacked = 156_000_000L
+        for (measured in listOf(0L, 1L, unpacked - 1, unpacked, unpacked + 1, 900_000_000L)) {
+            val credit = existingTreeCredit(rootUnder("usr"), filesDir, unpacked) { measured }
+            assertTrue(
+                packInstallBytes(unpacked) - credit >= SPACE_BUFFER,
+                "a tree measuring $measured credited $credit against a pack recorded at " +
+                    "$unpacked, leaving the install gate asking for less than the buffer",
+            )
+        }
     }
 
     // -- what the pre-flight is told a pack unpacks to --

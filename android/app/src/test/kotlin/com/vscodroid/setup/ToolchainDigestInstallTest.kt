@@ -1219,4 +1219,45 @@ class ToolchainDigestInstallTest {
             "a complete body with the wrong digest is its own answer",
         )
     }
+
+    /**
+     * A write that cannot finish is answered by the stage it happened in, not by
+     * the transfer that had already succeeded.
+     *
+     * Unpacking is the second bulk write an install performs, and about 155 MB of
+     * it for the Java 17 that ships today. The copy into `usr/` that follows has
+     * caught its own IOException and reported STORAGE ever since a device with a
+     * full disk was told to check its connection; the unpacking had no such
+     * catch, so the identical event one stage earlier unwound into the
+     * `catch (e: IOException)` that speaks for the transfer and came out as
+     * "Download failed. Check your connection and try again." The remedy that
+     * message names is a better connection, so the user moves to wifi and retries
+     * for ever, while the disk stays full.
+     *
+     * Driven with an archive cut short rather than with a full disk, which no JVM
+     * test can arrange: what is being pinned is which stage answers, and both
+     * causes reach it the same way. The digest is published for the truncated
+     * bytes, so the check above passes and the failure lands where it is meant to.
+     */
+    @Test
+    fun `an unpacking that cannot finish is not reported as a network failure`() {
+        // Cut inside the payload entry's compressed data: the local header is
+        // read, the entry opens, and the deflate stream ends before it should.
+        zipBytes = packZip(64 * 1024).let { it.copyOf(it.size - 4_096) }
+        publishFrom(releaseDir)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+
+        installAndWait()
+
+        assertEquals(
+            listOf(ToolchainFailure.STORAGE),
+            synchronized(reasons) { reasons.toList() },
+            "the unpacking ran out of somewhere to write and the user was told about " +
+                "their connection",
+        )
+        assertFalse(
+            File(filesDir, "usr/opt/test").exists(),
+            "a half-unpacked tree was copied into usr/ anyway",
+        )
+    }
 }

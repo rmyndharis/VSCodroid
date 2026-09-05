@@ -151,6 +151,14 @@ class ToolchainInstallTest {
 
     private val javaUnpacked = ToolchainRegistry.find("toolchain_java")!!.estimatedSize
 
+    /**
+     * The other half of the reservation, and it has to come from the registry
+     * too. The gate charges for the stage that holds the most at once, and for a
+     * credited reinstall that stage is the extraction, which holds the archive
+     * beside the tree it is expanding.
+     */
+    private val javaDownload = ToolchainRegistry.find("toolchain_java")!!.downloadSize
+
     // ── which route a user gets ──────────────────────────────────────────
 
     @Test
@@ -264,7 +272,7 @@ class ToolchainInstallTest {
         verify {
             Logger.e(
                 any(),
-                refusalNaming(toolchainInstallBytes(javaUnpacked) - alreadyThere),
+                refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, alreadyThere)),
                 any(),
             )
         }
@@ -286,7 +294,7 @@ class ToolchainInstallTest {
         manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
-        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked)), any()) }
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
     }
 
     /**
@@ -304,7 +312,7 @@ class ToolchainInstallTest {
         manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
-        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked)), any()) }
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
     }
 
     // ── where both routes converge ───────────────────────────────────────
@@ -340,11 +348,12 @@ class ToolchainInstallTest {
         assertEquals(listOf(AssetPackStatus.COMPLETED), statuses())
         val state = File(filesDir, "home/.vscodroid/toolchains.json").readText()
         assertTrue(state.contains("\"java\""), "the install was reported but not recorded: $state")
-        // The marker an install writes before it copies is removed in the same
-        // `finally` that gives the claim back, so its lifetime is exactly the
-        // claim's. Left behind, it tells the next launch's reclaim that a finished
-        // install is a partial one; the record check saves the files, so this is
-        // the assertion that catches the leak rather than the damage.
+        // The marker an install writes before it copies is dropped by the exit
+        // that reaches a definite end: here, the record has just been written and
+        // says everything the marker stood in for. Left behind, it tells the next
+        // launch's reclaim that a finished install is a partial one; the record
+        // check saves the files, so this is the assertion that catches the leak
+        // rather than the damage.
         assertFalse(marker().exists(), "a finished install left its marker behind")
     }
 

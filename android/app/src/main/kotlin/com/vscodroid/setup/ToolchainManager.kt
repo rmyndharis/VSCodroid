@@ -82,8 +82,8 @@ class ToolchainManager(private val context: Context) {
     /**
      * The marker for one pack.
      *
-     * One place decides the path, so the install that writes it, the `finally`
-     * that removes it and [reclaimInterruptedInstallsSync] cannot drift apart.
+     * One place decides the path, so the install that writes it, the exits that
+     * remove it and [reclaimInterruptedInstallsSync] cannot drift apart.
      * Keyed by pack name rather than by the manifest's `name` because the reclaim
      * has to take the `installsInFlight` claim first, and that set is keyed by
      * pack name; deriving one form from the other would break for a payload whose
@@ -1251,15 +1251,22 @@ class ToolchainManager(private val context: Context) {
             // which would refuse every later install of that pack for the life
             // of the process.
             installsInFlight.remove(packName)
-            // Beside the claim, and for the same reason plus one of its own. The
-            // marker's lifetime is meant to be exactly the claim's: that is what
-            // makes "a marker with no claim" mean "the process died", which is
-            // the whole basis on which [reclaimInterruptedInstallsSync] deletes
-            // anything. Dropped only on the path its author had in mind, a marker
-            // would outlive a finished install and leave the next launch
-            // examining a tree that is in use. The decline above returns before
-            // this `try`, so a decliner never removes a marker it did not write.
-            installMarker(packName).delete()
+            // The claim only, and the marker deliberately not beside it. The two
+            // lifetimes look identical and are not: a claim lives in this process
+            // and keeps two installs of one pack apart, while a marker is the
+            // durable note of a tree being written and is meant to outlive the
+            // process.
+            //
+            // Removed here it was keyed on the pack alone, so it came off on exits
+            // this call had no part in. A delivery with no manifest takes the
+            // claim, reports CORRUPT and returns without writing a byte, and took
+            // an EARLIER interrupted install's marker with it; that marker is the
+            // last thing on disk naming its tree, so those ~155 MB stopped being
+            // reclaimable at all. It also came off on a throw partway through the
+            // copy, which is the one event the marker exists for.
+            //
+            // Each exit in the body that has written the record or settled its own
+            // tree now drops its own marker, and nothing else does.
         }
     }
 
@@ -1388,6 +1395,11 @@ class ToolchainManager(private val context: Context) {
                 // `copyDirectoryTree` refuses rather than treating as empty.
                 Logger.e(tag, "Could not copy $packName into usr/", e)
                 reclaimPartialCopy(name, manifest)
+                // The line above has just settled the tree this marker was
+                // written for, either by taking it back or by leaving it to the
+                // record that still names it, so there is nothing left for a
+                // later launch to find through it.
+                installMarker(packName).delete()
                 fail(packName, ToolchainFailure.STORAGE)
                 // Play's copy is KEPT, exactly as for the record write below:
                 // freeing space and relaunching finishes this install from the
@@ -1511,6 +1523,8 @@ class ToolchainManager(private val context: Context) {
                 // bookkeeping, which needs the manifest this failure means we could
                 // not write.
                 reclaimPartialCopy(name, manifest)
+                // Settled, exactly as on the copy failure above.
+                installMarker(packName).delete()
                 fail(packName, ToolchainFailure.STORAGE)
                 // Play's copy is KEPT, which is the whole of the return value
                 // above. The user is told to free space and try again, and the
@@ -1522,6 +1536,11 @@ class ToolchainManager(private val context: Context) {
             regenerateDerivedFilesLocked()
         }
 
+        // The record now says everything the marker was standing in for, so this
+        // is where it goes. Not in the caller's `finally`, which also ran for
+        // calls that never wrote one and for the throw the marker exists to
+        // survive.
+        installMarker(packName).delete()
         Logger.i(tag, "Toolchain $name installed successfully")
         report(packName, AssetPackStatus.COMPLETED, 100)
         return true
@@ -1584,14 +1603,35 @@ class ToolchainManager(private val context: Context) {
      * The install root is the toolchain's own directory and is the bulk of it,
      * and deleting it is what makes room for the retry that a full disk needs.
      *
-     * Left alone when the record already names this toolchain: that is a
-     * reinstall over a working copy, and those files are the working copy's.
+     * Left alone when the record already names this toolchain: those files are a
+     * working copy's, and deleting them would cost a user a toolchain that runs.
+     * But that is not the same as saying nothing happened to them, which is why
+     * the entry is sent back through the repair pass rather than simply kept. The
+     * two cases behind it are an install that finished and only lost the delete
+     * of its own marker, and a reinstall the system stopped part-way through, and
+     * nothing on disk tells them apart: both leave a marker beside a record that
+     * names the toolchain.
+     *
+     * The second is the one that leaves damage. The copy writes content and not
+     * permissions -- `copyTo` carries neither the execute bit nor anything else
+     * -- and the install applies the bits from the manifest AFTER the copy, so a
+     * reinstall stopped in between leaves the binaries it had reached with no
+     * execute bit at all. `java` then answers "permission denied" for good: the
+     * record says [KEY_EXEC_REPAIRED], so [repairInstalledToolchainsSync] steps
+     * over the entry on this launch and on every launch after it.
+     *
+     * ⚠️ What that repair CANNOT put right is the content. A reinstall from a
+     * payload that differs from the recorded one leaves a tree that is part one
+     * version and part the other, and no pass here can tell which files came from
+     * which or fetch the missing half. Re-running the install is the only cure,
+     * and it is the user's to ask for.
      */
     private fun reclaimPartialCopy(name: String, manifest: JSONObject) {
         val installRoot = manifest.optString("installRoot", "")
         if (installRoot.isEmpty()) return
         if (name in getInstalledToolchains()) {
             Logger.w(tag, "Keeping $installRoot: the record still names $name")
+            clearExecRepairMark(name)
             return
         }
         val dir = File(context.filesDir, installRoot)
@@ -1600,6 +1640,36 @@ class ToolchainManager(private val context: Context) {
             Logger.i(tag, "Reclaimed the partial $name tree under $installRoot")
         } else {
             Logger.w(tag, "Could not fully reclaim the partial $name tree under $installRoot")
+        }
+    }
+
+    /**
+     * Puts [name] back in front of [repairInstalledToolchainsSync].
+     *
+     * That pass is marked done per toolchain and never looks at a marked entry
+     * again, which is right while the tree it walked is the tree the install
+     * left. A copy that ran over it and stopped part-way breaks that assumption,
+     * and the mark is then the reason nothing notices.
+     *
+     * Cheap where it matters: the reclaim runs earlier in the same launch pass
+     * than the repair does, so an entry cleared here is walked on this launch
+     * rather than the next one. The cost when the interruption was harmless is
+     * one tree walk reading four bytes per file, once, after which the entry is
+     * marked again.
+     *
+     * Silent when there is nothing to clear, so the common launch does not
+     * rewrite the record for no reason.
+     */
+    private fun clearExecRepairMark(name: String) = synchronized(stateLock) {
+        val state = readState()
+        for (i in 0 until state.length()) {
+            val entry = state.optJSONObject(i) ?: continue
+            if (entry.optString("name") != name) continue
+            if (!entry.optBoolean(KEY_EXEC_REPAIRED, false)) return@synchronized
+            entry.put(KEY_EXEC_REPAIRED, false)
+            Logger.i(tag, "Re-checking $name: a copy wrote over its tree and did not finish")
+            writeState(state)
+            return@synchronized
         }
     }
 
@@ -1759,10 +1829,19 @@ class ToolchainManager(private val context: Context) {
                 // deletes each destination file before opening its output stream,
                 // so overwriting an identical tree allocates nothing net. The
                 // staging copy under `cacheDir` is a genuinely new allocation and
-                // stays charged in full, which is also why no `coerceAtLeast` is
-                // wanted here and adding one would hide a mistake: [existingTreeCredit]
-                // clamps at the recorded size, so the figure below can never fall
-                // under one tree plus [SPACE_BUFFER].
+                // stays charged in full.
+                //
+                // Handed to [toolchainInstallBytes] rather than subtracted from
+                // what it returns, and that is not a tidy-up. The credit is worth
+                // nothing until the copy reaches the file it is overwriting, while
+                // the archive and the staging tree are both on disk before that,
+                // so a fully credited reinstall subtracted its way UNDER the peak
+                // the extraction actually reaches. Taking both figures, the
+                // function can charge for whichever stage is the tallest. No
+                // `coerceAtLeast` here either, for the same reason as before:
+                // [existingTreeCredit] clamps at the recorded size, so the figure
+                // below can never fall under one tree plus [SPACE_BUFFER], and a
+                // floor written over the top would hide a mistake instead.
                 //
                 // The root comes from the RECORD, not from the incoming payload,
                 // which is not on disk yet, and that gap is the whole reason this
@@ -1782,7 +1861,7 @@ class ToolchainManager(private val context: Context) {
                     unpackedBytes,
                     StorageManager::dirSize,
                 )
-                val requiredBytes = toolchainInstallBytes(unpackedBytes) - credit
+                val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes, credit)
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
@@ -1869,7 +1948,32 @@ class ToolchainManager(private val context: Context) {
                 report(packName, AssetPackStatus.TRANSFERRING, 90)
                 extractDir.deleteRecursively()
                 extractDir.mkdirs()
-                extractZip(zipFile, extractDir)
+                try {
+                    extractZip(zipFile, extractDir)
+                } catch (e: IOException) {
+                    // The same event the copy into `usr/` already catches in
+                    // [installFromDirectoryHoldingPack], one stage earlier and for
+                    // the same reason: this writes the whole unpacked tree, about
+                    // 155 MB for the Java 17 that ships today, and a phone that
+                    // ran out of room while the download was in flight fails here
+                    // rather than there. Left to unwind, it reached the
+                    // `catch (e: IOException)` below, which speaks for the
+                    // transfer, and the user was told "Download failed. Check your
+                    // connection and try again" for a disk that filled up after
+                    // the connection had done its job. They move to wifi and retry
+                    // for ever; the one sentence that names the remedy is the one
+                    // this reports.
+                    //
+                    // A digest-verified archive that will not unpack throws here
+                    // too, and that is a release that published a broken ZIP: no
+                    // message in the enum helps, and none did before this either.
+                    // Nothing is reclaimed because there is nothing to reclaim --
+                    // the staging tree belongs to this download alone and the
+                    // finally below deletes it whole.
+                    Logger.e(tag, "Could not unpack $packName", e)
+                    fail(packName, ToolchainFailure.STORAGE)
+                    return@execute
+                }
                 // Before the copy, which is the other half of the peak. The
                 // digest was checked above and nothing reads the archive again,
                 // so holding it through installFromDirectory buys nothing and
@@ -3503,21 +3607,48 @@ internal const val SPACE_BUFFER = 50_000_000L
 /**
  * What an HTTP toolchain install actually needs free, given its unpacked size.
  *
- * Twice the tree, because the install holds two copies at its peak: the one
- * unpacked into the cache and the one being written into `filesDir/usr`. The
- * reservation used to charge for one, which is the product rather than the
- * process, and nothing frees a stage before the next allocates. For Java 17 that
- * asked 196 MB for something that needs about 342, so every device between the
- * two figures downloaded 55 MB and then failed partway through the copy, with
- * the disk error reported as a network problem and the half-copied files left in
- * `usr/` under no manifest, so each retry started from less space than the last.
+ * Twice the tree for a first install, because the install holds two copies at
+ * that peak: the one unpacked into the cache and the one being written into
+ * `filesDir/usr`. The reservation used to charge for one, which is the product
+ * rather than the process, and nothing frees a stage before the next allocates.
+ * For Java 17 that asked 196 MB for something that needs about 342, so every
+ * device between the two figures downloaded 55 MB and then failed partway
+ * through the copy, with the disk error reported as a network problem and the
+ * half-copied files left in `usr/` under no manifest, so each retry started from
+ * less space than the last.
  *
- * The downloaded archive is deliberately not a third term: it is deleted after
- * extraction, before the copy begins. Charging for it here as well would refuse
- * devices for room they never need at once.
+ * The archive is not a third term but it is half of one, and the difference cost
+ * a device its install. It is deleted after extraction and before the copy
+ * begins, so it is never on disk at the same time as the second tree; it IS on
+ * disk at the same time as the first, for the whole of the extraction that
+ * writes it. So the run has two peaks, not one, and this charges for the taller:
+ *
+ *  - unpacking, holding the archive and the staging tree at once;
+ *  - copying, holding the staging tree and what it writes into `usr/`, less the
+ *    tree it overwrites there ([existingTreeCredit], which `copyTo(overwrite)`
+ *    frees file by file as it goes).
+ *
+ * A fresh install is dominated by the second, which is where the doubled term
+ * came from and why the first went unnoticed: 312 MB against 211 MB for Java 17.
+ * Credit the copy with a tree already on disk, though, and the second peak drops
+ * below the first, and a caller subtracting the credit from a single figure
+ * reserved 207 MB for an extraction that needs 211 MB. That is the whole of the
+ * failure: the gate passes, the 55 MB download is spent, and the unpack runs out
+ * of disk a few megabytes short of finishing.
+ *
+ * This KDoc said the archive was deliberately excluded and that charging for it
+ * "would refuse devices for room they never need at once", which was never true
+ * of the extraction, and it is the sentence a reader would have used to decide
+ * the archive could go on being ignored.
  */
-internal fun toolchainInstallBytes(unpackedBytes: Long): Long =
-    unpackedBytes * 2 + SPACE_BUFFER
+internal fun toolchainInstallBytes(
+    unpackedBytes: Long,
+    downloadBytes: Long,
+    existingTreeBytes: Long,
+): Long = maxOf(
+    downloadBytes + unpackedBytes,
+    unpackedBytes * 2 - existingTreeBytes,
+) + SPACE_BUFFER
 
 /**
  * The unpacked size recorded for [packName], or null when none is.

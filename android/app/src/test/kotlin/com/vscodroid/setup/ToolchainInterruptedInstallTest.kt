@@ -84,6 +84,13 @@ class ToolchainInterruptedInstallTest {
             .apply { isAccessible = true }
             .invoke(m)
 
+    /** Private, and the point at which both delivery routes converge. */
+    private fun installFromDirectory(m: ToolchainManager, pack: String, dir: File) =
+        ToolchainManager::class.java
+            .getDeclaredMethod("installFromDirectory", String::class.java, File::class.java)
+            .apply { isAccessible = true }
+            .invoke(m, pack, dir)
+
     /** What an install writes before it copies a byte. */
     private fun plantMarker(pack: String, body: String): File =
         File(filesDir, "home/.vscodroid/toolchain-installing/$pack.json").apply {
@@ -147,6 +154,53 @@ class ToolchainInterruptedInstallTest {
     }
 
     /**
+     * A tree the record still names is kept, and then looked at again.
+     *
+     * Keeping it is right: a marker beside a record that names the toolchain is
+     * either an install that finished and lost the delete of its own marker, or a
+     * reinstall the system stopped part-way, and deleting a working copy on the
+     * chance of the second would be the worse mistake. But the second leaves
+     * damage that nothing else in the app will ever look for. `copyTo` carries
+     * content and not permissions, and the install applies the manifest's execute
+     * bits after the copy, so a reinstall stopped in between leaves the binaries
+     * it reached without them -- while the record says `execBitsChecked`, which
+     * is what makes `repairInstalledToolchainsSync` step over the entry on this
+     * launch and on every launch after it. `java` answers "permission denied" for
+     * good, and the marker, the one witness that the copy was interrupted, is
+     * deleted by the same pass.
+     *
+     * The reclaim runs earlier in the pass than the repair, so the entry it clears
+     * is walked on this launch rather than the next.
+     */
+    @Test
+    fun `a reinstall the system interrupted is walked again by the repair`() {
+        plantMarker("toolchain_java", """{"name":"java","installRoot":"usr/opt/java"}""")
+        val tree = plantTree("usr/opt/java")
+        val binary = File(tree, "bin/java").apply { writeText("half of one build") }
+        record(
+            """[{"name":"java","installRoot":"usr/opt/java",""" +
+                """"binaries":["usr/opt/java/bin/java"],"execBitsChecked":true}]"""
+        )
+        assertFalse(binary.canExecute(), "the fixture starts from the wrong state")
+
+        manager().repairInstalledToolchains()
+
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!binary.canExecute() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20)
+        }
+        assertTrue(
+            binary.canExecute(),
+            "the interpreter of a toolchain the record calls installed has no execute " +
+                "bit, and the entry is marked repaired, so no later launch will look",
+        )
+        assertTrue(
+            File(tree, "bin/payload").exists(),
+            "the tree of a toolchain the record still names was deleted",
+        )
+    }
+
+    /**
      * A toolchain the app no longer offers strands the most of anyone, and it is
      * exactly the case a registry lookup cannot serve: `ToolchainRegistry.find`
      * answers null for a withdrawn pack and `RETIRED_TOOLCHAINS` carries sizes
@@ -164,6 +218,51 @@ class ToolchainInterruptedInstallTest {
             tree.exists(),
             "an orphan of a withdrawn toolchain was left behind, which is the one " +
                 "nothing else in the app can name",
+        )
+    }
+
+    /**
+     * An install drops its own marker and no one else's.
+     *
+     * The delete used to sit in the `finally` that gives the pack claim back, on
+     * the reasoning that a marker's lifetime is the claim's. It is not: the claim
+     * is per process and the marker is what survives one. Keyed on the pack alone,
+     * the delete fired on exits that had written nothing -- a delivery whose
+     * manifest is missing takes the claim, reports CORRUPT and returns -- and the
+     * marker it took was an EARLIER install's, the last thing on disk naming the
+     * tree that install left behind.
+     *
+     * The reclaim at the end is the consequence, not decoration. A marker is only
+     * worth keeping because a later launch acts on it, and that is the launch the
+     * defect took away: no record, no card, no marker, and ~155 MB that nothing in
+     * the app can name.
+     *
+     * Both delivery paths reach this, which is why it is driven at the point they
+     * converge: a Play delivery whose `removePack` a process death interrupted
+     * midway arrives here with no manifest in it.
+     */
+    @Test
+    fun `an install with no manifest leaves an earlier install's marker alone`() {
+        val marker = plantMarker(
+            "toolchain_java",
+            """{"name":"java","installRoot":"usr/opt/java"}""",
+        )
+        val stranded = plantTree("usr/opt/java")
+        val delivery = File(filesDir, "delivered-toolchain_java").apply { mkdirs() }
+
+        installFromDirectory(manager(), "toolchain_java", delivery)
+
+        assertTrue(
+            marker.exists(),
+            "an install that wrote nothing deleted the marker of one that did",
+        )
+
+        reclaimInterruptedInstalls(manager())
+
+        assertFalse(
+            stranded.exists(),
+            "the interrupted install's tree survived the next launch's reclaim, which " +
+                "is what a lost marker costs: nothing else on disk names it",
         )
     }
 
