@@ -19,8 +19,8 @@ import org.junit.jupiter.api.Test
  * of attempts where a backup is still pending. That is the noise this override was
  * written to remove, returning by the door nobody watches.
  *
- * Source-level, and the limit is worth stating: it holds the three navigations
- * that exist today, and it cannot notice a fourth being added unmarked. What
+ * Source-level, and the limit is worth stating: it holds the four navigations
+ * that exist today, and it cannot notice a fifth being added unmarked. What
  * catches that is the review of a diff adding a `loadUrl`, plus the failure mode
  * being the conservative one.
  */
@@ -43,6 +43,11 @@ class AppNavigationMarkingTest {
             "private fun handleResumeFromBackground(",
             "private fun loadVSCode(",
             "private fun navigateToFolder(",
+            // The fourth, and the one the first version of this list missed. It
+            // replaces a live workbench with the page carrying the only control
+            // that can restart a dead server, so an unload veto blocking it
+            // leaves the app with no lever at all.
+            "private fun showErrorPage(",
         )) {
             val body = SourceScan.body(source, function)
             assertTrue(
