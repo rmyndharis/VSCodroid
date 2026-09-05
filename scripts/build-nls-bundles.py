@@ -152,26 +152,32 @@ if __name__ == "__main__":
         sys.exit(f"{COMMIT_FILE} is empty; it must pin a microsoft/vscode-loc commit")
 
     messages, keys = load_source_order()
-    DEST.mkdir(parents=True, exist_ok=True)
-
-    # A language dropped from LOCALES has to leave the directory as well as the
-    # list. CI restores this directory from a cache keyed on this script, and a
-    # partial-key restore can hand a build the previous run's tree, so a bundle
-    # nobody generates any more would go on shipping and go on being offered by
-    # LocaleCoverageTest's counterpart in res/. Removing first also means a run
-    # that fails part way leaves no half-old, half-new set behind.
-    expected = {f"{locale}.json" for locale in LOCALES}
-    for stale in sorted(p for p in DEST.glob("*.json") if p.name not in expected):
-        stale.unlink()
-        print(f"  removed {stale.name}, no longer in LOCALES")
     print(f"vscode-loc @ {commit[:12]}, {len(messages)} messages per bundle")
 
-    written = 0
+    # Every bundle is fetched and checked before any of them is written, which is
+    # the whole reason thirteen of them are held in memory rather than written as
+    # they arrive.
+    #
+    # A bundle only means anything against the English array it was built from:
+    # the workbench reads `_VSCODE_NLS_MESSAGES` by position, so a directory
+    # holding some bundles built for one VS Code version and some for another
+    # renders every string after the first inserted or deleted message under the
+    # wrong control, in the languages left over. Nothing downstream can tell.
+    # This script is the only thing that ever holds the array and a translation
+    # side by side; Gradle sums the directory's size, and the client resolves a
+    # bundle by locale alone.
+    #
+    # Writing inside the loop put that mixture one dropped connection away, and
+    # made it durable: CI restores this directory from a cache, a working tree
+    # keeps whatever was last written, and either way the half-old set outlives
+    # the run that failed and is packaged by the next build. Holding the
+    # serialised bundles instead costs about 20 MiB.
+    built: list[tuple[str, bytes]] = []
     for locale in LOCALES:
         try:
             bundle, coverage = build(commit, locale, messages, keys)
         except urllib.error.URLError as error:
-            sys.exit(f"{locale}: could not fetch translations ({error}). Nothing further written.")
+            sys.exit(f"{locale}: could not fetch translations ({error}). Nothing written.")
         if coverage < MIN_COVERAGE:
             sys.exit(
                 f"{locale}: only {coverage:.0%} of messages were translated, below the "
@@ -192,10 +198,22 @@ if __name__ == "__main__":
                 "the form this language uses."
             )
 
-        target = DEST / f"{locale}.json"
-        target.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
-        size = target.stat().st_size / 1024 / 1024
-        print(f"  {locale:<8} {coverage:.0%} translated, {size:.1f} MiB")
-        written += 1
+        payload = json.dumps(bundle, ensure_ascii=False).encode("utf-8")
+        built.append((locale, payload))
+        print(f"  {locale:<8} {coverage:.0%} translated, {len(payload) / 1024 / 1024:.1f} MiB")
 
-    print(f"{written} bundles in {DEST.relative_to(REPO_ROOT)}")
+    # A language dropped from LOCALES has to leave the directory as well as the
+    # list. CI restores this directory from a cache keyed on this script, and a
+    # partial-key restore can hand a build the previous run's tree, so a bundle
+    # nobody generates any more would go on shipping and go on being offered by
+    # LocaleCoverageTest's counterpart in res/.
+    DEST.mkdir(parents=True, exist_ok=True)
+    expected = {f"{locale}.json" for locale in LOCALES}
+    for stale in sorted(path for path in DEST.glob("*.json") if path.name not in expected):
+        stale.unlink()
+        print(f"  removed {stale.name}, no longer in LOCALES")
+
+    for locale, payload in built:
+        (DEST / f"{locale}.json").write_bytes(payload)
+
+    print(f"{len(built)} bundles in {DEST.relative_to(REPO_ROOT)}")
