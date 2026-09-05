@@ -4,6 +4,7 @@ import android.webkit.WebView
 import io.mockk.mockk
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -89,6 +90,92 @@ class ExtraKeyQueryOwnershipTest {
         )
         assertTrue(query.release(injector), "the answer that arrived is the one being waited for")
         assertTrue(query.claim(injector), "with the answer in, the next tick must ask again")
+    }
+
+    /**
+     * The reply that is simply lost, with the injector that owes it still the
+     * row's.
+     *
+     * Nothing displaces the claim: no replacement injector arrives, so [claim]
+     * never sees a different one, and the row still has an injector, so the poll
+     * never reaches [abandon]. Without a way out, the guard above turns from
+     * back-pressure into a stop: every later tick returns without asking, and the
+     * row never again learns that the page has spent a latched modifier. It is
+     * the plain-flag failure this class was written to remove, reached by the one
+     * door the class did not close.
+     *
+     * NEGATIVE CONTROL: restore the old `if (askedOf === injector) return false`
+     * and this goes red on the last assertion, on every tick after it.
+     */
+    @Test
+    fun `an injector that never answers is asked again after a bounded silence`() {
+        val query = OutstandingModifierQuery()
+        val silent = injector()
+
+        assertTrue(query.claim(silent), "the first tick must be allowed to ask")
+
+        // The bound is still a bound: it is not given up on the very next tick,
+        // or a slow renderer is back to being asked five times a second.
+        assertFalse(query.claim(silent), "the tick right after the question must not re-ask")
+
+        // Ticks on, with nothing ever answering. This is deliberately not a
+        // spelled count: what the case is about is that the silence ENDS, and
+        // pinning the number here would make a change to it a two-file edit for
+        // no gain. The floor below is what keeps it from being unbounded.
+        var asked = 1
+        var ticks = 1
+        while (ticks < 20 && asked < 2) {
+            ticks += 1
+            if (query.claim(silent)) asked += 1
+        }
+
+        assertTrue(
+            asked >= 2,
+            "twenty ticks went by and the poll never asked again, so one lost reply " +
+                "silences it for the life of the page: the row goes on painting a modifier " +
+                "the page has already spent, and the next key goes out as a chord",
+        )
+        assertTrue(
+            ticks >= 3,
+            "the slot was given up almost immediately, which is the bound gone rather than " +
+                "closed: a renderer slow to answer is asked again while its first reply is " +
+                "still in the air",
+        )
+    }
+
+    /**
+     * That the reprieve is spent, not carried.
+     *
+     * A silence already counted against one query must not be counted against
+     * the next: carried forward, the bound decays over the life of a page until
+     * every tick asks, which is the back-pressure gone by degrees rather than
+     * visibly. Compared between two rounds rather than against a spelled number,
+     * for the reason the case above gives.
+     */
+    @Test
+    fun `a silence is not counted against the query after it`() {
+        val query = OutstandingModifierQuery()
+        val injector = injector()
+
+        fun refusalsBeforeReasking(): Int {
+            var refusals = 0
+            while (refusals < 20 && !query.claim(injector)) refusals += 1
+            return refusals
+        }
+
+        assertTrue(query.claim(injector), "the first tick must be allowed to ask")
+        val first = refusalsBeforeReasking()
+        assertTrue(first in 1..19, "the first round never re-asked, so there is nothing to compare")
+
+        // This round's query is answered, and then the injector goes silent again.
+        assertTrue(query.release(injector), "the answer arrived")
+        assertTrue(query.claim(injector), "with the answer in, the next tick must ask again")
+
+        assertEquals(
+            first, refusalsBeforeReasking(),
+            "a query that follows an answered one gets a shorter reprieve than the one " +
+                "before it, so the bound wears away over the life of a page",
+        )
     }
 
     /**

@@ -152,7 +152,10 @@ class ExtraKeyRow @JvmOverloads constructor(
          * a fresh query every 200 ms with nothing waiting on the last one, for as
          * long as a modifier stayed latched. Asking again only once the previous
          * answer is in restores exactly one outstanding query, without making the
-         * poll depend on an answer arriving.
+         * poll depend on an answer arriving. Only once, or after a bounded silence:
+         * a reply lost while the injector that owes it is still this row's is
+         * displaced by nothing, and a slot with no way out of that is a poll that
+         * ticks forever without ever asking again.
          *
          * On the runnable rather than on the row, because it is the poll's own
          * bookkeeping and no other member reads it. It is deliberately not a
@@ -316,6 +319,24 @@ class ExtraKeyRow @JvmOverloads constructor(
 
             visibility = if (imeVisible) View.VISIBLE else View.GONE
             if (!imeVisible) {
+                // The popup is a window of its own and the row going GONE does
+                // not take it with it: nothing here is its parent. Measured on an
+                // API 37 emulator, long press `{}`, then let the keyboard go: the
+                // row disappears and the two alternates are left floating over
+                // the middle of the editor, with no key under them and nothing to
+                // say what they belong to. Dismissing it here is the same
+                // reasoning as the modifier reset beside it: the row is leaving,
+                // so everything it put on the screen leaves with it.
+                //
+                // It cannot fire while a popup is legitimately open, and that is
+                // measured rather than assumed: the popup sets
+                // INPUT_METHOD_NOT_NEEDED so the IME goes on targeting the
+                // activity window, and on an API 37 emulator a Ctrl latched on
+                // the row was still latched with the alternates up, which the
+                // reset on this same branch would have cleared had the branch
+                // run.
+                longPressPopup?.dismiss()
+                longPressPopup = null
                 resetModifiersIfNeeded()
             }
             Logger.d(tag, "IME visible=$imeVisible, bottomInset=$bottomInset")
@@ -487,13 +508,24 @@ class ExtraKeyRow @JvmOverloads constructor(
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val repacked = KeyPages.forSmallestWidthDp(newConfig.smallestScreenWidthDp)
-        if (repacked == pages) return
-        // The popup is a window anchored to a key that is about to be destroyed
-        // with the page holding it, and nothing tears it down with that key: the
-        // same reason [onDetachedFromWindow] dismisses it.
+        // Before the early return below, not after it, and that ordering is the
+        // whole of it. `smallestScreenWidthDp` is by definition the SMALLER of
+        // the two dimensions, so it does not move when the phone is turned over:
+        // a rotation always repacks to the same pages and always takes that
+        // return. The dismiss therefore never ran on the one configuration change
+        // every user performs. Measured on an API 37 emulator: long press `{}` in
+        // portrait, rotate, and the alternates are left sitting in the middle of
+        // the soft keyboard, a screen's width from the key they belong to, until
+        // the user taps somewhere else.
+        //
+        // The popup is a window anchored to a key that a repack destroys with the
+        // page holding it, and nothing tears it down with that key: the same
+        // reason [onDetachedFromWindow] dismisses it. A rotation that changes
+        // nothing else still moves the key out from under it.
         longPressPopup?.dismiss()
         longPressPopup = null
+        val repacked = KeyPages.forSmallestWidthDp(newConfig.smallestScreenWidthDp)
+        if (repacked == pages) return
         val ctrl = ctrlActive
         val alt = altActive
         val shift = shiftActive
@@ -617,10 +649,22 @@ internal fun latchedModifierLabel(ctrl: Boolean, alt: Boolean, shift: Boolean): 
  * Asked against the injector, that cannot happen: a claim by an injector other
  * than the one owing an answer displaces it, because an answer nobody can
  * deliver is an answer nobody is waiting for. The record is therefore released
- * on three occasions and can be stuck on none of them: [claim] by a new
- * injector, [release] by the answer arriving, [abandon] when the row is left
- * with no injector at all. Bounded at one reference, and that reference is
- * replaced or dropped rather than accumulated.
+ * on four occasions and can be stuck on none of them: [claim] by a new injector,
+ * [release] by the answer arriving, [abandon] when the row is left with no
+ * injector at all, and [claim] again by the SAME injector once it has stayed
+ * silent for [UNANSWERED_TICKS] of them. Bounded at one reference, and that
+ * reference is replaced or dropped rather than accumulated.
+ *
+ * That fourth one is the case the other three cannot reach: a reply lost while
+ * the injector it was asked of is still the row's. Nothing then displaces the
+ * claim and nothing abandons it, so every later tick returned at the guard and
+ * the poll went silent for the life of the page while going on ticking. It is
+ * the same end state the plain flag had, arrived at by a narrower door, and the
+ * cost is the same: a modifier the page has spent stays lit on the row and the
+ * next key goes out as a chord. Giving the slot up after a bounded silence
+ * closes it without giving back the bound, which is the whole reason the slot
+ * exists: a renderer that never answers is asked once a second instead of five
+ * times.
  *
  * Main thread only, which is where both writers run: the tick is a
  * `View.postDelayed` and the answer is an `evaluateJavascript` callback.
@@ -636,14 +680,33 @@ internal class OutstandingModifierQuery {
     private var askedOf: KeyInjector? = null
 
     /**
+     * How many claims [askedOf] has refused since it was taken.
+     *
+     * Zero whenever the slot is free, so it never has to be read together with
+     * [askedOf] to mean anything.
+     */
+    private var unanswered = 0
+
+    /**
      * Takes the single outstanding slot for [injector], reporting whether the
-     * caller may now ask. False only while that same injector already owes an
-     * answer, which is the back-pressure; a different injector always takes it,
-     * displacing a claim whose answer can no longer arrive.
+     * caller may now ask. False while that same injector already owes an answer
+     * and has owed it for fewer than [UNANSWERED_TICKS] calls, which is the
+     * back-pressure; a different injector always takes it, displacing a claim
+     * whose answer can no longer arrive.
+     *
+     * The count is what keeps the back-pressure from becoming a deadlock. It is
+     * kept in calls and not in milliseconds because this has no clock: the caller
+     * is a 200 ms tick, so five of them is the second the class doc names, and a
+     * caller that ticked at some other rate would get its own five ticks rather
+     * than a wrong second.
      */
     fun claim(injector: KeyInjector): Boolean {
-        if (askedOf === injector) return false
+        if (askedOf === injector) {
+            unanswered += 1
+            if (unanswered < UNANSWERED_TICKS) return false
+        }
         askedOf = injector
+        unanswered = 0
         return true
     }
 
@@ -656,11 +719,30 @@ internal class OutstandingModifierQuery {
     fun release(injector: KeyInjector): Boolean {
         if (askedOf !== injector) return false
         askedOf = null
+        unanswered = 0
         return true
     }
 
     /** Gives up on the answer entirely, for a row left with no injector. */
     fun abandon() {
         askedOf = null
+        unanswered = 0
+    }
+
+    private companion object {
+        /**
+         * How many ticks one injector may stay silent before it is asked again.
+         *
+         * Inside the class rather than beside it: a file-level `const` written
+         * above the declaration lands between this class's KDoc and the class,
+         * which orphans thirty lines explaining the whole invariant onto a
+         * number.
+         *
+         * Five, against the poll's 200 ms tick, so a lost reply costs about a
+         * second of a row painted stale rather than the rest of the page's life,
+         * and a renderer that answers nothing is asked once a second rather than
+         * five times.
+         */
+        const val UNANSWERED_TICKS = 5
     }
 }

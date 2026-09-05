@@ -76,11 +76,25 @@ function canConnect(host, port, timeoutMs = PROBE_TIMEOUT_MS) {
  * Which of [ports] are listening, and from which of this device's addresses each
  * of them answers.
  *
- * Two probes, because one cannot tell the difference and the difference is the
- * point of the command. Loopback finds the server; the device's own addresses
- * decide whether anyone else can reach it. A server bound to 127.0.0.1 answers
- * the first and refuses the second, which is exactly the distinction reading
- * /proc used to give for free.
+ * Two kinds of probe, because one cannot tell the difference and the difference
+ * is the point of the command: loopback says the server is only reachable here,
+ * the device's own addresses say another device can reach it. A server bound to
+ * 127.0.0.1 answers the first and refuses the second, which is exactly the
+ * distinction reading /proc used to give for free.
+ *
+ * Neither is a gate, and loopback used to be one. It was asked first and a
+ * refusal ended the port there, which reads as "is anything listening at all"
+ * and is not what it answers: `vite --host 192.168.1.50`, the invocation Vite
+ * documents for binding a single address and the one this command's own advice
+ * leads to, binds that address alone, so loopback refuses and the port was
+ * dropped before any address was tried. The quick pick then offered no entry for
+ * it and typing the port in answered "Nothing is listening on port 5173" about a
+ * server that was up and already reachable from the other device.
+ *
+ * Asking everything at once costs less wall clock, not more: the loopback probe
+ * and the address probes used to be sequential, so a scan could take two
+ * PROBE_TIMEOUT_MS and now takes one. What rises is the number of sockets open
+ * at once, and every one of them is dialled at this device.
  *
  * Every address, not the first one. A phone routinely has more than one: a VPN
  * puts up tun0 and mobile data puts up rmnet beside wlan0, and this probed
@@ -95,17 +109,23 @@ function canConnect(host, port, timeoutMs = PROBE_TIMEOUT_MS) {
  * which is what makes the answer meaningful.
  *
  * Returns a Map of port to the addresses that answered, which is empty for a
- * port only loopback reaches.
+ * port only loopback reaches. A port nothing answered at all is absent, which is
+ * a different thing from present with an empty list.
  */
 async function scanPorts(ports, lanAddresses, connect = canConnect) {
     const addresses = lanAddresses || [];
     const results = await Promise.all(
         ports.map(async (port) => {
-            if (!(await connect('127.0.0.1', port))) return null;
-            const answered = await Promise.all(
-                addresses.map(async (address) => ((await connect(address, port)) ? address : null)),
-            );
-            return [port, answered.filter(Boolean)];
+            const [loopback, ...answers] = await Promise.all([
+                connect('127.0.0.1', port),
+                ...addresses.map(async (address) => ((await connect(address, port)) ? address : null)),
+            ]);
+            const answered = answers.filter(Boolean);
+            // Absent only when nothing anywhere answered. An empty list is not
+            // the same verdict: it is a port loopback reached and no address
+            // did, which is the "this device only" entry the quick pick shows.
+            if (!loopback && answered.length === 0) return null;
+            return [port, answered];
         }),
     );
     return new Map(results.filter(Boolean));

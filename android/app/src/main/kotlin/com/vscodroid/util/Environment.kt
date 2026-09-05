@@ -134,12 +134,37 @@ object Environment {
             // any certificate; CAPATH alone does not satisfy it, measured on
             // device. setupGitCaBundle() writes this on every launch it has
             // changed, from the system trust store plus any CA the device owner
-            // installed themselves through Settings. That second half reaches
-            // git and nothing else: SSL_CERT_DIR below names the system store
-            // directly, so python, ruby and curl still see system roots only,
-            // and the WebView and the toolchain downloader go through the
-            // platform trust manager, which this file cannot influence.
+            // installed themselves through Settings.
             "GIT_SSL_CAINFO" to "$filesDir/usr/etc/tls/cert.pem",
+            // The same bundle for everything else that links OpenSSL, and this
+            // used to say the directory below was enough for them. It is not,
+            // and the reason is a hash algorithm.
+            //
+            // A directory trust store is not scanned, it is looked up: OpenSSL
+            // hashes the issuer name and opens `<hash>.0`. Android names its
+            // files with the OpenSSL 0.9.8 hash, and everything since 1.0 uses a
+            // different one. Measured against a cert out of
+            // /system/etc/security/cacerts on the emulator: the file is
+            // 01419da9.0, `openssl x509 -subject_hash_old` answers 01419da9, and
+            // `-hash` answers 8d89cda1, which is the name OpenSSL 3 goes looking
+            // for and which is not there. So SSL_CERT_DIR alone leaves a store
+            // that can be listed and never read.
+            //
+            // What that cost, measured on device before this line existed: the
+            // bundled Python loaded zero certificates and `urllib.request` on
+            // https://pypi.org failed with CERTIFICATE_VERIFY_FAILED. With the
+            // file named here it loads 120 and the same request answers 200.
+            // Ruby's OpenSSL reads the same variable and was in the same state.
+            //
+            // pip is NOT the client this rescues, and saying so was the first
+            // wrong version of this comment: it verifies against the certifi
+            // bundle vendored inside itself, so it worked throughout. What was
+            // broken is everything that asks OpenSSL for the default trust,
+            // which is any ordinary script a user writes.
+            //
+            // The directory stays beside it. It costs nothing, and a client that
+            // does resolve the old hashes keeps working.
+            "SSL_CERT_FILE" to "$filesDir/usr/etc/tls/cert.pem",
             "SSL_CERT_DIR" to getSystemCaCertsPath(),
             "NPM_CONFIG_PREFIX" to "$filesDir/usr",
             "NPM_CONFIG_CACHE" to "$cacheDir/npm-cache",
@@ -155,7 +180,27 @@ object Environment {
             "VSCODROID_VERSION" to getVersionName(context),
         )
 
-        return base + toolchainEnv
+        // The name pip actually reads, and what makes a CA the device owner
+        // installed count for a private index. It is requests' variable rather
+        // than pip's own PIP_CERT, so the one row also reaches a user's own
+        // `requests` code.
+        //
+        // Conditional, and the guard is the whole reason this is not a row in
+        // the map above. requests treats a bundle it cannot open as fatal
+        // instead of falling back to its vendored certifi: measured on an API 37
+        // emulator, pointing it at a missing path stops pip with "Could not find
+        // a suitable TLS CA certificate bundle". setupGitCaBundle() gives up on
+        // a device with no system CA directory and after a failed write, so
+        // naming a file it never wrote would take away the one Python HTTPS
+        // client that works without any of this. SSL_CERT_FILE above wants no
+        // such guard: with a path that does not exist OpenSSL loads nothing and
+        // verification fails, which is where this started rather than worse.
+        val caBundle = File("$filesDir/usr/etc/tls/cert.pem")
+        val requestsCa =
+            if (caBundle.isFile) mapOf("REQUESTS_CA_BUNDLE" to caBundle.absolutePath)
+            else emptyMap()
+
+        return base + requestsCa + toolchainEnv
     }
 
     private fun getToolchainEnvironment(context: Context): MutableMap<String, String> {

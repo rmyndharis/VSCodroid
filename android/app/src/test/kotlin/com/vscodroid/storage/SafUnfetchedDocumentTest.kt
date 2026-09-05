@@ -52,6 +52,7 @@ class SafUnfetchedDocumentTest {
     lateinit var filesDir: File
 
     private lateinit var resolver: ContentResolver
+    private lateinit var context: Context
     private lateinit var engine: SafSyncEngine
     private lateinit var treeUri: Uri
     private val uris = mutableMapOf<String, Uri>()
@@ -89,7 +90,7 @@ class SafUnfetchedDocumentTest {
         every { DocumentsContract.renameDocument(any(), any(), any()) } returns mockk(relaxed = true)
 
         resolver = mockk(relaxed = true)
-        val context = mockk<Context>(relaxed = true)
+        context = mockk<Context>(relaxed = true)
         every { context.contentResolver } returns resolver
         every { context.filesDir } returns filesDir
         engine = SafSyncEngine(context)
@@ -713,6 +714,72 @@ class SafUnfetchedDocumentTest {
             announced,
             "the write was refused and nothing said so, which is the silence this " +
                 "guard was supposed to end rather than create",
+        )
+    }
+
+    /**
+     * The refusal that is not a skip and not a failure: this sync did not read the
+     * document because another sync of the same mirror was already reading it.
+     *
+     * The claim is in the companion object because two engines routinely meet over
+     * one mirror; `unfetched` is per engine, so the loser is the only thing that
+     * can arm its own guard, and the loser is routinely the engine that outlives
+     * the winner. An activity recreated mid-open leaves the claim with the engine
+     * of the activity being destroyed, so the survivor, the one whose watcher goes
+     * on serving saves, is exactly the one that walked away with no record.
+     *
+     * Built reentrantly and single-threaded rather than with two threads: the
+     * second engine's whole `initialSync` runs inside the first engine's answer to
+     * `openInputStream`, which is precisely the window in which the first engine
+     * holds the claim. Nothing here can flake and nothing can hang.
+     */
+    @Test
+    fun `a sync that lost the copy to another engine still guards the document`() {
+        deviceHolding("notes.md", size = 64)
+        val loser = SafSyncEngine(context)
+        val announced = mutableListOf<String>()
+        loser.onWriteBackFailed = { announced.add(it.name) }
+
+        var writes = 0
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            writes++
+            java.io.ByteArrayOutputStream()
+        }
+
+        var reentered = false
+        every { resolver.openInputStream(any()) } answers {
+            if (!reentered) {
+                reentered = true
+                // Inside the winner's read, so the claim is held: this sync meets
+                // it, loses, and walks away without the file.
+                runBlocking { loser.initialSync(treeUri, mirror) { _, _ -> } }
+            }
+            // And then the winner's own copy fails, which is what leaves the
+            // mirror without the document and the device holding the only one.
+            throw IOException("the provider refused the read")
+        }
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertTrue(reentered, "the second sync never ran, so no claim was ever contested")
+
+        // Counted from here, because the reentrant sync above is a whole sync of
+        // its own and a bare `exactly = 0` would be answering for both.
+        val before = writes
+
+        File(mirror, "notes.md").writeText("stub")
+        loser.handleMirrorEvent(FileObserver.CREATE, File(mirror, "notes.md"), mirror, treeUri)
+        loser.runWriteBackLoop { false }
+
+        assertEquals(
+            before, writes,
+            "the engine that lost the copy wrote a local file over a device document it " +
+                "never read, opening it with \"wt\": the device copy is truncated to " +
+                "whatever the mirror happened to hold",
+        )
+        assertEquals(
+            listOf("notes.md"), announced,
+            "the write was refused and nothing said so, which is the silence the guard " +
+                "exists to end rather than create",
         )
     }
 

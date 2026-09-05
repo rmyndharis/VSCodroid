@@ -61,6 +61,8 @@
 | KB-21 | Keyboard only for text | Tap the Explorer icon, open a file from the tree, then tap a line of text | Stays down for the first two, comes up on the third with the caret where the tap landed | | |
 | KB-22 | Deleting after a paste does not multiply a word | The report this exists for is a word repeated many times while deleting pasted code. It did not reproduce on an emulator across four attempts, and the emulator is not the reason: tapping Gboard's own key coordinates with `adb shell input tap` produces a real composing region, a tap on a key row coordinate drives the real `dispatchKeyEvent` path, and `adb shell input swipe X Y X Y 2000` drives Gboard's own backspace auto-repeat, so every ingredient is reachable there. What an emulator cannot vary is the reporter's Gboard build and a WebView old enough to use the textarea path, which is what a real device is for. Open a file, paste a block of code from the clipboard, then type a word with Gboard so a composition is pending (the underlined, uncommitted characters), tap a punctuation key on the extra key row, and hold backspace until the paste is gone. Watch Gboard's suggestion strip while you type, not only the file | Backspace removes one character per repeat and the file only shrinks. The thing to watch for on the way is the suggestion strip offering a word the file does not contain, for example the composed word doubled: that is the keyboard's buffer and the page disagreeing, and it was seen on an emulator without the file ever multiplying, so it is the state the report would grow out of rather than the report itself. Record the device, the Gboard version, the keyboard language and the WebView version | | |
 | KB-23 | Control for KB-22 | The same file and the same paste, but type the punctuation from Gboard's own symbol page instead of the extra key row, and delete the same way | Identical behaviour. If KB-22 multiplies and this does not, the row's injected key event is what desynchronised the keyboard; if both do, it belongs to Monaco or to the WebView and not to this app | | |
+| KB-24 | Ctrl with a capital typed on the soft keyboard | Tap **ctrl** on the key row so it lights, then use the soft keyboard's own Shift to type a capital `P` | The Command Palette opens, "Type the name of a command to run". Quick Open, "Search files by name", is the failure: it means the capital reached the page without its Shift, so `Ctrl+Shift+P` resolved as `Ctrl+P`. Measured on an API 37 emulator before the fix: the page received `{key:"P", code:"KeyP", ctrl:true, shift:false}`. Try `Ctrl` with a lower-case `s` as the control, which must still be Save and not Save As | | |
+| KB-25 | The alternates go away with the row | Hold `{}` on the key row until `[` and `<` appear. With them up, turn the phone over; then hold `{}` again and let the keyboard go, by tapping outside a text area or with the keyboard's own hide key | Both times the alternates disappear with the row. Before the fix they stayed: after the rotation they sat over the middle of the soft keyboard, a screen's width from the key, and after the keyboard went down they sat over the editor with nothing under them, until the user tapped elsewhere. `smallestScreenWidthDp` does not change on rotation, so this is the case the popup's own teardown could not see | | |
 
 ## 4. Screen & Orientation
 
@@ -257,7 +259,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 23 | | | |
+| Keyboard Input | 25 | | | |
 | Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 6 | | | |
@@ -268,7 +270,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **123** | | | |
+| **Total** | **125** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
