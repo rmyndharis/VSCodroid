@@ -59,4 +59,28 @@ class ServerReadyNavigationTest {
                 "connection-refused page",
         )
     }
+
+    /**
+     * And waiting is not dropping. The grant is taken and the mirror is copied by
+     * the time readiness is asked about, so a guard that simply declines to
+     * navigate throws away minutes of the user's copy and says nothing, which is
+     * worse than the error page it avoids: an error page can be read. The first
+     * version of this guard did exactly that.
+     */
+    @Test
+    fun `a folder picked while the server is down is not thrown away`() {
+        val body = SourceScan.body(mainActivity(), "private fun openSafFolder(")
+
+        assertTrue(
+            body.contains("rememberWorkspaceFolder(target)"),
+            "openSafFolder does not remember the folder it declined to open, so the " +
+                "grant and the copy are spent and nothing will reopen it",
+        )
+        assertTrue(
+            body.contains("retryServerStart()"),
+            "openSafFolder declines to navigate and does not ask the server back, so " +
+                "the remembered folder waits for a readiness callback that is never " +
+                "coming once the service has given up",
+        )
+    }
 }

@@ -2289,8 +2289,13 @@ claude() {
         // first prunes again on the next launch, which is the direction to fail
         // in. That is what the versionCode form got right and is kept.
         val shouldPrune = !prefs.getBoolean(KEY_MOVED_DEFAULTS_PRUNED, false)
+        val document = refreshed ?: current
+        // Whether it LOOKED, which is not the same as whether it changed anything.
+        // A decline leaves the app's old preferences in the document, so recording
+        // the pass as done for one would keep them there for ever.
+        val looked = shouldPrune && prunableMovedDefaults(document)
         val pruned = if (shouldPrune) {
-            pruneMovedDefaults(refreshed ?: current, isCompactScreen())
+            pruneMovedDefaults(document, isCompactScreen())
         } else {
             null
         }
@@ -2302,7 +2307,7 @@ claude() {
                 // document was already free of them. That is this migration's
                 // definition of done, and not recording it here is what would
                 // leave the pass running on every launch for ever.
-                if (shouldPrune) markMovedDefaultsPruned()
+                if (looked) markMovedDefaultsPruned()
                 return
             }
 
@@ -2315,7 +2320,7 @@ claude() {
             Logger.w(tag, "Could not refresh managed paths; settings.json is unchanged")
             return
         }
-        if (shouldPrune) markMovedDefaultsPruned()
+        if (looked) markMovedDefaultsPruned()
         Logger.i(tag, "Refreshed managed paths in settings.json")
     }
 
@@ -2597,6 +2602,16 @@ claude() {
             if (!writeDefaultSettings()) {
                 throw IOException("could not write $settingsFile")
             }
+            // This document is ours and was written a line ago, so it holds none
+            // of the preferences the prune exists to take out. Recording that here
+            // is what stops a fresh install spending its one pass on the second
+            // launch, over a document that by then can only differ from this one
+            // by what the USER has written into it: the Settings editor's Remote
+            // tab writes to this very file, and the pairs are matched value-exact,
+            // so a first-day choice that happens to match an old default would be
+            // deleted once and never again. An install that never carried them
+            // should never look for them.
+            markMovedDefaultsPruned()
         }
     }
 
@@ -5217,6 +5232,10 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
     val brace = rootBraceIndex(content)
     if (brace < 0) return null
     val indent = firstPropertyIndent(content, brace) ?: return null
+    // Past here the document has been read and the answer is trustworthy: either
+    // lines come out or there were none to take. Everything above is a decline,
+    // which [prunableMovedDefaults] answers separately so the caller cannot record
+    // a refusal as a success.
     // Matched against a copy with the comments blanked, and deleted from the
     // original by the offsets that copy reports. A commented-out setting starts
     // its line exactly as a live one does, so a plain text replace takes the
@@ -5242,6 +5261,27 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
         updated.delete(cut.first, cut.last + 1)
     }
     return updated.toString().takeIf { it != content }
+}
+
+/**
+ * Whether [pruneMovedDefaults] can read this document at all.
+ *
+ * The same two preconditions it starts with, asked separately because its own
+ * answer cannot carry the difference: it returns null both for a document that
+ * holds none of the moved pairs and for one it declined to read, and those are
+ * opposite facts. A decline means the app's old preferences may still be in
+ * there; recording the pass as done for one would leave them for ever, which is
+ * exactly what the one-shot flag must not do.
+ *
+ * The declining case is real rather than theoretical: [firstPropertyIndent]
+ * answers null when the root object opens with a comment, and it was deliberately
+ * made to answer that way so a leading comment could not send the prune into a
+ * nested object instead. settings.json is JSONC and belongs to the user, and the
+ * editor tells them to edit it by hand.
+ */
+private fun prunableMovedDefaults(content: String): Boolean {
+    val brace = rootBraceIndex(content)
+    return brace >= 0 && firstPropertyIndent(content, brace) != null
 }
 
 /**

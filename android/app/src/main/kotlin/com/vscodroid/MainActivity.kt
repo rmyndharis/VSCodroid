@@ -1264,12 +1264,7 @@ class MainActivity : AppCompatActivity() {
                 // The listing is off the main thread for the reason every other
                 // disk read here is: `MainThreadWatch` installs a policy that
                 // logs one, and `folderOpenTarget` stats each candidate.
-                // Readiness rather than the port, for the reason recreateWebView
-                // gives: a device-folder sync can run for minutes, and a server
-                // that died during it leaves `serverPort` set with nothing behind
-                // it, so the folder the user just picked would open onto a
-                // connection-refused page.
-                if (navigate && serverPort > 0 && nodeService?.isServerReady() == true) {
+                if (navigate && serverPort > 0) {
                     val target = withContext(Dispatchers.IO) {
                         folderOpenTarget(
                             mirrorDir.absolutePath,
@@ -1279,7 +1274,28 @@ class MainActivity : AppCompatActivity() {
                     if (target != mirrorDir.absolutePath) {
                         Logger.i(tag, "The granted folder holds a workspace; opening that")
                     }
-                    navigateToFolder(serverPort, target)
+                    // Readiness rather than the port, for the reason recreateWebView
+                    // gives: a device-folder sync can run for minutes, and a server
+                    // that died during it leaves `serverPort` set with nothing behind
+                    // it, so navigating puts a connection-refused page in front of the
+                    // folder the user just picked.
+                    //
+                    // But the folder is NOT dropped for it, which is the mistake the
+                    // first version of this guard made. The grant is taken and the
+                    // mirror is copied by the time we are here, so refusing to
+                    // navigate throws away minutes of the user's copy and says
+                    // nothing at all -- worse than the error page it avoids, because
+                    // an error page can at least be read. It is remembered instead
+                    // and the server is asked back: retryServerStart puts up the
+                    // loading page, whose URL names no folder, so onServerReady's
+                    // loadVSCode falls through the chain to this one.
+                    if (nodeService?.isServerReady() == true) {
+                        navigateToFolder(serverPort, target)
+                    } else {
+                        Logger.i(tag, "The server is not serving; opening the folder once it is")
+                        rememberWorkspaceFolder(target)
+                        retryServerStart()
+                    }
                 }
             } catch (e: CancellationException) {
                 // Not a folder that failed. This Activity is being destroyed and

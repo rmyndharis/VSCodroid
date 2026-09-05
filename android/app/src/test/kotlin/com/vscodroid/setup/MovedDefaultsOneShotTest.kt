@@ -164,4 +164,83 @@ class MovedDefaultsOneShotTest {
                 "old preferences stay in the file and nothing will look again",
         )
     }
+
+    /**
+     * A document the pass could not read is not a document it cleaned.
+     *
+     * `pruneMovedDefaults` returns null for both, and they are opposite facts:
+     * `firstPropertyIndent` answers null when the root object opens with a comment,
+     * which it was deliberately made to do so a leading comment could not send the
+     * prune into a nested object and delete the user's overrides there instead. The
+     * app's own preferences are then still in the file. Recording the pass as done
+     * for that leaves them for ever, which is the one thing the flag must not do,
+     * and settings.json is JSONC that the editor invites the user to hand-edit.
+     */
+    @Test
+    fun `a document the pass could not read is not recorded as done`() {
+        // Settled first, so refreshManagedPaths has nothing to do and the prune sees
+        // the document as written. That matters: the refresh inserts its managed
+        // values directly after the opening brace, so on a stale document a leading
+        // comment is no longer leading by the time the prune looks, and a fixture
+        // that skips this step exercises the ordinary path while claiming to
+        // exercise the decline.
+        run()
+        stored.clear()
+
+        val settled = settingsFile.readText()
+        settingsFile.writeText(
+            settled.replaceFirst(
+                "{\n",
+                "{\n    // my own notes\n    \"editor.wordWrap\": \"on\",\n",
+            ),
+        )
+
+        run()
+
+        assertTrue(
+            settingsFile.readText().contains("\"editor.wordWrap\": \"on\""),
+            "the fixture is wrong: the prune was expected to decline this document. " +
+                "File now:\n" + settingsFile.readText(),
+        )
+        assertFalse(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "the pass recorded itself as done over a document it declined to read, so " +
+                "the app's own preferences stay in the file that outranks the user's " +
+                "settings and nothing will ever look again",
+        )
+    }
+
+    /**
+     * A fresh install never spends its one pass.
+     *
+     * The pass exists for documents written by an older release. An install that
+     * begins now has never carried those preferences, so the only way its document
+     * can hold one of the seventeen value-exact pairs is that the USER wrote it,
+     * through the Settings editor's Remote tab which writes to this very file.
+     * Spending the pass on the second launch therefore has exactly one possible
+     * effect, and it is deleting a setting the user chose.
+     */
+    @Test
+    fun `writing the settings file fresh records the pass as unnecessary`() {
+        settingsFile.delete()
+        stored.clear()
+
+        FirstRunSetup(context).let { setup ->
+            val create = FirstRunSetup::class.java.getDeclaredMethod("createDefaultSettings")
+            create.isAccessible = true
+            create.invoke(setup)
+        }
+
+        assertTrue(
+            settingsFile.exists(),
+            "the fixture is wrong: createDefaultSettings wrote nothing, so the case below " +
+                "would pass on a method that never ran",
+        )
+        assertTrue(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "a settings file this app just wrote was not recorded as needing no prune, so " +
+                "the next launch spends the one pass over a document that can only have " +
+                "gained one of those pairs from the user",
+        )
+    }
 }
