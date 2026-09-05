@@ -568,10 +568,10 @@ Debugging** and choose **Add Configuration...** at the bottom of the list. That
 creates `.vscode/launch.json` in the folder, and what you put there appears in
 the same list beside VSCodroid's three.
 
-### What Works Today, Measured
+### Attaching to a Server You Started
 
-**Attaching works.** Start your program yourself with the inspector open and
-attach to it:
+`Attach to Node.js` is the one to reach for with a dev server, because it leaves
+the server alone:
 
 ```bash
 node --inspect server.js
@@ -580,17 +580,7 @@ node --inspect server.js
 Node prints `Debugger listening on ws://127.0.0.1:9229/...`; start **Attach to
 Node.js** and it connects, and the process itself reports `Debugger attached.`
 The configuration sets `restart`, so it reconnects when a watcher restarts the
-process. Breakpoints, stepping and the call stack all work from there.
-
-**Launching does not yet.** **Node.js: Run Current File** and **NestJS: Debug**
-start a session, put the toolbar up and then hang without running your program.
-The reason is in the debug adapter rather than in this app: it starts a helper
-process for the debugger connection with a stripped environment, three variables
-and no library path, and this device's Node cannot start without one. It leaves
-no error on screen, which is why this section says so plainly.
-
-Until that is fixed, attach to a process you started yourself, or use
-`console.log` and the terminal.
+process.
 
 ### What Has No Debugger Here At All
 
@@ -721,13 +711,6 @@ The status bar shows a phantom process count. This tells you how many background
 ---
 
 ## Known Limitations
-
-### Starting a Debug Session
-
-Attaching to a process you started with `--inspect` works. Launching one from a
-configuration does not yet: the debug adapter starts its helper process with a
-stripped environment that this device's Node cannot start under. See [Running
-and Debugging](#running-and-debugging).
 
 ### Native npm Packages
 

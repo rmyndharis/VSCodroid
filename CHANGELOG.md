@@ -14,11 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor's interface now follows your phone's language: Chinese (Simplified and Traditional), Czech, French, German, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish and Turkish. Nothing to install, and a language nobody has translated the editor into stays English.
 - The app's own screens are translated into those same languages, and Android's per-app language picker now lists them.
 - VSCodroid's own commands, settings and the Get Started walkthrough are translated into the same thirteen languages as the editor.
-- Attaching the debugger to a Node process you started with `--inspect` works, and the user guide says which debug routes do and do not.
 - The user guide covers installing an extension from a VSIX file, and what running and debugging does and does not do on the device.
 
 ### Fixed
 
+- Running and debugging a file works on the device. A launch configuration started a session, put the debug toolbar up and then never ran the program, with nothing on screen to say why. The editor built its terminal command around `/usr/bin/env`, which Android does not have, and behind that the debug adapter started its own helper processes with an environment too small for this device's Node to start under.
 - A file you changed on the device is no longer overwritten when the app reopens the folder after an upload was cut short. The app took its own record of the unfinished write as proof that nothing else had touched the file, and replaced it. The check now reads both copies rather than trusting the size the folder provider reports, so a document the interrupted write had emptied is recognised instead of leaving a spare copy of the file in your folder.
 - A setting you change is the one that applies. The app wrote its own preferences into a file the editor ranks above your settings, so changing the theme, word wrap or the minimap in Settings did nothing, with no error to say why. Those are defaults now, and an existing install has the old overrides removed once.
 - A folder you closed stays closed on the next launch. It was only remembered as closed for as long as the editor stayed open.

@@ -90,6 +90,8 @@
 | ED-10 | Application Menu across a rotation | Open the Application Menu, tap File so its submenu opens, then rotate the device | Both menus close. They must not stay open: the submenu would be anchored where it no longer fits and would be clipped off the edge | | |
 | ED-11 | An https preview with a bad certificate | Run `Simple Browser: Show` and enter `https://self-signed.badssl.com/`, then `https://expired.badssl.com/`, then the first one again. Offline variant: a local https server with a self-signed certificate, reached at `https://127.0.0.1:8443` | Each of the first two shows an empty tab plus a toast naming the host, the first saying the certificate is not trusted and the second that it is expired or not yet valid. The third shows no second toast: a repeat of a fact already said is suppressed. No dialog and no way to continue appears at any point | Pass | Verified 2026-08-21 on an API 33 emulator against a local self-signed server reached at `https://10.0.2.2:8443`, which is what the host is called from inside an emulator. Logcat: `TLS refused for 10.0.2.2:8443: UNTRUSTED`. The toast reads `Blocked 10.0.2.2:8443: certificate not trusted. Use http instead.` and renders whole. The pane stays empty, which is the symptom this exists to explain rather than remove. **Re-run: this result predates the subframe navigation rules, which an https preview goes through** |
 | ED-12 | Where a preview's own links go | On a debug build with `adb logcat -s VSCodroid.WebViewClient` running, run `Simple Browser: Show` and enter `https://example.com`, then tap the link on that page | The linked page renders in the preview tab; the device browser does not open. Record whether logcat shows anything from the client for that navigation, because that is what this row exists to settle: the platform documents `shouldOverrideUrlLoading` as one that *may* be called for subframes, and whether it is here decides whether the subframe rules are live behaviour or defence in depth. The refusal line is `Logger.d`, so a release build prints nothing either way | | |
+| ED-13 | Running a file under the debugger | Put `debugger;` in a `.js` file in the projects folder, open it, run **Debug: Select and Start Debugging** and pick **Node.js: Run Current File** | Execution stops on that line with the gutter arrow and the debug toolbar, and the terminal shows `Debugger attached.` A session that starts, shows the toolbar and never stops is the failure this row exists for: it looks like it is working | | |
+| ED-14 | Attaching to a process you started | Run `node --inspect server.js` in a terminal, then start **Attach to Node.js** | The editor attaches and `Debugger attached.` appears in that terminal | | |
 
 ## 6. Extensions
 
@@ -254,7 +256,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Android Versions | 4 | | | |
 | Keyboard Input | 21 | | | |
 | Screen & Orientation | 9 | | | |
-| Editor Operations | 12 | | | |
+| Editor Operations | 14 | | | |
 | Extensions | 6 | | | |
 | Background/Foreground | 8 | | | |
 | Low Memory & Stress | 4 | | | |
@@ -263,7 +265,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **118** | | | |
+| **Total** | **120** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

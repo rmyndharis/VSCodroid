@@ -139,3 +139,4 @@
 # that creates the submenu. closest is a DOM method and the class is a string
 # literal, so neither is renamed.
 0017 menu pan ownership|out/vs/code/browser/workbench/workbench.js|closest('.monaco-submenu')
+0018 debug terminal env|out/vs/workbench/api/node/extensionHostProcess.js|unset 

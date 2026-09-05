@@ -700,6 +700,21 @@ CSSEOF
 grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS" || { echo "  ERROR: append did not land" >&2; exit 1; }
 echo "  appended mobile menu overrides to workbench.css"
 
+step "Debug adapter"
+# js-debug spawns two helpers that carry the debugger connection, and both get an
+# environment of three variables rather than the parent's. That is enough
+# everywhere it was written for and nowhere here: this app's Node is reached
+# through a PATH the app builds and links against libraries only LD_LIBRARY_PATH
+# names, so both helpers die before they start, silently, and the program blocks
+# for a debugger that never attaches.
+#
+# Here rather than in patches/, because that directory is applied to the
+# microsoft/vscode source with `git apply` and js-debug is not in it: it arrives
+# as a built extension the VS Code build downloads. Same family as
+# patch-default-shell.py, which rewrites another downloaded artifact's idea of
+# where the system is.
+python3 "$SCRIPT_DIR/patch-js-debug-env.py" "$OUT"
+
 step "Patch manifest"
 # What the fingerprints cannot see. A fingerprint row proves a patch arrived, not
 # which version of it did: editing an already-matching patch leaves every gate

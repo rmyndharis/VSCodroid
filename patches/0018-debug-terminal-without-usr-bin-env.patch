@@ -1,0 +1,60 @@
+Build a debug terminal command that does not name /usr/bin/env.
+
+prepareCommand assembles the shell line the debug adapter asks the terminal to
+run. For a POSIX shell it sets the child's environment by prefixing the command
+with /usr/bin/env, which is right everywhere it was written for and wrong here:
+Android has no /usr/bin at all. A command naming an absolute path that does not
+exist is not a lookup failure the shell can recover from, so bash answers
+
+  bash: /usr/bin/env: No such file or directory
+
+and the program never starts. Measured on an API 37 emulator with the three
+launch configurations this app seeds: the session starts, the debug toolbar
+appears, the status bar names the configuration, and the only sign that nothing
+ran is one line in the terminal panel. That is worse than an error, because
+every visible indicator says it is working.
+
+Inline assignments and unset do the same job with no binary. `A=1 B=2 cmd` is
+POSIX and is what a shell is for; the removals become `unset A B ; ` ahead of
+the command. The one behavioural difference is that unset affects the shell
+that runs the command rather than only the child, which matters only if the
+terminal is reused for something else afterwards, and a debug terminal is not.
+
+The quoting is untouched: both halves still go through hardQuote, so a value
+holding a space or a quote is escaped exactly as it was.
+
+diff --git a/src/vs/workbench/contrib/debug/node/terminals.ts b/src/vs/workbench/contrib/debug/node/terminals.ts
+index b3b5a84..1d4b76c 100644
+--- a/src/vs/workbench/contrib/debug/node/terminals.ts
++++ b/src/vs/workbench/contrib/debug/node/terminals.ts
+@@ -173,16 +173,26 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
+ 				command += `cd ${quote(cwd)} ; `;
+ 			}
+ 			if (env) {
+-				command += '/usr/bin/env';
++				// Android has no /usr/bin, so naming that path produces
++				// "/usr/bin/env: No such file or directory" and the debug
++				// session starts a terminal that runs nothing. Inline
++				// assignments and unset are POSIX shell and need no binary.
++				const removed: string[] = [];
++				let assigned = '';
+ 				for (const key in env) {
+ 					const value = env[key];
+ 					if (value === null) {
+-						command += ` -u ${hardQuote(key)}`;
++						removed.push(hardQuote(key));
+ 					} else {
+-						command += ` ${hardQuote(`${key}=${value}`)}`;
++						assigned += ` ${hardQuote(`${key}=${value}`)}`;
+ 					}
+ 				}
+-				command += ' ';
++				if (removed.length > 0) {
++					command += `unset ${removed.join(' ')} ; `;
++				}
++				if (assigned.length > 0) {
++					command += `${assigned.substring(1)} `;
++				}
+ 			}
+ 			for (const a of args) {
+ 				command += (a === '<' || a === '>' || argsCanBeInterpretedByShell) ? a : quote(a);
