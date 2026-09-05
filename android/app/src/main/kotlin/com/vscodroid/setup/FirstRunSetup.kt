@@ -1607,6 +1607,14 @@ class FirstRunSetup(
                 additions.append(claudeBashFunction())
                 added += "claude"
             }
+            // Its own guard, for the reason the claude block states: every
+            // install that predates this already carries npm() and claude(), so
+            // sharing either guard would skip pip on exactly the devices that
+            // need it added.
+            if (!content.contains("pip()")) {
+                additions.append(pipBashFunctions())
+                added += "pip/pip3"
+            }
             // One rewrite through a temporary file rather than an append per
             // block. A guard that reads a string its own block opens with
             // certifies a partial append: `claude()` is there, its body is not,
@@ -1990,7 +1998,8 @@ class FirstRunSetup(
      */
     fun createBashEnvFile() {
         val envFile = File(Environment.getBashEnvPath(context))
-        val content = BASH_ENV_HEADER + npmBashFunctions() + claudeBashFunction() + """
+        val content = BASH_ENV_HEADER + npmBashFunctions() + claudeBashFunction() +
+            pipBashFunctions() + """
 
 # On-demand toolchain env vars (Go, Ruby, Java, etc.)
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
@@ -2189,6 +2198,33 @@ __vscodroid_symlink_note() {
     echo "vscodroid: so npm cannot create node_modules/.bin here. Move the project to" >&2
     echo "vscodroid: internal storage and open it there:  mv \"${'$'}PWD\" ~/" >&2
 }
+"""
+
+    /**
+     * `pip` and `pip3` in the terminal, which the Get Started walkthrough promises.
+     *
+     * pip is installed and works; it simply has no name on PATH. It ships as a
+     * package inside site-packages rather than as a program, and the console
+     * script that would carry the name is a text file with a `#!` line, which
+     * SELinux will not execute from filesDir. So the walkthrough said "Python +
+     * pip: ready" and the first thing a person typed answered
+     * `bash: pip: command not found`, on an interpreter that would have run the
+     * same command perfectly as `python3 -m pip`.
+     *
+     * A function for the same reason npm is one, and with the same ceiling: it
+     * reaches a bash shell and not a `"type": "process"` task, which is why the
+     * walkthrough and the guide name the module form beside it.
+     *
+     * `python3` and not `python`, because [setupToolSymlinks] guarantees the
+     * first and the second is only conventionally the same thing.
+     */
+    private fun pipBashFunctions(): String = """
+
+# pip/pip3: shell functions. pip is installed as a library, not as a program:
+# its console script is a #! text file under filesDir, which SELinux refuses to
+# execute. The module form is the same pip and always has been.
+pip() { python3 -m pip "${'$'}@"; }
+pip3() { python3 -m pip "${'$'}@"; }
 """
 
     /**

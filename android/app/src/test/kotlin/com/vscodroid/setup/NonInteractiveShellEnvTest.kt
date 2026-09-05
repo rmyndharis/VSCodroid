@@ -104,7 +104,11 @@ class NonInteractiveShellEnvTest {
         FirstRunSetup(context).createBashEnvFile()
 
         val written = bashEnvFile().readText()
-        for (name in listOf("npm()", "npx()", "claude()")) {
+        // pip and pip3 are here because pip has no name on PATH at all: it is
+        // installed as a library and its console script is a #! file SELinux
+        // will not execute, so the walkthrough's "Python + pip: ready" was
+        // answered by `bash: pip: command not found`.
+        for (name in listOf("npm()", "npx()", "claude()", "pip()", "pip3()")) {
             assertTrue(written.contains(name), "$name is missing, so a task cannot run it")
         }
         assertTrue(
