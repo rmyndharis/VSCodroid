@@ -4133,12 +4133,35 @@ private class SettingPin(val key: String, valuePattern: String, val value: Strin
 }
 
 /**
- * The first property in the document, with the indentation it sits at.
+ * The indentation of the root object's own first property, or null.
  *
- * Anchored to the opening brace so it cannot match a property nested inside some
- * other object further down, which would put the inserted line in the wrong scope.
+ * Matched AT the opening brace rather than searched for from it, and the
+ * difference is the whole point. The previous form was
+ * `Regex("""(?<=\{)\s*\n([ \t]*)(?=")""")` used with `find(content, brace)`,
+ * where the start index only says where scanning begins and the lookbehind
+ * accepts ANY opening brace. settings.json is JSONC, so a comment is legal as
+ * the first thing inside the root object, and one comment there slides the match
+ * past it to the first NESTED object and reports that object's indentation as
+ * the document's own.
+ *
+ * That is harmless where the answer only decides where a new line is placed, and
+ * it is not harmless in [pruneMovedDefaults], which deletes a line by matching
+ * key, value, indent and comma: at the wrong indent it removes the user's nested
+ * overrides while leaving the app's root-level ones behind, which is the exact
+ * inversion of what it is for. Anchoring here fixes both callers at once.
+ *
+ * No match on a root object that opens with a comment is the intended answer,
+ * not a gap: the prune then declines, and [insertSetting] falls back to four
+ * spaces, which is the conservative direction both already ask for.
  */
-private val FIRST_PROPERTY = Regex("""(?<=\{)\s*\n([ \t]*)(?=")""")
+private val FIRST_PROPERTY = Regex("""\s*\n([ \t]*)(?=")""")
+
+/**
+ * The indent [FIRST_PROPERTY] answers for a document whose root brace is at
+ * [brace], or null when the root object does not open with a plain property.
+ */
+private fun firstPropertyIndent(content: String, brace: Int): String? =
+    FIRST_PROPERTY.matchAt(content, brace + 1)?.groupValues?.get(1)
 
 /**
  * Directories under our own publisher that this build no longer bundles.
@@ -5101,6 +5124,11 @@ internal fun settingsWithLayoutDefaults(content: String, compactScreen: Boolean)
  *
  * `vscodroid.layout.autoHideSideBar` is not here because its value is the
  * device's; [pruneMovedDefaults] takes it as an argument instead.
+ *
+ * Drawn from EVERY shipped release's writer, not from the most recent one. The
+ * document on disk is whatever the release the user first installed wrote, plus
+ * whatever later releases inserted into it; a key one release stopped writing
+ * is still in the file of everyone who was there for it.
  */
 private val MOVED_DEFAULTS = listOf(
     "workbench.secondarySideBar.defaultVisibility" to "\"hidden\"",
@@ -5114,6 +5142,20 @@ private val MOVED_DEFAULTS = listOf(
     "diffEditor.wordWrap" to "\"on\"",
     "terminal.integrated.fontSize" to "13",
     "terminal.integrated.shellIntegration.enabled" to "true",
+    // v1.0.0 wrote these six into `home/.vscodroid/User/settings.json`, and
+    // `migrateSettingsToMachinePath` moved that whole document, comments and
+    // all, into the machine file on the upgrade to v1.1.0. v1.1.0 stopped
+    // writing them and nothing has removed them since, so an install that began
+    // at v1.0.0 still carries app-written GitLens preferences in the layer that
+    // outranks the user's own. GitLens is no longer bundled, so the user who
+    // installs it from Open VSX and turns code lens back on is overridden by a
+    // release they last ran years of updates ago.
+    "gitlens.showWelcomeOnInstall" to "false",
+    "gitlens.showWhatsNewAfterUpgrades" to "false",
+    "gitlens.codeLens.enabled" to "false",
+    "gitlens.currentLine.enabled" to "true",
+    "gitlens.hovers.enabled" to "false",
+    "gitlens.statusBar.enabled" to "false",
 )
 
 /**
@@ -5140,15 +5182,60 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
     // understand costs the file, because the write that follows is atomic.
     val brace = rootBraceIndex(content)
     if (brace < 0) return null
-    val indent = FIRST_PROPERTY.find(content, brace)?.groupValues?.get(1) ?: return null
-    var updated = content
+    val indent = firstPropertyIndent(content, brace) ?: return null
+    // Matched against a copy with the comments blanked, and deleted from the
+    // original by the offsets that copy reports. A commented-out setting starts
+    // its line exactly as a live one does, so a plain text replace takes the
+    // user's parked experiment out of their own comment and rewrites a file that
+    // needed no write. `ProcessManager.heapOverrideFromSettings` learned the same
+    // lesson reading a value; this is the writing half of it, and the blanks are
+    // length-preserving so the two texts share one index space.
+    val masked = commentsBlanked(content)
     val moved = MOVED_DEFAULTS +
         ("vscodroid.layout.autoHideSideBar" to autoHideSideBar.toString())
+    val cuts = mutableListOf<IntRange>()
     for ((key, value) in moved) {
-        updated = updated.replace("\n$indent\"$key\": $value,", "")
+        val needle = "\n$indent\"$key\": $value,"
+        var at = masked.indexOf(needle)
+        while (at >= 0) {
+            cuts.add(at until at + needle.length)
+            at = masked.indexOf(needle, at + needle.length)
+        }
     }
-    return updated.takeIf { it != content }
+    if (cuts.isEmpty()) return null
+    val updated = StringBuilder(content)
+    for (cut in cuts.sortedByDescending { it.first }) {
+        updated.delete(cut.first, cut.last + 1)
+    }
+    return updated.toString().takeIf { it != content }
 }
+
+/**
+ * [content] with every comment replaced by spaces, and nothing else moved.
+ *
+ * Same length, and the newlines are kept, so an offset found here is the same
+ * offset in the original. Strings are left as they are: the arm that recognises
+ * them is what stops a delimiter inside a value opening a comment that runs to
+ * the end of the file.
+ *
+ * The pattern is the one `ProcessManager` documents at length beside its own
+ * copy, deliberately restated rather than shared: that reader strips comments to
+ * find a value and can afford to change the text's length, this one must not.
+ * If either is ever wrong the other is too, so the KDoc there is the one to read.
+ */
+private fun commentsBlanked(content: String): String =
+    STRING_OR_COMMENT.replace(content) { match ->
+        if (match.value.startsWith("\"")) {
+            match.value
+        } else {
+            buildString(match.value.length) {
+                for (c in match.value) append(if (c == '\n') '\n' else ' ')
+            }
+        }
+    }
+
+/** A JSON string, a `//` comment, or a block comment, whichever starts first. */
+private val STRING_OR_COMMENT = Regex("""\"(?:\\.|[^\"\\])*\"|//[^\n]*|/\*[\s\S]*?\*/""")
 
 /**
  * Adds a setting to a JSONC document, directly after its opening brace.
@@ -5165,7 +5252,7 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
 private fun insertSetting(content: String, key: String, value: String): String {
     val brace = rootBraceIndex(content)
     if (brace < 0) return content
-    val indent = FIRST_PROPERTY.find(content, brace)?.groupValues?.get(1) ?: "    "
+    val indent = firstPropertyIndent(content, brace) ?: "    "
     return content.substring(0, brace + 1) +
         "\n$indent\"$key\": $value," +
         content.substring(brace + 1)

@@ -463,6 +463,113 @@ class SettingsPathsTest {
             )
         }
 
+        /**
+         * A comment as the first thing inside the root object.
+         *
+         * This is legal JSONC and a user is free to write it, and it used to
+         * decide which lines the prune deleted. The indent was found by scanning
+         * FORWARD from the root brace with a pattern whose lookbehind accepted
+         * any brace, so one comment slid the match past the root object's own
+         * first property and onto the first NESTED one, and the prune then
+         * matched at that deeper indent: it removed the user's per-language
+         * overrides and left the app's root-level lines in place, which is
+         * precisely inverted.
+         *
+         * Declining is the right answer here. The prune exists to remove lines
+         * this app wrote, and a document it cannot read the shape of is one it
+         * should not be deleting from.
+         */
+        /**
+         * The document an install that began at v1.0.0 is still carrying.
+         *
+         * v1.0.0 wrote six GitLens preferences into the legacy `User/` path, and
+         * the migration to the machine path moved that document whole. Nothing
+         * has removed them since, and the machine file outranks the user's own
+         * settings, so a user who installs GitLens from the marketplace today
+         * and turns code lens back on is overridden by a release they last ran
+         * many updates ago. The prune list is drawn from every shipped release's
+         * writer for exactly this reason.
+         */
+        @Test
+        fun `preferences an older release wrote are removed too`() {
+            val before = document(
+                """"gitlens.codeLens.enabled": false,""",
+                """"gitlens.currentLine.enabled": true,""",
+                """"git.path": "$git"""",
+            )
+
+            val result = pruneMovedDefaults(before, autoHideSideBar = true)
+
+            assertEquals(
+                document(""""git.path": "$git""""),
+                result,
+                "a preference this app wrote at v1.0.0 is still in the file, and the " +
+                    "workbench ranks that file above the user's own settings",
+            )
+        }
+
+        @Test
+        fun `a comment before the first property makes the prune decline`() {
+            val before = "{\n" +
+                "    // my own notes\n" +
+                "    \"editor.wordWrap\": \"on\",\n" +
+                "    \"[markdown]\": {\n" +
+                "        \"editor.wordWrap\": \"on\",\n" +
+                "    },\n" +
+                "    \"git.path\": \"$git\"\n}"
+
+            assertNull(
+                pruneMovedDefaults(before, autoHideSideBar = true),
+                "the indent came from somewhere other than the root object's own first " +
+                    "property, so the prune was aimed at a nesting level it does not own. " +
+                    "The nested `[markdown]` override above is what it would have deleted, " +
+                    "while the root-level `editor.wordWrap` it exists to remove stayed",
+            )
+        }
+
+        /**
+         * A setting the user parked inside a comment.
+         *
+         * A commented-out line starts exactly as a live one does, so a plain
+         * text replace deletes it out of the user's own comment and rewrites a
+         * file that needed no write at all. Nothing inside a comment is a
+         * setting, and nothing there is this app's to tidy.
+         */
+        @Test
+        fun `a line commented out by the user is left alone`() {
+            val before = "{\n" +
+                "    \"git.path\": \"$git\",\n" +
+                "    /*\n" +
+                "    \"editor.wordWrap\": \"on\",\n" +
+                "    */\n" +
+                "    \"files.autoSave\": \"off\"\n}"
+
+            assertNull(
+                pruneMovedDefaults(before, autoHideSideBar = true),
+                "the prune reached inside a comment, so it took the user's parked " +
+                    "experiment and rewrote a file that needed no write",
+            )
+        }
+
+        /**
+         * And the same key live, so the case above cannot pass by the prune
+         * having quietly stopped working altogether.
+         */
+        @Test
+        fun `the same key outside a comment is still removed`() {
+            val before = "{\n" +
+                "    \"editor.wordWrap\": \"on\",\n" +
+                "    \"git.path\": \"$git\"\n}"
+
+            val result = pruneMovedDefaults(before, autoHideSideBar = true)
+
+            assertEquals(
+                document(""""git.path": "$git""""),
+                result,
+                "the live override survived the prune",
+            )
+        }
+
         @Test
         fun `a document that never had them costs no write`() {
             val before = document(""""git.path": "$git"""")
