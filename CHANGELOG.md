@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A device folder you waited for is no longer lost when the server dies while it is being copied. The page the app puts up to carry the new folder could be stopped by the editor's own "changes you made may not be saved" prompt, because the app had not said the navigation was its own doing; cancelling it left the old folder open and the new one forgotten after minutes of copying.
+- A folder opened after the editor's page has crashed several times comes back with its Android features working. The editor could be loaded over a rebuilt page whose bridge had not been restored, so Open Folder from Device, the toolchain screen, Open in Browser and every download quietly did nothing, with nothing on screen to say why.
 - The editor no longer offers to uninstall VSCodroid's own extensions. Removing one took the device folder picker, the toolchain screen and the storage tools with it, nothing in the editor could put it back, and the only way out was clearing app data.
 - `pip` and `pip3` are commands in the terminal. Get Started said "Python + pip: ready" and typing `pip` answered `command not found`, because pip ships as a library rather than as a program.
 - A server the device cannot keep running now stops and offers the Retry page. Its five restart attempts were refilled every time it came up, so one that was killed seconds later could never use them up: the workspace reloaded every twenty seconds or so for as long as the app was open, with nothing on screen to say why.
