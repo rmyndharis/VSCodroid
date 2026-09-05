@@ -93,17 +93,25 @@ jobs:
             toolchains/build/npm/
             toolchains/extensions/
             toolchains/musl/
-          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
+          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
           restore-keys: |
             downloads-
 
       # Cache the generated assets directory (extracted, patched VS Code server + tools).
-      # patches/, branding/ and build-vscode-oss.sh are in the key even though no
-      # step here reads them: they shape the server tarball, which is republished
-      # under the same server-<version> name when they change. On an assets cache
-      # hit the fetch step - and its digest check against the release - never
-      # runs, so this key is the only thing standing between a republished server
-      # and a stale cached tree going into the APK.
+      # Every input to the server build is in the key even though no step here
+      # reads any of them: patches/, branding/, build-vscode-oss.sh and the
+      # scripts it runs over the tree shape the server tarball, which is
+      # republished under the same server-<version> name when they change. On an
+      # assets cache hit the fetch step - and its digest check against the
+      # release - never runs, so this key is the only thing standing between a
+      # republished server and a stale cached tree going into the APK.
+      #
+      # Which makes "every" a rule rather than a description: a script that edits
+      # the packaged tree belongs here the day it is written. patch-js-debug-env.py
+      # landed without it, and nothing else could have caught that. The patch
+      # fingerprints cover patches/*.patch and nothing else, and
+      # verify-server-tree.py counts occurrences of one string that script writes,
+      # which a tarball built before its latest edit carries just the same.
       - name: Cache generated assets
         id: cache-assets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -115,7 +123,7 @@ jobs:
             android/app/src/main/assets/nls/
             android/app/src/main/jniLibs/arm64-v8a/
             server/vscode-reh/
-          key: assets-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'VSCODE_LOC_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/package-assets.sh', 'scripts/build-nls-bundles.py', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'scripts/build-exec-trampoline.sh', 'scripts/exec-trampoline.c', 'scripts/build-claude-shim.sh', 'scripts/seccomp-shim.c', 'scripts/claude-launch.c', 'android/app/src/main/assets/extensions/**', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
+          key: assets-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'VSCODE_LOC_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/package-assets.sh', 'scripts/build-nls-bundles.py', 'scripts/verify-server-tree.py', 'scripts/check-patch-fingerprints.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/build-native-addons.sh', 'scripts/build-glibc-shim.sh', 'scripts/glibc-shim.c', 'scripts/gen-glibc-forwarders.py', 'scripts/build-exec-trampoline.sh', 'scripts/exec-trampoline.c', 'scripts/build-claude-shim.sh', 'scripts/seccomp-shim.c', 'scripts/claude-launch.c', 'android/app/src/main/assets/extensions/**', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py', 'scripts/patch-python-platform.py', 'scripts/check-extension.py') }}
           # The fallback is what let a removed extension come back: it restores
           # any earlier tree, and the run then saves that tree forward under its
           # own key. It stays, because a partial hit still saves most of a build

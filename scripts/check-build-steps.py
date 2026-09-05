@@ -393,6 +393,38 @@ def _main() -> int:
                   for line in text.splitlines()
                   if name in line and "python3" in line}
 
+    # Every script the server build runs over its output has to be in the cache
+    # key that decides whether the server is fetched again.
+    #
+    # The `assets-` key deliberately hashes files no step in the job reads: on an
+    # exact hit the fetch and its digest check are skipped, so the key is the only
+    # thing that can notice a tarball republished under an unchanged
+    # `server-<version>` tag. A script that shapes that tarball and is missing
+    # from the key means a build that edits only that script keeps the old tree
+    # and passes every gate: the patch manifest still matches, because it hashes
+    # `patches/*.patch` and nothing else, and a tree check that counts what the
+    # script writes is satisfied by the copy already there.
+    build_sh = ROOT / "scripts" / "build-vscode-oss.sh"
+    workflow = ROOT / ".github" / "workflows" / "build.yml"
+    if build_sh.is_file() and workflow.is_file():
+        shapers = set(re.findall(r'\$SCRIPT_DIR/([\w.-]+\.py)', build_sh.read_text()))
+        key_line = next(
+            (l for l in workflow.read_text().splitlines() if "assets-" in l and "hashFiles" in l),
+            "",
+        )
+        keyed = set(re.findall(r"scripts/([\w.-]+\.py)", key_line))
+        missing_from_key = shapers - keyed
+        if missing_from_key:
+            report("scripts that shape the server tarball but are not in the assets cache key",
+                   missing_from_key,
+                   ".github/workflows/build.yml, the assets- hashFiles list",
+                   "On a cache hit the tarball is never re-fetched, so the key is the only"
+                   " thing that can notice a server republished under the same tag.")
+            failed = True
+        elif shapers:
+            print(f"  ok     all {len(shapers)} scripts that shape the server tree are in "
+                  "the assets cache key")
+
     unwired = checkers - wired
     if unwired:
         report("checkers in scripts/ that nothing invokes", unwired,

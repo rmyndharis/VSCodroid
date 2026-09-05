@@ -40,11 +40,13 @@ extension the VS Code build downloads, so the edit belongs where the tree is
 assembled, in the same family as `patch-default-shell.py`.
 
 The edit is anchored on `ELECTRON_RUN_AS_NODE:"1"` inside an `env:{...}` that
-does not spread `process.env`, which is exactly the shape that needs it: the
-third occurrence in the file is a port probe that already spreads the parent
-environment and is deliberately left alone. Two sites are expected. Any other
-count is a build failure rather than a warning, because a miss here is invisible
-in every other gate and shows up only as a debug session that hangs.
+does not spread `process.env`, which is exactly the shape that needs it. One
+further mark in the file is a port probe that spreads the parent environment
+already and needs nothing, named here by that shape rather than by its position:
+the count below is read by someone comparing occurrences after upstream has
+moved them, which is the one moment an ordinal is wrong. Two sites are expected.
+Any other count is a build failure rather than a warning, because a miss here is
+invisible in every other gate and shows up only as a debug session that hangs.
 """
 
 from __future__ import annotations
