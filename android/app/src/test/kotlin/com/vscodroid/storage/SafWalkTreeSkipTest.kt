@@ -84,6 +84,9 @@ class SafWalkTreeSkipTest {
         }
     }
 
+    /** What the last [walk] reported as skipped, in the order it met them. */
+    private val skipped = mutableListOf<String>()
+
     /** Runs the real walk over [rows] and returns the relative paths it kept. */
     private fun walk(rows: List<Pair<String, Boolean>>): List<String> {
         // `returns` and not `answers`: the cursor is built once, so the recursive
@@ -99,13 +102,19 @@ class SafWalkTreeSkipTest {
         engine = SafSyncEngine(context)
 
         val result = mutableListOf<DocumentInfo>()
+        skipped.clear()
+        // Five parameters, and the fifth is not decoration: what the walk leaves
+        // out is device content no later phase can see, so it is reported rather
+        // than dropped and the delete guard is armed from it. Reflection cannot
+        // be told by the compiler that the arity moved, so this call is the one
+        // place that has to follow it by hand.
         SafSyncEngine::class.java
             .getDeclaredMethod(
                 "walkTree", Uri::class.java, String::class.java,
-                String::class.java, MutableList::class.java
+                String::class.java, MutableList::class.java, MutableList::class.java
             )
             .apply { isAccessible = true }
-            .invoke(engine, treeUri, "root", "", result)
+            .invoke(engine, treeUri, "root", "", result, skipped)
         return result.map { it.relativePath }
     }
 
@@ -128,6 +137,17 @@ class SafWalkTreeSkipTest {
         val kept = walk(listOf("node_modules" to true, "src" to true))
 
         assertEquals(listOf("src"), kept, "node_modules must not be mirrored")
+        // Left out is not the same as forgotten. Nothing under a skipped directory
+        // ever becomes a DocumentInfo, so no later phase can record it as device
+        // content this sync did not read, and the DELETE guard proves "the device
+        // holds the only copy" from a set that cannot contain it. Unreported, an
+        // `rm -rf` of the parent in the terminal takes the device's node_modules
+        // and .git with it, permanently, with nothing set aside.
+        assertEquals(
+            listOf("node_modules"), skipped,
+            "the walk dropped node_modules without reporting it, so the delete guard " +
+                "cannot see the device content the mirror never held",
+        )
     }
 
     @Test

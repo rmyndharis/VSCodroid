@@ -242,7 +242,18 @@ class SafSyncEngine(private val context: Context) {
         val documents = mutableListOf<DocumentInfo>()
         val rootDocId = DocumentsContract.getTreeDocumentId(safUri)
         cacheDocId(safUri, "", rootDocId)  // root entry
-        val enumerationComplete = walkTree(safUri, rootDocId, "", documents)
+        val skippedDirs = mutableListOf<String>()
+        val enumerationComplete = walkTree(safUri, rootDocId, "", documents, skippedDirs)
+        // Device content this sync deliberately did not read, which is what
+        // `unfetched` means. Recorded by the directory's own mirror path: the DELETE
+        // guard matches a directory by prefix, so an unlink of any parent sees it,
+        // and no file can ever equal a directory path, so the exact-path test the
+        // write guard uses is untouched. Scrubbed with the rest of the mirror's
+        // prefix at the top of this function, so a folder that stops holding one
+        // stops being held back by it.
+        for (relative in skippedDirs) {
+            unfetched.add(File(mirrorDir, relative).absolutePath)
+        }
 
         // What phase 2 is about to fetch, against what there is room for. Nothing is
         // refused on the strength of it: these are the sizes the provider reported, and a
@@ -434,6 +445,18 @@ class SafSyncEngine(private val context: Context) {
                         // again. Writing anyway would be the loss this guard
                         // exists to prevent.
                         keptLocal++
+                        // The device holds a document this sync did not read, which
+                        // is what the set means and what stops the next save opening
+                        // it with "wt" and truncating it. Recorded here for the same
+                        // reason the confine refusal, the size skip and a failed copy
+                        // all record it: this branch ends the same way, having
+                        // declined to read the device copy. Without it the refusal
+                        // protects the document for exactly as long as the sync runs,
+                        // and the first edit afterwards overwrites the bytes it would
+                        // not overwrite here. Self-clearing: `initialSync` scrubs the
+                        // mirror's prefix on every reopen, so a later sync that CAN
+                        // set the device copy aside leaves the path out again.
+                        unfetched.add(localPath.absolutePath)
                         Logger.w(
                             tag,
                             "Not replacing ${doc.relativePath}: its device copy is not the " +
@@ -631,6 +654,11 @@ class SafSyncEngine(private val context: Context) {
                         val deviceCopy =
                             if (deviceChanged) setAsideDeviceCopy(doc, localPath) else null
                         if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE) {
+                            // Unread, exactly as in the repair branch above, and armed
+                            // for the same reason: this declines to touch the device
+                            // copy now, and nothing else would stop the next save
+                            // doing what this refused.
+                            unfetched.add(localPath.absolutePath)
                             Logger.w(
                                 tag,
                                 "Not writing ${doc.relativePath} back: the record cannot " +
@@ -1752,7 +1780,8 @@ class SafSyncEngine(private val context: Context) {
         treeUri: Uri,
         parentDocId: String,
         parentRelPath: String,
-        result: MutableList<DocumentInfo>
+        result: MutableList<DocumentInfo>,
+        skipped: MutableList<String>,
     ): Boolean {
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
         var complete = true
@@ -1800,7 +1829,20 @@ class SafSyncEngine(private val context: Context) {
                     // `.gitignore` and `.editorconfig` off the device silently. Note the
                     // set holds `.env` as a DIRECTORY name, so a `.env` file is mirrored
                     // and a `.env` directory is not.
-                    if (shouldSkip(name, isDir)) continue
+                    if (shouldSkip(name, isDir)) {
+                        // Collected, not merely dropped. Nothing under a skipped
+                        // directory becomes a DocumentInfo, so it never reaches phase
+                        // 2 and never reaches an `unfetched.add`; the DELETE guard
+                        // then proves "the device holds the only copy" from a set
+                        // that cannot contain it, answers false, and lets
+                        // deleteDocument take the whole directory on the device --
+                        // including the `.git` or `node_modules` that being skipped
+                        // is the reason the mirror never held. The MOVED_FROM hold
+                        // already refuses to lose this exact content; this is what
+                        // lets the outright delete refuse it too.
+                        skipped.add(relativePath)
+                        continue
+                    }
 
                     // Cache the docId so write-back resolves this path without
                     // walking the tree again
@@ -1808,7 +1850,7 @@ class SafSyncEngine(private val context: Context) {
 
                     result.add(DocumentInfo(docUri, docId, relativePath, isDir, size, lastModified))
 
-                    if (isDir && !walkTree(treeUri, docId, relativePath, result)) {
+                    if (isDir && !walkTree(treeUri, docId, relativePath, result, skipped)) {
                         complete = false
                     }
                 }
