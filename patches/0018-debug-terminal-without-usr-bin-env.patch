@@ -20,14 +20,22 @@ the command. The one behavioural difference is that unset affects the shell
 that runs the command rather than only the child, which matters only if the
 terminal is reused for something else afterwards, and a debug terminal is not.
 
-The quoting is untouched: both halves still go through hardQuote, so a value
-holding a space or a quote is escaped exactly as it was.
+Only the VALUE is quoted, and that is the whole of the difference between this
+and the first version of it. `env` takes NAME=VALUE as a single argument, so
+quoting the pair is correct there; a shell reads a quoted pair as one word and
+tries to execute it, which on the device read as
+
+  bash: NODE_OPTIONS= --require .../bootloader.js: No such file or directory
+
+one layer further along and looking like a different bug. The key is left
+unquoted because `'NAME'=value` is not an assignment to a shell; the removals
+still quote the name, since `unset` takes it as an ordinary word.
 
 diff --git a/src/vs/workbench/contrib/debug/node/terminals.ts b/src/vs/workbench/contrib/debug/node/terminals.ts
-index b3b5a84..1d4b76c 100644
+index b3b5a84..0e1d7ff 100644
 --- a/src/vs/workbench/contrib/debug/node/terminals.ts
 +++ b/src/vs/workbench/contrib/debug/node/terminals.ts
-@@ -173,16 +173,26 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
+@@ -173,16 +173,30 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
  				command += `cd ${quote(cwd)} ; `;
  			}
  			if (env) {
@@ -36,6 +44,10 @@ index b3b5a84..1d4b76c 100644
 +				// "/usr/bin/env: No such file or directory" and the debug
 +				// session starts a terminal that runs nothing. Inline
 +				// assignments and unset are POSIX shell and need no binary.
++				//
++				// Only the value is quoted. env takes NAME=VALUE as one
++				// argument, so quoting the pair is right there; a shell reads a
++				// quoted pair as one word and tries to execute it.
 +				const removed: string[] = [];
 +				let assigned = '';
  				for (const key in env) {
@@ -45,7 +57,7 @@ index b3b5a84..1d4b76c 100644
 +						removed.push(hardQuote(key));
  					} else {
 -						command += ` ${hardQuote(`${key}=${value}`)}`;
-+						assigned += ` ${hardQuote(`${key}=${value}`)}`;
++						assigned += ` ${key}=${hardQuote(value)}`;
  					}
  				}
 -				command += ' ';
