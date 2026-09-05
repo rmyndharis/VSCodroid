@@ -121,13 +121,38 @@ async function closedPortIsAbsent() {
     assert.strictEqual(found.size, 0, 'ports nothing answers are not reported at all');
 }
 
-async function lanProbeSkippedWhenNothingListens() {
-    const { connect, dialled } = fakeConnector(new Set());
-    await ext.scanPorts([3000], [LAN], connect);
+/**
+ * The case the loopback gate lost outright: a server bound to one LAN address
+ * and nothing else.
+ *
+ * `vite --host 192.168.1.50` binds that address alone, so loopback refuses. The
+ * scan used to end the port there and the command reported no dev server, both
+ * in the list and for a port typed in by hand, about a server that was up and
+ * already answering the other device.
+ */
+async function boundToTheLanAddressAloneIsFound() {
+    const { connect } = fakeConnector(new Set([`${LAN}:5173`]));
+    const found = await ext.scanPorts([5173], [LAN], connect);
     assert.deepStrictEqual(
-        dialled,
-        ['127.0.0.1:3000'],
-        'the LAN probe is not dialled for a port loopback already refused',
+        [...found],
+        [[5173, [LAN]]],
+        'a server bound to the LAN address alone is reported as reachable',
+    );
+}
+
+/**
+ * Every probe goes out for every port, loopback included, and the port is
+ * dropped only when all of them refuse. Dialling is asserted as a set: they are
+ * issued together now, so the order is the scheduler's and pinning it would fail
+ * for a reason that is not a defect.
+ */
+async function everyAddressIsProbedEvenWhenLoopbackRefuses() {
+    const { connect, dialled } = fakeConnector(new Set());
+    await ext.scanPorts([3000], [VPN, LAN], connect);
+    assert.deepStrictEqual(
+        [...dialled].sort(),
+        ['10.8.0.2:3000', '127.0.0.1:3000', '192.168.1.50:3000'],
+        `a loopback refusal still ends the port before its addresses are tried: ${dialled.join(', ')}`,
     );
 }
 
@@ -169,15 +194,16 @@ async function main() {
     await localOnlyWhenLanRefuses();
     await eachAddressGetsItsOwnVerdict();
     await closedPortIsAbsent();
-    await lanProbeSkippedWhenNothingListens();
+    await boundToTheLanAddressAloneIsFound();
+    await everyAddressIsProbedEvenWhenLoopbackRefuses();
     await noLanAddressMeansLocalOnly();
     candidatesMergeAndSort();
     defaultsAreSane();
 
     say(
         `  ok     reachable/local-only split holds over ${ext.COMMON_DEV_PORTS.length} default ports, ` +
-            'each address is judged on its own probe, and the LAN probe is skipped when ' +
-            'loopback refuses\n',
+            'each address is judged on its own probe, a server bound only to the LAN ' +
+            'address is found, and a port is dropped only once every probe has refused\n',
     );
 }
 
